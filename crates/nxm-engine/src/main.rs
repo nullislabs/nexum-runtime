@@ -221,9 +221,9 @@ impl web3::runtime::logging::Host for HostState {
 async fn main() -> anyhow::Result<()> {
     let wasm_path = std::env::args()
         .nth(1)
-        .ok_or_else(|| anyhow::anyhow!("usage: nexum-runtime <path-to-component.wasm>"))?;
+        .ok_or_else(|| anyhow::anyhow!("usage: nxm-engine <path-to-component.wasm>"))?;
 
-    println!("nexum-runtime: loading component from {wasm_path}");
+    println!("nxm-engine: loading component from {wasm_path}");
 
     let mut config = wasmtime::Config::new();
     config.wasm_component_model(true);
@@ -261,19 +261,19 @@ async fn main() -> anyhow::Result<()> {
     eprintln!("[timing] component instantiate: {:?}", start.elapsed());
 
     // Call init with config
-    println!("nexum-runtime: calling init...");
+    println!("nxm-engine: calling init...");
     let config_entries: Config = vec![
         ("name".into(), "example".into()),
     ];
     let start = Instant::now();
     match bindings.call_init(&mut store, &config_entries).await? {
-        Ok(()) => println!("nexum-runtime: init succeeded"),
-        Err(e) => println!("nexum-runtime: init failed: {e}"),
+        Ok(()) => println!("nxm-engine: init succeeded"),
+        Err(e) => println!("nxm-engine: init failed: {e}"),
     }
     eprintln!("[timing] call_init: {:?}", start.elapsed());
 
     // Dispatch a test block event
-    println!("nexum-runtime: dispatching test block event...");
+    println!("nxm-engine: dispatching test block event...");
     let block = web3::runtime::types::BlockData {
         chain_id: 1,
         number: 19_000_000,
@@ -283,12 +283,12 @@ async fn main() -> anyhow::Result<()> {
     let event = web3::runtime::types::Event::Block(block);
     let start = Instant::now();
     match bindings.call_on_event(&mut store, &event).await? {
-        Ok(()) => println!("nexum-runtime: on-event succeeded"),
-        Err(e) => println!("nexum-runtime: on-event failed: {e}"),
+        Ok(()) => println!("nxm-engine: on-event succeeded"),
+        Err(e) => println!("nxm-engine: on-event failed: {e}"),
     }
     eprintln!("[timing] call_on_event: {:?}", start.elapsed());
 
-    println!("nexum-runtime: done");
+    println!("nxm-engine: done");
     Ok(())
 }
 
