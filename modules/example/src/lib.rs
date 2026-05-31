@@ -3,17 +3,17 @@
 #![allow(clippy::too_many_arguments)]
 
 wit_bindgen::generate!({
-    path: "../../wit/web3-runtime",
-    world: "headless-module",
+    path: "../../wit/nexum-host",
+    world: "nexum:host/event-module",
 });
 
-use web3::runtime::logging;
-use web3::runtime::types;
+use nexum::host::logging;
+use nexum::host::types;
 
 struct ExampleModule;
 
 impl Guest for ExampleModule {
-    fn init(config: Vec<(String, String)>) -> Result<(), String> {
+    fn init(config: Vec<(String, String)>) -> Result<(), HostError> {
         let name = config
             .iter()
             .find(|(k, _)| k == "name")
@@ -26,13 +26,13 @@ impl Guest for ExampleModule {
         Ok(())
     }
 
-    fn on_event(event: types::Event) -> Result<(), String> {
+    fn on_event(event: types::Event) -> Result<(), HostError> {
         match &event {
             types::Event::Block(block) => {
                 logging::log(
                     logging::Level::Info,
                     &format!(
-                        "block {} on chain {} (ts={})",
+                        "block {} on chain {} (ts={}ms)",
                         block.number, block.chain_id, block.timestamp
                     ),
                 );
@@ -43,8 +43,11 @@ impl Guest for ExampleModule {
                     &format!("received {} log entries", logs.len()),
                 );
             }
-            types::Event::Timer(ts) => {
-                logging::log(logging::Level::Info, &format!("timer fired at {ts}"));
+            types::Event::Tick(tick) => {
+                logging::log(
+                    logging::Level::Info,
+                    &format!("tick fired at {}ms", tick.fired_at),
+                );
             }
             types::Event::Message(msg) => {
                 logging::log(
