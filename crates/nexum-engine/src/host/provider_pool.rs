@@ -12,9 +12,13 @@
 //! - `http://` / `https://` — alloy's HTTP transport; request/response only.
 
 use std::collections::BTreeMap;
+use std::pin::Pin;
 use std::sync::Arc;
 
 use alloy_provider::{DynProvider, Provider, ProviderBuilder, WsConnect};
+use alloy_rpc_types_eth::{Filter, Header, Log};
+use futures::stream::Stream;
+use futures::stream::StreamExt as _;
 use serde_json::value::RawValue;
 use thiserror::Error;
 use tracing::info;
@@ -72,6 +76,46 @@ impl ProviderPool {
         }
     }
 
+    /// Open a new-blocks (`eth_subscribe newHeads`) stream on
+    /// `chain_id`. Requires a WS / IPC transport at construction
+    /// time; HTTP-only providers surface `UnknownChain` here.
+    pub async fn subscribe_blocks(&self, chain_id: u64) -> Result<BlockStream, ProviderError> {
+        let provider = self
+            .providers
+            .get(&chain_id)
+            .ok_or(ProviderError::UnknownChain(chain_id))?;
+        let sub = provider
+            .subscribe_blocks()
+            .await
+            .map_err(|e| ProviderError::Rpc {
+                method: "eth_subscribe(newHeads)".into(),
+                detail: e.to_string(),
+            })?;
+        let stream = sub.into_stream().map(Ok::<_, ProviderError>);
+        Ok(Box::pin(stream))
+    }
+
+    /// Open an `eth_subscribe(logs, filter)` stream on `chain_id`.
+    pub async fn subscribe_logs(
+        &self,
+        chain_id: u64,
+        filter: Filter,
+    ) -> Result<LogStream, ProviderError> {
+        let provider = self
+            .providers
+            .get(&chain_id)
+            .ok_or(ProviderError::UnknownChain(chain_id))?;
+        let sub = provider
+            .subscribe_logs(&filter)
+            .await
+            .map_err(|e| ProviderError::Rpc {
+                method: "eth_subscribe(logs)".into(),
+                detail: e.to_string(),
+            })?;
+        let stream = sub.into_stream().map(Ok::<_, ProviderError>);
+        Ok(Box::pin(stream))
+    }
+
     /// Raw JSON-RPC dispatch. `params_json` must be the JSON encoding
     /// of the params array (e.g. `"[\"0x...\",\"latest\"]"`), as
     /// produced by the SDK's `chain::request` glue.
@@ -103,6 +147,11 @@ impl ProviderPool {
         Ok(result.get().to_owned())
     }
 }
+
+/// Boxed stream of `newHeads`-style block headers.
+pub type BlockStream = Pin<Box<dyn Stream<Item = Result<Header, ProviderError>> + Send>>;
+/// Boxed stream of `logs`-filtered log events.
+pub type LogStream = Pin<Box<dyn Stream<Item = Result<Log, ProviderError>> + Send>>;
 
 /// Errors surfaced by [`ProviderPool`].
 #[derive(Debug, Error)]

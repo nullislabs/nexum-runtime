@@ -1,17 +1,20 @@
 mod engine_config;
 mod host;
 mod manifest;
+mod supervisor;
 
 use std::path::PathBuf;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use clap::Parser;
+use futures::StreamExt;
+use futures::stream::{FuturesUnordered, select_all};
 use tracing::{info, warn};
 use tracing_subscriber::EnvFilter;
-use wasmtime::component::{Component, Linker, ResourceTable};
+use wasmtime::Engine;
+use wasmtime::component::{Linker, ResourceTable};
 use wasmtime::error::Context as _;
-use wasmtime::{Engine, Store};
-use wasmtime_wasi::{WasiCtx, WasiCtxBuilder, WasiCtxView, WasiView};
+use wasmtime_wasi::{WasiCtx, WasiCtxView, WasiView};
 
 /// Reference CLI for the 0.2 `nexum-engine` runtime.
 ///
@@ -29,19 +32,23 @@ use wasmtime_wasi::{WasiCtx, WasiCtxBuilder, WasiCtxView, WasiView};
     version,
 )]
 struct Cli {
-    /// Path to the Wasm Component file to load.
-    wasm_path: PathBuf,
+    /// Optional path to a Wasm Component file. Backwards-compat
+    /// shortcut that synthesises a one-module engine config when no
+    /// `--engine-config` is supplied. Production deployments declare
+    /// modules in TOML and omit this positional.
+    wasm: Option<PathBuf>,
 
     /// Optional explicit path to the module's `nexum.toml` manifest.
-    /// When omitted, the engine looks for `nexum.toml` next to the
-    /// component file and falls back to a permissive default (with
-    /// a deprecation warning) when none is found.
-    manifest_path: Option<PathBuf>,
+    /// Only consulted alongside the positional `wasm` shortcut; when
+    /// the engine config drives the module set, each module brings
+    /// its own manifest via the engine-config entries.
+    manifest: Option<PathBuf>,
 
     /// Optional explicit path to the engine-wide `engine.toml` config.
     /// When omitted, the engine resolves the default search path
     /// documented in `engine_config::load_or_default`.
-    engine_config_path: Option<PathBuf>,
+    #[arg(long = "engine-config")]
+    engine_config: Option<PathBuf>,
 }
 
 // Both packages are listed explicitly so wit-parser can resolve the
@@ -448,15 +455,16 @@ fn hex_encode(bytes: &[u8]) -> String {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    // CLI surface (clap-derived, see `Cli`):
+    //   nexum-engine [<wasm-path> [<manifest-path>]] [--engine-config <path>]
+    //
+    // Positional `<wasm-path>` is a backwards-compat shortcut that
+    // synthesises a one-module engine config. Production deployments
+    // pass `--engine-config` and declare modules in TOML.
     let cli = Cli::parse();
-    let wasm_path = cli.wasm_path;
-    let explicit_manifest = cli.manifest_path;
-    let explicit_engine_config = cli.engine_config_path;
 
-    // -- 1. Load engine config (optional). --
-    let engine_cfg = engine_config::load_or_default(explicit_engine_config.as_deref())?;
+    let engine_cfg = engine_config::load_or_default(cli.engine_config.as_deref())?;
 
-    // -- 2. Install tracing subscriber. --
     let env_filter = EnvFilter::try_from_default_env()
         .or_else(|_| EnvFilter::try_new(&engine_cfg.engine.log_level))
         .unwrap_or_else(|_| EnvFilter::new("info"));
@@ -466,20 +474,8 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     info!("nexum-engine starting");
-    info!(wasm = %wasm_path.display(), "loading component");
 
-    // -- 3. Load the module manifest. --
-    let manifest_path =
-        explicit_manifest.or_else(|| wasm_path.parent().map(|p| p.join("nexum.toml")));
-    let loaded = match manifest_path.as_deref() {
-        Some(p) if p.exists() => {
-            info!(manifest = %p.display(), "loading nexum.toml");
-            manifest::load(p)?
-        }
-        _ => manifest::fallback_manifest(),
-    };
-
-    // -- 4. Bring up the host backends. --
+    // Bring up shared host backends.
     std::fs::create_dir_all(&engine_cfg.engine.state_dir).with_context(|| {
         format!(
             "create state directory {}",
@@ -494,19 +490,10 @@ async fn main() -> anyhow::Result<()> {
         .await
         .context("open chain providers")?;
 
-    // -- 5. Build the wasmtime engine + component. --
+    // wasmtime engine + linker — one of each, shared across modules.
     let mut config = wasmtime::Config::new();
     config.wasm_component_model(true);
-    // `async_support` was deprecated in wasmtime 45 — the engine
-    // resolves async on its own. Keeping the call out of the Config
-    // chain silences the `deprecated` warning under
-    // `RUSTFLAGS=-D warnings`.
     let engine = Engine::new(&config)?;
-
-    let load_start = Instant::now();
-    let component =
-        Component::from_file(&engine, &wasm_path).context("failed to load component")?;
-    tracing::debug!(elapsed_ms = ?load_start.elapsed(), "component load");
 
     let mut linker = Linker::<HostState>::new(&engine);
     Shepherd::add_to_linker::<HostState, wasmtime::component::HasSelf<HostState>>(
@@ -515,72 +502,200 @@ async fn main() -> anyhow::Result<()> {
     )?;
     wasmtime_wasi::p2::add_to_linker_async(&mut linker)?;
 
-    let wasi = WasiCtxBuilder::new().inherit_stdio().build();
-    let module_namespace = if loaded.manifest.module.name.is_empty() {
-        "module".to_owned()
+    // Boot supervisor — `engine.toml.[[modules]]` first, CLI
+    // positional second.
+    let mut supervisor = if let Some(wasm) = cli.wasm.as_deref() {
+        if !engine_cfg.modules.is_empty() {
+            warn!("ignoring engine.toml [[modules]] because a positional <wasm-path> was given");
+        }
+        supervisor::Supervisor::boot_single(
+            &engine,
+            &linker,
+            wasm,
+            cli.manifest.as_deref(),
+            &cow_pool,
+            &provider_pool,
+            &local_store,
+        )
+        .await?
+    } else if !engine_cfg.modules.is_empty() {
+        supervisor::Supervisor::boot(
+            &engine,
+            &linker,
+            &engine_cfg,
+            &cow_pool,
+            &provider_pool,
+            &local_store,
+        )
+        .await?
     } else {
-        loaded.manifest.module.name.clone()
+        anyhow::bail!(
+            "no modules to run — either pass a positional <wasm-path> or declare \
+             [[modules]] entries in engine.toml"
+        );
     };
 
-    let mut store = Store::new(
-        &engine,
-        HostState {
-            wasi,
-            table: ResourceTable::new(),
-            monotonic_baseline: Instant::now(),
-            http_allowlist: loaded.http_allowlist,
-            module_namespace,
-            cow: cow_pool,
-            chain: provider_pool,
-            store: local_store,
-        },
+    info!(
+        modules = supervisor.module_count(),
+        chains = supervisor.block_chains().len(),
+        "supervisor ready"
     );
 
-    let inst_start = Instant::now();
-    let bindings = Shepherd::instantiate_async(&mut store, &component, &linker)
-        .await
-        .context("failed to instantiate component")?;
-    tracing::debug!(elapsed_ms = ?inst_start.elapsed(), "component instantiate");
+    // Open per-chain block subscriptions + per-module log
+    // subscriptions, merge, dispatch until shutdown.
+    let block_chains = supervisor.block_chains();
+    let log_subs = supervisor.log_subscriptions();
 
-    info!("calling init");
-    let config_entries: Config = if loaded.config.is_empty() {
-        vec![("name".into(), loaded.manifest.module.name.clone())]
-    } else {
-        loaded.config
-    };
-    let init_start = Instant::now();
-    match bindings.call_init(&mut store, &config_entries).await? {
-        Ok(()) => info!(elapsed_ms = ?init_start.elapsed(), "init succeeded"),
-        Err(e) => warn!(
-            domain = %e.domain,
-            kind = ?e.kind,
-            code = e.code,
-            message = %e.message,
-            "init failed",
-        ),
+    if block_chains.is_empty() && log_subs.is_empty() {
+        info!("no [[subscription]] entries — engine has nothing to run; exiting");
+        return Ok(());
     }
 
-    // Dispatch a test block event (timestamps are ms since Unix epoch, UTC).
-    info!("dispatching test block event");
-    let block = nexum::host::types::Block {
-        chain_id: 1,
-        number: 19_000_000,
-        hash: vec![0xab; 32],
-        timestamp: 1_700_000_000_000,
-    };
-    let event = nexum::host::types::Event::Block(block);
-    let evt_start = Instant::now();
-    match bindings.call_on_event(&mut store, &event).await? {
-        Ok(()) => info!(elapsed_ms = ?evt_start.elapsed(), "on-event succeeded"),
-        Err(e) => warn!(
-            domain = %e.domain,
-            kind = ?e.kind,
-            code = e.code,
-            message = %e.message,
-            "on-event failed",
-        ),
-    }
+    let block_streams = open_block_streams(&provider_pool, &block_chains).await;
+    let log_streams = open_log_streams(&provider_pool, log_subs).await;
 
+    let shutdown = async {
+        match wait_for_shutdown_signal().await {
+            Ok(name) => info!(signal = %name, "shutdown signal received"),
+            Err(err) => warn!(error = %err, "signal handler failed — using ctrl-c"),
+        }
+    };
+
+    run_event_loop(&mut supervisor, block_streams, log_streams, shutdown).await;
     info!("done");
     Ok(())
+}
+
+/// Per-chain block subscriptions, one shared stream per chain id.
+async fn open_block_streams(
+    pool: &host::provider_pool::ProviderPool,
+    chains: &std::collections::BTreeSet<u64>,
+) -> Vec<TaggedBlockStream> {
+    let mut openings: FuturesUnordered<_> = chains
+        .iter()
+        .copied()
+        .map(|chain_id| async move { (chain_id, pool.subscribe_blocks(chain_id).await) })
+        .collect();
+
+    let mut streams = Vec::new();
+    while let Some((chain_id, result)) = openings.next().await {
+        match result {
+            Ok(stream) => {
+                info!(chain_id, "block subscription open");
+                let tagged: TaggedBlockStream = Box::pin(stream.map(move |item| {
+                    item.map(|header| (chain_id, header))
+                        .map_err(anyhow::Error::from)
+                }));
+                streams.push(tagged);
+            }
+            Err(err) => {
+                warn!(chain_id, error = %err, "block subscription failed");
+            }
+        }
+    }
+    streams
+}
+
+/// Per-module log subscriptions. Each entry is a stream tagged with
+/// the owning module name + chain id.
+async fn open_log_streams(
+    pool: &host::provider_pool::ProviderPool,
+    subs: Vec<(String, u64, alloy_rpc_types_eth::Filter)>,
+) -> Vec<TaggedLogStream> {
+    let mut openings: FuturesUnordered<_> = subs
+        .into_iter()
+        .map(|(module, chain_id, filter)| async move {
+            let stream = pool.subscribe_logs(chain_id, filter).await;
+            (module, chain_id, stream)
+        })
+        .collect();
+
+    let mut streams = Vec::new();
+    while let Some((module, chain_id, result)) = openings.next().await {
+        match result {
+            Ok(stream) => {
+                info!(module = %module, chain_id, "log subscription open");
+                let module_name = module.clone();
+                let tagged: TaggedLogStream = Box::pin(stream.map(move |item| {
+                    item.map(|log| (module_name.clone(), chain_id, log))
+                        .map_err(anyhow::Error::from)
+                }));
+                streams.push(tagged);
+            }
+            Err(err) => {
+                warn!(module = %module, chain_id, error = %err, "log subscription failed");
+            }
+        }
+    }
+    streams
+}
+
+type TaggedBlockStream = std::pin::Pin<
+    Box<
+        dyn futures::Stream<Item = Result<(u64, alloy_rpc_types_eth::Header), anyhow::Error>>
+            + Send,
+    >,
+>;
+type TaggedLogStream = std::pin::Pin<
+    Box<
+        dyn futures::Stream<Item = Result<(String, u64, alloy_rpc_types_eth::Log), anyhow::Error>>
+            + Send,
+    >,
+>;
+
+/// Drive the supervisor with events until `shutdown` resolves.
+async fn run_event_loop(
+    supervisor: &mut supervisor::Supervisor,
+    block_streams: Vec<TaggedBlockStream>,
+    log_streams: Vec<TaggedLogStream>,
+    shutdown: impl std::future::Future<Output = ()> + Send,
+) {
+    let mut blocks = select_all(block_streams);
+    let mut logs = select_all(log_streams);
+    let mut shutdown = Box::pin(shutdown);
+    loop {
+        tokio::select! {
+            biased;
+            () = &mut shutdown => return,
+            next = blocks.next() => match next {
+                Some(Ok((chain_id, header))) => {
+                    let block = nexum::host::types::Block {
+                        chain_id,
+                        number: header.number,
+                        hash: header.hash.as_slice().to_vec(),
+                        timestamp: header.timestamp.saturating_mul(1000),
+                    };
+                    supervisor.dispatch_block(block).await;
+                }
+                Some(Err(err)) => warn!(error = %err, "block stream error — continuing"),
+                None => {}
+            },
+            next = logs.next() => match next {
+                Some(Ok((module, chain_id, log))) => {
+                    supervisor.dispatch_log(&module, chain_id, log).await;
+                }
+                Some(Err(err)) => warn!(error = %err, "log stream error — continuing"),
+                None => {}
+            },
+        }
+    }
+}
+
+/// Wait for SIGINT or (on Unix) SIGTERM, whichever arrives first.
+async fn wait_for_shutdown_signal() -> anyhow::Result<&'static str> {
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{SignalKind, signal};
+        let mut sigterm = signal(SignalKind::terminate())?;
+        let mut sigint = signal(SignalKind::interrupt())?;
+        tokio::select! {
+            _ = sigterm.recv() => Ok("SIGTERM"),
+            _ = sigint.recv()  => Ok("SIGINT"),
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        tokio::signal::ctrl_c().await?;
+        Ok("ctrl-c")
+    }
 }

@@ -32,6 +32,27 @@ pub struct EngineConfig {
     /// pool seed.
     #[serde(default)]
     pub chains: BTreeMap<u64, ChainConfig>,
+    /// Modules the supervisor should boot. Each entry resolves a
+    /// `(component.wasm, nexum.toml)` pair on the local filesystem
+    /// for 0.2 — content-addressed resolution (Swarm / OCI /
+    /// `[[content.sources]]`) lands in 0.3 per
+    /// `docs/03-module-discovery.md`.
+    #[serde(default)]
+    pub modules: Vec<ModuleEntry>,
+}
+
+/// One `[[modules]]` table from `engine.toml`.
+///
+/// Both fields are filesystem paths in 0.2. `manifest` defaults to
+/// `nexum.toml` next to `path` if omitted, matching the bundle layout
+/// in `docs/02-modules-events-packaging.md`.
+#[derive(Debug, Deserialize)]
+pub struct ModuleEntry {
+    /// Path to the compiled `.wasm` component.
+    pub path: std::path::PathBuf,
+    /// Path to the module's `nexum.toml`. Defaults to `<path-parent>/nexum.toml`.
+    #[serde(default)]
+    pub manifest: Option<std::path::PathBuf>,
 }
 
 #[derive(Debug, Deserialize)]
