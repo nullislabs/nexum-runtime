@@ -9,11 +9,55 @@ repository.workspace = true
 workspace = true
 
 [dependencies]
+# WASM Component Model runtime.
 wasmtime = { version = "45", features = ["component-model"] }
 wasmtime-wasi = "45"
+
+# Async + error plumbing.
 anyhow.workspace = true
-clap.workspace = true
+thiserror.workspace = true
 tokio.workspace = true
-getrandom = "0.4"
+clap.workspace = true
+
+# Manifest parsing.
 serde.workspace = true
 toml = "1"
+serde_json.workspace = true
+
+# Observability. `tracing` replaces the prior `eprintln!` debug log
+# so the engine can drop into a structured log pipeline in production.
+tracing.workspace = true
+tracing-subscriber = { workspace = true, default-features = false, features = ["fmt", "env-filter", "ansi"] }
+
+# `cow-api` backend. cowprotocol pulls `OrderBookApi`, `OrderCreation`,
+# `OrderUid`, the orderbook base URL table per `Chain`, and the typed
+# error surface the host re-projects into `HostError`. Pinned via the
+# workspace so every crate that touches cowprotocol moves in lockstep.
+cowprotocol.workspace = true
+# REST passthrough for `cow_api::request`. cowprotocol pulls reqwest
+# transitively for its own client; we depend on it directly so the
+# import is explicit and survives any future cowprotocol feature
+# rearrangement.
+reqwest.workspace = true
+
+# `chain` backend. Each configured chain owns a `DynProvider` built
+# from a `WsConnect`/`Http` transport so the host's `request` /
+# `request-batch` impls can hand a raw `(method, params)` pair to
+# alloy's JSON-RPC layer without reimplementing the codec.
+alloy-provider.workspace = true
+alloy-rpc-client    = { version = "1.5", default-features = false }
+alloy-transport     = { version = "1.5", default-features = false }
+alloy-transport-ws.workspace = true
+alloy-primitives.workspace = true
+
+# `local-store` backend. Per-module namespacing is enforced
+# host-side via a `[len:u8][module_name][raw_key]` prefix.
+redb = "2"
+
+# Misc.
+getrandom = "0.4"
+url = "2"
+
+[dev-dependencies]
+tempfile = "3"
+wiremock = "0.6"
