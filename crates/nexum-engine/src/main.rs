@@ -63,9 +63,20 @@ wasmtime::component::bindgen!({
 
 use nexum::host::types::HostErrorKind;
 
+/// Default fuel budget granted per `on_event` invocation (≈ 1 billion WASM
+/// instructions). Modules that exceed this budget trap with `OutOfFuel`.
+/// Configurable per-module via `engine.toml` in 0.3.
+pub const DEFAULT_FUEL_PER_EVENT: u64 = 1_000_000_000;
+
+/// Default linear-memory cap per module store (64 MiB). Prevents a single
+/// runaway module from exhausting process memory. Configurable in 0.3.
+pub const DEFAULT_MEMORY_LIMIT: usize = 64 * 1024 * 1024;
+
 struct HostState {
     wasi: WasiCtx,
     table: ResourceTable,
+    /// Wasmtime memory/table/instance resource limits for this store.
+    limits: wasmtime::StoreLimits,
     /// Origin for `clock::monotonic-ns`. Differences between successive
     /// readings are the only meaningful values.
     monotonic_baseline: Instant,
@@ -493,6 +504,7 @@ async fn main() -> anyhow::Result<()> {
     // wasmtime engine + linker — one of each, shared across modules.
     let mut config = wasmtime::Config::new();
     config.wasm_component_model(true);
+    config.consume_fuel(true);
     let engine = Engine::new(&config)?;
 
     let mut linker = Linker::<HostState>::new(&engine);

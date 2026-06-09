@@ -155,11 +155,15 @@ impl Supervisor {
         } else {
             loaded_manifest.manifest.module.name.clone()
         };
+        let limits = wasmtime::StoreLimitsBuilder::new()
+            .memory_size(crate::DEFAULT_MEMORY_LIMIT)
+            .build();
         let mut store = Store::new(
             engine,
             HostState {
                 wasi,
                 table: ResourceTable::new(),
+                limits,
                 monotonic_baseline: std::time::Instant::now(),
                 http_allowlist: loaded_manifest.http_allowlist.clone(),
                 module_namespace: module_namespace.clone(),
@@ -168,6 +172,8 @@ impl Supervisor {
                 store: local_store.clone(),
             },
         );
+        store.limiter(|state| &mut state.limits);
+        store.set_fuel(crate::DEFAULT_FUEL_PER_EVENT)?;
         let bindings = Shepherd::instantiate_async(&mut store, &component, linker)
             .await
             .map_err(Error::from)
@@ -194,6 +200,8 @@ impl Supervisor {
                 "init failed",
             ),
         }
+        // Refuel after init so the first on_event starts with a full budget.
+        store.set_fuel(crate::DEFAULT_FUEL_PER_EVENT)?;
 
         // Surface any `[[subscription]]` entries the host cannot
         // service yet, so an operator running 0.2 against a 0.3
@@ -286,6 +294,11 @@ impl Supervisor {
             if !subscribed {
                 continue;
             }
+            // Refuel before each invocation so each event gets a fresh budget.
+            if let Err(e) = module.store.set_fuel(crate::DEFAULT_FUEL_PER_EVENT) {
+                error!(module = %module.name, error = %e, "set_fuel failed — skipping");
+                continue;
+            }
             match module
                 .bindings
                 .call_on_event(&mut module.store, &event)
@@ -332,6 +345,10 @@ impl Supervisor {
             }
         };
         if !target.alive {
+            return false;
+        }
+        if let Err(e) = target.store.set_fuel(crate::DEFAULT_FUEL_PER_EVENT) {
+            error!(module = %module_name, error = %e, "set_fuel failed — skipping");
             return false;
         }
         let event = crate::nexum::host::types::Event::Logs(vec![project_log(chain_id, &log)]);
