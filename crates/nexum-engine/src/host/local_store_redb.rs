@@ -1,41 +1,43 @@
 //! `nexum:host/local-store` backend.
 //!
 //! Single redb file under `EngineConfig.engine.state_dir`. Per-module
-//! namespacing is enforced host-side via a `[len:u8][module_name][raw_key]`
-//! prefix on every redb key. Two modules using the same key string see
-//! disjoint data.
+//! namespacing is enforced host-side via a fixed-length 32-byte prefix:
+//! `keccak256(module_name) ++ raw_key`. Two modules using the same key
+//! string see disjoint data regardless of how similar their names are.
 //!
-//! The runtime supplies the namespace; modules see plain key strings.
-//! Module names longer than 255 bytes are rejected at construction
-//! (matches the one-byte length prefix).
+//! The 32-byte hash prefix has two properties that the old
+//! `[len:u8][name][key]` scheme lacked:
+//!
+//! - **Fixed width** — no length field to forge; a module cannot craft a
+//!   key that bleeds into another module's prefix range.
+//! - **ENS-compatible** — keccak256 is the same hash used by ENS node
+//!   derivation, so module identities can be derived from ENS names
+//!   without extra hashing in the future (ADR-0003).
 
-// The redb error enum is large by construction (Txn / Storage /
-// Commit each carry a redb backtrace ≈ 160 bytes). Allowing the
-// cap-on-Result-size lint here is the lesser evil: boxing every
-// variant pushes the error path to the heap just to humour the lint.
 #![allow(clippy::result_large_err)]
 
 use std::path::Path;
 use std::sync::Arc;
 
+use alloy_primitives::keccak256;
 use redb::{Database, ReadableTable, TableDefinition};
 use thiserror::Error;
 
 const TABLE: TableDefinition<'static, &[u8], &[u8]> = TableDefinition::new("nexum:local-store");
-const MAX_NAMESPACE_LEN: usize = u8::MAX as usize;
+#[cfg(test)]
+const PREFIX_LEN: usize = 32;
 
 /// Process-wide handle to the local-store redb database. Cheap to
-/// clone; the per-module view is constructed by setting the
-/// namespace prefix at call time.
+/// clone; the per-module view is constructed by setting the namespace
+/// prefix at call time.
 #[derive(Debug, Clone)]
 pub struct LocalStore {
     db: Arc<Database>,
 }
 
 impl LocalStore {
-    /// Open (or create) the redb file at `path`. Materialises the
-    /// shared table so subsequent read transactions never hit
-    /// `TableDoesNotExist`.
+    /// Open (or create) the redb file at `path`. Materialises the shared
+    /// table so subsequent read transactions never hit `TableDoesNotExist`.
     pub fn open(path: impl AsRef<Path>) -> Result<Self, StorageError> {
         let db = Database::create(path).map_err(StorageError::Open)?;
         {
@@ -47,7 +49,7 @@ impl LocalStore {
     }
 
     /// Fetch a value for `(namespace, key)`. Returns `Ok(None)` when
-    /// no entry exists; module never observes the prefix.
+    /// no entry exists; the module never observes the prefix.
     pub fn get(&self, namespace: &str, key: &str) -> Result<Option<Vec<u8>>, StorageError> {
         let full = build_key(namespace, key)?;
         let txn = self.db.begin_read().map_err(StorageError::Txn)?;
@@ -87,9 +89,9 @@ impl LocalStore {
         Ok(())
     }
 
-    /// Enumerate keys in `namespace` whose raw key (post-prefix)
-    /// starts with `prefix`. Returns only the module-visible key
-    /// strings — the host strips the namespace prefix.
+    /// Enumerate keys in `namespace` whose raw key (post-prefix) starts
+    /// with `prefix`. Returns only the module-visible key strings — the
+    /// host strips the namespace prefix.
     pub fn list_keys(&self, namespace: &str, prefix: &str) -> Result<Vec<String>, StorageError> {
         let ns_prefix = namespace_prefix(namespace)?;
         let full_prefix = build_key(namespace, prefix)?;
@@ -109,23 +111,15 @@ impl LocalStore {
     }
 }
 
+/// Returns the 32-byte keccak256 hash of `namespace` as a `Vec<u8>`.
+/// Rejects the empty string so callers can rely on a non-trivial prefix.
 fn namespace_prefix(namespace: &str) -> Result<Vec<u8>, StorageError> {
     if namespace.is_empty() {
         return Err(StorageError::InvalidNamespace(
             "module namespace must not be empty".into(),
         ));
     }
-    let bytes = namespace.as_bytes();
-    if bytes.len() > MAX_NAMESPACE_LEN {
-        return Err(StorageError::InvalidNamespace(format!(
-            "namespace `{namespace}` is {} bytes; max is {MAX_NAMESPACE_LEN}",
-            bytes.len()
-        )));
-    }
-    let mut out = Vec::with_capacity(1 + bytes.len());
-    out.push(bytes.len() as u8);
-    out.extend_from_slice(bytes);
-    Ok(out)
+    Ok(keccak256(namespace.as_bytes()).to_vec())
 }
 
 fn build_key(namespace: &str, key: &str) -> Result<Vec<u8>, StorageError> {
@@ -207,5 +201,30 @@ mod tests {
         let (_dir, store) = fresh();
         let err = store.set("", "k", b"v").unwrap_err();
         assert!(matches!(err, StorageError::InvalidNamespace(_)));
+    }
+
+    #[test]
+    fn prefix_is_fixed_32_bytes() {
+        let short = namespace_prefix("a").unwrap();
+        let long = namespace_prefix(&"a".repeat(300)).unwrap();
+        assert_eq!(short.len(), PREFIX_LEN);
+        assert_eq!(long.len(), PREFIX_LEN);
+        // Different inputs produce different prefixes.
+        assert_ne!(short, long);
+    }
+
+    #[test]
+    fn prefix_is_deterministic() {
+        let p1 = namespace_prefix("twap-monitor").unwrap();
+        let p2 = namespace_prefix("twap-monitor").unwrap();
+        assert_eq!(p1, p2);
+    }
+
+    #[test]
+    fn similar_names_differ() {
+        // Verify that names that share a common prefix don't collide.
+        let pa = namespace_prefix("module-a").unwrap();
+        let pb = namespace_prefix("module-b").unwrap();
+        assert_ne!(pa, pb);
     }
 }

@@ -69,7 +69,7 @@ struct HostState {
     /// Origin for `clock::monotonic-ns`. Differences between successive
     /// readings are the only meaningful values.
     monotonic_baseline: Instant,
-    /// Per-module `[capabilities.http].allow` allowlist (from nexum.toml).
+    /// Per-module `[capabilities.http].allow` allowlist (from module.toml).
     /// Consulted by `http::fetch` before any outbound call.
     http_allowlist: Vec<String>,
     /// Namespace for the running module's `local-store` rows. Set from
@@ -429,7 +429,7 @@ impl nexum::host::http::Host for HostState {
                 code: 0,
                 message: format!(
                     "host {host} not in [capabilities.http].allow; \
-                     add it to nexum.toml to permit"
+                     add it to module.toml to permit"
                 ),
                 data: None,
             });
@@ -485,7 +485,7 @@ async fn main() -> anyhow::Result<()> {
     let store_path = engine_cfg.engine.state_dir.join("local-store.redb");
     let local_store = host::local_store_redb::LocalStore::open(&store_path)
         .with_context(|| format!("open local-store at {}", store_path.display()))?;
-    let cow_pool = host::cow_orderbook::OrderBookPool::with_default_chains();
+    let cow_pool = host::cow_orderbook::OrderBookPool::default();
     let provider_pool = host::provider_pool::ProviderPool::from_config(&engine_cfg)
         .await
         .context("open chain providers")?;

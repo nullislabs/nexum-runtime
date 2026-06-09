@@ -28,12 +28,12 @@ pub struct OrderBookPool {
     http: reqwest::Client,
 }
 
-impl OrderBookPool {
-    /// Build a pool covering every `cowprotocol::Chain` variant. The
-    /// default `OrderBookApi::new(chain)` constructor uses the canonical
-    /// `api.cow.fi/{slug}/api/v1` base URL from the SDK; callers that
-    /// need barn or a custom staging URL override per chain.
-    pub fn with_default_chains() -> Self {
+impl Default for OrderBookPool {
+    /// Build a pool covering every `cowprotocol::Chain` variant. Each entry
+    /// uses the canonical `api.cow.fi/{slug}/api/v1` base URL from the SDK.
+    /// Override individual entries via `OrderBookApi::new_with_base_url` for
+    /// barn or staging targets.
+    fn default() -> Self {
         let http = reqwest::Client::new();
         let chains = [
             Chain::Mainnet,
@@ -48,6 +48,9 @@ impl OrderBookPool {
             .collect();
         Self { clients, http }
     }
+}
+
+impl OrderBookPool {
 
     /// Look up the client for a chain.
     pub fn get(&self, chain_id: u64) -> Result<&OrderBookApi, CowApiError> {
@@ -145,7 +148,7 @@ mod tests {
 
     #[test]
     fn pool_indexes_default_chains() {
-        let pool = OrderBookPool::with_default_chains();
+        let pool = OrderBookPool::default();
         assert!(pool.get(1).is_ok(), "mainnet present");
         assert!(pool.get(100).is_ok(), "gnosis present");
         assert!(pool.get(11_155_111).is_ok(), "sepolia present");
@@ -155,7 +158,7 @@ mod tests {
 
     #[test]
     fn unknown_chain_surfaces_typed_error() {
-        let pool = OrderBookPool::with_default_chains();
+        let pool = OrderBookPool::default();
         assert!(matches!(
             pool.get(99_999),
             Err(CowApiError::UnknownChain(99_999))
@@ -224,7 +227,7 @@ mod tests {
 
     #[tokio::test]
     async fn request_rejects_unknown_method() {
-        let pool = OrderBookPool::with_default_chains();
+        let pool = OrderBookPool::default();
         let err = pool
             .request(Chain::Mainnet.id(), "PATCH", "/x", None)
             .await

@@ -1,7 +1,6 @@
-//! Minimal `nexum.toml` parser and capability-enforcement helpers (0.2 scope).
+//! `module.toml` parser and capability-enforcement helpers (0.2 scope).
 //!
-//! 0.2 intentionally ships a slim subset of the manifest spec described in
-//! the migration guide §3:
+//! 0.2 intentionally ships a slim subset of the manifest spec:
 //!
 //! - `[capabilities].required` is parsed and validated (names must be in
 //!   the known capability set; the 0.2 reference engine always provides
@@ -14,9 +13,9 @@
 //!   module's `init`. Typed `config-value` variant is deferred to 0.3.
 //!
 //! When the manifest file is missing or has no `[capabilities]` section,
-//! a deprecation warning is emitted on stderr and the engine falls back
-//! to 0.1 behaviour (treat every linked capability as required). This
-//! fallback will be removed in 0.3.
+//! a deprecation warning is emitted and the engine falls back to 0.1
+//! behaviour (treat every linked capability as required). This fallback
+//! will be removed in 0.3.
 
 use std::collections::HashSet;
 use std::path::Path;
@@ -55,7 +54,7 @@ pub struct Manifest {
     pub subscriptions: Vec<Subscription>,
 }
 
-/// One `[[subscription]]` table in `nexum.toml`.
+/// One `[[subscription]]` table in `module.toml`.
 ///
 /// The discriminator is the `kind` field; remaining fields are
 /// validated per-kind by the supervisor. Unknown kinds are surfaced
@@ -162,7 +161,88 @@ pub struct LoadedManifest {
     pub config: Vec<(String, String)>,
 }
 
-/// Read `nexum.toml` from `path`, parse, validate, and emit a deprecation
+/// Error returned when a component's WIT imports exceed its declared capabilities.
+#[derive(Debug)]
+pub struct CapabilityViolation {
+    /// Capability name (e.g. `"remote-store"`).
+    pub capability: String,
+    /// Full WIT import name as it appeared in the component (e.g.
+    /// `"nexum:host/remote-store@0.2.0"`).
+    pub wit_import: String,
+}
+
+impl std::fmt::Display for CapabilityViolation {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "component imports `{}` ({}) but it is not listed in \
+             [capabilities].required or [capabilities].optional",
+            self.capability, self.wit_import
+        )
+    }
+}
+
+impl std::error::Error for CapabilityViolation {}
+
+/// Check that every capability-bearing WIT import of the component is covered
+/// by the module's manifest declarations. Call this after loading the
+/// component but before instantiation.
+///
+/// When `[capabilities]` is absent the manifest is in 0.1-fallback mode and
+/// all imports are allowed; the caller is expected to have already emitted
+/// a deprecation warning.
+///
+/// `component_imports` should be the iterator returned by
+/// `component.component_type().imports(&engine)` — pass the **name** part
+/// (`&str`) of each `(&str, ComponentItem)` tuple.
+pub fn enforce_capabilities<'a>(
+    loaded: &LoadedManifest,
+    component_imports: impl Iterator<Item = &'a str>,
+) -> Result<(), CapabilityViolation> {
+    let caps = match loaded.manifest.capabilities.as_ref() {
+        None => return Ok(()), // 0.1-fallback: no enforcement
+        Some(c) => c,
+    };
+
+    let declared: HashSet<&str> = caps
+        .required
+        .iter()
+        .chain(caps.optional.iter())
+        .map(String::as_str)
+        .collect();
+
+    for import_name in component_imports {
+        if let Some(cap) = wit_import_to_cap(import_name) {
+            if !declared.contains(cap) {
+                return Err(CapabilityViolation {
+                    capability: cap.to_owned(),
+                    wit_import: import_name.to_owned(),
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Map a WIT import name to a capability name, or `None` for non-capability
+/// imports (wasi:*, wasi:io, wasi:cli, etc.).
+///
+/// Examples:
+/// - `"nexum:host/chain@0.2.0"` → `Some("chain")`
+/// - `"shepherd:cow/cow-api@0.2.0"` → `Some("cow-api")`
+/// - `"wasi:io/streams@0.2.0"` → `None`
+fn wit_import_to_cap(import_name: &str) -> Option<&str> {
+    let without_version = import_name.split('@').next().unwrap_or(import_name);
+    if let Some(iface) = without_version.strip_prefix("nexum:host/") {
+        Some(iface)
+    } else if let Some(iface) = without_version.strip_prefix("shepherd:cow/") {
+        Some(iface)
+    } else {
+        None
+    }
+}
+
+/// Read `module.toml` from `path`, parse, validate, and emit a deprecation
 /// warning if `[capabilities]` is absent (0.1-compat fallback).
 pub fn load(path: &Path) -> Result<LoadedManifest, ParseError> {
     let raw = std::fs::read_to_string(path).map_err(ParseError::Io)?;
@@ -171,10 +251,9 @@ pub fn load(path: &Path) -> Result<LoadedManifest, ParseError> {
     let caps = manifest.capabilities.as_ref();
     if caps.is_none() {
         eprintln!(
-            "[deprecation] no [capabilities] section in nexum.toml — \
+            "[deprecation] no [capabilities] section in module.toml — \
              defaulting to all-required (0.1 behaviour). This default \
-             will be removed in 0.3; add an explicit [capabilities] block \
-             now."
+             will be removed in 0.3; add an explicit [capabilities] block."
         );
     }
 
@@ -221,13 +300,13 @@ pub fn load(path: &Path) -> Result<LoadedManifest, ParseError> {
     })
 }
 
-/// Synthesise a "0.1 fallback" manifest for when no `nexum.toml` is found.
+/// Synthesise a "0.1 fallback" manifest for when no `module.toml` is found.
 /// Emits the same deprecation warning as a missing-section manifest.
 pub fn fallback_manifest() -> LoadedManifest {
     eprintln!(
-        "[deprecation] no nexum.toml found — defaulting to all-required \
+        "[deprecation] no module.toml found — defaulting to all-required \
          (0.1 behaviour). This default will be removed in 0.3; ship a \
-         nexum.toml alongside your component."
+         module.toml alongside your component."
     );
     LoadedManifest {
         manifest: Manifest::default(),
@@ -309,5 +388,88 @@ mod tests {
         assert!(host_allowed("a.b.discord.com", &allow));
         assert!(!host_allowed("discord.com", &allow));
         assert!(!host_allowed("nope.example", &allow));
+    }
+
+    // ── capability enforcement ────────────────────────────────────────────
+
+    #[test]
+    fn wit_import_to_cap_nexum_host() {
+        assert_eq!(wit_import_to_cap("nexum:host/chain@0.2.0"), Some("chain"));
+        assert_eq!(
+            wit_import_to_cap("nexum:host/local-store@0.2.0"),
+            Some("local-store")
+        );
+        assert_eq!(wit_import_to_cap("nexum:host/http@0.2.0"), Some("http"));
+    }
+
+    #[test]
+    fn wit_import_to_cap_shepherd_cow() {
+        assert_eq!(
+            wit_import_to_cap("shepherd:cow/cow-api@0.2.0"),
+            Some("cow-api")
+        );
+    }
+
+    #[test]
+    fn wit_import_to_cap_wasi_is_none() {
+        assert_eq!(wit_import_to_cap("wasi:io/streams@0.2.0"), None);
+        assert_eq!(wit_import_to_cap("wasi:cli/stdin@0.2.0"), None);
+    }
+
+    fn manifest_with_caps(required: &[&str], optional: &[&str]) -> LoadedManifest {
+        LoadedManifest {
+            manifest: Manifest {
+                capabilities: Some(CapabilitiesSection {
+                    required: required.iter().map(|s| s.to_string()).collect(),
+                    optional: optional.iter().map(|s| s.to_string()).collect(),
+                    http: None,
+                }),
+                ..Default::default()
+            },
+            http_allowlist: vec![],
+            config: vec![],
+        }
+    }
+
+    fn manifest_no_caps() -> LoadedManifest {
+        LoadedManifest {
+            manifest: Manifest::default(),
+            http_allowlist: vec![],
+            config: vec![],
+        }
+    }
+
+    #[test]
+    fn enforce_passes_when_caps_absent() {
+        let loaded = manifest_no_caps();
+        let imports = ["nexum:host/chain@0.2.0", "nexum:host/remote-store@0.2.0"];
+        assert!(enforce_capabilities(&loaded, imports.into_iter()).is_ok());
+    }
+
+    #[test]
+    fn enforce_passes_when_all_imports_declared() {
+        let loaded = manifest_with_caps(&["chain", "cow-api"], &["http"]);
+        let imports = [
+            "nexum:host/chain@0.2.0",
+            "shepherd:cow/cow-api@0.2.0",
+            "nexum:host/http@0.2.0",
+            "wasi:io/streams@0.2.0",
+        ];
+        assert!(enforce_capabilities(&loaded, imports.into_iter()).is_ok());
+    }
+
+    #[test]
+    fn enforce_rejects_undeclared_import() {
+        let loaded = manifest_with_caps(&["chain"], &[]);
+        let imports = ["nexum:host/chain@0.2.0", "nexum:host/remote-store@0.2.0"];
+        let err = enforce_capabilities(&loaded, imports.into_iter()).unwrap_err();
+        assert_eq!(err.capability, "remote-store");
+    }
+
+    #[test]
+    fn enforce_optional_caps_are_also_allowed() {
+        let loaded = manifest_with_caps(&["chain"], &["remote-store"]);
+        let imports = ["nexum:host/chain@0.2.0", "nexum:host/remote-store@0.2.0"];
+        assert!(enforce_capabilities(&loaded, imports.into_iter()).is_ok());
     }
 }

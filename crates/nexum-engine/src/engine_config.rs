@@ -1,6 +1,6 @@
 //! Engine-side runtime configuration.
 //!
-//! Distinct from `nexum.toml` (module manifest): this file describes
+//! Distinct from `module.toml` (module manifest): this file describes
 //! the *engine*'s I/O wiring — chain RPC endpoints and the on-disk
 //! location of the `local-store` database. Both are required for the
 //! 0.2 reference engine to do anything other than print stubs.
@@ -33,7 +33,7 @@ pub struct EngineConfig {
     #[serde(default)]
     pub chains: BTreeMap<u64, ChainConfig>,
     /// Modules the supervisor should boot. Each entry resolves a
-    /// `(component.wasm, nexum.toml)` pair on the local filesystem
+    /// `(component.wasm, module.toml)` pair on the local filesystem
     /// for 0.2 — content-addressed resolution (Swarm / OCI /
     /// `[[content.sources]]`) lands in 0.3 per
     /// `docs/03-module-discovery.md`.
@@ -44,13 +44,13 @@ pub struct EngineConfig {
 /// One `[[modules]]` table from `engine.toml`.
 ///
 /// Both fields are filesystem paths in 0.2. `manifest` defaults to
-/// `nexum.toml` next to `path` if omitted, matching the bundle layout
+/// `module.toml` next to `path` if omitted, matching the bundle layout
 /// in `docs/02-modules-events-packaging.md`.
 #[derive(Debug, Deserialize)]
 pub struct ModuleEntry {
     /// Path to the compiled `.wasm` component.
     pub path: std::path::PathBuf,
-    /// Path to the module's `nexum.toml`. Defaults to `<path-parent>/nexum.toml`.
+    /// Path to the module's `module.toml`. Defaults to `<path-parent>/module.toml`.
     #[serde(default)]
     pub manifest: Option<std::path::PathBuf>,
 }

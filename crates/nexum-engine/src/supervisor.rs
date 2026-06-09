@@ -5,14 +5,11 @@
 //! `Store`, and routes the event types declared in each manifest's
 //! `[[subscription]]` table.
 //!
-//! 0.2 dispatches a block event to every module that subscribed to
-//! that chain's blocks, and a log event only to the module that
-//! opened the subscription. Restart + poison-pill bookkeeping ships
-//! in a follow-up — for now a failing `_on_event` is logged via
-//! `tracing::error!` and the module continues to receive subsequent
-//! events. Lifecycle states `Restart` / `Dead` from
-//! `docs/02-modules-events-packaging.md` land alongside the
-//! `[module.restart]` schema in 0.3.
+//! Trap handling (BLEU-817): a wasmtime trap in `on_event` marks the
+//! module as `alive = false` and removes it from all future dispatch.
+//! The module's subscriptions remain registered (the event-loop
+//! streams are not closed) but the dispatcher skips dead modules.
+//! Full restart-with-backoff lands in 0.3.
 
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -40,9 +37,13 @@ struct LoadedModule {
     name: String,
     bindings: Shepherd,
     store: Store<HostState>,
-    /// Subscriptions copied from `nexum.toml`. The supervisor reads
+    /// Subscriptions copied from `module.toml`. The supervisor reads
     /// these on every event to decide whether to dispatch.
     subscriptions: Vec<Subscription>,
+    /// Set to `false` when `on_event` traps. Dead modules are silently
+    /// skipped on every subsequent dispatch. Full restart-with-backoff
+    /// lands in 0.3.
+    alive: bool,
 }
 
 impl Supervisor {
@@ -103,19 +104,33 @@ impl Supervisor {
         provider_pool: &ProviderPool,
         local_store: &LocalStore,
     ) -> Result<LoadedModule> {
-        let manifest_path = entry
-            .manifest
-            .clone()
-            .or_else(|| entry.path.parent().map(|p| p.join("nexum.toml")));
+        // Canonical name is module.toml (ADR-0001). nexum.toml is accepted
+        // with a deprecation warning during the 0.1→0.2 transition.
+        let manifest_path = entry.manifest.clone().or_else(|| {
+            let dir = entry.path.parent()?.to_owned();
+            let canonical = dir.join("module.toml");
+            if canonical.exists() {
+                return Some(canonical);
+            }
+            let legacy = dir.join("nexum.toml");
+            if legacy.exists() {
+                eprintln!(
+                    "[deprecation] nexum.toml is deprecated; rename to module.toml \
+                     (ADR-0001). Support will be removed in 0.3."
+                );
+                return Some(legacy);
+            }
+            None
+        });
         let loaded_manifest: LoadedManifest = match manifest_path.as_deref() {
             Some(p) if p.exists() => {
-                info!(manifest = %p.display(), "loading nexum.toml");
+                info!(manifest = %p.display(), "loading module manifest");
                 manifest::load(p)?
             }
             _ => {
                 warn!(
                     component = %entry.path.display(),
-                    "no nexum.toml — falling back to anonymous module"
+                    "no module.toml — falling back to anonymous module"
                 );
                 manifest::fallback_manifest()
             }
@@ -126,6 +141,14 @@ impl Supervisor {
         let component = Component::from_file(engine, &entry.path)
             .map_err(Error::from)
             .with_context(|| format!("compile {}", entry.path.display()))?;
+
+        // Enforce capability declarations before spending time on instantiation.
+        manifest::enforce_capabilities(
+            &loaded_manifest,
+            component.component_type().imports(engine).map(|(n, _)| n),
+        )
+        .map_err(|e| Error::msg(e.to_string()))
+        .with_context(|| format!("capability violation in {}", entry.path.display()))?;
         let wasi = WasiCtxBuilder::new().inherit_stdio().build();
         let module_namespace = if loaded_manifest.manifest.module.name.is_empty() {
             "module".to_owned()
@@ -189,6 +212,7 @@ impl Supervisor {
             bindings,
             store,
             subscriptions: loaded_manifest.manifest.subscriptions.clone(),
+            alive: true,
         })
     }
 
@@ -243,6 +267,7 @@ impl Supervisor {
 
     /// Dispatch a block event to every module subscribed to
     /// `block.chain_id`. Returns the number of modules invoked.
+    /// Modules that trap are marked dead and excluded from future dispatch.
     pub async fn dispatch_block(&mut self, block: crate::nexum::host::types::Block) -> usize {
         let event = crate::nexum::host::types::Event::Block(block);
         let chain_id = match &event {
@@ -251,6 +276,9 @@ impl Supervisor {
         };
         let mut dispatched = 0;
         for module in &mut self.modules {
+            if !module.alive {
+                continue;
+            }
             let subscribed = module
                 .subscriptions
                 .iter()
@@ -272,21 +300,24 @@ impl Supervisor {
                     message = %host_err.message,
                     "on-event returned host-error",
                 ),
-                Err(trap) => error!(
-                    module = %module.name,
-                    chain_id,
-                    error = %trap,
-                    "on-event trapped",
-                ),
+                Err(trap) => {
+                    error!(
+                        module = %module.name,
+                        chain_id,
+                        error = %trap,
+                        "on-event trapped — module marked dead, removed from dispatch",
+                    );
+                    module.alive = false;
+                }
             }
         }
         dispatched
     }
 
     /// Dispatch a log event to the specific module that opened the
-    /// subscription. Returns `true` when the module accepted the
-    /// dispatch; `false` when the module was not found or its
-    /// callback failed.
+    /// subscription. Returns `true` when the module accepted the dispatch;
+    /// `false` when the module is dead, not found, or its callback failed.
+    /// A trapping module is marked dead and excluded from future dispatch.
     pub async fn dispatch_log(
         &mut self,
         module_name: &str,
@@ -300,6 +331,9 @@ impl Supervisor {
                 return false;
             }
         };
+        if !target.alive {
+            return false;
+        }
         let event = crate::nexum::host::types::Event::Logs(vec![project_log(chain_id, &log)]);
         match target
             .bindings
@@ -323,11 +357,17 @@ impl Supervisor {
                     module = %module_name,
                     chain_id,
                     error = %trap,
-                    "on-event trapped",
+                    "on-event trapped — module marked dead, removed from dispatch",
                 );
+                target.alive = false;
                 false
             }
         }
+    }
+
+    /// Count of modules currently alive (not dead due to traps).
+    pub fn alive_count(&self) -> usize {
+        self.modules.iter().filter(|m| m.alive).count()
     }
 }
 
