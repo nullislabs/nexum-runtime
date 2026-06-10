@@ -1,7 +1,7 @@
 //! Engine-side runtime configuration.
 //!
 //! Distinct from `module.toml` (module manifest): this file describes
-//! the *engine*'s I/O wiring — chain RPC endpoints and the on-disk
+//! the *engine*'s I/O wiring - chain RPC endpoints and the on-disk
 //! location of the `local-store` database. Both are required for the
 //! 0.2 reference engine to do anything other than print stubs.
 //!
@@ -10,7 +10,7 @@
 //! 1. `--engine-config <path>` CLI flag (future), or third positional
 //!    argument today;
 //! 2. `engine.toml` in the current working directory;
-//! 3. defaults — no chains configured, `state_dir = ./data`.
+//! 3. defaults - no chains configured, `state_dir = ./data`.
 //!
 //! A missing config is OK for the example module (it only logs); for
 //! the cow-api / chain backends it surfaces as `HostError {
@@ -34,7 +34,7 @@ pub struct EngineConfig {
     pub chains: BTreeMap<u64, ChainConfig>,
     /// Modules the supervisor should boot. Each entry resolves a
     /// `(component.wasm, module.toml)` pair on the local filesystem
-    /// for 0.2 — content-addressed resolution (Swarm / OCI /
+    /// for 0.2 - content-addressed resolution (Swarm / OCI /
     /// `[[content.sources]]`) lands in 0.3 per
     /// `docs/03-module-discovery.md`.
     #[serde(default)]
@@ -101,7 +101,7 @@ pub fn load_or_default(path: Option<&Path>) -> anyhow::Result<EngineConfig> {
     if !path.exists() {
         warn!(
             path = %path.display(),
-            "engine.toml not found — running with defaults (no chain RPC endpoints; \
+            "engine.toml not found - running with defaults (no chain RPC endpoints; \
              chain::request and cow_api::submit_order will return Unsupported)"
         );
         return Ok(EngineConfig::default());

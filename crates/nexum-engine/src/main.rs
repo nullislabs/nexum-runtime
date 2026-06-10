@@ -1,3 +1,5 @@
+#![cfg_attr(not(test), warn(unused_crate_dependencies))]
+
 mod engine_config;
 mod host;
 mod manifest;
@@ -52,7 +54,7 @@ struct Cli {
 }
 
 // Both packages are listed explicitly so wit-parser can resolve the
-// cross-package reference natively — no vendored deps/ tree needed.
+// cross-package reference natively - no vendored deps/ tree needed.
 // World name is fully qualified.
 wasmtime::component::bindgen!({
     path: ["../../wit/nexum-host", "../../wit/shepherd-cow"],
@@ -86,11 +88,11 @@ struct HostState {
     /// Namespace for the running module's `local-store` rows. Set from
     /// `manifest.module.name` at instantiation.
     module_namespace: String,
-    /// `cow-api` backend — per-chain `OrderBookApi` clients + reqwest.
+    /// `cow-api` backend - per-chain `OrderBookApi` clients + reqwest.
     cow: host::cow_orderbook::OrderBookPool,
-    /// `chain` backend — per-chain alloy `DynProvider` pool.
+    /// `chain` backend - per-chain alloy `DynProvider` pool.
     chain: host::provider_pool::ProviderPool,
-    /// `local-store` backend — redb file with host-side namespacing.
+    /// `local-store` backend - redb file with host-side namespacing.
     store: host::local_store_redb::LocalStore,
 }
 
@@ -189,11 +191,11 @@ impl shepherd::cow::cow_api::Host for HostState {
                 message: format!("invalid OrderCreation JSON: {err}"),
                 data: None,
             }),
-            Err(host::cow_orderbook::CowApiError::Orderbook(msg)) => Err(HostError {
+            Err(host::cow_orderbook::CowApiError::Orderbook(err)) => Err(HostError {
                 domain: "cow-api".into(),
                 kind: HostErrorKind::Denied,
                 code: 0,
-                message: msg,
+                message: err.to_string(),
                 data: None,
             }),
             Err(err) => Err(internal_error("cow-api", err.to_string())),
@@ -268,7 +270,7 @@ impl nexum::host::chain::Host for HostState {
 
 impl nexum::host::identity::Host for HostState {
     async fn accounts(&mut self) -> Result<Vec<Vec<u8>>, HostError> {
-        // No keystore wired yet — return an empty roster so guests can
+        // No keystore wired yet - return an empty roster so guests can
         // probe-then-skip without erroring. Real keystore lands in 0.3.
         Ok(vec![])
     }
@@ -367,7 +369,7 @@ impl nexum::host::messaging::Host for HostState {
         _end_time: Option<u64>,
         _limit: Option<u32>,
     ) -> Result<Vec<nexum::host::types::Message>, HostError> {
-        // Empty result — same posture as `identity::accounts`.
+        // Empty result - same posture as `identity::accounts`.
         Ok(vec![])
     }
 }
@@ -405,7 +407,7 @@ impl nexum::host::random::Host for HostState {
         let mut buf = vec![0u8; len as usize];
         // getrandom 0.4: fill() returns Result<(), Error>. CSPRNG failures
         // are exceptionally rare on supported platforms; on failure we
-        // return zero-filled bytes — guests that need a strong-failure
+        // return zero-filled bytes - guests that need a strong-failure
         // signal should use identity or chain primitives instead.
         let _ = getrandom::fill(&mut buf);
         buf
@@ -419,7 +421,7 @@ impl nexum::host::http::Host for HostState {
     ) -> Result<nexum::host::http::Response, HostError> {
         // Manifest allowlist enforcement runs before any I/O. Hosts that
         // never link a manifest leave `http_allowlist` empty, which denies
-        // every request — matching the "no implicit network" stance.
+        // every request - matching the "no implicit network" stance.
         let host = match manifest::extract_host(&req.url) {
             Some(h) => h,
             None => {
@@ -501,7 +503,7 @@ async fn main() -> anyhow::Result<()> {
         .await
         .context("open chain providers")?;
 
-    // wasmtime engine + linker — one of each, shared across modules.
+    // wasmtime engine + linker - one of each, shared across modules.
     let mut config = wasmtime::Config::new();
     config.wasm_component_model(true);
     config.consume_fuel(true);
@@ -514,7 +516,7 @@ async fn main() -> anyhow::Result<()> {
     )?;
     wasmtime_wasi::p2::add_to_linker_async(&mut linker)?;
 
-    // Boot supervisor — `engine.toml.[[modules]]` first, CLI
+    // Boot supervisor - `engine.toml.[[modules]]` first, CLI
     // positional second.
     let mut supervisor = if let Some(wasm) = cli.wasm.as_deref() {
         if !engine_cfg.modules.is_empty() {
@@ -542,7 +544,7 @@ async fn main() -> anyhow::Result<()> {
         .await?
     } else {
         anyhow::bail!(
-            "no modules to run — either pass a positional <wasm-path> or declare \
+            "no modules to run - either pass a positional <wasm-path> or declare \
              [[modules]] entries in engine.toml"
         );
     };
@@ -559,7 +561,7 @@ async fn main() -> anyhow::Result<()> {
     let log_subs = supervisor.log_subscriptions();
 
     if block_chains.is_empty() && log_subs.is_empty() {
-        info!("no [[subscription]] entries — engine has nothing to run; exiting");
+        info!("no [[subscription]] entries - engine has nothing to run; exiting");
         return Ok(());
     }
 
@@ -569,7 +571,7 @@ async fn main() -> anyhow::Result<()> {
     let shutdown = async {
         match wait_for_shutdown_signal().await {
             Ok(name) => info!(signal = %name, "shutdown signal received"),
-            Err(err) => warn!(error = %err, "signal handler failed — using ctrl-c"),
+            Err(err) => warn!(error = %err, "signal handler failed - using ctrl-c"),
         }
     };
 
@@ -679,14 +681,14 @@ async fn run_event_loop(
                     };
                     supervisor.dispatch_block(block).await;
                 }
-                Some(Err(err)) => warn!(error = %err, "block stream error — continuing"),
+                Some(Err(err)) => warn!(error = %err, "block stream error - continuing"),
                 None => {}
             },
             next = logs.next() => match next {
                 Some(Ok((module, chain_id, log))) => {
                     supervisor.dispatch_log(&module, chain_id, log).await;
                 }
-                Some(Err(err)) => warn!(error = %err, "log stream error — continuing"),
+                Some(Err(err)) => warn!(error = %err, "log stream error - continuing"),
                 None => {}
             },
         }

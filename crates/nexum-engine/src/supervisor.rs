@@ -130,7 +130,7 @@ impl Supervisor {
             _ => {
                 warn!(
                     component = %entry.path.display(),
-                    "no module.toml — falling back to anonymous module"
+                    "no module.toml - falling back to anonymous module"
                 );
                 manifest::fallback_manifest()
             }
@@ -147,7 +147,6 @@ impl Supervisor {
             &loaded_manifest,
             component.component_type().imports(engine).map(|(n, _)| n),
         )
-        .map_err(|e| Error::msg(e.to_string()))
         .with_context(|| format!("capability violation in {}", entry.path.display()))?;
         let wasi = WasiCtxBuilder::new().inherit_stdio().build();
         let module_namespace = if loaded_manifest.manifest.module.name.is_empty() {
@@ -264,7 +263,7 @@ impl Supervisor {
                             module = %module.name,
                             chain_id,
                             error = %err,
-                            "invalid log subscription — skipping",
+                            "invalid log subscription - skipping",
                         ),
                     }
                 }
@@ -296,7 +295,7 @@ impl Supervisor {
             }
             // Refuel before each invocation so each event gets a fresh budget.
             if let Err(e) = module.store.set_fuel(crate::DEFAULT_FUEL_PER_EVENT) {
-                error!(module = %module.name, error = %e, "set_fuel failed — skipping");
+                error!(module = %module.name, error = %e, "set_fuel failed - skipping");
                 continue;
             }
             match module
@@ -318,7 +317,7 @@ impl Supervisor {
                         module = %module.name,
                         chain_id,
                         error = %trap,
-                        "on-event trapped — module marked dead, removed from dispatch",
+                        "on-event trapped - module marked dead, removed from dispatch",
                     );
                     module.alive = false;
                 }
@@ -340,7 +339,7 @@ impl Supervisor {
         let target = match self.modules.iter_mut().find(|m| m.name == module_name) {
             Some(m) => m,
             None => {
-                warn!(module = %module_name, "no such module — dropping log");
+                warn!(module = %module_name, "no such module - dropping log");
                 return false;
             }
         };
@@ -348,7 +347,7 @@ impl Supervisor {
             return false;
         }
         if let Err(e) = target.store.set_fuel(crate::DEFAULT_FUEL_PER_EVENT) {
-            error!(module = %module_name, error = %e, "set_fuel failed — skipping");
+            error!(module = %module_name, error = %e, "set_fuel failed - skipping");
             return false;
         }
         let event = crate::nexum::host::types::Event::Logs(vec![project_log(chain_id, &log)]);
@@ -374,7 +373,7 @@ impl Supervisor {
                     module = %module_name,
                     chain_id,
                     error = %trap,
-                    "on-event trapped — module marked dead, removed from dispatch",
+                    "on-event trapped - module marked dead, removed from dispatch",
                 );
                 target.alive = false;
                 false
@@ -475,7 +474,7 @@ mod tests {
             Some(p)
         } else {
             eprintln!(
-                "SKIP: {} not found — run `just build-module` to enable E2E tests",
+                "SKIP: {} not found - run `just build-module` to enable E2E tests",
                 p.display()
             );
             None

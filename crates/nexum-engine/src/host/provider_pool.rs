@@ -3,13 +3,13 @@
 //! Per-chain alloy provider, opened from the engine config at boot.
 //! `request` is a raw JSON-RPC dispatch: the host hands `(method,
 //! params)` straight to alloy's transport and returns the result body
-//! verbatim. No method allowlist, no re-encoding of params — the
+//! verbatim. No method allowlist, no re-encoding of params - the
 //! contract is "give us a JSON-RPC pair, we'll return what the node
 //! returns".
 //!
 //! Transports:
-//! - `ws://` / `wss://`  — `WsConnect`; required for `eth_subscribe`.
-//! - `http://` / `https://` — alloy's HTTP transport; request/response only.
+//! - `ws://` / `wss://`  - `WsConnect`; required for `eth_subscribe`.
+//! - `http://` / `https://` - alloy's HTTP transport; request/response only.
 
 use std::collections::BTreeMap;
 use std::pin::Pin;
@@ -66,7 +66,7 @@ impl ProviderPool {
         })
     }
 
-    /// Empty pool — used by tests and as a default when no
+    /// Empty pool - used by tests and as a default when no
     /// `engine.toml` is found. Every `request` call returns
     /// `UnknownChain`.
     #[cfg_attr(not(test), allow(dead_code))]

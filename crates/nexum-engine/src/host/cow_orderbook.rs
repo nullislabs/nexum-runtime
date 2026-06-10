@@ -2,11 +2,11 @@
 //!
 //! Two responsibilities:
 //!
-//! 1. `request` — generic REST passthrough. Module gives the HTTP
+//! 1. `request` - generic REST passthrough. Module gives the HTTP
 //!    method, path (relative to the chain's orderbook base URL), and
 //!    optional JSON body. We dispatch via `reqwest`, return the
 //!    response body verbatim.
-//! 2. `submit_order` — typed submission. Module gives a JSON-encoded
+//! 2. `submit_order` - typed submission. Module gives a JSON-encoded
 //!    `cowprotocol::OrderCreation`; we parse, dispatch via
 //!    `cowprotocol::OrderBookApi::post_order`, return the assigned
 //!    `OrderUid` as a `0x`-prefixed hex string.
@@ -60,7 +60,7 @@ impl OrderBookPool {
     }
 
     /// REST passthrough. The base URL is whichever URL the pool's
-    /// `OrderBookApi` client carries — overrides set via
+    /// `OrderBookApi` client carries - overrides set via
     /// `OrderBookApi::new_with_base_url` (staging, wiremock) flow
     /// through here too, which keeps the passthrough and the typed
     /// `submit_order_json` path aimed at the same orderbook.
@@ -99,7 +99,7 @@ impl OrderBookPool {
         let response = request.send().await.map_err(CowApiError::Network)?;
         // Surface the orderbook's structured 4xx / 5xx bodies verbatim
         // so the guest can decode `{"errorType": "...", "description":
-        // "..."}` — projecting them into HostError here loses the
+        // "..."}` - projecting them into HostError here loses the
         // detail the guest needs to recover.
         let text = response.text().await.map_err(CowApiError::Network)?;
         Ok(text)
@@ -116,10 +116,7 @@ impl OrderBookPool {
     ) -> Result<OrderUid, CowApiError> {
         let creation: OrderCreation = serde_json::from_slice(body).map_err(CowApiError::Decode)?;
         let api = self.get(chain_id)?;
-        let uid = api
-            .post_order(&creation)
-            .await
-            .map_err(|e| CowApiError::Orderbook(e.to_string()))?;
+        let uid = api.post_order(&creation).await?;
         Ok(uid)
     }
 }
@@ -136,8 +133,8 @@ pub enum CowApiError {
     Network(#[from] reqwest::Error),
     #[error("decode OrderCreation JSON: {0}")]
     Decode(#[from] serde_json::Error),
-    #[error("orderbook rejected: {0}")]
-    Orderbook(String),
+    #[error("orderbook: {0}")]
+    Orderbook(#[from] cowprotocol::Error),
 }
 
 #[cfg(test)]
@@ -260,7 +257,7 @@ mod tests {
 
     #[tokio::test]
     async fn request_4xx_response_is_returned_verbatim() {
-        // The host must NOT surface a 4xx as an error — the module
+        // The host must NOT surface a 4xx as an error - the module
         // needs the structured JSON body to decode `OrderPostError`.
         let mock = MockServer::start().await;
         let error_body = r#"{"errorType":"InsufficientFee","description":"fee too low"}"#;

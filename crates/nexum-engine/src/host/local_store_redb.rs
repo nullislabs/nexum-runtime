@@ -8,9 +8,9 @@
 //! The 32-byte hash prefix has two properties that the old
 //! `[len:u8][name][key]` scheme lacked:
 //!
-//! - **Fixed width** — no length field to forge; a module cannot craft a
+//! - **Fixed width** - no length field to forge; a module cannot craft a
 //!   key that bleeds into another module's prefix range.
-//! - **ENS-compatible** — keccak256 is the same hash used by ENS node
+//! - **ENS-compatible** - keccak256 is the same hash used by ENS node
 //!   derivation, so module identities can be derived from ENS names
 //!   without extra hashing in the future (ADR-0003).
 
@@ -75,7 +75,7 @@ impl LocalStore {
         Ok(())
     }
 
-    /// Delete. Idempotent — deleting a missing key is a no-op.
+    /// Delete. Idempotent - deleting a missing key is a no-op.
     pub fn delete(&self, namespace: &str, key: &str) -> Result<(), StorageError> {
         let full = build_key(namespace, key)?;
         let txn = self.db.begin_write().map_err(StorageError::Txn)?;
@@ -90,7 +90,7 @@ impl LocalStore {
     }
 
     /// Enumerate keys in `namespace` whose raw key (post-prefix) starts
-    /// with `prefix`. Returns only the module-visible key strings — the
+    /// with `prefix`. Returns only the module-visible key strings - the
     /// host strips the namespace prefix.
     pub fn list_keys(&self, namespace: &str, prefix: &str) -> Result<Vec<String>, StorageError> {
         let ns_prefix = namespace_prefix(namespace)?;
