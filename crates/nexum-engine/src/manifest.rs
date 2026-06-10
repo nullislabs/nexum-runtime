@@ -226,21 +226,29 @@ pub fn enforce_capabilities<'a>(
 }
 
 /// Map a WIT import name to a capability name, or `None` for non-capability
-/// imports (wasi:*, wasi:io, wasi:cli, etc.).
+/// imports.
+///
+/// Returns `Some` only for functional interfaces that appear in
+/// `KNOWN_CAPABILITIES`. Type-only packages (e.g. `nexum:host/types`) and
+/// WASI system interfaces are treated as non-capability and ignored.
 ///
 /// Examples:
-/// - `"nexum:host/chain@0.2.0"` → `Some("chain")`
-/// - `"shepherd:cow/cow-api@0.2.0"` → `Some("cow-api")`
-/// - `"wasi:io/streams@0.2.0"` → `None`
+/// - `"nexum:host/chain@0.2.0"`      → `Some("chain")`
+/// - `"shepherd:cow/cow-api@0.2.0"`  → `Some("cow-api")`
+/// - `"nexum:host/types@0.2.0"`      → `None` (type-only, not a capability)
+/// - `"wasi:io/streams@0.2.0"`       → `None`
 fn wit_import_to_cap(import_name: &str) -> Option<&str> {
     let without_version = import_name.split('@').next().unwrap_or(import_name);
-    if let Some(iface) = without_version.strip_prefix("nexum:host/") {
-        Some(iface)
-    } else if let Some(iface) = without_version.strip_prefix("shepherd:cow/") {
-        Some(iface)
+    let iface = if let Some(i) = without_version.strip_prefix("nexum:host/") {
+        i
+    } else if let Some(i) = without_version.strip_prefix("shepherd:cow/") {
+        i
     } else {
-        None
-    }
+        return None;
+    };
+    // Only return Some for functional capabilities. Type-only packages
+    // (like nexum:host/types) are shared data definitions, not capabilities.
+    if KNOWN_CAPABILITIES.contains(&iface) { Some(iface) } else { None }
 }
 
 /// Read `module.toml` from `path`, parse, validate, and emit a deprecation
