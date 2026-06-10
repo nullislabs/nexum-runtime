@@ -198,4 +198,33 @@ mod tests {
             .unwrap_err();
         assert!(matches!(err, ProviderError::UnknownChain(1)));
     }
+
+    #[tokio::test]
+    async fn empty_pool_rejects_block_subscribe() {
+        let pool = ProviderPool::empty();
+        // Can't use .unwrap_err() because BlockStream doesn't impl Debug.
+        assert!(matches!(
+            pool.subscribe_blocks(1).await,
+            Err(ProviderError::UnknownChain(1))
+        ));
+    }
+
+    #[tokio::test]
+    async fn empty_pool_rejects_log_subscribe() {
+        let pool = ProviderPool::empty();
+        let filter = alloy_rpc_types_eth::Filter::new();
+        assert!(matches!(
+            pool.subscribe_logs(1, filter).await,
+            Err(ProviderError::UnknownChain(1))
+        ));
+    }
+
+    #[tokio::test]
+    async fn invalid_params_json_is_rejected_before_network() {
+        // RawValue::from_string rejects non-JSON; verify the parse layer
+        // we rely on before forwarding to alloy.
+        let bad = "not json at all {{{";
+        let result = RawValue::from_string(bad.to_owned());
+        assert!(result.is_err(), "invalid JSON should fail RawValue parse");
+    }
 }

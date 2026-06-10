@@ -236,6 +236,64 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn request_post_with_body_is_forwarded() {
+        let mock = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/api/v1/quote"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(r#"{"quote":"ok"}"#))
+            .expect(1)
+            .mount(&mock)
+            .await;
+
+        let pool = pool_with_mainnet_at(&mock);
+        let body = pool
+            .request(
+                Chain::Mainnet.id(),
+                "POST",
+                "/api/v1/quote",
+                Some(r#"{"sellToken":"0x01"}"#),
+            )
+            .await
+            .expect("post with body succeeds");
+        assert_eq!(body, r#"{"quote":"ok"}"#);
+    }
+
+    #[tokio::test]
+    async fn request_4xx_response_is_returned_verbatim() {
+        // The host must NOT surface a 4xx as an error — the module
+        // needs the structured JSON body to decode `OrderPostError`.
+        let mock = MockServer::start().await;
+        let error_body = r#"{"errorType":"InsufficientFee","description":"fee too low"}"#;
+        Mock::given(method("POST"))
+            .and(path("/api/v1/orders"))
+            .respond_with(
+                ResponseTemplate::new(400).set_body_string(error_body),
+            )
+            .expect(1)
+            .mount(&mock)
+            .await;
+
+        let pool = pool_with_mainnet_at(&mock);
+        let body = pool
+            .request(
+                Chain::Mainnet.id(),
+                "POST",
+                "/api/v1/orders",
+                Some(r#"{"test":true}"#),
+            )
+            .await
+            .expect("4xx body is returned, not an Err");
+        assert_eq!(body, error_body);
+    }
+
+    #[tokio::test]
+    async fn request_rejects_unknown_chain() {
+        let pool = OrderBookPool::default();
+        let err = pool.request(99_999, "GET", "/x", None).await.unwrap_err();
+        assert!(matches!(err, CowApiError::UnknownChain(99_999)));
+    }
+
+    #[tokio::test]
     async fn submit_order_propagates_orderbook_response() {
         let mock = MockServer::start().await;
         let body_json = sample_order_json();

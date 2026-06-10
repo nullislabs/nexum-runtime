@@ -149,6 +149,7 @@ impl std::fmt::Display for ParseError {
 impl std::error::Error for ParseError {}
 
 /// Loaded + validated manifest, plus its source path for diagnostics.
+#[derive(Debug)]
 pub struct LoadedManifest {
     pub manifest: Manifest,
     /// Hosts to allow for `http::fetch`. Each entry is either an exact
@@ -471,5 +472,96 @@ mod tests {
         let loaded = manifest_with_caps(&["chain"], &["remote-store"]);
         let imports = ["nexum:host/chain@0.2.0", "nexum:host/remote-store@0.2.0"];
         assert!(enforce_capabilities(&loaded, imports.into_iter()).is_ok());
+    }
+
+    // ── manifest parsing ──────────────────────────────────────────────────
+
+    #[test]
+    fn load_parses_block_and_log_subscriptions() {
+        let toml = r#"
+[module]
+name = "twap-monitor"
+
+[capabilities]
+required = ["chain", "local-store"]
+
+[[subscription]]
+kind     = "block"
+chain_id = 1
+
+[[subscription]]
+kind     = "log"
+chain_id = 1
+address  = "0xC92E8bdf79f0507f65a392b0ab4667716BFE0110"
+event_signature = "0x00000000000000000000000000000000000000000000000000000000deadbeef"
+"#;
+        let manifest: Manifest = toml::from_str(toml).expect("parse");
+        assert_eq!(manifest.module.name, "twap-monitor");
+        assert_eq!(manifest.subscriptions.len(), 2);
+        assert!(matches!(
+            &manifest.subscriptions[0],
+            Subscription::Block { chain_id: 1 }
+        ));
+        if let Subscription::Log { chain_id, address, .. } = &manifest.subscriptions[1] {
+            assert_eq!(*chain_id, 1);
+            assert!(address.is_some());
+        } else {
+            panic!("expected Log subscription");
+        }
+    }
+
+    #[test]
+    fn load_parses_cron_subscription() {
+        let toml = r#"
+[module]
+name = "scheduler"
+
+[[subscription]]
+kind     = "cron"
+schedule = "*/5 * * * *"
+"#;
+        let manifest: Manifest = toml::from_str(toml).expect("parse");
+        assert!(matches!(
+            &manifest.subscriptions[0],
+            Subscription::Cron { .. }
+        ));
+    }
+
+    #[test]
+    fn load_rejects_unknown_capability() {
+        let toml = r#"
+[module]
+name = "bad"
+
+[capabilities]
+required = ["chain", "not-a-real-cap"]
+"#;
+        // Write to a temp file so load() can read it.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("module.toml");
+        std::fs::write(&path, toml).unwrap();
+        let err = load(&path).unwrap_err();
+        assert!(matches!(err, ParseError::UnknownCapability(ref name) if name == "not-a-real-cap"));
+    }
+
+    #[test]
+    fn load_parses_config_table() {
+        let toml = r#"
+[module]
+name = "example"
+
+[config]
+chain_id = 1
+label    = "mainnet"
+enabled  = true
+"#;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("module.toml");
+        std::fs::write(&path, toml).unwrap();
+        let loaded = load(&path).unwrap();
+        let config: std::collections::HashMap<_, _> = loaded.config.into_iter().collect();
+        assert_eq!(config.get("chain_id").map(String::as_str), Some("1"));
+        assert_eq!(config.get("label").map(String::as_str), Some("mainnet"));
+        assert_eq!(config.get("enabled").map(String::as_str), Some("true"));
     }
 }

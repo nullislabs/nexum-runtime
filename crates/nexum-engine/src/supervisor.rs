@@ -441,4 +441,43 @@ mod tests {
         assert!(sup.log_subscriptions().is_empty());
         assert_eq!(sup.module_count(), 0);
     }
+
+    // ── build_alloy_filter ────────────────────────────────────────────────
+
+    #[test]
+    fn alloy_filter_with_address_and_topic() {
+        let addr = "0xC92E8bdf79f0507f65a392b0ab4667716BFE0110";
+        let topic = "0x237e158222e3e6968b72b9db0d8043aacf074ad9f650f0d1606b4d82ee432c00";
+        let filter = build_alloy_filter(Some(addr), Some(topic)).unwrap();
+        // Check address is set (alloy Filter doesn't expose a simple getter,
+        // but we can verify the filter serialises the address field).
+        let serialised = serde_json::to_value(&filter).unwrap();
+        let addr_field = serialised.get("address").unwrap().to_string().to_lowercase();
+        assert!(addr_field.contains(&addr.to_lowercase()[2..])); // strip 0x
+    }
+
+    #[test]
+    fn alloy_filter_no_address_no_topic() {
+        let filter = build_alloy_filter(None, None).unwrap();
+        let serialised = serde_json::to_value(&filter).unwrap();
+        // Address and topics should be absent or null.
+        assert!(
+            serialised.get("address").is_none()
+                || serialised["address"].is_null()
+                || serialised["address"] == serde_json::json!([])
+        );
+    }
+
+    #[test]
+    fn alloy_filter_rejects_bad_address() {
+        let err = build_alloy_filter(Some("not-an-address"), None);
+        assert!(err.is_err());
+    }
+
+    #[test]
+    fn alloy_filter_rejects_bad_topic() {
+        let addr = "0xC92E8bdf79f0507f65a392b0ab4667716BFE0110";
+        let err = build_alloy_filter(Some(addr), Some("not-a-topic"));
+        assert!(err.is_err());
+    }
 }
