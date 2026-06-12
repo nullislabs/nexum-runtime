@@ -213,13 +213,13 @@ pub fn enforce_capabilities<'a>(
         .collect();
 
     for import_name in component_imports {
-        if let Some(cap) = wit_import_to_cap(import_name) {
-            if !declared.contains(cap) {
-                return Err(CapabilityViolation {
-                    capability: cap.to_owned(),
-                    wit_import: import_name.to_owned(),
-                });
-            }
+        if let Some(cap) = wit_import_to_cap(import_name)
+            && !declared.contains(cap)
+        {
+            return Err(CapabilityViolation {
+                capability: cap.to_owned(),
+                wit_import: import_name.to_owned(),
+            });
         }
     }
     Ok(())
@@ -239,16 +239,16 @@ pub fn enforce_capabilities<'a>(
 /// - `"wasi:io/streams@0.2.0"`       → `None`
 fn wit_import_to_cap(import_name: &str) -> Option<&str> {
     let without_version = import_name.split('@').next().unwrap_or(import_name);
-    let iface = if let Some(i) = without_version.strip_prefix("nexum:host/") {
-        i
-    } else if let Some(i) = without_version.strip_prefix("shepherd:cow/") {
-        i
-    } else {
-        return None;
-    };
+    let iface = without_version
+        .strip_prefix("nexum:host/")
+        .or_else(|| without_version.strip_prefix("shepherd:cow/"))?;
     // Only return Some for functional capabilities. Type-only packages
     // (like nexum:host/types) are shared data definitions, not capabilities.
-    if KNOWN_CAPABILITIES.contains(&iface) { Some(iface) } else { None }
+    if KNOWN_CAPABILITIES.contains(&iface) {
+        Some(iface)
+    } else {
+        None
+    }
 }
 
 /// Read `module.toml` from `path`, parse, validate, and emit a deprecation

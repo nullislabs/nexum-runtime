@@ -20,7 +20,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use alloy_primitives::keccak256;
-use redb::{Database, ReadableTable, TableDefinition};
+use redb::{Database, TableDefinition};
 use thiserror::Error;
 
 const TABLE: TableDefinition<'static, &[u8], &[u8]> = TableDefinition::new("nexum:local-store");
@@ -98,12 +98,21 @@ impl LocalStore {
         let txn = self.db.begin_read().map_err(StorageError::Txn)?;
         let table = txn.open_table(TABLE).map_err(StorageError::Table)?;
         let mut out = Vec::new();
-        for entry in table.iter().map_err(StorageError::Storage)? {
+        // redb's B-tree iterates keys in sorted order, so a range
+        // starting at `full_prefix` only touches matching entries (and
+        // the first key past the prefix range). Breaking on the first
+        // non-matching key keeps this O(matching entries) instead of
+        // the O(total DB entries) `table.iter()` would do.
+        for entry in table
+            .range(full_prefix.as_slice()..)
+            .map_err(StorageError::Storage)?
+        {
             let (k, _v) = entry.map_err(StorageError::Storage)?;
             let key_bytes = k.value();
-            if key_bytes.starts_with(&full_prefix)
-                && let Ok(s) = std::str::from_utf8(&key_bytes[ns_prefix.len()..])
-            {
+            if !key_bytes.starts_with(&full_prefix) {
+                break;
+            }
+            if let Ok(s) = std::str::from_utf8(&key_bytes[ns_prefix.len()..]) {
                 out.push(s.to_owned());
             }
         }

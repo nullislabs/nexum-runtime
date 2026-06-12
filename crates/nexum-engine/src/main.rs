@@ -1,5 +1,13 @@
 #![cfg_attr(not(test), warn(unused_crate_dependencies))]
 
+// alloy split its API across multiple crates; we depend on the
+// transports directly so cargo resolves the right feature set, but
+// the runtime code only names them through the `alloy_provider`
+// re-exports. Silence `unused_crate_dependencies` with `as _`.
+use alloy_rpc_client as _;
+use alloy_transport as _;
+use alloy_transport_ws as _;
+
 mod engine_config;
 mod host;
 mod manifest;
@@ -457,11 +465,14 @@ impl nexum::host::http::Host for HostState {
 }
 
 /// Lowercase hex encoder. Kept in the engine binary rather than
-/// pulling a `hex` crate just for one call site.
+/// pulling a `hex` crate just for one call site. Writes into the
+/// pre-allocated buffer to avoid the per-byte `String` allocation
+/// `format!("{b:02x}")` would do.
 fn hex_encode(bytes: &[u8]) -> String {
+    use std::fmt::Write as _;
     let mut s = String::with_capacity(bytes.len() * 2);
     for b in bytes {
-        s.push_str(&format!("{b:02x}"));
+        write!(s, "{b:02x}").expect("writing to String never fails");
     }
     s
 }
@@ -682,14 +693,27 @@ async fn run_event_loop(
                     supervisor.dispatch_block(block).await;
                 }
                 Some(Err(err)) => warn!(error = %err, "block stream error - continuing"),
-                None => {}
+                None => {
+                    // alloy ends the stream with None when the
+                    // WebSocket drops. Without this branch the loop
+                    // keeps polling a dead stream and the operator
+                    // sees no events with no indication anything is
+                    // wrong. Bail out so the supervisor (or whatever
+                    // wraps the engine) restarts us; a reconnect-
+                    // with-backoff is the 0.3 fix.
+                    warn!("block stream ended (WebSocket dropped?) - shutting down for restart");
+                    return;
+                }
             },
             next = logs.next() => match next {
                 Some(Ok((module, chain_id, log))) => {
                     supervisor.dispatch_log(&module, chain_id, log).await;
                 }
                 Some(Err(err)) => warn!(error = %err, "log stream error - continuing"),
-                None => {}
+                None => {
+                    warn!("log stream ended (WebSocket dropped?) - shutting down for restart");
+                    return;
+                }
             },
         }
     }

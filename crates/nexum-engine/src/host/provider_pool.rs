@@ -131,19 +131,23 @@ impl ProviderPool {
             .ok_or(ProviderError::UnknownChain(chain_id))?;
         // Pass the params through as a raw JSON value so alloy does
         // not re-encode them on the way to the node.
-        let params: Box<RawValue> = RawValue::from_string(params_json.clone()).map_err(|e| {
-            ProviderError::InvalidParams {
+        let params: Box<RawValue> =
+            RawValue::from_string(params_json).map_err(|e| ProviderError::InvalidParams {
                 method: method.clone(),
                 detail: e.to_string(),
-            }
-        })?;
-        let result: Box<RawValue> = provider
-            .raw_request(method.clone().into(), params)
-            .await
-            .map_err(|e| ProviderError::Rpc {
-                method,
-                detail: e.to_string(),
             })?;
+        // `raw_request` consumes the method name; clone once for the
+        // error branch so the success path moves the original string
+        // straight into alloy without an extra allocation.
+        let method_for_err = method.clone();
+        let result: Box<RawValue> =
+            provider
+                .raw_request(method.into(), params)
+                .await
+                .map_err(|e| ProviderError::Rpc {
+                    method: method_for_err,
+                    detail: e.to_string(),
+                })?;
         Ok(result.get().to_owned())
     }
 }

@@ -51,7 +51,6 @@ impl Default for OrderBookPool {
 }
 
 impl OrderBookPool {
-
     /// Look up the client for a chain.
     pub fn get(&self, chain_id: u64) -> Result<&OrderBookApi, CowApiError> {
         self.clients

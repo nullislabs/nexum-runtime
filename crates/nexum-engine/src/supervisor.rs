@@ -276,11 +276,8 @@ impl Supervisor {
     /// `block.chain_id`. Returns the number of modules invoked.
     /// Modules that trap are marked dead and excluded from future dispatch.
     pub async fn dispatch_block(&mut self, block: crate::nexum::host::types::Block) -> usize {
+        let chain_id = block.chain_id;
         let event = crate::nexum::host::types::Event::Block(block);
-        let chain_id = match &event {
-            crate::nexum::host::types::Event::Block(b) => b.chain_id,
-            _ => unreachable!(),
-        };
         let mut dispatched = 0;
         for module in &mut self.modules {
             if !module.alive {
@@ -499,12 +496,15 @@ mod tests {
         linker
     }
 
-    fn temp_local_store() -> crate::host::local_store_redb::LocalStore {
+    /// Return `(dir, store)` so the test holds the `TempDir` for the
+    /// duration of the test scope and cleans it up on drop. Forgetting
+    /// the dir (the old `ManuallyDrop` approach) leaks it for the
+    /// entire process lifetime.
+    fn temp_local_store() -> (tempfile::TempDir, crate::host::local_store_redb::LocalStore) {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("ls.redb");
-        // Leak the dir so the file stays alive for the duration of the test.
-        let _ = std::mem::ManuallyDrop::new(dir);
-        crate::host::local_store_redb::LocalStore::open(path).expect("local store")
+        let store = crate::host::local_store_redb::LocalStore::open(path).expect("local store");
+        (dir, store)
     }
 
     // ── E2E tests ─────────────────────────────────────────────────────────
@@ -519,7 +519,7 @@ mod tests {
         let linker = make_linker(&engine);
         let cow_pool = crate::host::cow_orderbook::OrderBookPool::default();
         let provider_pool = crate::host::provider_pool::ProviderPool::empty();
-        let local_store = temp_local_store();
+        let (_dir, local_store) = temp_local_store();
 
         let supervisor = Supervisor::boot_single(
             &engine,
@@ -566,7 +566,7 @@ chain_id = 1
         let linker = make_linker(&engine);
         let cow_pool = crate::host::cow_orderbook::OrderBookPool::default();
         let provider_pool = crate::host::provider_pool::ProviderPool::empty();
-        let local_store = temp_local_store();
+        let (_dir, local_store) = temp_local_store();
 
         let mut supervisor = Supervisor::boot_single(
             &engine,
