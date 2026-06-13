@@ -20,12 +20,14 @@ use wasmtime::component::{Component, Linker, ResourceTable};
 use wasmtime::{Engine, Store};
 use wasmtime_wasi::WasiCtxBuilder;
 
+use crate::bindings::{Config, Shepherd, nexum};
 use crate::engine_config::{EngineConfig, ModuleEntry};
 use crate::host::cow_orderbook::OrderBookPool;
 use crate::host::local_store_redb::LocalStore;
 use crate::host::provider_pool::ProviderPool;
+use crate::host::state::HostState;
 use crate::manifest::{self, LoadedManifest, Subscription};
-use crate::{HostState, Shepherd};
+use crate::runtime::limits::{DEFAULT_FUEL_PER_EVENT, DEFAULT_MEMORY_LIMIT};
 
 /// Owns every loaded module and exposes the dispatch surface the
 /// event loop needs.
@@ -155,7 +157,7 @@ impl Supervisor {
             loaded_manifest.manifest.module.name.clone()
         };
         let limits = wasmtime::StoreLimitsBuilder::new()
-            .memory_size(crate::DEFAULT_MEMORY_LIMIT)
+            .memory_size(DEFAULT_MEMORY_LIMIT)
             .build();
         let mut store = Store::new(
             engine,
@@ -172,14 +174,14 @@ impl Supervisor {
             },
         );
         store.limiter(|state| &mut state.limits);
-        store.set_fuel(crate::DEFAULT_FUEL_PER_EVENT)?;
+        store.set_fuel(DEFAULT_FUEL_PER_EVENT)?;
         let bindings = Shepherd::instantiate_async(&mut store, &component, linker)
             .await
             .map_err(Error::from)
             .with_context(|| format!("instantiate {}", entry.path.display()))?;
 
         // Call `init` with the manifest's `[config]`.
-        let config: crate::Config = if loaded_manifest.config.is_empty() {
+        let config: Config = if loaded_manifest.config.is_empty() {
             vec![("name".into(), module_namespace.clone())]
         } else {
             loaded_manifest.config.clone()
@@ -200,7 +202,7 @@ impl Supervisor {
             ),
         }
         // Refuel after init so the first on_event starts with a full budget.
-        store.set_fuel(crate::DEFAULT_FUEL_PER_EVENT)?;
+        store.set_fuel(DEFAULT_FUEL_PER_EVENT)?;
 
         // Surface any `[[subscription]]` entries the host cannot
         // service yet, so an operator running 0.2 against a 0.3
@@ -275,9 +277,9 @@ impl Supervisor {
     /// Dispatch a block event to every module subscribed to
     /// `block.chain_id`. Returns the number of modules invoked.
     /// Modules that trap are marked dead and excluded from future dispatch.
-    pub async fn dispatch_block(&mut self, block: crate::nexum::host::types::Block) -> usize {
+    pub async fn dispatch_block(&mut self, block: nexum::host::types::Block) -> usize {
         let chain_id = block.chain_id;
-        let event = crate::nexum::host::types::Event::Block(block);
+        let event = nexum::host::types::Event::Block(block);
         let mut dispatched = 0;
         for module in &mut self.modules {
             if !module.alive {
@@ -291,7 +293,7 @@ impl Supervisor {
                 continue;
             }
             // Refuel before each invocation so each event gets a fresh budget.
-            if let Err(e) = module.store.set_fuel(crate::DEFAULT_FUEL_PER_EVENT) {
+            if let Err(e) = module.store.set_fuel(DEFAULT_FUEL_PER_EVENT) {
                 error!(module = %module.name, error = %e, "set_fuel failed - skipping");
                 continue;
             }
@@ -343,11 +345,11 @@ impl Supervisor {
         if !target.alive {
             return false;
         }
-        if let Err(e) = target.store.set_fuel(crate::DEFAULT_FUEL_PER_EVENT) {
+        if let Err(e) = target.store.set_fuel(DEFAULT_FUEL_PER_EVENT) {
             error!(module = %module_name, error = %e, "set_fuel failed - skipping");
             return false;
         }
-        let event = crate::nexum::host::types::Event::Logs(vec![project_log(chain_id, &log)]);
+        let event = nexum::host::types::Event::Logs(vec![project_log(chain_id, &log)]);
         match target
             .bindings
             .call_on_event(&mut target.store, &event)
@@ -388,8 +390,8 @@ impl Supervisor {
 /// Project an alloy `Log` onto the WIT `log` record. The chain id
 /// is not on the alloy log (the subscription context carries it),
 /// so we receive it alongside.
-fn project_log(chain_id: u64, log: &alloy_rpc_types_eth::Log) -> crate::nexum::host::types::Log {
-    crate::nexum::host::types::Log {
+fn project_log(chain_id: u64, log: &alloy_rpc_types_eth::Log) -> nexum::host::types::Log {
+    nexum::host::types::Log {
         chain_id,
         address: log.address().as_slice().to_vec(),
         topics: log.topics().iter().map(|t| t.as_slice().to_vec()).collect(),
@@ -580,7 +582,7 @@ chain_id = 1
         .await
         .expect("boot_single");
 
-        let block = crate::nexum::host::types::Block {
+        let block = nexum::host::types::Block {
             chain_id: 1,
             number: 19_000_000,
             hash: vec![0xab; 32],
