@@ -11,5 +11,4 @@ crate-type = ["cdylib"]
 
 [dependencies]
 shepherd-sdk = { path = "../../../crates/shepherd-sdk" }
-alloy-primitives = { version = "1.5", default-features = false, features = ["std"] }
 wit-bindgen = { version = "0.57", default-features = false, features = ["macros", "realloc"] }

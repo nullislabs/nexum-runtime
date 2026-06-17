@@ -1,4 +1,4 @@
-# Example module manifest — exercises the 0.2 manifest schema end-to-end.
+# Example module manifest - exercises the 0.2 manifest schema end-to-end.
 
 [module]
 name = "example"
