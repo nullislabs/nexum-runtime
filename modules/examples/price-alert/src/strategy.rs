@@ -1,7 +1,7 @@
 //! Pure strategy logic for the price-alert module.
 //!
 //! Every interaction with the world flows through the [`Host`] trait
-//! seam exposed by `shepherd-sdk` — no direct calls to wit-bindgen-
+//! seam exposed by `shepherd-sdk` - no direct calls to wit-bindgen-
 //! generated free functions live here. The `lib.rs` glue wraps a
 //! `WitBindgenHost` adapter around the module's per-cdylib wit-bindgen
 //! imports and hands it to [`on_block`]; tests under `#[cfg(test)]`
@@ -148,7 +148,10 @@ pub fn parse_config(entries: &[(String, String)]) -> Result<Settings, HostError>
     }
     let threshold_decimal = config_get(entries, "threshold")?;
     let threshold_scaled = scale_threshold(threshold_decimal, decimals)?;
-    let direction = match config_get(entries, "direction")?.to_ascii_lowercase().as_str() {
+    let direction = match config_get(entries, "direction")?
+        .to_ascii_lowercase()
+        .as_str()
+    {
         "above" => Direction::Above,
         "below" => Direction::Below,
         other => {
@@ -182,7 +185,10 @@ fn config_get<'a>(entries: &'a [(String, String)], key: &str) -> Result<&'a str,
 }
 
 fn config_get_optional<'a>(entries: &'a [(String, String)], key: &str) -> Option<&'a str> {
-    entries.iter().find(|(k, _)| k == key).map(|(_, v)| v.as_str())
+    entries
+        .iter()
+        .find(|(k, _)| k == key)
+        .map(|(_, v)| v.as_str())
 }
 
 fn config_err(message: impl Into<String>) -> HostError {
@@ -234,8 +240,8 @@ fn scale_threshold(threshold_decimal: &str, decimals: u32) -> Result<I256, HostE
     let unsigned: U256 = raw
         .parse()
         .map_err(|e| config_err(format!("threshold parse: {e}")))?;
-    let signed = I256::try_from(unsigned)
-        .map_err(|e| config_err(format!("threshold range: {e}")))?;
+    let signed =
+        I256::try_from(unsigned).map_err(|e| config_err(format!("threshold range: {e}")))?;
     Ok(if sign < 0 { -signed } else { signed })
 }
 
@@ -248,7 +254,9 @@ mod tests {
 
     fn sample_settings(trigger_scaled_dec: i128, direction: Direction) -> Settings {
         Settings {
-            oracle_address: "0x694AA1769357215DE4FAC081bf1f309aDC325306".parse().unwrap(),
+            oracle_address: "0x694AA1769357215DE4FAC081bf1f309aDC325306"
+                .parse()
+                .unwrap(),
             threshold_scaled: I256::try_from(trigger_scaled_dec).unwrap(),
             direction,
             every_n_blocks: 1,
@@ -282,17 +290,41 @@ mod tests {
     #[test]
     fn classify_below_fires_at_or_under_threshold() {
         let t = I256::try_from(100_i32).unwrap();
-        assert!(classify(I256::try_from(99_i32).unwrap(), t, Direction::Below));
-        assert!(classify(I256::try_from(100_i32).unwrap(), t, Direction::Below));
-        assert!(!classify(I256::try_from(101_i32).unwrap(), t, Direction::Below));
+        assert!(classify(
+            I256::try_from(99_i32).unwrap(),
+            t,
+            Direction::Below
+        ));
+        assert!(classify(
+            I256::try_from(100_i32).unwrap(),
+            t,
+            Direction::Below
+        ));
+        assert!(!classify(
+            I256::try_from(101_i32).unwrap(),
+            t,
+            Direction::Below
+        ));
     }
 
     #[test]
     fn classify_above_fires_at_or_over_threshold() {
         let t = I256::try_from(100_i32).unwrap();
-        assert!(classify(I256::try_from(101_i32).unwrap(), t, Direction::Above));
-        assert!(classify(I256::try_from(100_i32).unwrap(), t, Direction::Above));
-        assert!(!classify(I256::try_from(99_i32).unwrap(), t, Direction::Above));
+        assert!(classify(
+            I256::try_from(101_i32).unwrap(),
+            t,
+            Direction::Above
+        ));
+        assert!(classify(
+            I256::try_from(100_i32).unwrap(),
+            t,
+            Direction::Above
+        ));
+        assert!(!classify(
+            I256::try_from(99_i32).unwrap(),
+            t,
+            Direction::Above
+        ));
     }
 
     #[test]
@@ -477,11 +509,7 @@ mod tests {
         let host = MockHost::new();
         let mut settings = sample_settings(100, Direction::Below);
         settings.every_n_blocks = 5;
-        programmed_eth_call(
-            &host,
-            settings.oracle_address,
-            Ok(oracle_response_json(50)),
-        );
+        programmed_eth_call(&host, settings.oracle_address, Ok(oracle_response_json(50)));
 
         // Blocks 1..5 do not poll; only block 5 (which divides evenly).
         for n in 1..5 {
