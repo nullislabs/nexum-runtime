@@ -1,0 +1,32 @@
+# balance-tracker example module: tracks native-token balances of a
+# fixed address list and emits a Warn log when one moves by more than
+# `change_threshold` wei between blocks. Demonstrates `chain::request`
+# (non-eth_call), per-key `local-store` state, and "diff-against-last-
+# seen" patterns reusable across indexer modules.
+
+[module]
+name = "balance-tracker"
+version = "0.1.0"
+component = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+
+[capabilities]
+required = ["logging", "chain", "local-store"]
+optional = []
+
+[capabilities.http]
+allow = []
+
+# --- subscriptions ----------------------------------------------------
+
+[[subscription]]
+kind = "block"
+chain_id = 11155111
+
+# --- config -----------------------------------------------------------
+
+[config]
+# Comma-separated list of 0x-prefixed 20-byte addresses. Whitespace
+# around entries is tolerated.
+addresses = "0x70997970C51812dc3A010C7d01b50e0d17dc79C8,0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266"
+# Change threshold in wei. Default is 0.1 ETH = 10**17.
+change_threshold = "100000000000000000"
