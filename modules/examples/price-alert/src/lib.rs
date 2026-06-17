@@ -31,6 +31,7 @@
 
 // wit_bindgen::generate! expands to host-import shims whose arity matches
 // the WIT signatures, which can exceed clippy's too-many-arguments threshold.
+#![cfg_attr(not(test), warn(unused_crate_dependencies))]
 #![allow(clippy::too_many_arguments)]
 
 wit_bindgen::generate!({
@@ -49,7 +50,7 @@ use nexum::host::types::HostErrorKind;
 use nexum::host::{chain, logging, types};
 
 sol! {
-    /// Chainlink AggregatorV3Interface — only the function this
+    /// Chainlink AggregatorV3Interface - only the function this
     /// module needs.
     interface AggregatorV3 {
         function latestRoundData() external view returns (
@@ -102,7 +103,7 @@ impl Guest for PriceAlert {
                         cfg.every_n_blocks,
                     ),
                 );
-                // OnceLock::set fails only if already set — in a
+                // OnceLock::set fails only if already set - in a
                 // single-init module that means a re-entry from the
                 // supervisor, which is not a hard error; we keep the
                 // first parse.
@@ -137,7 +138,7 @@ impl Guest for PriceAlert {
 /// Build + dispatch the `latestRoundData` eth_call. Result is
 /// logged: Info if the threshold is not crossed, Warn if it is.
 /// Returns nothing so a single bad RPC reply does not propagate
-/// into the supervisor — the next block re-polls.
+/// into the supervisor - the next block re-polls.
 fn poll_oracle(chain_id: u64, cfg: &Settings) {
     let call_data = AggregatorV3::latestRoundDataCall {}.abi_encode();
     let params = eth_call_params(&cfg.oracle_address, &call_data);
@@ -189,7 +190,7 @@ fn poll_oracle(chain_id: u64, cfg: &Settings) {
 }
 
 /// `true` when `answer` is on the firing side of `threshold` per
-/// `direction`. Pure — exercised by the unit tests.
+/// `direction`. Pure - exercised by the unit tests.
 fn classify(answer: I256, threshold: I256, direction: Direction) -> bool {
     match direction {
         Direction::Above => answer >= threshold,
@@ -279,7 +280,7 @@ fn scale_threshold(threshold_decimal: &str, decimals: u32) -> Result<I256, Strin
         }
         s
     } else {
-        // Fractional part is longer than `decimals` — truncate
+        // Fractional part is longer than `decimals` - truncate
         // (chops trailing digits; deliberately not rounding to keep
         // behaviour predictable).
         let mut s = String::with_capacity(whole.len() + decimals as usize);

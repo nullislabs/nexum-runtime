@@ -23,6 +23,7 @@
 //! change_threshold = "100000000000000000"  # 0.1 ETH
 //! ```
 
+#![cfg_attr(not(test), warn(unused_crate_dependencies))]
 #![allow(clippy::too_many_arguments)]
 
 wit_bindgen::generate!({
@@ -33,7 +34,7 @@ wit_bindgen::generate!({
 
 use std::sync::OnceLock;
 
-use alloy_primitives::{Address, U256};
+use shepherd_sdk::prelude::{Address, U256};
 
 use nexum::host::types::HostErrorKind;
 use nexum::host::{chain, local_store, logging, types};
@@ -82,7 +83,7 @@ impl Guest for BalanceTracker {
         if let types::Event::Block(block) = event {
             for addr in &s.addresses {
                 if let Err(err) = check_one(block.chain_id, *addr, s.change_threshold) {
-                    // Surface but do not propagate — a single flaky
+                    // Surface but do not propagate - a single flaky
                     // eth_getBalance shouldn't stop the loop.
                     logging::log(
                         logging::Level::Warn,
@@ -110,7 +111,7 @@ fn check_one(chain_id: u64, addr: Address, threshold: U256) -> Result<(), HostEr
 
     if abs_diff(current, prior) >= threshold {
         // Distinguish first-seen (prior == ZERO and we have no
-        // record) from a real change — the Warn line carries the
+        // record) from a real change - the Warn line carries the
         // delta direction so an operator can grep.
         let direction = if current > prior { "+" } else { "-" };
         logging::log(
@@ -227,7 +228,7 @@ export!(BalanceTracker);
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alloy_primitives::address;
+    use shepherd_sdk::prelude::address;
 
     #[test]
     fn parse_balance_hex_decodes_canonical_response() {
