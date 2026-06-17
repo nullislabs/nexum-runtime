@@ -167,6 +167,194 @@ chain_id = 1
     assert_eq!(supervisor.alive_count(), 1, "module must remain alive");
 }
 
+// ── COW-1068: production module integration tests ────────────────────
+//
+// One test per module that goes through the real wit-bindgen +
+// WitBindgenHost adapter + supervisor dispatch path, not just the
+// strategy-level MockHost coverage. Mirrors the example-module e2e
+// shape above; each test is guarded by `module_wasm_or_skip()` so
+// local runs without a fresh `--target wasm32-wasip2 --release`
+// build are skipped rather than failing.
+
+const SEPOLIA: u64 = 11_155_111;
+
+/// Path to a production module's .wasm artefact under the workspace
+/// target dir. `Cargo` writes the artefact as `<name>.wasm` with
+/// hyphens replaced by underscores, so the helper mirrors that.
+fn module_wasm(module_name: &str) -> PathBuf {
+    let artifact = module_name.replace('-', "_");
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .join(format!("target/wasm32-wasip2/release/{artifact}.wasm"))
+}
+
+fn module_wasm_or_skip(module_name: &str) -> Option<PathBuf> {
+    let p = module_wasm(module_name);
+    if p.exists() {
+        Some(p)
+    } else {
+        eprintln!(
+            "SKIP: {} not found - build with `cargo build -p {module_name} --target wasm32-wasip2 --release`",
+            p.display()
+        );
+        None
+    }
+}
+
+/// Resolve a real `module.toml` for one of the production modules.
+/// Looking up the real manifest (rather than synthesising one) keeps
+/// the integration test honest about the capability set + subscription
+/// shape each module actually ships.
+fn production_module_toml(relative_path: &str) -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .join(relative_path)
+}
+
+fn synthetic_sepolia_block() -> nexum::host::types::Block {
+    nexum::host::types::Block {
+        chain_id: SEPOLIA,
+        number: 19_000_000,
+        hash: vec![0xab; 32],
+        timestamp: 1_700_000_000_000,
+    }
+}
+
+/// Boot a single module from `(wasm, manifest)` and return the live
+/// supervisor. Shared body across the 5 integration tests.
+async fn boot_production_module(
+    engine: &wasmtime::Engine,
+    linker: &Linker<crate::HostState>,
+    local_store: &crate::host::local_store_redb::LocalStore,
+    wasm: &Path,
+    manifest: &Path,
+) -> Supervisor {
+    let cow_pool = crate::host::cow_orderbook::OrderBookPool::default();
+    let provider_pool = crate::host::provider_pool::ProviderPool::empty();
+    Supervisor::boot_single(
+        engine,
+        linker,
+        wasm,
+        Some(manifest),
+        &cow_pool,
+        &provider_pool,
+        local_store,
+    )
+    .await
+    .expect("boot_single")
+}
+
+#[tokio::test]
+async fn e2e_twap_monitor_block_dispatch() {
+    let Some(wasm) = module_wasm_or_skip("twap-monitor") else {
+        return;
+    };
+    let manifest = production_module_toml("modules/twap-monitor/module.toml");
+    let engine = make_wasmtime_engine();
+    let linker = make_linker(&engine);
+    let (_dir, store) = temp_local_store();
+
+    let mut supervisor =
+        boot_production_module(&engine, &linker, &store, &wasm, &manifest).await;
+    assert_eq!(supervisor.module_count(), 1);
+    assert_eq!(supervisor.alive_count(), 1);
+
+    // twap-monitor subscribes to Sepolia blocks (poll path). A real
+    // poll would call chain::request, which ProviderPool::empty() does
+    // not satisfy - the module surfaces a host-error and warns; the
+    // supervisor must keep the module alive because the strategy
+    // catches the error and returns Ok(()).
+    let dispatched = supervisor.dispatch_block(synthetic_sepolia_block()).await;
+    assert_eq!(dispatched, 1);
+    assert_eq!(supervisor.alive_count(), 1);
+}
+
+#[tokio::test]
+async fn e2e_ethflow_watcher_log_dispatch() {
+    let Some(wasm) = module_wasm_or_skip("ethflow-watcher") else {
+        return;
+    };
+    let manifest = production_module_toml("modules/ethflow-watcher/module.toml");
+    let engine = make_wasmtime_engine();
+    let linker = make_linker(&engine);
+    let (_dir, store) = temp_local_store();
+
+    let mut supervisor =
+        boot_production_module(&engine, &linker, &store, &wasm, &manifest).await;
+    assert_eq!(supervisor.alive_count(), 1);
+
+    // A log with an unrecognised topic is silently skipped by the
+    // module's decoder (returns `None` from `decode_order_placement`),
+    // so the test only proves: supervisor delivered, module did not
+    // trap, module stayed alive. Stronger asserts (submitted:{uid}
+    // markers etc.) require a hand-crafted ABI-encoded OrderPlacement
+    // payload and the real ETH_FLOW_PRODUCTION address, deferred to
+    // COW-1064 testnet integration.
+    let synthetic_log = alloy_rpc_types_eth::Log::default();
+    let dispatched = supervisor
+        .dispatch_log("ethflow-watcher", SEPOLIA, synthetic_log)
+        .await;
+    assert!(dispatched);
+    assert_eq!(supervisor.alive_count(), 1);
+}
+
+#[tokio::test]
+async fn e2e_price_alert_block_dispatch() {
+    let Some(wasm) = module_wasm_or_skip("price-alert") else {
+        return;
+    };
+    let manifest = production_module_toml("modules/examples/price-alert/module.toml");
+    let engine = make_wasmtime_engine();
+    let linker = make_linker(&engine);
+    let (_dir, store) = temp_local_store();
+
+    let mut supervisor =
+        boot_production_module(&engine, &linker, &store, &wasm, &manifest).await;
+    let dispatched = supervisor.dispatch_block(synthetic_sepolia_block()).await;
+    assert_eq!(dispatched, 1);
+    assert_eq!(supervisor.alive_count(), 1);
+}
+
+#[tokio::test]
+async fn e2e_balance_tracker_block_dispatch() {
+    let Some(wasm) = module_wasm_or_skip("balance-tracker") else {
+        return;
+    };
+    let manifest = production_module_toml("modules/examples/balance-tracker/module.toml");
+    let engine = make_wasmtime_engine();
+    let linker = make_linker(&engine);
+    let (_dir, store) = temp_local_store();
+
+    let mut supervisor =
+        boot_production_module(&engine, &linker, &store, &wasm, &manifest).await;
+    let dispatched = supervisor.dispatch_block(synthetic_sepolia_block()).await;
+    assert_eq!(dispatched, 1);
+    assert_eq!(supervisor.alive_count(), 1);
+}
+
+#[tokio::test]
+async fn e2e_stop_loss_block_dispatch() {
+    let Some(wasm) = module_wasm_or_skip("stop-loss") else {
+        return;
+    };
+    let manifest = production_module_toml("modules/examples/stop-loss/module.toml");
+    let engine = make_wasmtime_engine();
+    let linker = make_linker(&engine);
+    let (_dir, store) = temp_local_store();
+
+    let mut supervisor =
+        boot_production_module(&engine, &linker, &store, &wasm, &manifest).await;
+    let dispatched = supervisor.dispatch_block(synthetic_sepolia_block()).await;
+    assert_eq!(dispatched, 1);
+    assert_eq!(supervisor.alive_count(), 1);
+}
+
 // ── build_alloy_filter ────────────────────────────────────────────────
 
 #[test]
