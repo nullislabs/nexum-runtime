@@ -1,0 +1,16 @@
+[package]
+name = "price-alert"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Shepherd example module: polls a Chainlink price oracle every block and emits a Warn log when the price crosses a config-supplied threshold."
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+shepherd-sdk = { path = "../../../crates/shepherd-sdk" }
+alloy-primitives = { version = "1.5", default-features = false, features = ["std"] }
+alloy-sol-types = { version = "1.5", default-features = false, features = ["std"] }
+wit-bindgen = { version = "0.57", default-features = false, features = ["macros", "realloc"] }
