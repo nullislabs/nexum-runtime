@@ -766,6 +766,99 @@ fail_first_n = "1"
     assert_eq!(dispatched_steady, 1);
 }
 
+// ── COW-1032: poison-pill quarantine ──────────────────────────────────
+//
+// fuel-bomb (the COW-1036 fixture) traps on every dispatch. With a
+// tight poison policy (3 failures / 60 s) we can observe the
+// supervisor escalate from "retry" to "permanent quarantine" inside
+// ~4 s of wall clock:
+//
+//   trap 1: failure_count=1, next_attempt=+1s
+//   sleep 1.1s
+//   trap 2: failure_count=2, next_attempt=+2s
+//   sleep 2.1s
+//   trap 3: failure_count=3 -> POISONED. Recent failures hit the
+//           window threshold; the supervisor stops attempting
+//           restarts entirely. Subsequent dispatches skip the
+//           module silently.
+//
+// Tests assert each transition + the post-quarantine no-op semantic.
+
+#[tokio::test]
+async fn poison_pill_quarantines_module_after_threshold() {
+    let Some(wasm) = module_wasm_or_skip("fuel-bomb") else {
+        return;
+    };
+    let manifest = production_module_toml("modules/fixtures/fuel-bomb/module.toml");
+    let engine = make_wasmtime_engine();
+    let linker = make_linker(&engine);
+    let cow_pool = crate::host::cow_orderbook::OrderBookPool::default();
+    let provider_pool = crate::host::provider_pool::ProviderPool::empty();
+    let (_dir, store) = temp_local_store();
+
+    // Tight policy: 3 failures in 60 s -> quarantine. Keeps the
+    // test wall-clock under 4 s.
+    let policy =
+        crate::runtime::poison_policy::PoisonPolicy::new(3, std::time::Duration::from_secs(60));
+    let mut supervisor = Supervisor::boot_single(
+        &engine,
+        &linker,
+        &wasm,
+        Some(&manifest),
+        &cow_pool,
+        &provider_pool,
+        &store,
+    )
+    .await
+    .expect("boot_single")
+    .with_poison_policy(policy);
+
+    assert_eq!(supervisor.module_count(), 1);
+    assert_eq!(supervisor.alive_count(), 1);
+    assert_eq!(supervisor.poisoned_count(), 0);
+
+    let block = nexum::host::types::Block {
+        chain_id: 1,
+        number: 1,
+        hash: vec![0; 32],
+        timestamp: 1_700_000_000_000,
+    };
+
+    // Trap 1.
+    let dispatched = supervisor.dispatch_block(block.clone()).await;
+    assert_eq!(dispatched, 0);
+    assert_eq!(supervisor.alive_count(), 0);
+    assert_eq!(supervisor.poisoned_count(), 0, "1 trap < threshold");
+    tokio::time::sleep(std::time::Duration::from_millis(1_100)).await;
+
+    // Trap 2.
+    let dispatched = supervisor.dispatch_block(block.clone()).await;
+    assert_eq!(dispatched, 0);
+    assert_eq!(supervisor.poisoned_count(), 0, "2 traps < threshold");
+    tokio::time::sleep(std::time::Duration::from_millis(2_100)).await;
+
+    // Trap 3 -> POISONED.
+    let dispatched = supervisor.dispatch_block(block.clone()).await;
+    assert_eq!(dispatched, 0);
+    assert_eq!(
+        supervisor.poisoned_count(),
+        1,
+        "3 traps inside window -> module quarantined",
+    );
+
+    // Post-quarantine: immediately re-dispatch. A poisoned module
+    // is excluded regardless of how much time has passed; the
+    // backoff timer is no longer load-bearing. We do NOT wait for
+    // the would-be next_attempt because the test just needs to
+    // observe the "skipped silently" semantic, not the timing.
+    let dispatched = supervisor.dispatch_block(block).await;
+    assert_eq!(
+        dispatched, 0,
+        "poisoned module excluded from dispatch forever",
+    );
+    assert_eq!(supervisor.poisoned_count(), 1);
+}
+
 // ── build_alloy_filter ────────────────────────────────────────────────
 
 #[test]

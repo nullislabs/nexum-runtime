@@ -48,6 +48,10 @@ pub struct Supervisor {
     cow_pool: OrderBookPool,
     provider_pool: ProviderPool,
     local_store: LocalStore,
+    /// COW-1032 poison-pill thresholds. Defaults to the production
+    /// constants (5 failures / 10 min); tests inject tighter values
+    /// via `boot_with_poison_policy` / `empty_for_test`.
+    poison_policy: crate::runtime::poison_policy::PoisonPolicy,
 }
 
 struct LoadedModule {
@@ -84,6 +88,15 @@ struct LoadedModule {
     /// the dispatch fast-path checks `next_attempt` *and* requires
     /// `alive = false` before flipping back).
     next_attempt: Option<std::time::Instant>,
+    /// Sliding-window record of recent trap timestamps for the
+    /// poison-pill check (COW-1032). Entries older than the
+    /// `PoisonPolicy.window` are dropped on each push.
+    failure_timestamps: std::collections::VecDeque<std::time::Instant>,
+    /// Once `true` the module is permanently quarantined: no restart
+    /// attempts, no dispatches, no metric churn. Recovery requires
+    /// an operator-driven full engine restart with the module
+    /// removed from `engine.toml::[[modules]]`.
+    poisoned: bool,
 }
 
 impl Supervisor {
@@ -123,6 +136,7 @@ impl Supervisor {
             cow_pool: cow_pool.clone(),
             provider_pool: provider_pool.clone(),
             local_store: local_store.clone(),
+            poison_policy: crate::runtime::poison_policy::PoisonPolicy::default(),
         })
     }
 
@@ -161,7 +175,21 @@ impl Supervisor {
             cow_pool: cow_pool.clone(),
             provider_pool: provider_pool.clone(),
             local_store: local_store.clone(),
+            poison_policy: crate::runtime::poison_policy::PoisonPolicy::default(),
         })
+    }
+
+    /// Override the poison-pill policy. Tests use this to inject
+    /// tighter thresholds (e.g. 3 failures in 60 s) so the
+    /// integration suite does not wait out the production 5/10min
+    /// schedule. Returns `self` so it can be chained off `boot_single`.
+    #[cfg(test)]
+    pub(crate) fn with_poison_policy(
+        mut self,
+        policy: crate::runtime::poison_policy::PoisonPolicy,
+    ) -> Self {
+        self.poison_policy = policy;
+        self
     }
 
     async fn load_one(
@@ -323,6 +351,8 @@ impl Supervisor {
             component,
             init_config: config,
             http_allowlist: loaded_manifest.http_allowlist.clone(),
+            failure_timestamps: std::collections::VecDeque::new(),
+            poisoned: false,
         })
     }
 
@@ -444,16 +474,22 @@ impl Supervisor {
         let block_number = block.number;
         let event = nexum::host::types::Event::Block(block);
         let now = std::time::Instant::now();
+        let poison_policy = self.poison_policy;
 
         // COW-1033 phase 1: find dead modules whose backoff window
         // has elapsed and re-instantiate them in place. The wasmtime
         // store + component instance left by a trap is poisoned
         // ("cannot enter component instance" on the next call), so
         // recovery requires a fresh Store + re-instantiated bindings.
+        //
+        // COW-1032: poisoned modules are excluded from the restart
+        // sweep entirely. Once quarantined they stay dead until
+        // an operator removes them from `engine.toml::[[modules]]`
+        // and restarts the engine.
         let restart_candidates: Vec<usize> = (0..self.modules.len())
             .filter(|&i| {
                 let m = &self.modules[i];
-                !m.alive && m.next_attempt.is_some_and(|t| t <= now)
+                !m.poisoned && !m.alive && m.next_attempt.is_some_and(|t| t <= now)
             })
             .collect();
         for idx in restart_candidates {
@@ -490,7 +526,7 @@ impl Supervisor {
 
         let mut dispatched = 0;
         for module in &mut self.modules {
-            if !module.alive {
+            if module.poisoned || !module.alive {
                 continue;
             }
             let subscribed = module
@@ -587,6 +623,7 @@ impl Supervisor {
                     .increment(1);
                     module.alive = false;
                     module.next_attempt = Some(next_attempt);
+                    record_failure_and_maybe_poison(module, poison_policy, &trap.to_string());
                 }
             }
         }
@@ -604,10 +641,19 @@ impl Supervisor {
         log: alloy_rpc_types_eth::Log,
     ) -> bool {
         let now = std::time::Instant::now();
+        let poison_policy = self.poison_policy;
         let Some(idx) = self.modules.iter().position(|m| m.name == module_name) else {
             warn!(module = %module_name, "no such module - dropping log");
             return false;
         };
+
+        // COW-1032 poison-pill: quarantined modules get no log
+        // dispatches at all - same as block. The check happens
+        // before the restart sweep so a poisoned module never
+        // triggers a restart attempt.
+        if self.modules[idx].poisoned {
+            return false;
+        }
 
         // COW-1033 restart-on-trap: re-instantiate before dispatch
         // if the backoff window elapsed. See `dispatch_block` for
@@ -727,6 +773,7 @@ impl Supervisor {
                 .increment(1);
                 target.alive = false;
                 target.next_attempt = Some(next_attempt);
+                record_failure_and_maybe_poison(target, poison_policy, &trap.to_string());
                 false
             }
         }
@@ -736,6 +783,13 @@ impl Supervisor {
     #[cfg_attr(not(test), allow(dead_code))]
     pub fn alive_count(&self) -> usize {
         self.modules.iter().filter(|m| m.alive).count()
+    }
+
+    /// COW-1032: also expose a per-module poisoned state for
+    /// metrics + integration tests.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn poisoned_count(&self) -> usize {
+        self.modules.iter().filter(|m| m.poisoned).count()
     }
 
     /// Build a zero-module supervisor with synthetic shared
@@ -750,7 +804,46 @@ impl Supervisor {
             cow_pool: OrderBookPool::default(),
             provider_pool: ProviderPool::empty(),
             local_store,
+            poison_policy: crate::runtime::poison_policy::PoisonPolicy::default(),
         }
+    }
+}
+
+/// COW-1032: push the current trap timestamp into the module's
+/// failure-window ring, drop entries older than the policy window,
+/// and flip `poisoned = true` once the window holds more than
+/// `policy.max_failures` traps. The first transition emits the
+/// `shepherd_module_poisoned` gauge + a structured WARN.
+fn record_failure_and_maybe_poison(
+    module: &mut LoadedModule,
+    policy: crate::runtime::poison_policy::PoisonPolicy,
+    last_error: &str,
+) {
+    let now = std::time::Instant::now();
+    // Prune entries outside the window.
+    while let Some(&front) = module.failure_timestamps.front() {
+        if now.duration_since(front) > policy.window {
+            module.failure_timestamps.pop_front();
+        } else {
+            break;
+        }
+    }
+    module.failure_timestamps.push_back(now);
+    let recent = module.failure_timestamps.len() as u32;
+    if crate::runtime::poison_policy::should_poison(policy, recent) && !module.poisoned {
+        module.poisoned = true;
+        warn!(
+            module = %module.name,
+            recent_failures = recent,
+            window_secs = policy.window.as_secs(),
+            last_error,
+            "module poisoned - quarantined; remove from engine.toml + restart to clear",
+        );
+        metrics::gauge!(
+            "shepherd_module_poisoned",
+            "module" => module.name.clone(),
+        )
+        .set(1.0);
     }
 }
 

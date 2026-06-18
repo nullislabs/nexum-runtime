@@ -3,4 +3,5 @@
 
 pub mod event_loop;
 pub mod limits;
+pub mod poison_policy;
 pub mod restart_policy;
