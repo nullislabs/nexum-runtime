@@ -1,76 +1,228 @@
 //! Open live `eth_subscribe` streams and dispatch their events to the
 //! supervisor until a shutdown signal arrives.
+//!
+//! ## COW-1071: per-stream reconnect with exponential backoff
+//!
+//! `open_block_streams` / `open_log_streams` no longer return a
+//! `Vec<Stream>` that ends on the first WebSocket drop. They each
+//! spawn one reconnect-aware task per `(chain_id)` or `(module,
+//! chain_id, filter)` tuple. The task:
+//!
+//! 1. Opens the subscription via the provider pool.
+//! 2. Pumps items to an mpsc channel until the underlying stream
+//!    yields `None` (WS drop) or `Err` (transport-level error).
+//! 3. Logs the drop + waits `restart_policy::backoff_for(attempt)`
+//!    (1s -> 2s -> ... cap 5min).
+//! 4. Reopens. On the first event after a reopen, attempt resets
+//!    if the stream has been healthy for `HEALTHY_WINDOW`.
+//!
+//! The event loop reads the receiver as a regular `Stream`. The
+//! reconnect tasks live for the lifetime of the engine; they exit
+//! cleanly when their channel receiver is dropped (which happens
+//! when `run` returns).
+
+use std::time::{Duration, Instant};
 
 use futures::StreamExt;
-use futures::stream::{BoxStream, FuturesUnordered, select_all};
+use futures::stream::{BoxStream, select_all};
+use tokio::sync::mpsc;
 use tracing::{info, warn};
 
 use crate::bindings::nexum;
 use crate::host::provider_pool::ProviderPool;
+use crate::runtime::restart_policy::backoff_for;
 use crate::supervisor::Supervisor;
 
-/// Per-chain block subscriptions, one shared stream per chain id.
+/// Time the wrapper stream must observe uninterrupted events before
+/// the backoff counter resets to 0. Long enough that a brief but
+/// real connection blip does not silently undo the doubling, short
+/// enough that a healthy node reverts to fast retries on the next
+/// drop.
+const HEALTHY_WINDOW: Duration = Duration::from_secs(60);
+
+/// Channel buffer for the reconnect tasks. Each chain / module
+/// subscription gets its own task -> channel pair; buffer is small
+/// because the event loop drains in real time.
+const RECONNECT_CHANNEL_BUF: usize = 64;
+
+/// Per-chain block subscriptions, one reconnect-aware task per chain id.
 pub async fn open_block_streams(
     pool: &ProviderPool,
     chains: &std::collections::BTreeSet<u64>,
 ) -> Vec<TaggedBlockStream> {
-    let mut openings: FuturesUnordered<_> = chains
-        .iter()
-        .copied()
-        .map(|chain_id| async move { (chain_id, pool.subscribe_blocks(chain_id).await) })
-        .collect();
-
     let mut streams = Vec::new();
-    while let Some((chain_id, result)) = openings.next().await {
-        match result {
-            Ok(stream) => {
-                info!(chain_id, "block subscription open");
-                let tagged: TaggedBlockStream = Box::pin(stream.map(move |item| {
-                    item.map(|header| (chain_id, header))
-                        .map_err(anyhow::Error::from)
-                }));
-                streams.push(tagged);
-            }
-            Err(err) => {
-                warn!(chain_id, error = %err, "block subscription failed");
-            }
-        }
+    for &chain_id in chains {
+        let (tx, rx) = mpsc::channel::<Result<(u64, alloy_rpc_types_eth::Header), anyhow::Error>>(
+            RECONNECT_CHANNEL_BUF,
+        );
+        let pool = pool.clone();
+        tokio::spawn(reconnecting_block_task(pool, chain_id, tx));
+        let tagged: TaggedBlockStream = Box::pin(receiver_stream(rx));
+        streams.push(tagged);
     }
     streams
 }
 
-/// Per-module log subscriptions. Each entry is a stream tagged with
-/// the owning module name + chain id.
+/// Per-module log subscriptions. Each entry gets its own reconnect-
+/// aware task tagged with the owning module name + chain id.
 pub async fn open_log_streams(
     pool: &ProviderPool,
     subs: Vec<(String, u64, alloy_rpc_types_eth::Filter)>,
 ) -> Vec<TaggedLogStream> {
-    let mut openings: FuturesUnordered<_> = subs
-        .into_iter()
-        .map(|(module, chain_id, filter)| async move {
-            let stream = pool.subscribe_logs(chain_id, filter).await;
-            (module, chain_id, stream)
-        })
-        .collect();
-
     let mut streams = Vec::new();
-    while let Some((module, chain_id, result)) = openings.next().await {
-        match result {
-            Ok(stream) => {
-                info!(module = %module, chain_id, "log subscription open");
-                let module_name = module.clone();
-                let tagged: TaggedLogStream = Box::pin(stream.map(move |item| {
-                    item.map(|log| (module_name.clone(), chain_id, log))
-                        .map_err(anyhow::Error::from)
-                }));
-                streams.push(tagged);
-            }
-            Err(err) => {
-                warn!(module = %module, chain_id, error = %err, "log subscription failed");
-            }
-        }
+    for (module, chain_id, filter) in subs {
+        let (tx, rx) = mpsc::channel::<
+            Result<(String, u64, alloy_rpc_types_eth::Log), anyhow::Error>,
+        >(RECONNECT_CHANNEL_BUF);
+        let pool = pool.clone();
+        tokio::spawn(reconnecting_log_task(pool, module, chain_id, filter, tx));
+        let tagged: TaggedLogStream = Box::pin(receiver_stream(rx));
+        streams.push(tagged);
     }
     streams
+}
+
+/// Wrap an `mpsc::Receiver<T>` as a `Stream<Item = T>` using
+/// `futures::stream::unfold`. Avoids pulling in `tokio-stream` just
+/// for `ReceiverStream`.
+fn receiver_stream<T: Send + 'static>(
+    rx: mpsc::Receiver<T>,
+) -> impl futures::Stream<Item = T> + Send {
+    futures::stream::unfold(rx, |mut rx| async move {
+        rx.recv().await.map(|item| (item, rx))
+    })
+}
+
+/// Reconnect-aware loop for a single chain's block subscription.
+/// Holds `(pool, chain_id)` and re-opens the underlying alloy
+/// `eth_subscribe` stream with exponential backoff after every drop
+/// or transport error.
+async fn reconnecting_block_task(
+    pool: ProviderPool,
+    chain_id: u64,
+    tx: mpsc::Sender<Result<(u64, alloy_rpc_types_eth::Header), anyhow::Error>>,
+) {
+    let mut attempt: u32 = 0;
+    let mut last_event: Option<Instant> = None;
+    loop {
+        match pool.subscribe_blocks(chain_id).await {
+            Ok(mut inner) => {
+                if attempt == 0 {
+                    info!(chain_id, "block subscription open");
+                } else {
+                    info!(chain_id, attempt, "block subscription reopened");
+                    metrics::counter!(
+                        "shepherd_stream_reconnects_total",
+                        "kind" => "block",
+                        "chain_id" => chain_id.to_string(),
+                    )
+                    .increment(1);
+                }
+                while let Some(item) = inner.next().await {
+                    let now = Instant::now();
+                    if attempt > 0
+                        && last_event.is_some_and(|t| now.duration_since(t) >= HEALTHY_WINDOW)
+                    {
+                        info!(chain_id, "block stream healthy - resetting backoff");
+                        attempt = 0;
+                    }
+                    last_event = Some(now);
+                    let tagged = item
+                        .map(|header| (chain_id, header))
+                        .map_err(anyhow::Error::from);
+                    if tx.send(tagged).await.is_err() {
+                        // Receiver dropped -> engine shutting down.
+                        return;
+                    }
+                }
+                warn!(chain_id, "block stream ended (WebSocket dropped?)");
+                attempt = attempt.saturating_add(1);
+            }
+            Err(err) => {
+                warn!(chain_id, error = %err, "block subscription failed");
+                attempt = attempt.saturating_add(1);
+            }
+        }
+        let backoff = backoff_for(attempt);
+        warn!(
+            chain_id,
+            attempt,
+            backoff_ms = backoff.as_millis() as u64,
+            "reconnecting block subscription after backoff",
+        );
+        tokio::time::sleep(backoff).await;
+    }
+}
+
+/// Reconnect-aware loop for a single (module, chain) log subscription.
+async fn reconnecting_log_task(
+    pool: ProviderPool,
+    module: String,
+    chain_id: u64,
+    filter: alloy_rpc_types_eth::Filter,
+    tx: mpsc::Sender<Result<(String, u64, alloy_rpc_types_eth::Log), anyhow::Error>>,
+) {
+    let mut attempt: u32 = 0;
+    let mut last_event: Option<Instant> = None;
+    loop {
+        match pool.subscribe_logs(chain_id, filter.clone()).await {
+            Ok(mut inner) => {
+                if attempt == 0 {
+                    info!(module = %module, chain_id, "log subscription open");
+                } else {
+                    info!(module = %module, chain_id, attempt, "log subscription reopened");
+                    metrics::counter!(
+                        "shepherd_stream_reconnects_total",
+                        "kind" => "log",
+                        "chain_id" => chain_id.to_string(),
+                        "module" => module.clone(),
+                    )
+                    .increment(1);
+                }
+                while let Some(item) = inner.next().await {
+                    let now = Instant::now();
+                    if attempt > 0
+                        && last_event.is_some_and(|t| now.duration_since(t) >= HEALTHY_WINDOW)
+                    {
+                        info!(
+                            module = %module,
+                            chain_id,
+                            "log stream healthy - resetting backoff"
+                        );
+                        attempt = 0;
+                    }
+                    last_event = Some(now);
+                    let module_name = module.clone();
+                    let tagged = item
+                        .map(|log| (module_name, chain_id, log))
+                        .map_err(anyhow::Error::from);
+                    if tx.send(tagged).await.is_err() {
+                        return;
+                    }
+                }
+                warn!(module = %module, chain_id, "log stream ended (WebSocket dropped?)");
+                attempt = attempt.saturating_add(1);
+            }
+            Err(err) => {
+                warn!(
+                    module = %module,
+                    chain_id,
+                    error = %err,
+                    "log subscription failed"
+                );
+                attempt = attempt.saturating_add(1);
+            }
+        }
+        let backoff = backoff_for(attempt);
+        warn!(
+            module = %module,
+            chain_id,
+            attempt,
+            backoff_ms = backoff.as_millis() as u64,
+            "reconnecting log subscription after backoff",
+        );
+        tokio::time::sleep(backoff).await;
+    }
 }
 
 pub type TaggedBlockStream = std::pin::Pin<
@@ -128,14 +280,13 @@ pub async fn run(
                 }
                 Some(Err(err)) => warn!(error = %err, "block stream error - continuing"),
                 None => {
-                    // alloy ends the stream with None when the
-                    // WebSocket drops. Without this branch the loop
-                    // keeps polling a dead stream and the operator
-                    // sees no events with no indication anything is
-                    // wrong. Bail out so the supervisor (or whatever
-                    // wraps the engine) restarts us; a reconnect-
-                    // with-backoff is the 0.3 fix.
-                    warn!("block stream ended (WebSocket dropped?) - shutting down for restart");
+                    // COW-1071: WebSocket drops are now absorbed by
+                    // the reconnect tasks behind `open_block_streams`
+                    // / `open_log_streams`; the stream surfaced here
+                    // only ends if the underlying task panicked or
+                    // the channel was closed. Treat as an
+                    // unrecoverable engine fault and bail.
+                    warn!("block reconnect task ended unexpectedly - shutting down");
                     return;
                 }
             },
@@ -145,7 +296,7 @@ pub async fn run(
                 }
                 Some(Err(err)) => warn!(error = %err, "log stream error - continuing"),
                 None => {
-                    warn!("log stream ended (WebSocket dropped?) - shutting down for restart");
+                    warn!("log reconnect task ended unexpectedly - shutting down");
                     return;
                 }
             },
