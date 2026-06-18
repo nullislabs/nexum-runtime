@@ -475,6 +475,10 @@ impl Supervisor {
         let event = nexum::host::types::Event::Block(block);
         let now = std::time::Instant::now();
         let poison_policy = self.poison_policy;
+        // Hoist the local-store reference out so the per-module
+        // borrow checker is happy when we write the COW-1072
+        // progress marker inside the dispatch loop.
+        let local_store = self.local_store.clone();
 
         // COW-1033 phase 1: find dead modules whose backoff window
         // has elapsed and re-instantiate them in place. The wasmtime
@@ -575,6 +579,22 @@ impl Supervisor {
                     // schedule with no further delay.
                     module.failure_count = 0;
                     module.next_attempt = None;
+                    // COW-1072: persist the per-module-per-chain
+                    // progress marker so a graceful restart (or
+                    // even a crash) leaves a paper trail. Operators
+                    // grepping the redb file can confirm the engine
+                    // got to block N before exiting. Writes failure
+                    // is best-effort; a warn is enough.
+                    let key = format!("last_dispatched_block:{chain_id}");
+                    if let Err(e) = local_store.set(&module.name, &key, &block_number.to_le_bytes())
+                    {
+                        warn!(
+                            module = %module.name,
+                            chain_id,
+                            error = %e,
+                            "failed to persist last_dispatched_block marker",
+                        );
+                    }
                     dispatched += 1;
                 }
                 Ok(Err(host_err)) => {

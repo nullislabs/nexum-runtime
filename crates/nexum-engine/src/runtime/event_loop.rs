@@ -239,6 +239,12 @@ pub type TaggedLogStream = std::pin::Pin<
 >;
 
 /// Drive the supervisor with events until `shutdown` resolves.
+///
+/// COW-1072 graceful shutdown: the dispatch path is structured so
+/// that `shutdown` is only observed *between* dispatches, never
+/// mid-`call_on_event`. Each select fork either yields a fresh event
+/// to dispatch or signals shutdown - the in-flight wasmtime call
+/// finishes naturally before the loop exits.
 pub async fn run(
     supervisor: &mut Supervisor,
     block_streams: Vec<TaggedBlockStream>,
@@ -264,42 +270,74 @@ pub async fn run(
         select_all(log_streams).boxed()
     };
     let mut shutdown = Box::pin(shutdown);
+    let mut dispatched_blocks: u64 = 0;
+    let mut dispatched_logs: u64 = 0;
+    let started = Instant::now();
     loop {
-        tokio::select! {
+        // Phase 1: pick the next event OR observe shutdown. The
+        // dispatch itself happens in phase 2 (outside the select)
+        // so an in-flight wasmtime call never gets cancelled by a
+        // shutdown signal arriving mid-dispatch.
+        enum NextEvent {
+            Block(nexum::host::types::Block),
+            Log(String, u64, alloy_rpc_types_eth::Log),
+            Shutdown,
+            StreamPanic(&'static str),
+        }
+        let next = tokio::select! {
             biased;
-            () = &mut shutdown => return,
+            () = &mut shutdown => NextEvent::Shutdown,
             next = blocks.next() => match next {
-                Some(Ok((chain_id, header))) => {
-                    let block = nexum::host::types::Block {
-                        chain_id,
-                        number: header.number,
-                        hash: header.hash.as_slice().to_vec(),
-                        timestamp: header.timestamp.saturating_mul(1000),
-                    };
-                    supervisor.dispatch_block(block).await;
+                Some(Ok((chain_id, header))) => NextEvent::Block(nexum::host::types::Block {
+                    chain_id,
+                    number: header.number,
+                    hash: header.hash.as_slice().to_vec(),
+                    timestamp: header.timestamp.saturating_mul(1000),
+                }),
+                Some(Err(err)) => {
+                    warn!(error = %err, "block stream error - continuing");
+                    continue;
                 }
-                Some(Err(err)) => warn!(error = %err, "block stream error - continuing"),
-                None => {
-                    // COW-1071: WebSocket drops are now absorbed by
-                    // the reconnect tasks behind `open_block_streams`
-                    // / `open_log_streams`; the stream surfaced here
-                    // only ends if the underlying task panicked or
-                    // the channel was closed. Treat as an
-                    // unrecoverable engine fault and bail.
-                    warn!("block reconnect task ended unexpectedly - shutting down");
-                    return;
-                }
+                None => NextEvent::StreamPanic("block"),
             },
             next = logs.next() => match next {
-                Some(Ok((module, chain_id, log))) => {
-                    supervisor.dispatch_log(&module, chain_id, log).await;
+                Some(Ok((module, chain_id, log))) => NextEvent::Log(module, chain_id, log),
+                Some(Err(err)) => {
+                    warn!(error = %err, "log stream error - continuing");
+                    continue;
                 }
-                Some(Err(err)) => warn!(error = %err, "log stream error - continuing"),
-                None => {
-                    warn!("log reconnect task ended unexpectedly - shutting down");
-                    return;
-                }
+                None => NextEvent::StreamPanic("log"),
             },
+        };
+
+        match next {
+            NextEvent::Block(block) => {
+                supervisor.dispatch_block(block).await;
+                dispatched_blocks += 1;
+            }
+            NextEvent::Log(module, chain_id, log) => {
+                supervisor.dispatch_log(&module, chain_id, log).await;
+                dispatched_logs += 1;
+            }
+            NextEvent::Shutdown => {
+                info!(
+                    dispatched_blocks,
+                    dispatched_logs,
+                    uptime_secs = started.elapsed().as_secs(),
+                    "graceful shutdown complete",
+                );
+                return;
+            }
+            NextEvent::StreamPanic(kind) => {
+                // COW-1071: reconnect tasks should loop forever.
+                // Hitting `None` from `select_all` means the task
+                // exited (panic or channel closed). Bail loudly.
+                warn!(
+                    kind,
+                    "reconnect task ended unexpectedly - shutting down for engine restart"
+                );
+                return;
+            }
         }
     }
 }
