@@ -78,7 +78,8 @@ impl Supervisor {
             .with_context(|| format!("load module {}", entry.path.display()))?;
             modules.push(loaded);
         }
-        info!(count = modules.len(), "supervisor up");
+        let alive = modules.iter().filter(|m| m.alive).count();
+        info!(loaded = modules.len(), alive, "supervisor up");
         Ok(Self { modules })
     }
 
@@ -216,21 +217,38 @@ impl Supervisor {
         } else {
             loaded_manifest.config.clone()
         };
-        match bindings
+        // Whether `init` returned `Ok(())`. When `init` returns
+        // `Err(HostError)` the module's strategy state (e.g. an
+        // `OnceLock<Settings>`) is left uninitialised. Existing M3
+        // example modules short-circuit on the missing state via
+        // `SETTINGS.get().is_none() -> return Ok(())`, but future
+        // modules without that guard could panic, and even with the
+        // guard each dispatch wastes fuel + an RPC subscription tick
+        // on a no-op. The `LoadedModule.alive` flag below is set from
+        // this result so the dispatcher skips the failed module
+        // without surfacing it to the dispatch fast-path. See
+        // COW-1070.
+        let init_succeeded = match bindings
             .call_init(&mut store, &config)
             .await
             .map_err(Error::from)?
         {
-            Ok(()) => info!(module = %module_namespace, "init succeeded"),
-            Err(e) => warn!(
-                module = %module_namespace,
-                domain = %e.domain,
-                kind = ?e.kind,
-                code = e.code,
-                message = %e.message,
-                "init failed",
-            ),
-        }
+            Ok(()) => {
+                info!(module = %module_namespace, "init succeeded");
+                true
+            }
+            Err(e) => {
+                warn!(
+                    module = %module_namespace,
+                    domain = %e.domain,
+                    kind = ?e.kind,
+                    code = e.code,
+                    message = %e.message,
+                    "init failed - module loaded but marked dead; dispatcher will skip it",
+                );
+                false
+            }
+        };
         // Refuel after init so the first on_event starts with a full budget.
         store.set_fuel(limits_cfg.fuel())?;
 
@@ -252,7 +270,7 @@ impl Supervisor {
             store,
             subscriptions: loaded_manifest.manifest.subscriptions.clone(),
             fuel_per_event: limits_cfg.fuel(),
-            alive: true,
+            alive: init_succeeded,
         })
     }
 

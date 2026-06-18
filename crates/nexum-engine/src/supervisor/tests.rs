@@ -385,6 +385,75 @@ async fn e2e_stop_loss_block_dispatch() {
     assert_eq!(supervisor.alive_count(), 1);
 }
 
+// ── COW-1070: init-failed modules must be marked dead ────────────────
+
+/// Drive `Supervisor::boot_single` with a module whose `[config]`
+/// carries a malformed `threshold` value (`"not-a-number"`). The
+/// module's `init` returns `Err(HostError { kind: InvalidInput })`.
+/// Pre-COW-1070 the supervisor still marked the module
+/// `alive = true`, so it received block dispatches forever. The fix
+/// flips `alive = false` when `init` fails.
+///
+/// Surfaced live on Sepolia in
+/// `docs/operations/m3-edge-case-validation.md` scenario 1.4.
+#[tokio::test]
+async fn init_failure_marks_module_dead_and_excludes_from_dispatch() {
+    let Some(wasm) = module_wasm_or_skip("price-alert") else {
+        return;
+    };
+
+    // Synthesise a manifest with the same shape as the real
+    // price-alert module but with a `threshold` that the strategy
+    // rejects in `parse_config`.
+    let dir = tempfile::tempdir().unwrap();
+    let manifest = dir.path().join("module.toml");
+    std::fs::write(
+        &manifest,
+        r#"
+[module]
+name = "price-alert"
+
+[capabilities]
+required = ["logging", "chain"]
+
+[[subscription]]
+kind     = "block"
+chain_id = 11155111
+
+[config]
+oracle_address = "0x694AA1769357215DE4FAC081bf1f309aDC325306"
+decimals       = "8"
+threshold      = "not-a-number"
+direction      = "below"
+every_n_blocks = "1"
+"#,
+    )
+    .unwrap();
+
+    let engine = make_wasmtime_engine();
+    let linker = make_linker(&engine);
+    let (_dir, store) = temp_local_store();
+
+    let mut supervisor = boot_production_module(&engine, &linker, &store, &wasm, &manifest).await;
+
+    // The module loaded successfully (wasm compiled, capabilities
+    // matched, manifest parsed) but `init` returned InvalidInput.
+    assert_eq!(supervisor.module_count(), 1, "module is loaded");
+    assert_eq!(
+        supervisor.alive_count(),
+        0,
+        "init-failed module must be marked dead",
+    );
+
+    // Dispatch the synthetic block. The init-failed module must
+    // not be reached by the dispatcher.
+    let dispatched = supervisor.dispatch_block(synthetic_sepolia_block()).await;
+    assert_eq!(
+        dispatched, 0,
+        "no live module is subscribed to chain 11155111 blocks",
+    );
+}
+
 // ── build_alloy_filter ────────────────────────────────────────────────
 
 #[test]
