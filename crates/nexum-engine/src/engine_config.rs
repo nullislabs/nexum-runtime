@@ -91,6 +91,11 @@ pub struct EngineSection {
     /// `info` when absent; `RUST_LOG` overrides at process start.
     #[serde(default = "default_log_level")]
     pub log_level: String,
+    /// Prometheus metrics exporter wiring (COW-1034). Absent table =
+    /// disabled (the engine still installs the recorder so call sites
+    /// stay live but no HTTP listener binds).
+    #[serde(default)]
+    pub metrics: MetricsSection,
 }
 
 impl Default for EngineSection {
@@ -98,8 +103,36 @@ impl Default for EngineSection {
         Self {
             state_dir: default_state_dir(),
             log_level: default_log_level(),
+            metrics: MetricsSection::default(),
         }
     }
+}
+
+/// `[engine.metrics]` config. When `enabled = true` the engine starts
+/// a Prometheus HTTP exporter on `bind_addr` and serves `/metrics`.
+///
+/// Default: disabled. Operators opt in explicitly so the M3 / M4
+/// runbook smoke runs do not bind a port unintentionally.
+#[derive(Debug, Deserialize)]
+pub struct MetricsSection {
+    #[serde(default)]
+    pub enabled: bool,
+    /// IPv4 / IPv6 socket address to bind. Default `127.0.0.1:9100`.
+    #[serde(default = "default_metrics_bind")]
+    pub bind_addr: String,
+}
+
+impl Default for MetricsSection {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            bind_addr: default_metrics_bind(),
+        }
+    }
+}
+
+fn default_metrics_bind() -> String {
+    "127.0.0.1:9100".to_owned()
 }
 
 #[derive(Debug, Deserialize)]

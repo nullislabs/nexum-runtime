@@ -57,6 +57,34 @@ async fn main() -> anyhow::Result<()> {
 
     info!("nexum-engine starting");
 
+    // COW-1034: install the Prometheus exporter. When
+    // `[engine.metrics].enabled = true` the HTTP listener also binds
+    // and serves `/metrics`. Otherwise the recorder is still
+    // installed (so `metrics::counter!` etc. call sites stay live)
+    // but no port is opened. This means the same binary can be run
+    // in CI / tests without binding a port and in production with
+    // observability enabled by flipping one config flag.
+    if engine_cfg.engine.metrics.enabled {
+        let addr: std::net::SocketAddr =
+            engine_cfg.engine.metrics.bind_addr.parse().map_err(|e| {
+                anyhow::anyhow!(
+                    "invalid [engine.metrics].bind_addr `{}`: {e}",
+                    engine_cfg.engine.metrics.bind_addr
+                )
+            })?;
+        metrics_exporter_prometheus::PrometheusBuilder::new()
+            .with_http_listener(addr)
+            .install()
+            .map_err(|e| anyhow::anyhow!("install Prometheus exporter on {addr}: {e}"))?;
+        info!(addr = %addr, "metrics exporter listening at /metrics");
+    } else {
+        // Recorder still installed so call sites do not panic; just
+        // discarded into a no-op sink instead of served.
+        metrics_exporter_prometheus::PrometheusBuilder::new()
+            .install_recorder()
+            .map_err(|e| anyhow::anyhow!("install Prometheus recorder: {e}"))?;
+    }
+
     // Bring up shared host backends.
     std::fs::create_dir_all(&engine_cfg.engine.state_dir).map_err(|e| {
         anyhow::anyhow!(

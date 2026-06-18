@@ -587,6 +587,7 @@ chain_id = 1
         engine: crate::engine_config::EngineSection {
             state_dir: tmp.path().to_path_buf(),
             log_level: "info".into(),
+            metrics: crate::engine_config::MetricsSection::default(),
         },
         chains: std::collections::BTreeMap::new(),
         modules: vec![

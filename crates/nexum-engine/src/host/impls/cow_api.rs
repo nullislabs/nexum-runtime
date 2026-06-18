@@ -87,6 +87,13 @@ impl shepherd::cow::cow_api::Host for HostState {
             Err(err) => Err(internal_error("cow-api", err.to_string())),
         };
         tracing::trace!(elapsed_ms = ?start.elapsed(), "cow-api::submit-order done");
+        let outcome = if result.is_ok() { "ok" } else { "err" };
+        metrics::counter!(
+            "shepherd_cow_api_submit_total",
+            "chain_id" => chain_id.to_string(),
+            "outcome" => outcome,
+        )
+        .increment(1);
         result
     }
 }

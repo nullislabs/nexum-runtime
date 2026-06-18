@@ -44,6 +44,7 @@ impl nexum::host::chain::Host for HostState {
             );
         }
         tracing::debug!(chain_id, %method, "chain::request");
+        let method_label = method.clone();
         let result = match self.chain.request(chain_id, method, params).await {
             Ok(body) => Ok(body),
             Err(ProviderError::UnknownChain(id)) => Err(HostError {
@@ -70,6 +71,14 @@ impl nexum::host::chain::Host for HostState {
             Err(err) => Err(internal_error("chain", err.to_string())),
         };
         tracing::trace!(elapsed_ms = ?start.elapsed(), "chain::request done");
+        let outcome = if result.is_ok() { "ok" } else { "err" };
+        metrics::counter!(
+            "shepherd_chain_request_total",
+            "chain_id" => chain_id.to_string(),
+            "method" => method_label,
+            "outcome" => outcome,
+        )
+        .increment(1);
         result
     }
 
