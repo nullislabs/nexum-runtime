@@ -13,6 +13,41 @@ fn empty_supervisor_returns_no_subscriptions() {
     assert_eq!(sup.module_count(), 0);
 }
 
+/// Regression guard: engines whose modules only declare
+/// `[[subscription]] kind = "block"` (or only `kind = "log"`) must not
+/// bail at boot. Previously `select_all` on an empty `Vec` yielded
+/// `None` immediately and the "stream ended -> shut down" arm fired
+/// before any event flowed. The fix in `runtime/event_loop.rs`
+/// substitutes `stream::pending()` when the Vec is empty so the
+/// corresponding select arm is never selected.
+///
+/// Surfaced when wiring up `engine.m3.toml` for the M3 testnet runbook:
+/// the 3 M3 example modules (price-alert, balance-tracker, stop-loss)
+/// all subscribe to blocks only, no logs. The engine bailed within
+/// ~50 ms of `supervisor ready` until this fix landed.
+#[tokio::test]
+async fn run_does_not_bail_when_both_stream_kinds_are_empty() {
+    use std::time::{Duration, Instant};
+
+    let mut supervisor = Supervisor {
+        modules: Vec::new(),
+    };
+    let started = Instant::now();
+    let shutdown = tokio::time::sleep(Duration::from_millis(50));
+
+    crate::runtime::event_loop::run(&mut supervisor, Vec::new(), Vec::new(), shutdown).await;
+
+    // If the bug were present, `run` returns ~0 ms (the empty `logs`
+    // stream's first `.next()` yields `None` and the loop bails on
+    // the bail-on-None arm). With the fix, `run` blocks on `shutdown`
+    // for the full 50 ms.
+    let elapsed = started.elapsed();
+    assert!(
+        elapsed >= Duration::from_millis(40),
+        "run returned in {elapsed:?}, expected >= ~50ms (shutdown timer)",
+    );
+}
+
 // ── E2E helpers ───────────────────────────────────────────────────────
 
 /// Path to the pre-built example WASM component. Tests that need it
@@ -260,8 +295,7 @@ async fn e2e_twap_monitor_block_dispatch() {
     let linker = make_linker(&engine);
     let (_dir, store) = temp_local_store();
 
-    let mut supervisor =
-        boot_production_module(&engine, &linker, &store, &wasm, &manifest).await;
+    let mut supervisor = boot_production_module(&engine, &linker, &store, &wasm, &manifest).await;
     assert_eq!(supervisor.module_count(), 1);
     assert_eq!(supervisor.alive_count(), 1);
 
@@ -285,8 +319,7 @@ async fn e2e_ethflow_watcher_log_dispatch() {
     let linker = make_linker(&engine);
     let (_dir, store) = temp_local_store();
 
-    let mut supervisor =
-        boot_production_module(&engine, &linker, &store, &wasm, &manifest).await;
+    let mut supervisor = boot_production_module(&engine, &linker, &store, &wasm, &manifest).await;
     assert_eq!(supervisor.alive_count(), 1);
 
     // A log with an unrecognised topic is silently skipped by the
@@ -314,8 +347,7 @@ async fn e2e_price_alert_block_dispatch() {
     let linker = make_linker(&engine);
     let (_dir, store) = temp_local_store();
 
-    let mut supervisor =
-        boot_production_module(&engine, &linker, &store, &wasm, &manifest).await;
+    let mut supervisor = boot_production_module(&engine, &linker, &store, &wasm, &manifest).await;
     let dispatched = supervisor.dispatch_block(synthetic_sepolia_block()).await;
     assert_eq!(dispatched, 1);
     assert_eq!(supervisor.alive_count(), 1);
@@ -331,8 +363,7 @@ async fn e2e_balance_tracker_block_dispatch() {
     let linker = make_linker(&engine);
     let (_dir, store) = temp_local_store();
 
-    let mut supervisor =
-        boot_production_module(&engine, &linker, &store, &wasm, &manifest).await;
+    let mut supervisor = boot_production_module(&engine, &linker, &store, &wasm, &manifest).await;
     let dispatched = supervisor.dispatch_block(synthetic_sepolia_block()).await;
     assert_eq!(dispatched, 1);
     assert_eq!(supervisor.alive_count(), 1);
@@ -348,8 +379,7 @@ async fn e2e_stop_loss_block_dispatch() {
     let linker = make_linker(&engine);
     let (_dir, store) = temp_local_store();
 
-    let mut supervisor =
-        boot_production_module(&engine, &linker, &store, &wasm, &manifest).await;
+    let mut supervisor = boot_production_module(&engine, &linker, &store, &wasm, &manifest).await;
     let dispatched = supervisor.dispatch_block(synthetic_sepolia_block()).await;
     assert_eq!(dispatched, 1);
     assert_eq!(supervisor.alive_count(), 1);

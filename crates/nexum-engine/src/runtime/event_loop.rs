@@ -2,7 +2,7 @@
 //! supervisor until a shutdown signal arrives.
 
 use futures::StreamExt;
-use futures::stream::{FuturesUnordered, select_all};
+use futures::stream::{BoxStream, FuturesUnordered, select_all};
 use tracing::{info, warn};
 
 use crate::bindings::nexum;
@@ -93,8 +93,24 @@ pub async fn run(
     log_streams: Vec<TaggedLogStream>,
     shutdown: impl std::future::Future<Output = ()> + Send,
 ) {
-    let mut blocks = select_all(block_streams);
-    let mut logs = select_all(log_streams);
+    // `select_all` over an empty Vec yields `None` immediately, which
+    // would trip the "stream ended -> shut down" arm below before the
+    // first block / log ever flows. Engine configs that subscribe to
+    // only one event kind (e.g. all modules use `[[subscription]] kind
+    // = "block"`) are valid and must not be punished. Replace each
+    // empty side with `stream::pending()` so the corresponding select
+    // arm is never selected; the bail-on-None semantic still fires
+    // when a *non-empty* stream actually closes.
+    let mut blocks: BoxStream<'_, _> = if block_streams.is_empty() {
+        futures::stream::pending().boxed()
+    } else {
+        select_all(block_streams).boxed()
+    };
+    let mut logs: BoxStream<'_, _> = if log_streams.is_empty() {
+        futures::stream::pending().boxed()
+    } else {
+        select_all(log_streams).boxed()
+    };
     let mut shutdown = Box::pin(shutdown);
     loop {
         tokio::select! {
