@@ -5,9 +5,9 @@ use crate::engine_config::ModuleLimits;
 
 #[test]
 fn empty_supervisor_returns_no_subscriptions() {
-    let sup = Supervisor {
-        modules: Vec::new(),
-    };
+    let engine = make_wasmtime_engine();
+    let (_dir, store) = temp_local_store();
+    let sup = Supervisor::empty_for_test(&engine, store);
     assert!(sup.block_chains().is_empty());
     assert!(sup.log_subscriptions().is_empty());
     assert_eq!(sup.module_count(), 0);
@@ -29,9 +29,9 @@ fn empty_supervisor_returns_no_subscriptions() {
 async fn run_does_not_bail_when_both_stream_kinds_are_empty() {
     use std::time::{Duration, Instant};
 
-    let mut supervisor = Supervisor {
-        modules: Vec::new(),
-    };
+    let engine = make_wasmtime_engine();
+    let (_dir, store) = temp_local_store();
+    let mut supervisor = Supervisor::empty_for_test(&engine, store);
     let started = Instant::now();
     let shutdown = tokio::time::sleep(Duration::from_millis(50));
 
@@ -665,6 +665,105 @@ async fn resource_limit_memory_bomb_traps_and_marks_module_dead() {
 
     let dispatched_again = supervisor.dispatch_block(block).await;
     assert_eq!(dispatched_again, 0);
+}
+
+// ── COW-1033: supervisor auto-restart with exponential backoff ───────
+//
+// flaky-bomb traps on the first N events (via wasm `unreachable!`)
+// and recovers on event N+1. Exercises the full restart lifecycle:
+//
+// 1. Dispatch 1: trap -> alive=false, failure_count=1, next_attempt=+1s.
+// 2. Immediate redispatch: skipped (next_attempt in the future).
+// 3. After 1.1s: alive flipped back on, dispatch retried.
+// 4. With fail_first_n=1, the second attempt succeeds -> failure_count
+//    resets to 0, next_attempt = None.
+//
+// Asserts the schedule shape end-to-end with real wall-clock.
+
+#[tokio::test]
+async fn restart_flaky_module_recovers_after_backoff() {
+    let Some(wasm) = module_wasm_or_skip("flaky-bomb") else {
+        return;
+    };
+
+    let dir = tempfile::tempdir().unwrap();
+    let manifest = dir.path().join("module.toml");
+    // fail_first_n = 1 so the module traps once and recovers on the
+    // second dispatch attempt. Keeps the test wall-clock under 2 s.
+    std::fs::write(
+        &manifest,
+        r#"
+[module]
+name = "flaky-bomb"
+
+[capabilities]
+required = ["logging", "local-store"]
+
+[[subscription]]
+kind     = "block"
+chain_id = 1
+
+[config]
+fail_first_n = "1"
+"#,
+    )
+    .unwrap();
+
+    let engine = make_wasmtime_engine();
+    let linker = make_linker(&engine);
+    let cow_pool = crate::host::cow_orderbook::OrderBookPool::default();
+    let provider_pool = crate::host::provider_pool::ProviderPool::empty();
+    let (_dir, store) = temp_local_store();
+    let mut supervisor = Supervisor::boot_single(
+        &engine,
+        &linker,
+        &wasm,
+        Some(&manifest),
+        &cow_pool,
+        &provider_pool,
+        &store,
+    )
+    .await
+    .expect("boot_single");
+    assert_eq!(supervisor.alive_count(), 1);
+
+    let block = nexum::host::types::Block {
+        chain_id: 1,
+        number: 1,
+        hash: vec![0; 32],
+        timestamp: 1_700_000_000_000,
+    };
+
+    // Dispatch 1: trap. Module marked dead with a +1s backoff.
+    let dispatched = supervisor.dispatch_block(block.clone()).await;
+    assert_eq!(dispatched, 0, "first dispatch trapped, no module accepted");
+    assert_eq!(supervisor.alive_count(), 0, "module marked dead");
+
+    // Immediate redispatch (under the 1s backoff): still skipped.
+    let dispatched_immediate = supervisor.dispatch_block(block.clone()).await;
+    assert_eq!(
+        dispatched_immediate, 0,
+        "in-backoff module not eligible for redispatch yet",
+    );
+    assert_eq!(supervisor.alive_count(), 0);
+
+    // Wait for the 1s backoff window to elapse (+ a small fudge for
+    // scheduler jitter).
+    tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
+
+    // Dispatch 3: now eligible. fail_first_n=1 was satisfied on
+    // dispatch 1, so this attempt succeeds. The supervisor flips
+    // alive back on, dispatch lands, failure_count resets.
+    let dispatched_after_backoff = supervisor.dispatch_block(block.clone()).await;
+    assert_eq!(
+        dispatched_after_backoff, 1,
+        "module recovered after the backoff window",
+    );
+    assert_eq!(supervisor.alive_count(), 1, "recovered + alive");
+
+    // Dispatch 4: steady-state, no backoff in play. Module is happy.
+    let dispatched_steady = supervisor.dispatch_block(block).await;
+    assert_eq!(dispatched_steady, 1);
 }
 
 // ── build_alloy_filter ────────────────────────────────────────────────

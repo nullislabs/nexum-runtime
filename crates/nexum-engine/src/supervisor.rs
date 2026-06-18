@@ -5,11 +5,18 @@
 //! `Store`, and routes the event types declared in each manifest's
 //! `[[subscription]]` table.
 //!
-//! Trap handling (BLEU-817): a wasmtime trap in `on_event` marks the
-//! module as `alive = false` and removes it from all future dispatch.
-//! The module's subscriptions remain registered (the event-loop
-//! streams are not closed) but the dispatcher skips dead modules.
-//! Full restart-with-backoff lands in 0.3.
+//! Trap handling (BLEU-817 + COW-1033): a wasmtime trap in `on_event`
+//! marks the module `alive = false`, increments `failure_count`, and
+//! schedules a `next_attempt` instant via `runtime::restart_policy::
+//! backoff_for`. The next dispatch eligible after that instant
+//! re-instantiates the component (fresh `Store` + bindings; the
+//! wasm instance left by a trap is poisoned with "cannot enter
+//! component instance") and re-calls `init`. On a successful
+//! `on_event` the failure counter resets to 0.
+//!
+//! Modules whose `init` returned `Err(HostError)` are dead with
+//! `next_attempt = None` and never get scheduled - the init failure
+//! is treated as a manifest / config bug, not a transient (COW-1070).
 
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -32,6 +39,15 @@ use crate::manifest::{self, LoadedManifest, Subscription};
 /// event loop needs.
 pub struct Supervisor {
     modules: Vec<LoadedModule>,
+    /// Cached for COW-1033 module restart: re-instantiating a
+    /// trapped module requires a fresh wasmtime `Store` + `Linker`,
+    /// which in turn need the shared backends. All four types are
+    /// `Clone` (internally `Arc`-backed) so the supervisor takes
+    /// owned copies at boot.
+    engine: Engine,
+    cow_pool: OrderBookPool,
+    provider_pool: ProviderPool,
+    local_store: LocalStore,
 }
 
 struct LoadedModule {
@@ -43,10 +59,31 @@ struct LoadedModule {
     subscriptions: Vec<Subscription>,
     /// Fuel budget refilled before each `on_event` invocation.
     fuel_per_event: u64,
-    /// Set to `false` when `on_event` traps. Dead modules are silently
-    /// skipped on every subsequent dispatch. Full restart-with-backoff
-    /// lands in 0.3.
+    /// Cached for COW-1033 restart: re-instantiating from the original
+    /// wasm bytes avoids re-reading the file on every restart. The
+    /// `Component` itself is internally `Arc`-backed by wasmtime.
+    component: Component,
+    /// Cached for COW-1033 restart: the manifest's `[config]` we pass
+    /// to `Guest::init`. Cloning a `Vec<(String, String)>` is cheap.
+    init_config: Config,
+    /// Cached for COW-1033 restart: HTTP allowlist baked into the
+    /// `HostState` we rebuild on each re-instantiation.
+    http_allowlist: Vec<String>,
+    /// Set to `false` when `on_event` traps. Dead modules are
+    /// excluded from dispatch until `next_attempt` is in the past
+    /// (COW-1033). Modules whose `init` failed have `alive = false`
+    /// + `next_attempt = None`, so they never come back.
     alive: bool,
+    /// Number of consecutive trap-style failures since the last
+    /// successful dispatch. Resets to 0 on success. Drives the
+    /// exponential backoff via `restart_policy::backoff_for`.
+    failure_count: u32,
+    /// Earliest instant at which the supervisor may retry this
+    /// module after a trap. `None` for healthy modules + for modules
+    /// whose `init` failed (the latter never get scheduled because
+    /// the dispatch fast-path checks `next_attempt` *and* requires
+    /// `alive = false` before flipping back).
+    next_attempt: Option<std::time::Instant>,
 }
 
 impl Supervisor {
@@ -80,7 +117,13 @@ impl Supervisor {
         }
         let alive = modules.iter().filter(|m| m.alive).count();
         info!(loaded = modules.len(), alive, "supervisor up");
-        Ok(Self { modules })
+        Ok(Self {
+            modules,
+            engine: engine.clone(),
+            cow_pool: cow_pool.clone(),
+            provider_pool: provider_pool.clone(),
+            local_store: local_store.clone(),
+        })
     }
 
     /// One-shot construction from a single ad-hoc `(component, manifest)`
@@ -114,6 +157,10 @@ impl Supervisor {
         .await?;
         Ok(Self {
             modules: vec![loaded],
+            engine: engine.clone(),
+            cow_pool: cow_pool.clone(),
+            provider_pool: provider_pool.clone(),
+            local_store: local_store.clone(),
         })
     }
 
@@ -271,6 +318,11 @@ impl Supervisor {
             subscriptions: loaded_manifest.manifest.subscriptions.clone(),
             fuel_per_event: limits_cfg.fuel(),
             alive: init_succeeded,
+            failure_count: 0,
+            next_attempt: None,
+            component,
+            init_config: config,
+            http_allowlist: loaded_manifest.http_allowlist.clone(),
         })
     }
 
@@ -326,10 +378,116 @@ impl Supervisor {
     /// Dispatch a block event to every module subscribed to
     /// `block.chain_id`. Returns the number of modules invoked.
     /// Modules that trap are marked dead and excluded from future dispatch.
+    /// Rebuild a module from its cached `Component` + `init_config`
+    /// after a wasmtime trap (COW-1033). A trap leaves the original
+    /// `Store` + component instance in a poisoned state ("cannot
+    /// enter component instance" on the next call); the only way to
+    /// recover is to create a fresh `Store` + re-instantiate. The
+    /// `LoadedModule.subscriptions` and `LoadedModule.name` are
+    /// preserved so the dispatch routing keeps working.
+    ///
+    /// On success the module's `alive` flag is left for the caller
+    /// to flip; on failure (e.g. `init` returns Err again) the
+    /// module stays dead and the failure_count keeps climbing.
+    async fn reinstantiate_one(&mut self, idx: usize) -> Result<()> {
+        // Re-build the wasi linker. Cheap: just two `add_to_linker`
+        // calls against the cached `Engine`.
+        let mut linker = Linker::<HostState>::new(&self.engine);
+        Shepherd::add_to_linker::<HostState, wasmtime::component::HasSelf<HostState>>(
+            &mut linker,
+            |state| state,
+        )?;
+        wasmtime_wasi::p2::add_to_linker_async(&mut linker)?;
+
+        let wasi = WasiCtxBuilder::new().inherit_stdio().build();
+        let limits = wasmtime::StoreLimitsBuilder::new()
+            .memory_size(DEFAULT_MEMORY_LIMIT)
+            .build();
+        let module = &mut self.modules[idx];
+        let mut store = Store::new(
+            &self.engine,
+            HostState {
+                wasi,
+                table: ResourceTable::new(),
+                limits,
+                monotonic_baseline: std::time::Instant::now(),
+                http_allowlist: module.http_allowlist.clone(),
+                module_namespace: module.name.clone(),
+                cow: self.cow_pool.clone(),
+                chain: self.provider_pool.clone(),
+                store: self.local_store.clone(),
+            },
+        );
+        store.limiter(|state| &mut state.limits);
+        store.set_fuel(DEFAULT_FUEL_PER_EVENT)?;
+        let bindings = Shepherd::instantiate_async(&mut store, &module.component, &linker)
+            .await
+            .map_err(Error::from)
+            .with_context(|| format!("reinstantiate {}", module.name))?;
+        match bindings.call_init(&mut store, &module.init_config).await? {
+            Ok(()) => {}
+            Err(e) => {
+                return Err(anyhow!(
+                    "init returned host-error on restart: {} ({:?})",
+                    e.message,
+                    e.kind
+                ));
+            }
+        }
+        module.bindings = bindings;
+        module.store = store;
+        Ok(())
+    }
+
     pub async fn dispatch_block(&mut self, block: nexum::host::types::Block) -> usize {
         let chain_id = block.chain_id;
         let block_number = block.number;
         let event = nexum::host::types::Event::Block(block);
+        let now = std::time::Instant::now();
+
+        // COW-1033 phase 1: find dead modules whose backoff window
+        // has elapsed and re-instantiate them in place. The wasmtime
+        // store + component instance left by a trap is poisoned
+        // ("cannot enter component instance" on the next call), so
+        // recovery requires a fresh Store + re-instantiated bindings.
+        let restart_candidates: Vec<usize> = (0..self.modules.len())
+            .filter(|&i| {
+                let m = &self.modules[i];
+                !m.alive && m.next_attempt.is_some_and(|t| t <= now)
+            })
+            .collect();
+        for idx in restart_candidates {
+            let name = self.modules[idx].name.clone();
+            let failure_count = self.modules[idx].failure_count;
+            info!(module = %name, failure_count, "restart attempt");
+            metrics::counter!(
+                "shepherd_module_restarts_total",
+                "module" => name.clone(),
+            )
+            .increment(1);
+            match self.reinstantiate_one(idx).await {
+                Ok(()) => {
+                    self.modules[idx].alive = true;
+                    info!(module = %name, "restart succeeded");
+                }
+                Err(e) => {
+                    // Re-instantiation failed: bump the backoff
+                    // again so the next attempt is further out.
+                    let m = &mut self.modules[idx];
+                    m.failure_count = m.failure_count.saturating_add(1);
+                    let backoff = crate::runtime::restart_policy::backoff_for(m.failure_count);
+                    m.next_attempt = Some(std::time::Instant::now() + backoff);
+                    error!(
+                        module = %name,
+                        failure_count = m.failure_count,
+                        backoff_ms = backoff.as_millis() as u64,
+                        error = %e,
+                        "restart failed - will retry after backoff",
+                    );
+                }
+            }
+        }
+
         let mut dispatched = 0;
         for module in &mut self.modules {
             if !module.alive {
@@ -375,6 +533,12 @@ impl Supervisor {
                         "event_kind" => "block",
                     )
                     .record(elapsed.as_secs_f64());
+                    // COW-1033: successful dispatch clears the
+                    // failure history. A module that recovered after
+                    // N traps lands back in the steady-state
+                    // schedule with no further delay.
+                    module.failure_count = 0;
+                    module.next_attempt = None;
                     dispatched += 1;
                 }
                 Ok(Err(host_err)) => {
@@ -401,14 +565,19 @@ impl Supervisor {
                 Err(trap) => {
                     let elapsed = start.elapsed();
                     let latency_ms = elapsed.as_millis() as u64;
+                    module.failure_count = module.failure_count.saturating_add(1);
+                    let backoff = crate::runtime::restart_policy::backoff_for(module.failure_count);
+                    let next_attempt = std::time::Instant::now() + backoff;
                     error!(
                         module = %module.name,
                         chain_id,
                         event_kind = "block",
                         block_number,
                         latency_ms,
+                        failure_count = module.failure_count,
+                        backoff_ms = backoff.as_millis() as u64,
                         error = %trap,
-                        "on-event trapped - module marked dead, removed from dispatch",
+                        "on-event trapped - module marked dead; will retry after backoff",
                     );
                     metrics::counter!(
                         "shepherd_module_errors_total",
@@ -417,6 +586,7 @@ impl Supervisor {
                     )
                     .increment(1);
                     module.alive = false;
+                    module.next_attempt = Some(next_attempt);
                 }
             }
         }
@@ -433,13 +603,47 @@ impl Supervisor {
         chain_id: u64,
         log: alloy_rpc_types_eth::Log,
     ) -> bool {
-        let target = match self.modules.iter_mut().find(|m| m.name == module_name) {
-            Some(m) => m,
-            None => {
-                warn!(module = %module_name, "no such module - dropping log");
-                return false;
-            }
+        let now = std::time::Instant::now();
+        let Some(idx) = self.modules.iter().position(|m| m.name == module_name) else {
+            warn!(module = %module_name, "no such module - dropping log");
+            return false;
         };
+
+        // COW-1033 restart-on-trap: re-instantiate before dispatch
+        // if the backoff window elapsed. See `dispatch_block` for
+        // the symmetric path.
+        let needs_restart = {
+            let m = &self.modules[idx];
+            !m.alive && m.next_attempt.is_some_and(|t| t <= now)
+        };
+        if needs_restart {
+            let name = self.modules[idx].name.clone();
+            let failure_count = self.modules[idx].failure_count;
+            info!(module = %name, failure_count, "restart attempt");
+            metrics::counter!(
+                "shepherd_module_restarts_total",
+                "module" => name.clone(),
+            )
+            .increment(1);
+            match self.reinstantiate_one(idx).await {
+                Ok(()) => self.modules[idx].alive = true,
+                Err(e) => {
+                    let m = &mut self.modules[idx];
+                    m.failure_count = m.failure_count.saturating_add(1);
+                    let backoff = crate::runtime::restart_policy::backoff_for(m.failure_count);
+                    m.next_attempt = Some(std::time::Instant::now() + backoff);
+                    error!(
+                        module = %name,
+                        failure_count = m.failure_count,
+                        error = %e,
+                        "restart failed - will retry after backoff",
+                    );
+                    return false;
+                }
+            }
+        }
+
+        let target = &mut self.modules[idx];
         if !target.alive {
             return false;
         }
@@ -472,6 +676,8 @@ impl Supervisor {
                     "event_kind" => "log",
                 )
                 .record(elapsed.as_secs_f64());
+                target.failure_count = 0;
+                target.next_attempt = None;
                 true
             }
             Ok(Err(host_err)) => {
@@ -499,14 +705,19 @@ impl Supervisor {
             Err(trap) => {
                 let elapsed = start.elapsed();
                 let latency_ms = elapsed.as_millis() as u64;
+                target.failure_count = target.failure_count.saturating_add(1);
+                let backoff = crate::runtime::restart_policy::backoff_for(target.failure_count);
+                let next_attempt = std::time::Instant::now() + backoff;
                 error!(
                     module = %module_name,
                     chain_id,
                     event_kind = "log",
                     block_number,
                     latency_ms,
+                    failure_count = target.failure_count,
+                    backoff_ms = backoff.as_millis() as u64,
                     error = %trap,
-                    "on-event trapped - module marked dead, removed from dispatch",
+                    "on-event trapped - module marked dead; will retry after backoff",
                 );
                 metrics::counter!(
                     "shepherd_module_errors_total",
@@ -515,6 +726,7 @@ impl Supervisor {
                 )
                 .increment(1);
                 target.alive = false;
+                target.next_attempt = Some(next_attempt);
                 false
             }
         }
@@ -524,6 +736,21 @@ impl Supervisor {
     #[cfg_attr(not(test), allow(dead_code))]
     pub fn alive_count(&self) -> usize {
         self.modules.iter().filter(|m| m.alive).count()
+    }
+
+    /// Build a zero-module supervisor with synthetic shared
+    /// backends. Used by the unit tests that need a `Supervisor` to
+    /// poke its public surface without going through the full
+    /// `boot` pipeline.
+    #[cfg(test)]
+    pub(crate) fn empty_for_test(engine: &Engine, local_store: LocalStore) -> Self {
+        Self {
+            modules: Vec::new(),
+            engine: engine.clone(),
+            cow_pool: OrderBookPool::default(),
+            provider_pool: ProviderPool::empty(),
+            local_store,
+        }
     }
 }
 
