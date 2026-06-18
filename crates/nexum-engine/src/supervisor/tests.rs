@@ -859,6 +859,240 @@ async fn poison_pill_quarantines_module_after_threshold() {
     assert_eq!(supervisor.poisoned_count(), 1);
 }
 
+// ── COW-1073: multi-chain isolation ───────────────────────────────────
+//
+// The supervisor's dispatch path is per-chain: `dispatch_block(block)`
+// walks every module but only invokes those whose
+// `[[subscription]] kind = "block"` matches `block.chain_id`. A
+// module on chain A receives nothing when a chain-B block arrives,
+// and vice versa. Combined with the per-module restart / poison
+// state, this gives the engine multi-chain isolation by
+// construction: a poisoned module on one chain cannot starve
+// modules on any other chain.
+//
+// The COW-1071 WS reconnect tasks add the upstream symmetry: each
+// chain owns its own subscription task + backoff timer, so a chain-A
+// WS drop never blocks chain-B events.
+
+#[tokio::test]
+async fn multi_chain_dispatch_isolates_modules_by_chain() {
+    // Two example modules on two different chains. Confirm dispatch
+    // on chain A reaches only the chain-A module and vice versa.
+    let Some(wasm) = example_wasm_or_skip() else {
+        return;
+    };
+
+    let dir = tempfile::tempdir().unwrap();
+    let chain_a_manifest = dir.path().join("a.toml");
+    let chain_b_manifest = dir.path().join("b.toml");
+    std::fs::write(
+        &chain_a_manifest,
+        r#"
+[module]
+name = "module-a"
+
+[capabilities]
+required = ["logging"]
+
+[[subscription]]
+kind     = "block"
+chain_id = 1
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        &chain_b_manifest,
+        r#"
+[module]
+name = "module-b"
+
+[capabilities]
+required = ["logging"]
+
+[[subscription]]
+kind     = "block"
+chain_id = 100
+"#,
+    )
+    .unwrap();
+
+    let engine = make_wasmtime_engine();
+    let linker = make_linker(&engine);
+    let cow_pool = crate::host::cow_orderbook::OrderBookPool::default();
+    let provider_pool = crate::host::provider_pool::ProviderPool::empty();
+    let (_dir, local_store) = temp_local_store();
+
+    let engine_cfg = crate::engine_config::EngineConfig {
+        engine: crate::engine_config::EngineSection {
+            state_dir: dir.path().to_path_buf(),
+            log_level: "info".into(),
+            metrics: crate::engine_config::MetricsSection::default(),
+        },
+        chains: std::collections::BTreeMap::new(),
+        modules: vec![
+            crate::engine_config::ModuleEntry {
+                path: wasm.clone(),
+                manifest: Some(chain_a_manifest),
+            },
+            crate::engine_config::ModuleEntry {
+                path: wasm,
+                manifest: Some(chain_b_manifest),
+            },
+        ],
+    };
+
+    let mut supervisor = Supervisor::boot(
+        &engine,
+        &linker,
+        &engine_cfg,
+        &cow_pool,
+        &provider_pool,
+        &local_store,
+    )
+    .await
+    .expect("boot");
+    assert_eq!(supervisor.module_count(), 2);
+    assert_eq!(supervisor.alive_count(), 2);
+
+    let block_a = nexum::host::types::Block {
+        chain_id: 1,
+        number: 1,
+        hash: vec![0; 32],
+        timestamp: 1_700_000_000_000,
+    };
+    let block_b = nexum::host::types::Block {
+        chain_id: 100,
+        number: 1,
+        hash: vec![0; 32],
+        timestamp: 1_700_000_000_000,
+    };
+
+    // Chain A block reaches only module-a.
+    let dispatched = supervisor.dispatch_block(block_a).await;
+    assert_eq!(dispatched, 1, "only module-a subscribed to chain 1");
+    assert_eq!(supervisor.alive_count(), 2);
+
+    // Chain B block reaches only module-b.
+    let dispatched = supervisor.dispatch_block(block_b).await;
+    assert_eq!(dispatched, 1, "only module-b subscribed to chain 100");
+    assert_eq!(supervisor.alive_count(), 2);
+}
+
+#[tokio::test]
+async fn multi_chain_poisoned_module_does_not_affect_other_chains() {
+    // fuel-bomb (always-traps) on chain 1, example (healthy) on
+    // chain 100. Trap the bomb a few times with a tight poison
+    // policy so it gets quarantined; verify the example keeps
+    // dispatching on chain 100 throughout.
+    let Some(bomb_wasm) = module_wasm_or_skip("fuel-bomb") else {
+        return;
+    };
+    let Some(example_wasm) = example_wasm_or_skip() else {
+        return;
+    };
+
+    let dir = tempfile::tempdir().unwrap();
+    let example_manifest = dir.path().join("example.toml");
+    std::fs::write(
+        &example_manifest,
+        r#"
+[module]
+name = "example"
+
+[capabilities]
+required = ["logging"]
+
+[[subscription]]
+kind     = "block"
+chain_id = 100
+"#,
+    )
+    .unwrap();
+
+    let engine = make_wasmtime_engine();
+    let linker = make_linker(&engine);
+    let cow_pool = crate::host::cow_orderbook::OrderBookPool::default();
+    let provider_pool = crate::host::provider_pool::ProviderPool::empty();
+    let (_dir, local_store) = temp_local_store();
+
+    let engine_cfg = crate::engine_config::EngineConfig {
+        engine: crate::engine_config::EngineSection {
+            state_dir: dir.path().to_path_buf(),
+            log_level: "info".into(),
+            metrics: crate::engine_config::MetricsSection::default(),
+        },
+        chains: std::collections::BTreeMap::new(),
+        modules: vec![
+            crate::engine_config::ModuleEntry {
+                path: bomb_wasm,
+                manifest: Some(fixture_module_toml(
+                    "modules/fixtures/fuel-bomb/module.toml",
+                )),
+            },
+            crate::engine_config::ModuleEntry {
+                path: example_wasm,
+                manifest: Some(example_manifest),
+            },
+        ],
+    };
+
+    let policy =
+        crate::runtime::poison_policy::PoisonPolicy::new(2, std::time::Duration::from_secs(60));
+    let mut supervisor = Supervisor::boot(
+        &engine,
+        &linker,
+        &engine_cfg,
+        &cow_pool,
+        &provider_pool,
+        &local_store,
+    )
+    .await
+    .expect("boot")
+    .with_poison_policy(policy);
+    assert_eq!(supervisor.module_count(), 2);
+    assert_eq!(supervisor.alive_count(), 2);
+
+    let block_bomb_chain = nexum::host::types::Block {
+        chain_id: 1, // fuel-bomb's manifest declares chain 1
+        number: 1,
+        hash: vec![0; 32],
+        timestamp: 1_700_000_000_000,
+    };
+    let block_healthy_chain = nexum::host::types::Block {
+        chain_id: 100,
+        number: 1,
+        hash: vec![0; 32],
+        timestamp: 1_700_000_000_000,
+    };
+
+    // Trap #1 on the bomb's chain: bomb dies, example untouched.
+    supervisor.dispatch_block(block_bomb_chain.clone()).await;
+    assert_eq!(supervisor.poisoned_count(), 0);
+
+    // Example keeps dispatching on its own chain - confirm before
+    // the bomb hits the poison threshold.
+    let dispatched_b = supervisor.dispatch_block(block_healthy_chain.clone()).await;
+    assert_eq!(dispatched_b, 1, "module-b receives chain-100 blocks");
+
+    // Wait out the bomb's backoff so trap #2 can land.
+    tokio::time::sleep(std::time::Duration::from_millis(1_100)).await;
+    supervisor.dispatch_block(block_bomb_chain).await;
+    assert_eq!(
+        supervisor.poisoned_count(),
+        1,
+        "bomb quarantined at 2 failures",
+    );
+
+    // POST-poison: bomb stays dead, example still healthy.
+    let dispatched_after = supervisor.dispatch_block(block_healthy_chain).await;
+    assert_eq!(
+        dispatched_after, 1,
+        "chain-100 module unaffected by chain-1 poison",
+    );
+    assert_eq!(supervisor.alive_count(), 1, "only example is alive");
+    assert_eq!(supervisor.poisoned_count(), 1);
+}
+
 // ── build_alloy_filter ────────────────────────────────────────────────
 
 #[test]

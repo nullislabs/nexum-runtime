@@ -17,6 +17,14 @@
 //! Modules whose `init` returned `Err(HostError)` are dead with
 //! `next_attempt = None` and never get scheduled - the init failure
 //! is treated as a manifest / config bug, not a transient (COW-1070).
+//!
+//! Multi-chain isolation (COW-1073): `dispatch_block(block)` walks
+//! every module but only enters those whose subscriptions match
+//! `block.chain_id`. Per-module restart / poison / fuel limits are
+//! independent across chains, so a poisoned module on chain A
+//! cannot starve modules on chain B. The upstream WS reconnect
+//! tasks (COW-1071) own one per-chain backoff timer each, so a
+//! chain-A connection drop does not block chain-B events.
 
 use std::collections::BTreeSet;
 use std::path::Path;
