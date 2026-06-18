@@ -456,6 +456,216 @@ every_n_blocks = "1"
     );
 }
 
+// ── COW-1036: resource-limit enforcement tests ───────────────────────
+//
+// Two evil-by-design fixtures under `modules/fixtures/` exercise the
+// per-module fuel + memory caps wired in BLEU-818 (DEFAULT_FUEL_PER_EVENT
+// + DEFAULT_MEMORY_LIMIT). The tests assert:
+//
+// 1. The host catches the trap (OutOfFuel / memory-grow rejection)
+//    without panicking the supervisor.
+// 2. The trapping module is marked dead (alive_count drops to 0 for a
+//    single-module supervisor).
+// 3. A subsequent dispatch does not re-enter the dead module + the
+//    engine itself remains alive (dispatched count is 0, no crash).
+//
+// Locks the M1 fuel/memory wiring against regression so future
+// changes to the supervisor cannot silently bypass the limits.
+
+fn fixture_module_toml(relative_path: &str) -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .join(relative_path)
+}
+
+/// Boot a single fixture (.wasm + module.toml) under the supervisor.
+/// Shared body across the two resource-limit tests.
+async fn boot_fixture(wasm: &Path, manifest_relative: &str) -> Supervisor {
+    let engine = make_wasmtime_engine();
+    let linker = make_linker(&engine);
+    let cow_pool = crate::host::cow_orderbook::OrderBookPool::default();
+    let provider_pool = crate::host::provider_pool::ProviderPool::empty();
+    let (_dir, local_store) = temp_local_store();
+    let manifest = fixture_module_toml(manifest_relative);
+    Supervisor::boot_single(
+        &engine,
+        &linker,
+        wasm,
+        Some(&manifest),
+        &cow_pool,
+        &provider_pool,
+        &local_store,
+    )
+    .await
+    .expect("boot_single")
+}
+
+#[tokio::test]
+async fn resource_limit_fuel_bomb_traps_and_marks_module_dead() {
+    let Some(wasm) = module_wasm_or_skip("fuel-bomb") else {
+        return;
+    };
+    let mut supervisor = boot_fixture(&wasm, "modules/fixtures/fuel-bomb/module.toml").await;
+    assert_eq!(supervisor.module_count(), 1);
+    assert_eq!(supervisor.alive_count(), 1, "loads alive");
+
+    // First dispatch enters the fuel-bomb's unbounded loop. wasmtime
+    // burns through the per-event fuel budget; the call returns Err
+    // (a trap), the supervisor catches it and marks the module dead.
+    let block = nexum::host::types::Block {
+        chain_id: 1,
+        number: 1,
+        hash: vec![0; 32],
+        timestamp: 1_700_000_000_000,
+    };
+    let dispatched = supervisor.dispatch_block(block.clone()).await;
+    assert_eq!(
+        dispatched, 0,
+        "fuel-bomb trapped, no module accepted the dispatch",
+    );
+    assert_eq!(
+        supervisor.alive_count(),
+        0,
+        "fuel-bomb is marked dead after the trap",
+    );
+
+    // Engine is still healthy for further dispatches.
+    let dispatched_again = supervisor.dispatch_block(block).await;
+    assert_eq!(
+        dispatched_again, 0,
+        "dead module excluded from second dispatch",
+    );
+}
+
+#[tokio::test]
+async fn resource_limit_dead_bomb_does_not_starve_healthy_module() {
+    // Strongest assertion of the isolation invariant: load fuel-bomb
+    // + the M1 example module side-by-side. After the bomb traps,
+    // dispatch a second block and confirm the example module still
+    // receives it (dispatched == 1, alive_count == 1 because only
+    // one of the two is alive).
+    let Some(bomb_wasm) = module_wasm_or_skip("fuel-bomb") else {
+        return;
+    };
+    let Some(example_wasm) = example_wasm_or_skip() else {
+        return;
+    };
+
+    let engine = make_wasmtime_engine();
+    let linker = make_linker(&engine);
+    let cow_pool = crate::host::cow_orderbook::OrderBookPool::default();
+    let provider_pool = crate::host::provider_pool::ProviderPool::empty();
+    let (_dir, local_store) = temp_local_store();
+
+    // Hand-build an EngineConfig with both modules subscribed to
+    // chain 1 blocks. fuel-bomb's manifest already declares the
+    // block subscription; the example module needs a synthesised
+    // manifest because its on-disk manifest does not subscribe to
+    // blocks by default.
+    let tmp = tempfile::tempdir().unwrap();
+    let example_manifest = tmp.path().join("example.toml");
+    std::fs::write(
+        &example_manifest,
+        r#"
+[module]
+name = "example"
+
+[capabilities]
+required = ["logging"]
+
+[[subscription]]
+kind     = "block"
+chain_id = 1
+"#,
+    )
+    .unwrap();
+
+    let engine_cfg = crate::engine_config::EngineConfig {
+        engine: crate::engine_config::EngineSection {
+            state_dir: tmp.path().to_path_buf(),
+            log_level: "info".into(),
+        },
+        chains: std::collections::BTreeMap::new(),
+        modules: vec![
+            crate::engine_config::ModuleEntry {
+                path: bomb_wasm.clone(),
+                manifest: Some(fixture_module_toml(
+                    "modules/fixtures/fuel-bomb/module.toml",
+                )),
+            },
+            crate::engine_config::ModuleEntry {
+                path: example_wasm.clone(),
+                manifest: Some(example_manifest.clone()),
+            },
+        ],
+    };
+
+    let mut supervisor = Supervisor::boot(
+        &engine,
+        &linker,
+        &engine_cfg,
+        &cow_pool,
+        &provider_pool,
+        &local_store,
+    )
+    .await
+    .expect("boot");
+
+    assert_eq!(supervisor.module_count(), 2);
+    assert_eq!(supervisor.alive_count(), 2, "both load alive");
+
+    // First dispatch: fuel-bomb burns through its budget + traps.
+    // The example module dispatches normally on the same block. The
+    // bomb is now dead.
+    let block = nexum::host::types::Block {
+        chain_id: 1,
+        number: 1,
+        hash: vec![0; 32],
+        timestamp: 1_700_000_000_000,
+    };
+    let dispatched = supervisor.dispatch_block(block.clone()).await;
+    assert_eq!(
+        dispatched, 1,
+        "example module received the dispatch even though fuel-bomb trapped",
+    );
+    assert_eq!(supervisor.alive_count(), 1, "only the example is alive");
+
+    // Second dispatch: only the example accepts; the dead bomb is
+    // skipped by the dispatch fast-path.
+    let dispatched_again = supervisor.dispatch_block(block).await;
+    assert_eq!(dispatched_again, 1);
+    assert_eq!(supervisor.alive_count(), 1);
+}
+
+#[tokio::test]
+async fn resource_limit_memory_bomb_traps_and_marks_module_dead() {
+    let Some(wasm) = module_wasm_or_skip("memory-bomb") else {
+        return;
+    };
+    let mut supervisor = boot_fixture(&wasm, "modules/fixtures/memory-bomb/module.toml").await;
+    assert_eq!(supervisor.module_count(), 1);
+    assert_eq!(supervisor.alive_count(), 1);
+
+    // memory-bomb's on_event allocates 128 MiB which exceeds the
+    // 64 MiB DEFAULT_MEMORY_LIMIT; wasmtime rejects the memory.grow
+    // and propagates a trap.
+    let block = nexum::host::types::Block {
+        chain_id: 1,
+        number: 1,
+        hash: vec![0; 32],
+        timestamp: 1_700_000_000_000,
+    };
+    let dispatched = supervisor.dispatch_block(block.clone()).await;
+    assert_eq!(dispatched, 0);
+    assert_eq!(supervisor.alive_count(), 0);
+
+    let dispatched_again = supervisor.dispatch_block(block).await;
+    assert_eq!(dispatched_again, 0);
+}
+
 // ── build_alloy_filter ────────────────────────────────────────────────
 
 #[test]
