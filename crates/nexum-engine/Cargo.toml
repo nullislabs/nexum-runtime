@@ -36,7 +36,7 @@ serde_json.workspace = true
 # Observability. `tracing` replaces the prior `eprintln!` debug log
 # so the engine can drop into a structured log pipeline in production.
 tracing.workspace = true
-tracing-subscriber = { workspace = true, default-features = false, features = ["fmt", "env-filter", "ansi"] }
+tracing-subscriber.workspace = true
 
 # `cow-api` backend. cowprotocol pulls `OrderBookApi`, `OrderCreation`,
 # `OrderUid`, the orderbook base URL table per `Chain`, and the typed

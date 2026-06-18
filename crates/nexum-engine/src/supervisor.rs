@@ -15,7 +15,7 @@ use std::collections::BTreeSet;
 use std::path::Path;
 
 use anyhow::{Context, Error, Result, anyhow};
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 use wasmtime::component::{Component, Linker, ResourceTable};
 use wasmtime::{Engine, Store};
 use wasmtime_wasi::WasiCtxBuilder;
@@ -328,6 +328,7 @@ impl Supervisor {
     /// Modules that trap are marked dead and excluded from future dispatch.
     pub async fn dispatch_block(&mut self, block: nexum::host::types::Block) -> usize {
         let chain_id = block.chain_id;
+        let block_number = block.number;
         let event = nexum::host::types::Event::Block(block);
         let mut dispatched = 0;
         for module in &mut self.modules {
@@ -343,27 +344,54 @@ impl Supervisor {
             }
             // Refuel before each invocation so each event gets a fresh budget.
             if let Err(e) = module.store.set_fuel(module.fuel_per_event) {
-                error!(module = %module.name, error = %e, "set_fuel failed - skipping");
+                error!(
+                    module = %module.name,
+                    chain_id,
+                    error = %e,
+                    "set_fuel failed - skipping"
+                );
                 continue;
             }
+            let start = std::time::Instant::now();
             match module
                 .bindings
                 .call_on_event(&mut module.store, &event)
                 .await
             {
-                Ok(Ok(())) => dispatched += 1,
-                Ok(Err(host_err)) => warn!(
-                    module = %module.name,
-                    chain_id,
-                    domain = %host_err.domain,
-                    kind = ?host_err.kind,
-                    message = %host_err.message,
-                    "on-event returned host-error",
-                ),
+                Ok(Ok(())) => {
+                    let latency_ms = start.elapsed().as_millis() as u64;
+                    debug!(
+                        module = %module.name,
+                        chain_id,
+                        event_kind = "block",
+                        block_number,
+                        latency_ms,
+                        "dispatch ok"
+                    );
+                    dispatched += 1;
+                }
+                Ok(Err(host_err)) => {
+                    let latency_ms = start.elapsed().as_millis() as u64;
+                    warn!(
+                        module = %module.name,
+                        chain_id,
+                        event_kind = "block",
+                        block_number,
+                        latency_ms,
+                        domain = %host_err.domain,
+                        kind = ?host_err.kind,
+                        message = %host_err.message,
+                        "on-event returned host-error",
+                    );
+                }
                 Err(trap) => {
+                    let latency_ms = start.elapsed().as_millis() as u64;
                     error!(
                         module = %module.name,
                         chain_id,
+                        event_kind = "block",
+                        block_number,
+                        latency_ms,
                         error = %trap,
                         "on-event trapped - module marked dead, removed from dispatch",
                     );
@@ -398,17 +426,34 @@ impl Supervisor {
             error!(module = %module_name, error = %e, "set_fuel failed - skipping");
             return false;
         }
+        let block_number = log.block_number.unwrap_or_default();
         let event = nexum::host::types::Event::Logs(vec![project_log(chain_id, &log)]);
+        let start = std::time::Instant::now();
         match target
             .bindings
             .call_on_event(&mut target.store, &event)
             .await
         {
-            Ok(Ok(())) => true,
+            Ok(Ok(())) => {
+                let latency_ms = start.elapsed().as_millis() as u64;
+                debug!(
+                    module = %module_name,
+                    chain_id,
+                    event_kind = "log",
+                    block_number,
+                    latency_ms,
+                    "dispatch ok"
+                );
+                true
+            }
             Ok(Err(host_err)) => {
+                let latency_ms = start.elapsed().as_millis() as u64;
                 warn!(
                     module = %module_name,
                     chain_id,
+                    event_kind = "log",
+                    block_number,
+                    latency_ms,
                     domain = %host_err.domain,
                     kind = ?host_err.kind,
                     message = %host_err.message,
@@ -417,9 +462,13 @@ impl Supervisor {
                 false
             }
             Err(trap) => {
+                let latency_ms = start.elapsed().as_millis() as u64;
                 error!(
                     module = %module_name,
                     chain_id,
+                    event_kind = "log",
+                    block_number,
+                    latency_ms,
                     error = %trap,
                     "on-event trapped - module marked dead, removed from dispatch",
                 );
