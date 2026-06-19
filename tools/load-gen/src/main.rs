@@ -128,6 +128,27 @@ async fn main() -> anyhow::Result<()> {
 
     let mut block_stream = provider.subscribe_blocks().await?.into_stream();
 
+    // Track the EOA's nonce locally so concurrent submissions within a
+    // block window do not race on the per-account counter. Anvil's
+    // `eth_sendTransaction` against an impersonated account auto-
+    // assigns a nonce when none is provided, but that path mutates
+    // shared state and the resulting nonces are not deterministic
+    // when bursts arrive faster than Anvil's miner cycles - that was
+    // the COW-1079 baseline's 5/270 revert root cause.
+    let starting_nonce: u64 = provider
+        .raw_request::<_, String>(
+            "eth_getTransactionCount".into(),
+            serde_json::json!([format!("{:?}", cli.eoa), "latest"]),
+        )
+        .await
+        .map_err(|e| anyhow::anyhow!("get nonce: {e}"))
+        .and_then(|hex| {
+            u64::from_str_radix(hex.trim_start_matches("0x"), 16)
+                .map_err(|e| anyhow::anyhow!("parse nonce {hex:?}: {e}"))
+        })?;
+    let mut nonce = starting_nonce;
+    info!(starting_nonce, "starting nonce captured");
+
     let deadline = Instant::now() + Duration::from_secs(cli.duration_min * 60);
     let mut blocks_seen = 0u64;
     let mut twap_attempted = 0u64;
@@ -135,6 +156,7 @@ async fn main() -> anyhow::Result<()> {
     let mut ethflow_attempted = 0u64;
     let mut ethflow_ok = 0u64;
     let mut salt_counter = 0u128;
+    let mut ethflow_seq = 0u128;
 
     info!(
         "load-gen running: {} TWAP + {} EthFlow per block for {} minute(s)",
@@ -159,10 +181,10 @@ async fn main() -> anyhow::Result<()> {
                 };
                 blocks_seen += 1;
                 let block_ts = header.timestamp;
-                let n_ok = submit_twaps(&provider, cli.eoa, cli.twap_per_block, &mut salt_counter, block_ts).await;
+                let n_ok = submit_twaps(&provider, cli.eoa, cli.twap_per_block, &mut salt_counter, &mut nonce, block_ts).await;
                 twap_attempted += u64::from(cli.twap_per_block);
                 twap_ok += n_ok;
-                let m_ok = submit_ethflows(&provider, cli.eoa, cli.ethflow_per_block, block_ts).await;
+                let m_ok = submit_ethflows(&provider, cli.eoa, cli.ethflow_per_block, &mut ethflow_seq, &mut nonce).await;
                 ethflow_attempted += u64::from(cli.ethflow_per_block);
                 ethflow_ok += m_ok;
                 if blocks_seen.is_multiple_of(5) {
@@ -189,6 +211,7 @@ async fn submit_twaps<P: Provider>(
     eoa: Address,
     n: u32,
     salt_counter: &mut u128,
+    nonce: &mut u64,
     block_ts: u64,
 ) -> u64 {
     let mut ok = 0u64;
@@ -196,26 +219,51 @@ async fn submit_twaps<P: Provider>(
         *salt_counter += 1;
         let salt = salt_from_counter(*salt_counter);
         let calldata = encode_twap_create(salt, block_ts);
-        match send_impersonated(provider, eoa, COMPOSABLE_COW, calldata, U256::ZERO).await {
-            Ok(_) => ok += 1,
-            Err(e) => warn!(error = %e, "twap create failed"),
+        match send_impersonated(provider, eoa, COMPOSABLE_COW, calldata, U256::ZERO, *nonce).await {
+            Ok(_) => {
+                ok += 1;
+                *nonce += 1;
+            }
+            Err(e) => warn!(error = %e, nonce = *nonce, "twap create failed"),
         }
     }
     ok
 }
 
-async fn submit_ethflows<P: Provider>(provider: &P, eoa: Address, m: u32, block_ts: u64) -> u64 {
-    // Small sell amount so we do not drain the impersonated EOA's
-    // balance even under heavy load. Anvil tops up via setBalance at
-    // startup so this is more about keeping `msg.value` consistent
-    // with the EthFlow contract's accounting.
-    const SELL_AMOUNT: u128 = 10_000_000_000; // 1e-8 ETH
+async fn submit_ethflows<P: Provider>(
+    provider: &P,
+    eoa: Address,
+    m: u32,
+    seq: &mut u128,
+    nonce: &mut u64,
+) -> u64 {
+    // EthFlow.createOrder dedups by the on-chain GPv2 OrderUid which
+    // is derived from `(buyToken, receiver, sellAmount, buyAmount,
+    // appData, feeAmount, validTo, partiallyFillable)` - NOT quoteId.
+    // We vary `sellAmount` by 1 wei per call so the resulting UIDs
+    // are unique and the contract does not reject with
+    // `OrderIsAlreadyOwned`.
+    const BASE_SELL_AMOUNT: u128 = 10_000_000_000; // 1e-8 ETH
     let mut ok = 0u64;
-    for i in 0..m {
-        let calldata = encode_ethflow_create_order(eoa, SELL_AMOUNT, block_ts, i);
-        match send_impersonated(provider, eoa, ETHFLOW, calldata, U256::from(SELL_AMOUNT)).await {
-            Ok(_) => ok += 1,
-            Err(e) => warn!(error = %e, "ethflow createOrder failed"),
+    for _ in 0..m {
+        *seq += 1;
+        let sell_amount = BASE_SELL_AMOUNT + *seq;
+        let calldata = encode_ethflow_create_order(eoa, sell_amount, 0);
+        match send_impersonated(
+            provider,
+            eoa,
+            ETHFLOW,
+            calldata,
+            U256::from(sell_amount),
+            *nonce,
+        )
+        .await
+        {
+            Ok(_) => {
+                ok += 1;
+                *nonce += 1;
+            }
+            Err(e) => warn!(error = %e, nonce = *nonce, "ethflow createOrder failed"),
         }
     }
     ok
@@ -263,13 +311,7 @@ fn encode_twap_create(salt: B256, block_ts: u64) -> Bytes {
 /// canonical EthFlow shape (COW-1076 - the mock orderbook is
 /// permissive here, and shepherd's strategy will drop with the
 /// expected Info-level log per PR #49).
-fn encode_ethflow_create_order(
-    eoa: Address,
-    sell_amount: u128,
-    block_ts: u64,
-    nonce: u32,
-) -> Bytes {
-    let _ = block_ts;
+fn encode_ethflow_create_order(eoa: Address, sell_amount: u128, quote_id: i64) -> Bytes {
     let order = EthFlowOrderData {
         buyToken: COW_TOKEN,
         receiver: eoa,
@@ -279,7 +321,7 @@ fn encode_ethflow_create_order(
         feeAmount: U256::ZERO,
         validTo: u32::MAX,
         partiallyFillable: false,
-        quoteId: i64::from(nonce),
+        quoteId: quote_id,
     };
     let call = createOrderCall { order };
     call.abi_encode().into()
@@ -291,13 +333,17 @@ async fn send_impersonated<P: Provider>(
     to: Address,
     data: Bytes,
     value: U256,
+    nonce: u64,
 ) -> anyhow::Result<B256> {
     // `eth_sendTransaction` on Anvil uses the impersonated account's
-    // virtual signer - no local key needed.
+    // virtual signer - no local key needed. We pin the nonce explicitly
+    // so concurrent submissions do not race on the per-account counter
+    // (root cause of the 5/270 revert rate in the COW-1079 baseline).
     let tx = TransactionRequest::default()
         .from(from)
         .to(to)
         .value(value)
+        .nonce(nonce)
         .input(data.into());
     let hash: B256 = provider
         .raw_request("eth_sendTransaction".into(), serde_json::json!([tx]))
