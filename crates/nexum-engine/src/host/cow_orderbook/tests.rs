@@ -152,6 +152,40 @@ async fn request_rejects_unknown_chain() {
 }
 
 #[tokio::test]
+async fn submit_order_propagates_orderbook_envelope() {
+    // The orderbook rejects with a typed envelope. The pool must
+    // surface `cowprotocol::Error::OrderbookApi { status, api }`
+    // so the WIT adapter can forward `api` to `HostError.data`
+    // (COW-1075). The string `DuplicatedOrder` is what the live
+    // Sepolia orderbook returns for an already-submitted order;
+    // it parses as `ApiError` even though `OrderPostErrorKind`
+    // falls back to `Unknown` for the spelling.
+    let mock = MockServer::start().await;
+    let envelope = r#"{"errorType":"DuplicatedOrder","description":"order already exists"}"#;
+    Mock::given(method("POST"))
+        .and(path("/api/v1/orders"))
+        .respond_with(ResponseTemplate::new(400).set_body_string(envelope))
+        .expect(1)
+        .mount(&mock)
+        .await;
+
+    let pool = pool_with_mainnet_at(&mock);
+    let err = pool
+        .submit_order_json(Chain::Mainnet.id(), sample_order_json().as_bytes())
+        .await
+        .expect_err("orderbook 400 surfaces as error");
+
+    match err {
+        CowApiError::Orderbook(cowprotocol::Error::OrderbookApi { status, api }) => {
+            assert_eq!(status, 400);
+            assert_eq!(api.error_type, "DuplicatedOrder");
+            assert_eq!(api.description, "order already exists");
+        }
+        other => panic!("expected OrderbookApi envelope, got {other:?}"),
+    }
+}
+
+#[tokio::test]
 async fn submit_order_propagates_orderbook_response() {
     let mock = MockServer::start().await;
     let body_json = sample_order_json();
