@@ -90,8 +90,20 @@ struct Cli {
 
     /// Address whose state Anvil should impersonate when sending the
     /// load-gen transactions. Defaults to the pinned Sepolia test EOA.
+    /// Ignored when `--parallel > 1` - synthetic per-worker EOAs are
+    /// used instead so the per-EOA nonce serialisation does not gate
+    /// throughput (the bottleneck the saturation 50x50 report
+    /// surfaced).
     #[arg(long, default_value_t = EOA)]
     eoa: Address,
+
+    /// Number of parallel workers. Each worker impersonates its own
+    /// synthetic EOA (`Address::from([i; 20])` where `i` is the
+    /// 1-based worker index), gets its own WS connection, runs its
+    /// own per-block submission loop. Total events per block =
+    /// `parallel * (twap_per_block + ethflow_per_block)`.
+    #[arg(long, default_value_t = 1)]
+    parallel: u32,
 }
 
 #[tokio::main]
@@ -105,40 +117,117 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     let cli = Cli::parse();
+    let parallel = cli.parallel.max(1);
 
+    info!(
+        parallel,
+        twap_per_block = cli.twap_per_block,
+        ethflow_per_block = cli.ethflow_per_block,
+        duration_min = cli.duration_min,
+        "load-gen running"
+    );
+
+    // Build per-worker EOAs. Worker 0 reuses the CLI-provided EOA so
+    // single-worker runs match the historic behaviour exactly;
+    // workers 1..N use deterministic synthetic addresses so each gets
+    // an independent nonce stream on Anvil.
+    let mut eoas: Vec<Address> = Vec::with_capacity(parallel as usize);
+    eoas.push(cli.eoa);
+    for i in 1..parallel {
+        let mut bytes = [0u8; 20];
+        bytes[19] = (i & 0xff) as u8;
+        bytes[18] = ((i >> 8) & 0xff) as u8;
+        // Tag bytes[0] with 0x57 ('W' for worker) so synthetic EOAs are
+        // easy to distinguish from anvil's default unlocked set.
+        bytes[0] = 0x57;
+        eoas.push(Address::from(bytes));
+    }
+
+    let deadline = Instant::now() + Duration::from_secs(cli.duration_min * 60);
+    let mut joinset: tokio::task::JoinSet<anyhow::Result<WorkerStats>> =
+        tokio::task::JoinSet::new();
+
+    for (idx, eoa) in eoas.into_iter().enumerate() {
+        let anvil = cli.anvil.clone();
+        let twap_n = cli.twap_per_block;
+        let ethflow_m = cli.ethflow_per_block;
+        joinset.spawn(async move {
+            worker_loop(idx as u32, anvil, eoa, twap_n, ethflow_m, deadline).await
+        });
+    }
+
+    let mut totals = WorkerStats::default();
+    let mut workers_finished = 0u32;
+    while let Some(res) = joinset.join_next().await {
+        match res {
+            Ok(Ok(stats)) => {
+                totals.merge(&stats);
+                workers_finished += 1;
+            }
+            Ok(Err(e)) => warn!(error = %e, "worker failed"),
+            Err(e) => warn!(error = %e, "worker panicked"),
+        }
+    }
+
+    info!(
+        workers_finished,
+        blocks_seen = totals.blocks_seen,
+        twap_attempted = totals.twap_attempted,
+        twap_ok = totals.twap_ok,
+        ethflow_attempted = totals.ethflow_attempted,
+        ethflow_ok = totals.ethflow_ok,
+        "load-gen finished"
+    );
+    Ok(())
+}
+
+#[derive(Debug, Default, Clone)]
+struct WorkerStats {
+    blocks_seen: u64,
+    twap_attempted: u64,
+    twap_ok: u64,
+    ethflow_attempted: u64,
+    ethflow_ok: u64,
+}
+
+impl WorkerStats {
+    fn merge(&mut self, other: &Self) {
+        self.blocks_seen += other.blocks_seen;
+        self.twap_attempted += other.twap_attempted;
+        self.twap_ok += other.twap_ok;
+        self.ethflow_attempted += other.ethflow_attempted;
+        self.ethflow_ok += other.ethflow_ok;
+    }
+}
+
+async fn worker_loop(
+    idx: u32,
+    anvil: String,
+    eoa: Address,
+    twap_n: u32,
+    ethflow_m: u32,
+    deadline: Instant,
+) -> anyhow::Result<WorkerStats> {
     let provider = ProviderBuilder::new()
-        .connect_ws(WsConnect::new(&cli.anvil))
+        .connect_ws(WsConnect::new(&anvil))
         .await?;
-
-    info!(eoa = %cli.eoa, anvil = %cli.anvil, "impersonating + funding EOA");
     provider
         .raw_request::<_, ()>(
             "anvil_impersonateAccount".into(),
-            serde_json::json!([format!("{:?}", cli.eoa)]),
+            serde_json::json!([format!("{:?}", eoa)]),
         )
         .await?;
-    // 1_000_000 ETH - more than enough for any reasonable run.
     let funded = format!("0x{:x}", U256::from(10u128.pow(24)));
     provider
         .raw_request::<_, ()>(
             "anvil_setBalance".into(),
-            serde_json::json!([format!("{:?}", cli.eoa), funded]),
+            serde_json::json!([format!("{:?}", eoa), funded]),
         )
         .await?;
-
-    let mut block_stream = provider.subscribe_blocks().await?.into_stream();
-
-    // Track the EOA's nonce locally so concurrent submissions within a
-    // block window do not race on the per-account counter. Anvil's
-    // `eth_sendTransaction` against an impersonated account auto-
-    // assigns a nonce when none is provided, but that path mutates
-    // shared state and the resulting nonces are not deterministic
-    // when bursts arrive faster than Anvil's miner cycles - that was
-    // the COW-1079 baseline's 5/270 revert root cause.
     let starting_nonce: u64 = provider
         .raw_request::<_, String>(
             "eth_getTransactionCount".into(),
-            serde_json::json!([format!("{:?}", cli.eoa), "latest"]),
+            serde_json::json!([format!("{:?}", eoa), "latest"]),
         )
         .await
         .map_err(|e| anyhow::anyhow!("get nonce: {e}"))
@@ -146,64 +235,54 @@ async fn main() -> anyhow::Result<()> {
             u64::from_str_radix(hex.trim_start_matches("0x"), 16)
                 .map_err(|e| anyhow::anyhow!("parse nonce {hex:?}: {e}"))
         })?;
+    info!(worker = idx, eoa = %eoa, starting_nonce, "worker started");
+
+    let mut block_stream = provider.subscribe_blocks().await?.into_stream();
     let mut nonce = starting_nonce;
-    info!(starting_nonce, "starting nonce captured");
-
-    let deadline = Instant::now() + Duration::from_secs(cli.duration_min * 60);
-    let mut blocks_seen = 0u64;
-    let mut twap_attempted = 0u64;
-    let mut twap_ok = 0u64;
-    let mut ethflow_attempted = 0u64;
-    let mut ethflow_ok = 0u64;
-    let mut salt_counter = 0u128;
-    let mut ethflow_seq = 0u128;
-
-    info!(
-        "load-gen running: {} TWAP + {} EthFlow per block for {} minute(s)",
-        cli.twap_per_block, cli.ethflow_per_block, cli.duration_min
-    );
+    // Disjoint salt space per worker via a 96-bit-shifted prefix - the
+    // salt is bytes32 so the upper bits stay free.
+    let mut salt_counter = (u128::from(idx) + 1) << 96;
+    // For ethflow_seq the value flows into `BASE_SELL_AMOUNT + seq` and
+    // becomes the tx's `msg.value`. We MUST keep this small so the
+    // impersonated EOA's 1_000_000 ETH balance can cover it (the
+    // first parallel-mode run shifted by 96 and produced a 7.9e28 wei
+    // sellAmount, blowing past the balance and reverting every
+    // EthFlow tx). Workers get a 10_000-wide window each, plenty for
+    // a 2 minute test at 5 ethflow/block.
+    let mut ethflow_seq: u128 = u128::from(idx) * 10_000;
+    let mut stats = WorkerStats::default();
 
     loop {
         tokio::select! {
             biased;
-            _ = tokio::signal::ctrl_c() => {
-                info!("ctrl-c received, exiting");
-                break;
-            }
-            _ = tokio::time::sleep_until(deadline.into()) => {
-                info!("duration elapsed, exiting");
-                break;
-            }
+            _ = tokio::signal::ctrl_c() => break,
+            _ = tokio::time::sleep_until(deadline.into()) => break,
             maybe_block = block_stream.next() => {
                 let Some(header) = maybe_block else {
-                    warn!("block stream ended unexpectedly");
+                    warn!(worker = idx, "block stream ended unexpectedly");
                     break;
                 };
-                blocks_seen += 1;
+                stats.blocks_seen += 1;
                 let block_ts = header.timestamp;
-                let n_ok = submit_twaps(&provider, cli.eoa, cli.twap_per_block, &mut salt_counter, &mut nonce, block_ts).await;
-                twap_attempted += u64::from(cli.twap_per_block);
-                twap_ok += n_ok;
-                let m_ok = submit_ethflows(&provider, cli.eoa, cli.ethflow_per_block, &mut ethflow_seq, &mut nonce).await;
-                ethflow_attempted += u64::from(cli.ethflow_per_block);
-                ethflow_ok += m_ok;
-                if blocks_seen.is_multiple_of(5) {
+                let n_ok = submit_twaps(&provider, eoa, twap_n, &mut salt_counter, &mut nonce, block_ts).await;
+                stats.twap_attempted += u64::from(twap_n);
+                stats.twap_ok += n_ok;
+                let m_ok = submit_ethflows(&provider, eoa, ethflow_m, &mut ethflow_seq, &mut nonce).await;
+                stats.ethflow_attempted += u64::from(ethflow_m);
+                stats.ethflow_ok += m_ok;
+                if stats.blocks_seen.is_multiple_of(5) {
                     info!(
+                        worker = idx,
                         block = header.number,
-                        twap = format!("{twap_ok}/{twap_attempted}"),
-                        ethflow = format!("{ethflow_ok}/{ethflow_attempted}"),
+                        twap = format!("{}/{}", stats.twap_ok, stats.twap_attempted),
+                        ethflow = format!("{}/{}", stats.ethflow_ok, stats.ethflow_attempted),
                         "progress"
                     );
                 }
             }
         }
     }
-
-    info!(
-        blocks_seen,
-        twap_attempted, twap_ok, ethflow_attempted, ethflow_ok, "load-gen finished"
-    );
-    Ok(())
+    Ok(stats)
 }
 
 async fn submit_twaps<P: Provider>(
