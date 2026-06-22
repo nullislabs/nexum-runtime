@@ -42,7 +42,16 @@ impl ProviderPool {
         let mut providers: BTreeMap<u64, DynProvider> = BTreeMap::new();
         for (chain_id, chain_cfg) in &cfg.chains {
             let url = chain_cfg.rpc_url.as_str();
-            info!(chain_id, url, "opening chain RPC provider");
+            // The boot log carries the URL with embedded API keys
+            // redacted — log aggregators (Loki, Datadog, splunk) often
+            // ingest these lines and the key shouldn't end up in
+            // long-term storage. The engine still uses the full URL
+            // when actually connecting to the provider below.
+            info!(
+                chain_id,
+                url = %crate::engine_config::redact_url(url),
+                "opening chain RPC provider",
+            );
             let provider = if url.starts_with("ws://") || url.starts_with("wss://") {
                 ProviderBuilder::new()
                     .connect_ws(WsConnect::new(url))

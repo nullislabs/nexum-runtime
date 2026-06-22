@@ -57,6 +57,14 @@ async fn main() -> anyhow::Result<()> {
 
     info!("nexum-engine starting");
 
+    // Surface config footguns now that the tracing subscriber is
+    // up. Today's only check: an HTTP `rpc_url` would loop forever
+    // in the event-loop's WS reconnect backoff because
+    // `eth_subscribe` is WS-only. One ERROR log per offending chain
+    // with the exact `wss://` swap suggested. See
+    // `engine_config::validate_transports`.
+    engine_cfg.validate_transports();
+
     // COW-1034: install the Prometheus exporter. When
     // `[engine.metrics].enabled = true` the HTTP listener also binds
     // and serves `/metrics`. Otherwise the recorder is still
