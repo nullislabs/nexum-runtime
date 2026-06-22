@@ -225,7 +225,16 @@ pub fn load_or_default(path: Option<&Path>) -> Result<EngineConfig, EngineConfig
     }
 
     let raw = std::fs::read_to_string(&path)?;
-    let cfg: EngineConfig = toml::from_str(&raw)?;
+    // Operators reference RPC URLs (which carry API keys) via
+    // `${VAR_NAME}` placeholders so the committed `engine.toml` /
+    // `engine.docker.toml` stays secret-free. The substitution runs
+    // before TOML parse so a missing var fails fast with the exact
+    // variable name, not a downstream "invalid URI" several layers
+    // deep.
+    let substituted = substitute_env_vars(&raw).map_err(|e| {
+        anyhow::anyhow!("engine config env-var substitution failed: {e}")
+    })?;
+    let cfg: EngineConfig = toml::from_str(&substituted)?;
     info!(
         path = %path.display(),
         chains = cfg.chains.len(),
@@ -238,6 +247,82 @@ pub fn load_or_default(path: Option<&Path>) -> Result<EngineConfig, EngineConfig
     // dropped. The validator is invoked explicitly from `main.rs`
     // after the subscriber is up.
     Ok(cfg)
+}
+
+/// Replace every `${VAR_NAME}` token in `raw` with the value of the
+/// corresponding environment variable. Returns an error naming any
+/// missing variable so the operator sees the exact fix.
+///
+/// Recognised variable names: `[A-Z_][A-Z0-9_]*` (matches shell env
+/// var conventions). Anything else inside `${...}` is rejected so a
+/// typo doesn't silently pass through.
+///
+/// Note: substitution runs over the whole TOML text, including
+/// comments. This is fine in practice — comments are stripped during
+/// the subsequent `toml::from_str` parse, and the only realistic
+/// `${VAR}` payload is in string values anyway.
+fn substitute_env_vars(raw: &str) -> Result<String, EnvVarError> {
+    let mut out = String::with_capacity(raw.len());
+    let bytes = raw.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'$'
+            && i + 1 < bytes.len()
+            && bytes[i + 1] == b'{'
+        {
+            // Find the closing `}`.
+            let start = i + 2;
+            let Some(end_offset) = raw[start..].find('}') else {
+                return Err(EnvVarError::Unclosed { offset: i });
+            };
+            let end = start + end_offset;
+            let name = &raw[start..end];
+            if !is_valid_env_name(name) {
+                return Err(EnvVarError::InvalidName {
+                    name: name.to_owned(),
+                });
+            }
+            match std::env::var(name) {
+                Ok(val) => out.push_str(&val),
+                Err(_) => return Err(EnvVarError::Missing { name: name.to_owned() }),
+            }
+            i = end + 1;
+        } else {
+            // Push one UTF-8 char (find the next char boundary).
+            let ch = raw[i..].chars().next().expect("byte index is on char boundary");
+            out.push(ch);
+            i += ch.len_utf8();
+        }
+    }
+    Ok(out)
+}
+
+fn is_valid_env_name(s: &str) -> bool {
+    let mut chars = s.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    if !(first.is_ascii_uppercase() || first == '_') {
+        return false;
+    }
+    chars.all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_')
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum EnvVarError {
+    #[error(
+        "environment variable `{name}` referenced via ${{{name}}} in engine.toml but not set. \
+         Export it before launching the engine (e.g. via a `.env` file consumed by `docker compose`)."
+    )]
+    Missing { name: String },
+    #[error(
+        "invalid env var name `{name}` inside ${{...}} in engine.toml — names must match \
+         [A-Z_][A-Z0-9_]*. Typo, or did you mean `${{{name_upper}}}`?",
+        name_upper = name.to_uppercase()
+    )]
+    InvalidName { name: String },
+    #[error("unclosed `${{` at byte offset {offset} in engine.toml — every `${{` needs a matching `}}`.")]
+    Unclosed { offset: usize },
 }
 
 impl EngineConfig {
@@ -406,5 +491,82 @@ mod tests {
         let redacted = redact_url("https://eth-mainnet.g.alchemy.com/v2/abc");
         assert!(redacted.contains("eth-mainnet.g.alchemy.com"));
         assert!(redacted.contains("v2"));
+    }
+
+    // ----------------- env var substitution -----------------------
+    //
+    // These tests stash + restore process env vars under unique names
+    // so parallel `cargo test` runs don't trip on each other.
+
+    fn with_env<F: FnOnce()>(name: &str, value: &str, body: F) {
+        let prev = std::env::var(name).ok();
+        // SAFETY: tests are single-threaded within one test fn; setting
+        // an env var here is fine since the unique-name convention
+        // avoids cross-test races.
+        unsafe { std::env::set_var(name, value) };
+        body();
+        match prev {
+            Some(v) => unsafe { std::env::set_var(name, v) },
+            None => unsafe { std::env::remove_var(name) },
+        }
+    }
+
+    #[test]
+    fn substitute_replaces_known_variable() {
+        with_env("COW1078_TEST_RPC", "wss://example.test/abc", || {
+            let raw = r#"rpc_url = "${COW1078_TEST_RPC}""#;
+            let out = substitute_env_vars(raw).unwrap();
+            assert_eq!(out, r#"rpc_url = "wss://example.test/abc""#);
+        });
+    }
+
+    #[test]
+    fn substitute_errors_on_missing_variable() {
+        // Variable name must not collide with anything in the operator
+        // environment. Use a guaranteed-unique prefix.
+        let err = substitute_env_vars(r#"x = "${COW1078_DEFINITELY_UNSET_VAR_XYZ}""#)
+            .unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("COW1078_DEFINITELY_UNSET_VAR_XYZ"));
+        assert!(msg.contains("not set"));
+    }
+
+    #[test]
+    fn substitute_errors_on_invalid_name() {
+        let err = substitute_env_vars(r#"x = "${lowercase_name}""#).unwrap_err();
+        assert!(matches!(err, EnvVarError::InvalidName { .. }));
+    }
+
+    #[test]
+    fn substitute_errors_on_unclosed_brace() {
+        let err = substitute_env_vars(r#"x = "${UNCLOSED"#).unwrap_err();
+        assert!(matches!(err, EnvVarError::Unclosed { .. }));
+    }
+
+    #[test]
+    fn substitute_passes_text_with_no_placeholders_through() {
+        let raw = "no placeholders here\nrpc_url = \"wss://x\"";
+        assert_eq!(substitute_env_vars(raw).unwrap(), raw);
+    }
+
+    #[test]
+    fn substitute_handles_multiple_placeholders_in_one_line() {
+        with_env("COW1078_A", "alpha", || {
+            with_env("COW1078_B", "beta", || {
+                let raw = "k = \"${COW1078_A}-${COW1078_B}\"";
+                let out = substitute_env_vars(raw).unwrap();
+                assert_eq!(out, "k = \"alpha-beta\"");
+            });
+        });
+    }
+
+    #[test]
+    fn substitute_preserves_utf8_around_placeholder() {
+        // The hand-rolled byte loop must respect multi-byte UTF-8.
+        with_env("COW1078_U", "X", || {
+            let raw = "# 河 ${COW1078_U} ⚙️\n";
+            let out = substitute_env_vars(raw).unwrap();
+            assert_eq!(out, "# 河 X ⚙️\n");
+        });
     }
 }
