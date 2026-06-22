@@ -8,24 +8,10 @@
 //! hand the same function a `shepherd_sdk_test::MockHost`.
 
 use alloy_primitives::I256;
-use alloy_sol_types::{SolCall, sol};
-use shepherd_sdk::chain::{eth_call_params, parse_eth_call_result};
+use shepherd_sdk::chain::chainlink::read_latest_answer;
+use shepherd_sdk::config::{self, ConfigError};
 use shepherd_sdk::host::{Host, HostError, HostErrorKind, LogLevel};
-use shepherd_sdk::prelude::{Address, U256};
-
-sol! {
-    /// Chainlink AggregatorV3Interface - only the function this module
-    /// needs.
-    interface AggregatorV3 {
-        function latestRoundData() external view returns (
-            uint80 roundId,
-            int256 answer,
-            uint256 startedAt,
-            uint256 updatedAt,
-            uint80 answeredInRound
-        );
-    }
-}
+use shepherd_sdk::prelude::Address;
 
 /// Resolved configuration, parsed from `module.toml::[config]` at
 /// `init` and read on every `on_event`.
@@ -67,39 +53,11 @@ pub fn on_block<H: Host>(
     if !block_number.is_multiple_of(settings.every_n_blocks) {
         return Ok(());
     }
-    let call_data = AggregatorV3::latestRoundDataCall {}.abi_encode();
-    let params = eth_call_params(&settings.oracle_address, &call_data);
-    let result_json = match host.request(chain_id, "eth_call", &params) {
-        Ok(s) => s,
-        Err(err) => {
-            host.log(
-                LogLevel::Warn,
-                &format!(
-                    "price-alert eth_call failed ({}): {}",
-                    err.code, err.message
-                ),
-            );
-            return Ok(());
-        }
-    };
-    let Some(bytes) = parse_eth_call_result(&result_json) else {
-        host.log(
-            LogLevel::Warn,
-            &format!("price-alert: cannot decode result hex {result_json}"),
-        );
+    let Some(answer) = read_latest_answer(host, chain_id, settings.oracle_address, "price-alert")
+    else {
+        // read_latest_answer already logged the failure at Warn.
         return Ok(());
     };
-    let decoded = match AggregatorV3::latestRoundDataCall::abi_decode_returns(&bytes) {
-        Ok(d) => d,
-        Err(e) => {
-            host.log(
-                LogLevel::Warn,
-                &format!("price-alert: latestRoundData decode failed: {e}"),
-            );
-            return Ok(());
-        }
-    };
-    let answer = decoded.answer;
     if classify(answer, settings.threshold_scaled, settings.direction) {
         host.log(
             LogLevel::Warn,
@@ -135,35 +93,39 @@ pub fn classify(answer: I256, threshold: I256, direction: Direction) -> bool {
 /// `Guest::init` adapter can lift the failure into the wit-bindgen
 /// `HostError` with no extra plumbing.
 pub fn parse_config(entries: &[(String, String)]) -> Result<Settings, HostError> {
-    let oracle_address = config_get(entries, "oracle_address")?
+    let oracle_address = config::get_required(entries, "oracle_address")
+        .map_err(config_err)?
         .parse::<Address>()
-        .map_err(|e| config_err(format!("oracle_address: {e}")))?;
-    let decimals = config_get(entries, "decimals")?
+        .map_err(|e| invalid(format!("oracle_address: {e}")))?;
+    let decimals = config::get_required(entries, "decimals")
+        .map_err(config_err)?
         .parse::<u32>()
-        .map_err(|e| config_err(format!("decimals: {e}")))?;
+        .map_err(|e| invalid(format!("decimals: {e}")))?;
     if decimals > 38 {
-        return Err(config_err(format!(
+        return Err(invalid(format!(
             "decimals={decimals} exceeds the I256 power-of-ten budget"
         )));
     }
-    let threshold_decimal = config_get(entries, "threshold")?;
-    let threshold_scaled = scale_threshold(threshold_decimal, decimals)?;
-    let direction = match config_get(entries, "direction")?
+    let threshold_decimal = config::get_required(entries, "threshold").map_err(config_err)?;
+    let threshold_scaled =
+        config::scale_decimal(threshold_decimal, decimals, "threshold").map_err(config_err)?;
+    let direction = match config::get_required(entries, "direction")
+        .map_err(config_err)?
         .to_ascii_lowercase()
         .as_str()
     {
         "above" => Direction::Above,
         "below" => Direction::Below,
         other => {
-            return Err(config_err(format!(
+            return Err(invalid(format!(
                 "direction: expected 'above'|'below', got {other:?}"
             )));
         }
     };
-    let every_n_blocks = config_get_optional(entries, "every_n_blocks")
+    let every_n_blocks = config::get_optional(entries, "every_n_blocks")
         .map(|s| {
             s.parse::<u64>()
-                .map_err(|e| config_err(format!("every_n_blocks: {e}")))
+                .map_err(|e| invalid(format!("every_n_blocks: {e}")))
         })
         .transpose()?
         .unwrap_or(1)
@@ -176,22 +138,10 @@ pub fn parse_config(entries: &[(String, String)]) -> Result<Settings, HostError>
     })
 }
 
-fn config_get<'a>(entries: &'a [(String, String)], key: &str) -> Result<&'a str, HostError> {
-    entries
-        .iter()
-        .find(|(k, _)| k == key)
-        .map(|(_, v)| v.as_str())
-        .ok_or_else(|| config_err(format!("missing key {key:?}")))
-}
-
-fn config_get_optional<'a>(entries: &'a [(String, String)], key: &str) -> Option<&'a str> {
-    entries
-        .iter()
-        .find(|(k, _)| k == key)
-        .map(|(_, v)| v.as_str())
-}
-
-fn config_err(message: impl Into<String>) -> HostError {
+/// Lift a free-text invalid-config detail into the price-alert `HostError`
+/// shape. Used when the SDK helper does not own the error (e.g. an
+/// `Address::from_str` failure).
+fn invalid(message: impl Into<String>) -> HostError {
     HostError {
         domain: "price-alert".into(),
         kind: HostErrorKind::InvalidInput,
@@ -201,54 +151,20 @@ fn config_err(message: impl Into<String>) -> HostError {
     }
 }
 
-/// Multiply `threshold_decimal` (e.g. `"2500.00"`) by `10**decimals`
-/// into an `I256` for direct comparison with the oracle's answer.
-fn scale_threshold(threshold_decimal: &str, decimals: u32) -> Result<I256, HostError> {
-    let (sign, body) = if let Some(rest) = threshold_decimal.strip_prefix('-') {
-        (-1i32, rest)
-    } else {
-        (1, threshold_decimal)
-    };
-    let (whole, frac) = match body.split_once('.') {
-        Some((w, f)) => (w, f),
-        None => (body, ""),
-    };
-    if whole.is_empty() && frac.is_empty() {
-        return Err(config_err("threshold: empty"));
-    }
-    if !whole.chars().all(|c| c.is_ascii_digit()) || !frac.chars().all(|c| c.is_ascii_digit()) {
-        return Err(config_err(format!(
-            "threshold: non-digit character in {threshold_decimal:?}"
-        )));
-    }
-    let frac_len = frac.len() as u32;
-    let composed: String = if frac_len <= decimals {
-        let mut s = String::with_capacity(whole.len() + decimals as usize);
-        s.push_str(whole);
-        s.push_str(frac);
-        for _ in 0..(decimals - frac_len) {
-            s.push('0');
-        }
-        s
-    } else {
-        let mut s = String::with_capacity(whole.len() + decimals as usize);
-        s.push_str(whole);
-        s.push_str(&frac[..decimals as usize]);
-        s
-    };
-    let raw = if composed.is_empty() { "0" } else { &composed };
-    let unsigned: U256 = raw
-        .parse()
-        .map_err(|e| config_err(format!("threshold parse: {e}")))?;
-    let signed =
-        I256::try_from(unsigned).map_err(|e| config_err(format!("threshold range: {e}")))?;
-    Ok(if sign < 0 { -signed } else { signed })
+/// Project a `shepherd_sdk::config::ConfigError` into the price-alert
+/// `HostError` shape via `Display`. Keeps the SDK error host-neutral
+/// while preserving the message at the WIT boundary.
+fn config_err(e: ConfigError) -> HostError {
+    invalid(e.to_string())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alloy_primitives::hex;
+    use alloy_primitives::{U256, hex};
+    use alloy_sol_types::SolCall;
+    use shepherd_sdk::chain::chainlink::AggregatorV3;
+    use shepherd_sdk::chain::eth_call_params;
     use shepherd_sdk::host::HostErrorKind as Kind;
     use shepherd_sdk_test::MockHost;
 
@@ -327,49 +243,10 @@ mod tests {
         ));
     }
 
-    #[test]
-    fn scale_threshold_pads_short_fractional() {
-        assert_eq!(
-            scale_threshold("1.5", 8).unwrap(),
-            I256::try_from(150_000_000_i64).unwrap(),
-        );
-    }
-
-    #[test]
-    fn scale_threshold_truncates_long_fractional() {
-        assert_eq!(
-            scale_threshold("1.123456789", 8).unwrap(),
-            I256::try_from(112_345_678_i64).unwrap(),
-        );
-    }
-
-    #[test]
-    fn scale_threshold_handles_no_decimal_point() {
-        assert_eq!(
-            scale_threshold("42", 8).unwrap(),
-            I256::try_from(4_200_000_000_i64).unwrap(),
-        );
-    }
-
-    #[test]
-    fn scale_threshold_handles_negative_values() {
-        assert_eq!(
-            scale_threshold("-1.5", 8).unwrap(),
-            -I256::try_from(150_000_000_i64).unwrap(),
-        );
-    }
-
-    #[test]
-    fn scale_threshold_rejects_garbage() {
-        assert!(matches!(
-            scale_threshold("abc", 8).unwrap_err().kind,
-            Kind::InvalidInput
-        ));
-        assert!(matches!(
-            scale_threshold("1.2.3", 8).unwrap_err().kind,
-            Kind::InvalidInput
-        ));
-    }
+    // Decimal-parsing tests for the shared scaler live in
+    // `shepherd-sdk::config::tests` now (lifted out of this module per
+    // PR #55 review). The integration-level parse_config tests below
+    // still exercise the wiring end-to-end with the SDK helper.
 
     #[test]
     fn parse_config_happy_path() {
