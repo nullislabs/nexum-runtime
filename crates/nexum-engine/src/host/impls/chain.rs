@@ -47,28 +47,7 @@ impl nexum::host::chain::Host for HostState {
         let method_label = method.clone();
         let result = match self.chain.request(chain_id, method, params).await {
             Ok(body) => Ok(body),
-            Err(ProviderError::UnknownChain(id)) => Err(HostError {
-                domain: "chain".into(),
-                kind: HostErrorKind::Unsupported,
-                code: 0,
-                message: format!("chain {id} has no engine.toml RPC entry"),
-                data: None,
-            }),
-            Err(err @ ProviderError::InvalidParams { .. }) => Err(HostError {
-                domain: "chain".into(),
-                kind: HostErrorKind::InvalidInput,
-                code: -32602,
-                message: err.to_string(),
-                data: None,
-            }),
-            Err(err @ ProviderError::Rpc { .. }) => Err(HostError {
-                domain: "chain".into(),
-                kind: HostErrorKind::Internal,
-                code: -32603,
-                message: err.to_string(),
-                data: None,
-            }),
-            Err(err) => Err(internal_error("chain", err.to_string())),
+            Err(err) => Err(provider_error_to_host_error(err)),
         };
         tracing::trace!(elapsed_ms = ?start.elapsed(), "chain::request done");
         let outcome = if result.is_ok() { "ok" } else { "err" };
@@ -98,5 +77,131 @@ impl nexum::host::chain::Host for HostState {
         }
         tracing::trace!(elapsed_ms = ?start.elapsed(), "chain::request-batch done");
         Ok(out)
+    }
+}
+
+/// Project a [`ProviderError`] into the WIT-side [`HostError`].
+///
+/// For [`ProviderError::Rpc`] (the node returned an `ErrorResp`) the
+/// `code` and structured `data` payload are propagated verbatim so the
+/// SDK's `shepherd_sdk::chain::decode_revert_hex` can dispatch the
+/// ComposableCoW `PollTryAtBlock` / `PollNever` / `OrderNotValid`
+/// revert envelopes (COW-1082). Without this projection the
+/// classifier is fed `None` and falls back to `TryNextBlock` —
+/// pruning-efficiency gap, not a correctness gap, but enough to keep
+/// dead TWAP watches polled on every block.
+fn provider_error_to_host_error(err: ProviderError) -> HostError {
+    match err {
+        ProviderError::UnknownChain(id) => HostError {
+            domain: "chain".into(),
+            kind: HostErrorKind::Unsupported,
+            code: 0,
+            message: format!("chain {id} has no engine.toml RPC entry"),
+            data: None,
+        },
+        ProviderError::InvalidParams { detail, .. } => HostError {
+            domain: "chain".into(),
+            kind: HostErrorKind::InvalidInput,
+            code: -32602,
+            message: detail,
+            data: None,
+        },
+        ProviderError::Rpc {
+            detail, code, data, ..
+        } => HostError {
+            domain: "chain".into(),
+            kind: HostErrorKind::Internal,
+            // Preserve the node-reported JSON-RPC code when the node
+            // actually returned an `ErrorResp` (typically `-32000` for
+            // `eth_call` reverts); fall back to `-32603` (Internal
+            // error) for transport-side failures. Out-of-`i32` codes
+            // saturate to `-32603` — real-world JSON-RPC codes fit
+            // (range `-32768..-32000`).
+            code: code
+                .and_then(|c| i32::try_from(c).ok())
+                .unwrap_or(-32603),
+            message: detail,
+            data,
+        },
+        other => internal_error("chain", other.to_string()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rpc_error_with_revert_data_is_forwarded() {
+        // The node returns a structured `ErrorResp` for an
+        // `eth_call` revert: `code = -32000`, `data = "0x..."` with
+        // the abi-encoded revert body. The projection must forward
+        // both into HostError so the SDK can classify the outcome
+        // via `decode_revert_hex`.
+        let host_err = provider_error_to_host_error(ProviderError::Rpc {
+            method: "eth_call".into(),
+            detail: "execution reverted".into(),
+            code: Some(-32000),
+            data: Some("\"0xabc123\"".into()),
+        });
+
+        assert!(matches!(host_err.kind, HostErrorKind::Internal));
+        assert_eq!(host_err.code, -32000);
+        assert_eq!(host_err.data.as_deref(), Some("\"0xabc123\""));
+        assert_eq!(host_err.message, "execution reverted");
+    }
+
+    #[test]
+    fn rpc_error_without_payload_keeps_internal_fallback() {
+        // Transport-level failures (timeout, connection drop, serde
+        // mismatch) leave both code and data blank. The projection
+        // must fall back to the `-32603` "Internal error" code and
+        // keep `data = None` so the SDK's classifier hits the
+        // `TryNextBlock` safe default rather than feeding garbage to
+        // `decode_revert_hex`.
+        let host_err = provider_error_to_host_error(ProviderError::Rpc {
+            method: "eth_call".into(),
+            detail: "websocket disconnected".into(),
+            code: None,
+            data: None,
+        });
+
+        assert!(matches!(host_err.kind, HostErrorKind::Internal));
+        assert_eq!(host_err.code, -32603);
+        assert!(host_err.data.is_none());
+    }
+
+    #[test]
+    fn out_of_range_rpc_code_saturates_to_internal_fallback() {
+        // JSON-RPC codes are conventionally `-32768..-32000`, but the
+        // alloy `ErrorPayload.code` field is `i64`. Defensive: an
+        // out-of-`i32` code should not poison the projection — clamp
+        // to `-32603` so the guest sees a sane Internal error.
+        let host_err = provider_error_to_host_error(ProviderError::Rpc {
+            method: "eth_call".into(),
+            detail: "weird code".into(),
+            code: Some(i64::from(i32::MAX) + 1),
+            data: None,
+        });
+
+        assert_eq!(host_err.code, -32603);
+    }
+
+    #[test]
+    fn unknown_chain_is_unsupported() {
+        let host_err = provider_error_to_host_error(ProviderError::UnknownChain(42));
+        assert!(matches!(host_err.kind, HostErrorKind::Unsupported));
+        assert_eq!(host_err.code, 0);
+        assert!(host_err.message.contains("42"));
+    }
+
+    #[test]
+    fn invalid_params_maps_to_invalid_input() {
+        let host_err = provider_error_to_host_error(ProviderError::InvalidParams {
+            method: "eth_call".into(),
+            detail: "bad JSON".into(),
+        });
+        assert!(matches!(host_err.kind, HostErrorKind::InvalidInput));
+        assert_eq!(host_err.code, -32602);
     }
 }
