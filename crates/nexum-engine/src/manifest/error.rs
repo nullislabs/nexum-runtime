@@ -6,6 +6,7 @@ use super::types::KNOWN_CAPABILITIES;
 
 /// Errors returned while loading or validating a manifest.
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum ParseError {
     /// Failed to read the manifest file from disk.
     #[error("manifest: i/o: {0}")]

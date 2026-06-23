@@ -20,7 +20,26 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
+use thiserror::Error;
 use tracing::{info, warn};
+
+/// Errors surfaced by [`load_or_default`].
+///
+/// Library-side modules must not propagate `anyhow::Error`; the rust
+/// idiomatic rubric reserves `anyhow` for `main.rs` and
+/// `supervisor.rs` top-level dispatch. The variants carry the
+/// upstream error via `#[from]` so the caller in `main.rs` (which
+/// uses `anyhow`) gets a free conversion through `?`.
+#[derive(Debug, Error)]
+#[non_exhaustive]
+pub enum EngineConfigError {
+    /// Failed to read the config file from disk.
+    #[error("read engine config: {0}")]
+    Io(#[from] std::io::Error),
+    /// Config file was unparseable as TOML.
+    #[error("parse engine config: {0}")]
+    Toml(#[from] toml::de::Error),
+}
 
 /// Engine-side configuration loaded from `engine.toml`.
 #[derive(Debug, Default, Deserialize)]
@@ -130,8 +149,8 @@ fn default_log_level() -> String {
 }
 
 /// Read an engine config from disk, returning defaults if the file is
-/// missing. Parse errors propagate.
-pub fn load_or_default(path: Option<&Path>) -> anyhow::Result<EngineConfig> {
+/// missing. Parse errors propagate via [`EngineConfigError`].
+pub fn load_or_default(path: Option<&Path>) -> Result<EngineConfig, EngineConfigError> {
     let path = match path {
         Some(p) => p.to_path_buf(),
         None => PathBuf::from("engine.toml"),

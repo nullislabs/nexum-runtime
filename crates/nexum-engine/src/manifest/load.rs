@@ -8,6 +8,8 @@
 use std::collections::HashSet;
 use std::path::Path;
 
+use tracing::{info, warn};
+
 use super::error::ParseError;
 use super::types::{KNOWN_CAPABILITIES, LoadedManifest, Manifest};
 
@@ -19,10 +21,11 @@ pub fn load(path: &Path) -> Result<LoadedManifest, ParseError> {
 
     let caps = manifest.capabilities.as_ref();
     if caps.is_none() {
-        eprintln!(
-            "[deprecation] no [capabilities] section in module.toml - \
-             defaulting to all-required (0.1 behaviour). This default \
-             will be removed in 0.3; add an explicit [capabilities] block."
+        warn!(
+            target: "manifest",
+            "no [capabilities] section in module.toml - defaulting to \
+             all-required (0.1 behaviour). This default will be removed \
+             in 0.3; add an explicit [capabilities] block."
         );
     }
 
@@ -34,16 +37,13 @@ pub fn load(path: &Path) -> Result<LoadedManifest, ParseError> {
             }
         }
         if !c.required.is_empty() {
-            eprintln!(
-                "[manifest] required capabilities: {}",
-                c.required.join(", ")
-            );
+            info!(target: "manifest", required = %c.required.join(", "), "required capabilities");
         }
         if !c.optional.is_empty() {
-            eprintln!(
-                "[manifest] optional capabilities (advisory in 0.2; trap-stub fallback \
-                 ships in 0.3): {}",
-                c.optional.join(", ")
+            info!(
+                target: "manifest",
+                optional = %c.optional.join(", "),
+                "optional capabilities (advisory in 0.2; trap-stub fallback ships in 0.3)",
             );
         }
     }
@@ -53,7 +53,7 @@ pub fn load(path: &Path) -> Result<LoadedManifest, ParseError> {
         .map(|h| h.allow.clone())
         .unwrap_or_default();
     if !http_allowlist.is_empty() {
-        eprintln!("[manifest] http allowlist: {}", http_allowlist.join(", "));
+        info!(target: "manifest", allow = %http_allowlist.join(", "), "http allowlist");
     }
 
     let config = manifest
@@ -72,9 +72,10 @@ pub fn load(path: &Path) -> Result<LoadedManifest, ParseError> {
 /// Synthesise a "0.1 fallback" manifest for when no `module.toml` is found.
 /// Emits the same deprecation warning as a missing-section manifest.
 pub fn fallback_manifest() -> LoadedManifest {
-    eprintln!(
-        "[deprecation] no module.toml found - defaulting to all-required \
-         (0.1 behaviour). This default will be removed in 0.3; ship a \
+    warn!(
+        target: "manifest",
+        "no module.toml found - defaulting to all-required (0.1 \
+         behaviour). This default will be removed in 0.3; ship a \
          module.toml alongside your component."
     );
     LoadedManifest {

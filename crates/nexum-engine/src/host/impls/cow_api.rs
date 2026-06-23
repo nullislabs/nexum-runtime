@@ -58,10 +58,7 @@ impl shepherd::cow::cow_api::Host for HostState {
         let start = Instant::now();
         tracing::debug!(chain_id, bytes = order_data.len(), "cow-api::submit-order");
         let result = match self.cow.submit_order_json(chain_id, &order_data).await {
-            Ok(uid) => Ok(format!(
-                "0x{}",
-                alloy_primitives::hex::encode(uid.as_slice())
-            )),
+            Ok(uid) => Ok(alloy_primitives::hex::encode_prefixed(uid.as_slice())),
             Err(CowApiError::UnknownChain(id)) => Err(unimplemented(
                 "cow-api",
                 format!("chain {id} not in cowprotocol"),
