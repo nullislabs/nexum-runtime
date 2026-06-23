@@ -53,6 +53,17 @@ pub enum StreamError {
 /// drop.
 const HEALTHY_WINDOW: Duration = Duration::from_secs(60);
 
+/// Time without any block event that we treat as a gap worth a
+/// positive recovery log line (COW-1086). Sepolia and Ethereum
+/// mainnet both produce blocks reliably every ~12 s, so a silence
+/// longer than this is either a transport-layer reconnect that alloy
+/// handled internally (no `stream ended` reached the engine, hence
+/// no `subscription reopened` log fires) or an upstream RPC stall.
+/// Either way, the soak operator wants a positive log line when
+/// blocks resume — otherwise an `alloy_transport_ws::native` ERROR
+/// followed by silence looks identical to a hung engine.
+const BLOCK_GAP_LOG_THRESHOLD: Duration = Duration::from_secs(60);
+
 /// Channel buffer for the reconnect tasks. Each chain / module
 /// subscription gets its own task -> channel pair; buffer is small
 /// because the event loop drains in real time.
@@ -144,6 +155,27 @@ async fn reconnecting_block_task(
                     {
                         info!(chain_id, "block stream healthy - resetting backoff");
                         attempt = 0;
+                    }
+                    // COW-1086: detect transport-layer reconnects that
+                    // alloy handled internally — `inner.next().await`
+                    // keeps yielding events but with a long gap. The
+                    // engine's reconnect path (`stream ended` -> wait
+                    // backoff -> `subscription reopened`) does not fire
+                    // for these, so without this log a soak operator
+                    // sees an `alloy_transport_ws::native` ERROR
+                    // followed by silence indistinguishable from a
+                    // hung engine.
+                    if let Some(gap) =
+                        block_stream_gap_to_log(now, last_event, BLOCK_GAP_LOG_THRESHOLD)
+                    {
+                        let gap_s = gap.as_secs();
+                        info!(
+                            chain_id,
+                            gap_s,
+                            kind = "block",
+                            "stream gap closed - first event after silence \
+                             (likely an alloy-internal transport reconnect)"
+                        );
                     }
                     last_event = Some(now);
                     let tagged = item
@@ -369,6 +401,21 @@ pub async fn run(
     }
 }
 
+/// Returns `Some(gap)` when the time between the last observed event
+/// and `now` meets or exceeds `threshold` — the caller should emit a
+/// positive-recovery log line at this point (COW-1086). `None` covers
+/// both the first-event case (no `last_event` yet) and the normal
+/// "events are arriving at expected cadence" case.
+fn block_stream_gap_to_log(
+    now: Instant,
+    last_event: Option<Instant>,
+    threshold: Duration,
+) -> Option<Duration> {
+    let last = last_event?;
+    let gap = now.duration_since(last);
+    (gap >= threshold).then_some(gap)
+}
+
 /// Wait for SIGINT or (on Unix) SIGTERM, whichever arrives first.
 pub async fn wait_for_shutdown_signal() -> anyhow::Result<&'static str> {
     #[cfg(unix)]
@@ -385,5 +432,56 @@ pub async fn wait_for_shutdown_signal() -> anyhow::Result<&'static str> {
     {
         tokio::signal::ctrl_c().await?;
         Ok("ctrl-c")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// COW-1086: the helper that decides whether to emit a
+    /// "stream gap closed" line on the next block event.
+    #[test]
+    fn block_stream_gap_to_log_returns_none_when_no_prior_event() {
+        let now = Instant::now();
+        assert_eq!(
+            block_stream_gap_to_log(now, None, Duration::from_secs(60)),
+            None,
+        );
+    }
+
+    #[test]
+    fn block_stream_gap_to_log_returns_none_when_under_threshold() {
+        let earlier = Instant::now();
+        let now = earlier + Duration::from_secs(30);
+        assert_eq!(
+            block_stream_gap_to_log(now, Some(earlier), Duration::from_secs(60)),
+            None,
+            "30s < 60s threshold -> do not log",
+        );
+    }
+
+    #[test]
+    fn block_stream_gap_to_log_returns_some_at_threshold_boundary() {
+        let earlier = Instant::now();
+        let now = earlier + Duration::from_secs(60);
+        assert_eq!(
+            block_stream_gap_to_log(now, Some(earlier), Duration::from_secs(60)),
+            Some(Duration::from_secs(60)),
+            "boundary is inclusive — exactly the threshold counts as a gap",
+        );
+    }
+
+    #[test]
+    fn block_stream_gap_to_log_returns_some_when_well_over_threshold() {
+        let earlier = Instant::now();
+        let now = earlier + Duration::from_secs(3600);
+        // The 2026-06-23 soak observation: a 1h gap between the
+        // `alloy_transport_ws::native` ERROR at 09:05 and the next
+        // block at 10:05. This is the exact case the log line was
+        // added for.
+        let gap = block_stream_gap_to_log(now, Some(earlier), Duration::from_secs(60))
+            .expect("1h gap is well over the 60s threshold");
+        assert_eq!(gap.as_secs(), 3600);
     }
 }
