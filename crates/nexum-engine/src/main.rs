@@ -160,9 +160,15 @@ async fn main() -> anyhow::Result<()> {
         return Ok(());
     }
 
-    let block_streams =
-        runtime::event_loop::open_block_streams(&provider_pool, &block_chains).await;
-    let log_streams = runtime::event_loop::open_log_streams(&provider_pool, log_subs).await;
+    let mut reconnect_tasks = tokio::task::JoinSet::new();
+    let block_streams = runtime::event_loop::open_block_streams(
+        &provider_pool,
+        &block_chains,
+        &mut reconnect_tasks,
+    )
+    .await;
+    let log_streams =
+        runtime::event_loop::open_log_streams(&provider_pool, log_subs, &mut reconnect_tasks).await;
 
     let shutdown = async {
         match runtime::event_loop::wait_for_shutdown_signal().await {
@@ -171,7 +177,14 @@ async fn main() -> anyhow::Result<()> {
         }
     };
 
-    runtime::event_loop::run(&mut supervisor, block_streams, log_streams, shutdown).await;
+    runtime::event_loop::run(
+        &mut supervisor,
+        block_streams,
+        log_streams,
+        reconnect_tasks,
+        shutdown,
+    )
+    .await;
     info!("done");
     Ok(())
 }

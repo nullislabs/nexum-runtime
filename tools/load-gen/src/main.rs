@@ -17,6 +17,13 @@
 //! EOA, ComposableCoW, TWAP handler, CoWSwapEthFlow, WETH9, COW token,
 //! Safe. These are constant across the Sepolia fork.
 
+#![cfg_attr(not(test), warn(unused_crate_dependencies))]
+
+// `alloy-transport-ws` is pulled into the workspace via
+// `alloy-provider`'s `pubsub` feature; declared explicitly here so the
+// Cargo.toml dependency surface mirrors what the engine pins.
+use alloy_transport_ws as _;
+
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use alloy_primitives::{Address, B256, Bytes, U256, address, b256};

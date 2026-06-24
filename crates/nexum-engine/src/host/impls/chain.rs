@@ -54,18 +54,18 @@ impl nexum::host::chain::Host for HostState {
                 message: format!("chain {id} has no engine.toml RPC entry"),
                 data: None,
             }),
-            Err(ProviderError::InvalidParams { detail, .. }) => Err(HostError {
+            Err(err @ ProviderError::InvalidParams { .. }) => Err(HostError {
                 domain: "chain".into(),
                 kind: HostErrorKind::InvalidInput,
                 code: -32602,
-                message: detail,
+                message: err.to_string(),
                 data: None,
             }),
-            Err(ProviderError::Rpc { detail, .. }) => Err(HostError {
+            Err(err @ ProviderError::Rpc { .. }) => Err(HostError {
                 domain: "chain".into(),
                 kind: HostErrorKind::Internal,
                 code: -32603,
-                message: detail,
+                message: err.to_string(),
                 data: None,
             }),
             Err(err) => Err(internal_error("chain", err.to_string())),

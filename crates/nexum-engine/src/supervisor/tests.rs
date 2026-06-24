@@ -35,7 +35,14 @@ async fn run_does_not_bail_when_both_stream_kinds_are_empty() {
     let started = Instant::now();
     let shutdown = tokio::time::sleep(Duration::from_millis(50));
 
-    crate::runtime::event_loop::run(&mut supervisor, Vec::new(), Vec::new(), shutdown).await;
+    crate::runtime::event_loop::run(
+        &mut supervisor,
+        Vec::new(),
+        Vec::new(),
+        tokio::task::JoinSet::new(),
+        shutdown,
+    )
+    .await;
 
     // If the bug were present, `run` returns ~0 ms (the empty `logs`
     // stream's first `.next()` yields `None` and the loop bails on

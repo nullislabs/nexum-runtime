@@ -25,13 +25,26 @@ use std::time::{Duration, Instant};
 
 use futures::StreamExt;
 use futures::stream::{BoxStream, select_all};
+use thiserror::Error;
 use tokio::sync::mpsc;
+use tokio::task::JoinSet;
 use tracing::{info, warn};
 
 use crate::bindings::nexum;
-use crate::host::provider_pool::ProviderPool;
+use crate::host::provider_pool::{ProviderError, ProviderPool};
 use crate::runtime::restart_policy::backoff_for;
 use crate::supervisor::Supervisor;
+
+/// Errors carried by the tagged block / log streams that the
+/// supervisor consumes. Library-side code keeps `anyhow::Error` out
+/// of long-lived stream item types per the rust idiomatic rubric.
+#[derive(Debug, Error)]
+pub enum StreamError {
+    /// Underlying provider / transport failure while opening or
+    /// pumping the subscription.
+    #[error(transparent)]
+    Provider(#[from] ProviderError),
+}
 
 /// Time the wrapper stream must observe uninterrupted events before
 /// the backoff counter resets to 0. Long enough that a brief but
@@ -45,18 +58,22 @@ const HEALTHY_WINDOW: Duration = Duration::from_secs(60);
 /// because the event loop drains in real time.
 const RECONNECT_CHANNEL_BUF: usize = 64;
 
-/// Per-chain block subscriptions, one reconnect-aware task per chain id.
+/// Per-chain block subscriptions, one reconnect-aware task per
+/// chain id. Tasks are spawned into `tasks` so the caller can drive
+/// graceful shutdown (the engine awaits the set after closing its
+/// receivers - the tasks exit cleanly when the receiver drops).
 pub async fn open_block_streams(
     pool: &ProviderPool,
     chains: &std::collections::BTreeSet<u64>,
+    tasks: &mut JoinSet<()>,
 ) -> Vec<TaggedBlockStream> {
     let mut streams = Vec::new();
     for &chain_id in chains {
-        let (tx, rx) = mpsc::channel::<Result<(u64, alloy_rpc_types_eth::Header), anyhow::Error>>(
+        let (tx, rx) = mpsc::channel::<Result<(u64, alloy_rpc_types_eth::Header), StreamError>>(
             RECONNECT_CHANNEL_BUF,
         );
         let pool = pool.clone();
-        tokio::spawn(reconnecting_block_task(pool, chain_id, tx));
+        tasks.spawn(reconnecting_block_task(pool, chain_id, tx));
         let tagged: TaggedBlockStream = Box::pin(receiver_stream(rx));
         streams.push(tagged);
     }
@@ -64,18 +81,20 @@ pub async fn open_block_streams(
 }
 
 /// Per-module log subscriptions. Each entry gets its own reconnect-
-/// aware task tagged with the owning module name + chain id.
+/// aware task tagged with the owning module name + chain id. Tasks
+/// are spawned into `tasks` (see [`open_block_streams`]).
 pub async fn open_log_streams(
     pool: &ProviderPool,
     subs: Vec<(String, u64, alloy_rpc_types_eth::Filter)>,
+    tasks: &mut JoinSet<()>,
 ) -> Vec<TaggedLogStream> {
     let mut streams = Vec::new();
     for (module, chain_id, filter) in subs {
-        let (tx, rx) = mpsc::channel::<
-            Result<(String, u64, alloy_rpc_types_eth::Log), anyhow::Error>,
-        >(RECONNECT_CHANNEL_BUF);
+        let (tx, rx) = mpsc::channel::<Result<(String, u64, alloy_rpc_types_eth::Log), StreamError>>(
+            RECONNECT_CHANNEL_BUF,
+        );
         let pool = pool.clone();
-        tokio::spawn(reconnecting_log_task(pool, module, chain_id, filter, tx));
+        tasks.spawn(reconnecting_log_task(pool, module, chain_id, filter, tx));
         let tagged: TaggedLogStream = Box::pin(receiver_stream(rx));
         streams.push(tagged);
     }
@@ -100,7 +119,7 @@ fn receiver_stream<T: Send + 'static>(
 async fn reconnecting_block_task(
     pool: ProviderPool,
     chain_id: u64,
-    tx: mpsc::Sender<Result<(u64, alloy_rpc_types_eth::Header), anyhow::Error>>,
+    tx: mpsc::Sender<Result<(u64, alloy_rpc_types_eth::Header), StreamError>>,
 ) {
     let mut attempt: u32 = 0;
     let mut last_event: Option<Instant> = None;
@@ -129,7 +148,7 @@ async fn reconnecting_block_task(
                     last_event = Some(now);
                     let tagged = item
                         .map(|header| (chain_id, header))
-                        .map_err(anyhow::Error::from);
+                        .map_err(StreamError::from);
                     if tx.send(tagged).await.is_err() {
                         // Receiver dropped -> engine shutting down.
                         return;
@@ -160,7 +179,7 @@ async fn reconnecting_log_task(
     module: String,
     chain_id: u64,
     filter: alloy_rpc_types_eth::Filter,
-    tx: mpsc::Sender<Result<(String, u64, alloy_rpc_types_eth::Log), anyhow::Error>>,
+    tx: mpsc::Sender<Result<(String, u64, alloy_rpc_types_eth::Log), StreamError>>,
 ) {
     let mut attempt: u32 = 0;
     let mut last_event: Option<Instant> = None;
@@ -195,7 +214,7 @@ async fn reconnecting_log_task(
                     let module_name = module.clone();
                     let tagged = item
                         .map(|log| (module_name, chain_id, log))
-                        .map_err(anyhow::Error::from);
+                        .map_err(StreamError::from);
                     if tx.send(tagged).await.is_err() {
                         return;
                     }
@@ -226,14 +245,11 @@ async fn reconnecting_log_task(
 }
 
 pub type TaggedBlockStream = std::pin::Pin<
-    Box<
-        dyn futures::Stream<Item = Result<(u64, alloy_rpc_types_eth::Header), anyhow::Error>>
-            + Send,
-    >,
+    Box<dyn futures::Stream<Item = Result<(u64, alloy_rpc_types_eth::Header), StreamError>> + Send>,
 >;
 pub type TaggedLogStream = std::pin::Pin<
     Box<
-        dyn futures::Stream<Item = Result<(String, u64, alloy_rpc_types_eth::Log), anyhow::Error>>
+        dyn futures::Stream<Item = Result<(String, u64, alloy_rpc_types_eth::Log), StreamError>>
             + Send,
     >,
 >;
@@ -249,6 +265,7 @@ pub async fn run(
     supervisor: &mut Supervisor,
     block_streams: Vec<TaggedBlockStream>,
     log_streams: Vec<TaggedLogStream>,
+    mut tasks: JoinSet<()>,
     shutdown: impl std::future::Future<Output = ()> + Send,
 ) {
     // `select_all` over an empty Vec yields `None` immediately, which
@@ -320,6 +337,13 @@ pub async fn run(
                 dispatched_logs += 1;
             }
             NextEvent::Shutdown => {
+                // Drop the stream-end receivers so the reconnect
+                // tasks observe a closed channel and exit. Then drain
+                // the JoinSet so the engine genuinely sees the tasks
+                // finish before returning (COW-1072 contract).
+                drop(blocks);
+                drop(logs);
+                tasks.shutdown().await;
                 info!(
                     dispatched_blocks,
                     dispatched_logs,
@@ -332,6 +356,9 @@ pub async fn run(
                 // COW-1071: reconnect tasks should loop forever.
                 // Hitting `None` from `select_all` means the task
                 // exited (panic or channel closed). Bail loudly.
+                drop(blocks);
+                drop(logs);
+                tasks.shutdown().await;
                 warn!(
                     kind,
                     "reconnect task ended unexpectedly - shutting down for engine restart"
