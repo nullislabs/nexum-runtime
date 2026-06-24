@@ -60,7 +60,7 @@ const HEALTHY_WINDOW: Duration = Duration::from_secs(60);
 /// handled internally (no `stream ended` reached the engine, hence
 /// no `subscription reopened` log fires) or an upstream RPC stall.
 /// Either way, the soak operator wants a positive log line when
-/// blocks resume — otherwise an `alloy_transport_ws::native` ERROR
+/// blocks resume - otherwise an `alloy_transport_ws::native` ERROR
 /// followed by silence looks identical to a hung engine.
 const BLOCK_GAP_LOG_THRESHOLD: Duration = Duration::from_secs(60);
 
@@ -157,7 +157,7 @@ async fn reconnecting_block_task(
                         attempt = 0;
                     }
                     // COW-1086: detect transport-layer reconnects that
-                    // alloy handled internally — `inner.next().await`
+                    // alloy handled internally - `inner.next().await`
                     // keeps yielding events but with a long gap. The
                     // engine's reconnect path (`stream ended` -> wait
                     // backoff -> `subscription reopened`) does not fire
@@ -402,7 +402,7 @@ pub async fn run(
 }
 
 /// Returns `Some(gap)` when the time between the last observed event
-/// and `now` meets or exceeds `threshold` — the caller should emit a
+/// and `now` meets or exceeds `threshold` - the caller should emit a
 /// positive-recovery log line at this point (COW-1086). `None` covers
 /// both the first-event case (no `last_event` yet) and the normal
 /// "events are arriving at expected cadence" case.
@@ -468,7 +468,7 @@ mod tests {
         assert_eq!(
             block_stream_gap_to_log(now, Some(earlier), Duration::from_secs(60)),
             Some(Duration::from_secs(60)),
-            "boundary is inclusive — exactly the threshold counts as a gap",
+            "boundary is inclusive - exactly the threshold counts as a gap",
         );
     }
 

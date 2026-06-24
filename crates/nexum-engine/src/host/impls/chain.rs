@@ -87,7 +87,7 @@ impl nexum::host::chain::Host for HostState {
 /// SDK's `shepherd_sdk::chain::decode_revert_hex` can dispatch the
 /// ComposableCoW `PollTryAtBlock` / `PollNever` / `OrderNotValid`
 /// revert envelopes (COW-1082). Without this projection the
-/// classifier is fed `None` and falls back to `TryNextBlock` —
+/// classifier is fed `None` and falls back to `TryNextBlock` -
 /// pruning-efficiency gap, not a correctness gap, but enough to keep
 /// dead TWAP watches polled on every block.
 fn provider_error_to_host_error(err: ProviderError) -> HostError {
@@ -99,15 +99,18 @@ fn provider_error_to_host_error(err: ProviderError) -> HostError {
             message: format!("chain {id} has no engine.toml RPC entry"),
             data: None,
         },
-        ProviderError::InvalidParams { detail, .. } => HostError {
+        ProviderError::InvalidParams { ref source, .. } => HostError {
             domain: "chain".into(),
             kind: HostErrorKind::InvalidInput,
             code: -32602,
-            message: detail,
+            message: source.to_string(),
             data: None,
         },
         ProviderError::Rpc {
-            detail, code, data, ..
+            ref source,
+            code,
+            ref data,
+            ..
         } => HostError {
             domain: "chain".into(),
             kind: HostErrorKind::Internal,
@@ -115,13 +118,11 @@ fn provider_error_to_host_error(err: ProviderError) -> HostError {
             // actually returned an `ErrorResp` (typically `-32000` for
             // `eth_call` reverts); fall back to `-32603` (Internal
             // error) for transport-side failures. Out-of-`i32` codes
-            // saturate to `-32603` — real-world JSON-RPC codes fit
+            // saturate to `-32603` - real-world JSON-RPC codes fit
             // (range `-32768..-32000`).
-            code: code
-                .and_then(|c| i32::try_from(c).ok())
-                .unwrap_or(-32603),
-            message: detail,
-            data,
+            code: code.and_then(|c| i32::try_from(c).ok()).unwrap_or(-32603),
+            message: source.to_string(),
+            data: data.clone(),
         },
         other => internal_error("chain", other.to_string()),
     }
@@ -130,6 +131,17 @@ fn provider_error_to_host_error(err: ProviderError) -> HostError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use alloy_transport::TransportErrorKind;
+
+    /// Helper: build a synthetic transport-level [`TransportError`] for
+    /// the test fixtures. Transport-level errors do not carry a
+    /// structured JSON-RPC `ErrorResp` payload, so `as_error_resp()` is
+    /// `None` for these and `code`/`data` are blank on the projected
+    /// [`HostError`].
+    fn transport_err(msg: &str) -> alloy_transport::TransportError {
+        TransportErrorKind::custom_str(msg)
+    }
 
     #[test]
     fn rpc_error_with_revert_data_is_forwarded() {
@@ -140,15 +152,14 @@ mod tests {
         // via `decode_revert_hex`.
         let host_err = provider_error_to_host_error(ProviderError::Rpc {
             method: "eth_call".into(),
-            detail: "execution reverted".into(),
             code: Some(-32000),
             data: Some("\"0xabc123\"".into()),
+            source: transport_err("execution reverted"),
         });
 
         assert!(matches!(host_err.kind, HostErrorKind::Internal));
         assert_eq!(host_err.code, -32000);
         assert_eq!(host_err.data.as_deref(), Some("\"0xabc123\""));
-        assert_eq!(host_err.message, "execution reverted");
     }
 
     #[test]
@@ -161,9 +172,9 @@ mod tests {
         // `decode_revert_hex`.
         let host_err = provider_error_to_host_error(ProviderError::Rpc {
             method: "eth_call".into(),
-            detail: "websocket disconnected".into(),
             code: None,
             data: None,
+            source: transport_err("websocket disconnected"),
         });
 
         assert!(matches!(host_err.kind, HostErrorKind::Internal));
@@ -175,13 +186,13 @@ mod tests {
     fn out_of_range_rpc_code_saturates_to_internal_fallback() {
         // JSON-RPC codes are conventionally `-32768..-32000`, but the
         // alloy `ErrorPayload.code` field is `i64`. Defensive: an
-        // out-of-`i32` code should not poison the projection — clamp
+        // out-of-`i32` code should not poison the projection - clamp
         // to `-32603` so the guest sees a sane Internal error.
         let host_err = provider_error_to_host_error(ProviderError::Rpc {
             method: "eth_call".into(),
-            detail: "weird code".into(),
             code: Some(i64::from(i32::MAX) + 1),
             data: None,
+            source: transport_err("weird code"),
         });
 
         assert_eq!(host_err.code, -32603);
@@ -197,9 +208,13 @@ mod tests {
 
     #[test]
     fn invalid_params_maps_to_invalid_input() {
+        // `serde_json::from_str::<()>("not json")` is the cheapest
+        // way to produce a real `serde_json::Error` for tests.
+        let source = serde_json::from_str::<serde_json::Value>("not json")
+            .expect_err("`not json` is not valid JSON");
         let host_err = provider_error_to_host_error(ProviderError::InvalidParams {
             method: "eth_call".into(),
-            detail: "bad JSON".into(),
+            source,
         });
         assert!(matches!(host_err.kind, HostErrorKind::InvalidInput));
         assert_eq!(host_err.code, -32602);

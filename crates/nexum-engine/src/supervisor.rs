@@ -874,23 +874,54 @@ fn project_log(chain_id: u64, log: &alloy_rpc_types_eth::Log) -> nexum::host::ty
     }
 }
 
+/// Errors surfaced by [`build_alloy_filter`].
+///
+/// Variants thread the underlying alloy parse error via `#[source]`
+/// instead of `to_string()`-ing it - keeps the typed chain intact for
+/// the supervisor's `tracing::warn!(error = %err, ...)` log line at
+/// the call site (where the `Display` chain prints the parse detail).
+#[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
+enum FilterError {
+    /// `[[subscriptions]].address` did not parse as an EVM address.
+    #[error("invalid log address {address:?}: {source}")]
+    Address {
+        /// Raw operator-supplied hex string.
+        address: String,
+        /// Underlying alloy parse failure.
+        #[source]
+        source: alloy_primitives::hex::FromHexError,
+    },
+    /// `[[subscriptions]].event_signature` did not parse as a 32-byte topic.
+    #[error("invalid topic {topic:?}: {source}")]
+    Topic {
+        /// Raw operator-supplied hex string.
+        topic: String,
+        /// Underlying alloy parse failure.
+        #[source]
+        source: alloy_primitives::hex::FromHexError,
+    },
+}
+
 /// Translate a `[[subscription]]` log entry into an alloy `Filter`.
 fn build_alloy_filter(
     address: Option<&str>,
     event_signature: Option<&str>,
-) -> Result<alloy_rpc_types_eth::Filter> {
+) -> std::result::Result<alloy_rpc_types_eth::Filter, FilterError> {
     use alloy_primitives::{Address, B256};
     let mut filter = alloy_rpc_types_eth::Filter::new();
     if let Some(addr_hex) = address {
-        let addr: Address = addr_hex
-            .parse()
-            .map_err(|e| anyhow!("invalid log address {addr_hex:?}: {e}"))?;
+        let addr: Address = addr_hex.parse().map_err(|source| FilterError::Address {
+            address: addr_hex.to_owned(),
+            source,
+        })?;
         filter = filter.address(addr);
     }
     if let Some(topic_hex) = event_signature {
-        let topic: B256 = topic_hex
-            .parse()
-            .map_err(|e| anyhow!("invalid topic {topic_hex:?}: {e}"))?;
+        let topic: B256 = topic_hex.parse().map_err(|source| FilterError::Topic {
+            topic: topic_hex.to_owned(),
+            source,
+        })?;
         filter = filter.event_signature(topic);
     }
     Ok(filter)

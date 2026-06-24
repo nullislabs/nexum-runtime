@@ -44,6 +44,9 @@ pub enum EngineConfigError {
     /// Config file was unparseable as TOML.
     #[error("parse engine config: {0}")]
     Toml(#[from] toml::de::Error),
+    /// `${VAR}` env-var substitution failed (missing, malformed, or unclosed).
+    #[error("engine config env-var substitution failed: {0}")]
+    Substitute(#[from] EnvVarError),
 }
 
 /// Engine-side configuration loaded from `engine.toml`.
@@ -149,7 +152,7 @@ pub struct ChainConfig {
     #[serde(default)]
     pub orderbook_url: Option<String>,
     /// Escape hatch: silence the boot-time warning when an `http(s)://`
-    /// `rpc_url` is configured. Default `true` — every production
+    /// `rpc_url` is configured. Default `true` - every production
     /// module today subscribes to blocks or logs, so an HTTP URL is
     /// almost certainly an operator mistake (drpc / Alchemy / Infura
     /// expose BOTH `https://...` and `wss://...` per endpoint; the WS
@@ -231,9 +234,7 @@ pub fn load_or_default(path: Option<&Path>) -> Result<EngineConfig, EngineConfig
     // before TOML parse so a missing var fails fast with the exact
     // variable name, not a downstream "invalid URI" several layers
     // deep.
-    let substituted = substitute_env_vars(&raw).map_err(|e| {
-        anyhow::anyhow!("engine config env-var substitution failed: {e}")
-    })?;
+    let substituted = substitute_env_vars(&raw)?;
     let cfg: EngineConfig = toml::from_str(&substituted)?;
     info!(
         path = %path.display(),
@@ -258,7 +259,7 @@ pub fn load_or_default(path: Option<&Path>) -> Result<EngineConfig, EngineConfig
 /// typo doesn't silently pass through.
 ///
 /// Note: substitution runs over the whole TOML text, including
-/// comments. This is fine in practice — comments are stripped during
+/// comments. This is fine in practice - comments are stripped during
 /// the subsequent `toml::from_str` parse, and the only realistic
 /// `${VAR}` payload is in string values anyway.
 fn substitute_env_vars(raw: &str) -> Result<String, EnvVarError> {
@@ -266,10 +267,7 @@ fn substitute_env_vars(raw: &str) -> Result<String, EnvVarError> {
     let bytes = raw.as_bytes();
     let mut i = 0;
     while i < bytes.len() {
-        if bytes[i] == b'$'
-            && i + 1 < bytes.len()
-            && bytes[i + 1] == b'{'
-        {
+        if bytes[i] == b'$' && i + 1 < bytes.len() && bytes[i + 1] == b'{' {
             // Find the closing `}`.
             let start = i + 2;
             let Some(end_offset) = raw[start..].find('}') else {
@@ -284,12 +282,19 @@ fn substitute_env_vars(raw: &str) -> Result<String, EnvVarError> {
             }
             match std::env::var(name) {
                 Ok(val) => out.push_str(&val),
-                Err(_) => return Err(EnvVarError::Missing { name: name.to_owned() }),
+                Err(_) => {
+                    return Err(EnvVarError::Missing {
+                        name: name.to_owned(),
+                    });
+                }
             }
             i = end + 1;
         } else {
             // Push one UTF-8 char (find the next char boundary).
-            let ch = raw[i..].chars().next().expect("byte index is on char boundary");
+            let ch = raw[i..]
+                .chars()
+                .next()
+                .expect("byte index is on char boundary");
             out.push(ch);
             i += ch.len_utf8();
         }
@@ -309,6 +314,7 @@ fn is_valid_env_name(s: &str) -> bool {
 }
 
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum EnvVarError {
     #[error(
         "environment variable `{name}` referenced via ${{{name}}} in engine.toml but not set. \
@@ -316,12 +322,14 @@ pub enum EnvVarError {
     )]
     Missing { name: String },
     #[error(
-        "invalid env var name `{name}` inside ${{...}} in engine.toml — names must match \
+        "invalid env var name `{name}` inside ${{...}} in engine.toml - names must match \
          [A-Z_][A-Z0-9_]*. Typo, or did you mean `${{{name_upper}}}`?",
         name_upper = name.to_uppercase()
     )]
     InvalidName { name: String },
-    #[error("unclosed `${{` at byte offset {offset} in engine.toml — every `${{` needs a matching `}}`.")]
+    #[error(
+        "unclosed `${{` at byte offset {offset} in engine.toml - every `${{` needs a matching `}}`."
+    )]
     Unclosed { offset: usize },
 }
 
@@ -345,7 +353,7 @@ impl EngineConfig {
             if url.starts_with("ws://") || url.starts_with("wss://") {
                 continue;
             }
-            // Redact BOTH the original URL and the suggested swap —
+            // Redact BOTH the original URL and the suggested swap -
             // log files often end up in shared aggregators (Loki,
             // Datadog), and the swap is straightforward enough that
             // the operator doesn't need the full URL printed back.
@@ -425,7 +433,7 @@ mod tests {
     fn validate_accepts_wss_url() {
         let cfg = cfg_with_url("wss://lb.drpc.org/sepolia/<key>", true);
         cfg.validate_transports();
-        // No assertion needed — passes if no panic and (in a real
+        // No assertion needed - passes if no panic and (in a real
         // logger setup) no ERROR line was emitted.
     }
 
@@ -437,7 +445,7 @@ mod tests {
 
     #[test]
     fn validate_is_silent_when_require_ws_is_false() {
-        // Operator explicitly opted out — HTTP is intentional (poll
+        // Operator explicitly opted out - HTTP is intentional (poll
         // only). The validator must not nag.
         let cfg = cfg_with_url("https://eth-mainnet.example.com/v2/abc", false);
         cfg.validate_transports();
@@ -470,17 +478,13 @@ mod tests {
 
     #[test]
     fn suggest_passes_through_already_ws_url() {
-        assert_eq!(
-            suggest_ws_swap("wss://x.example/k"),
-            "wss://x.example/k",
-        );
+        assert_eq!(suggest_ws_swap("wss://x.example/k"), "wss://x.example/k",);
     }
 
     #[test]
     fn redact_replaces_long_path_segments() {
-        let redacted = redact_url(
-            "https://lb.drpc.live/sepolia/AnOfyGnZ_0nWpS-OOwQzqAnFj_Naa0sR8ZxkVjewFaCJ",
-        );
+        let redacted =
+            redact_url("https://lb.drpc.live/sepolia/AnOfyGnZ_0nWpS-OOwQzqAnFj_Naa0sR8ZxkVjewFaCJ");
         assert!(redacted.contains("<KEY>"));
         assert!(!redacted.contains("AnOfyGnZ"));
     }
@@ -524,8 +528,7 @@ mod tests {
     fn substitute_errors_on_missing_variable() {
         // Variable name must not collide with anything in the operator
         // environment. Use a guaranteed-unique prefix.
-        let err = substitute_env_vars(r#"x = "${COW1078_DEFINITELY_UNSET_VAR_XYZ}""#)
-            .unwrap_err();
+        let err = substitute_env_vars(r#"x = "${COW1078_DEFINITELY_UNSET_VAR_XYZ}""#).unwrap_err();
         let msg = err.to_string();
         assert!(msg.contains("COW1078_DEFINITELY_UNSET_VAR_XYZ"));
         assert!(msg.contains("not set"));

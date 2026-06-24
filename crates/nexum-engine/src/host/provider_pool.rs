@@ -43,7 +43,7 @@ impl ProviderPool {
         for (chain_id, chain_cfg) in &cfg.chains {
             let url = chain_cfg.rpc_url.as_str();
             // The boot log carries the URL with embedded API keys
-            // redacted — log aggregators (Loki, Datadog, splunk) often
+            // redacted - log aggregators (Loki, Datadog, splunk) often
             // ingest these lines and the key shouldn't end up in
             // long-term storage. The engine still uses the full URL
             // when actually connecting to the provider below.
@@ -97,6 +97,11 @@ impl ProviderPool {
             .await
             .map_err(|source| ProviderError::Rpc {
                 method: "eth_subscribe(newHeads)".into(),
+<<<<<<< HEAD
+=======
+                code: None,
+                data: None,
+>>>>>>> 5375073 (chore(rust-idiomatic): M5 compliance pass (cherry-pick M4 + M5 deploy fixes) (#67))
                 source,
             })?;
         let stream = sub.into_stream().map(Ok::<_, ProviderError>);
@@ -118,6 +123,11 @@ impl ProviderPool {
             .await
             .map_err(|source| ProviderError::Rpc {
                 method: "eth_subscribe(logs)".into(),
+<<<<<<< HEAD
+=======
+                code: None,
+                data: None,
+>>>>>>> 5375073 (chore(rust-idiomatic): M5 compliance pass (cherry-pick M4 + M5 deploy fixes) (#67))
                 source,
             })?;
         let stream = sub.into_stream().map(Ok::<_, ProviderError>);
@@ -166,9 +176,35 @@ impl ProviderPool {
             provider
                 .raw_request(method.into(), params)
                 .await
+<<<<<<< HEAD
                 .map_err(|source| ProviderError::Rpc {
                     method: method_for_err,
                     source,
+=======
+                .map_err(|source| {
+                    // When the node returns a JSON-RPC error response
+                    // (`{"error": {"code":..., "data":...}}`) - typically
+                    // an `eth_call` revert - capture the structured
+                    // payload so the host can forward it to
+                    // `HostError.data` (COW-1082). Transport-side
+                    // failures (timeouts, serde, etc.) leave both
+                    // `code` and `data` `None` so the projection can
+                    // tell "no ErrorResp" apart from "ErrorResp with
+                    // code = 0".
+                    let (code, data) = match source.as_error_resp() {
+                        Some(payload) => (
+                            Some(payload.code),
+                            payload.data.as_ref().map(|d| d.get().to_owned()),
+                        ),
+                        None => (None, None),
+                    };
+                    ProviderError::Rpc {
+                        method: method_for_err,
+                        code,
+                        data,
+                        source,
+                    }
+>>>>>>> 5375073 (chore(rust-idiomatic): M5 compliance pass (cherry-pick M4 + M5 deploy fixes) (#67))
                 })?;
 >>>>>>> 36366cf (chore(rust-idiomatic): M4 compliance pass (blockers + majors) (#66))
         Ok(result.get().to_owned())
@@ -220,10 +256,19 @@ pub enum ProviderError {
         source: serde_json::Error,
     },
     /// The node returned an error for the dispatched call.
+<<<<<<< HEAD
+=======
+    ///
+    /// When the underlying alloy `RpcError` carries a JSON-RPC
+    /// `ErrorResp` payload (the normal shape for `eth_call` reverts)
+    /// the structured `code` and `data` fields are propagated; for
+    /// transport-side failures both are `None`.
+>>>>>>> 5375073 (chore(rust-idiomatic): M5 compliance pass (cherry-pick M4 + M5 deploy fixes) (#67))
     #[error("rpc `{method}` failed: {source}")]
     Rpc {
         /// RPC method name.
         method: String,
+<<<<<<< HEAD
         /// Transport-side error.
         #[source]
         source: alloy_transport::TransportError,
@@ -236,6 +281,20 @@ pub enum ProviderError {
         method: String,
 =======
 >>>>>>> 36366cf (chore(rust-idiomatic): M4 compliance pass (blockers + majors) (#66))
+=======
+        /// JSON-RPC error code from `ErrorResp.code`. `None` when
+        /// the failure was transport-level (no structured response).
+        code: Option<i64>,
+        /// JSON-encoded `ErrorResp.data` payload - for `eth_call`
+        /// reverts this is the quoted hex string of the abi-encoded
+        /// revert body (consumed by `shepherd_sdk::chain::
+        /// decode_revert_hex`). `None` when the failure was
+        /// transport-level.
+        data: Option<String>,
+        /// Transport-side typed error.
+        #[source]
+        source: alloy_transport::TransportError,
+>>>>>>> 5375073 (chore(rust-idiomatic): M5 compliance pass (cherry-pick M4 + M5 deploy fixes) (#67))
     },
 }
 
