@@ -139,6 +139,7 @@ impl ProviderPool {
         // error branch so the success path moves the original string
         // straight into alloy without an extra allocation.
         let method_for_err = method.clone();
+<<<<<<< HEAD
         let result: Box<RawValue> = tokio::time::timeout(
             Duration::from_secs(30),
             provider.raw_request(method.into(), params),
@@ -151,6 +152,16 @@ impl ProviderPool {
             method: method_for_err,
             source,
         })?;
+=======
+        let result: Box<RawValue> =
+            provider
+                .raw_request(method.into(), params)
+                .await
+                .map_err(|source| ProviderError::Rpc {
+                    method: method_for_err,
+                    source,
+                })?;
+>>>>>>> 36366cf (chore(rust-idiomatic): M4 compliance pass (blockers + majors) (#66))
         Ok(result.get().to_owned())
     }
 }
@@ -207,12 +218,15 @@ pub enum ProviderError {
         /// Transport-side error.
         #[source]
         source: alloy_transport::TransportError,
+<<<<<<< HEAD
     },
     /// The RPC call did not complete within the configured timeout.
     #[error("rpc `{method}` timed out after 30s")]
     Timeout {
         /// RPC method name.
         method: String,
+=======
+>>>>>>> 36366cf (chore(rust-idiomatic): M4 compliance pass (blockers + majors) (#66))
     },
 }
 
