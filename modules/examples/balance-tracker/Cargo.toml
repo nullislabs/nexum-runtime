@@ -11,6 +11,10 @@ crate-type = ["cdylib"]
 
 [dependencies]
 shepherd-sdk = { path = "../../../crates/shepherd-sdk" }
+# `thiserror` powers the typed `AddressListParseError` returned by
+# `parse_addresses` so the strategy stops returning `Result<_, String>`
+# (rubric prohibits stringly-typed errors in library APIs).
+thiserror = "2"
 wit-bindgen = { version = "0.57", default-features = false, features = ["macros", "realloc"] }
 
 [dev-dependencies]
