@@ -2,10 +2,38 @@ mod manifest;
 
 use std::path::PathBuf;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
+
+use clap::Parser;
 use wasmtime::component::{Component, Linker, ResourceTable};
 use wasmtime::error::Context as _;
 use wasmtime::{Engine, Store};
 use wasmtime_wasi::{WasiCtx, WasiCtxBuilder, WasiCtxView, WasiView};
+
+/// Reference CLI for the 0.2 `nexum-engine` runtime.
+///
+/// Loads a Wasm Component, links the `shepherd:cow/shepherd` host
+/// world plus the WASI p2 set, calls `init` once, then dispatches a
+/// single synthetic block event so the host stubs exercise their
+/// timing paths. Production deployments invoke the engine through
+/// the supervisor entrypoint introduced in later milestones; this
+/// CLI is the M1 smoke-test surface.
+#[derive(Parser, Debug)]
+#[command(
+    name = "nexum-engine",
+    about = "Load a Wasm Component and dispatch a synthetic block event",
+    long_about = None,
+    version,
+)]
+struct Cli {
+    /// Path to the Wasm Component file to load.
+    wasm_path: PathBuf,
+
+    /// Optional explicit path to the module's `nexum.toml` manifest.
+    /// When omitted, the engine looks for `nexum.toml` next to the
+    /// component file and falls back to a permissive default (with
+    /// a deprecation warning) when none is found.
+    manifest_path: Option<PathBuf>,
+}
 
 // Both packages are listed explicitly so wit-parser can resolve the
 // cross-package reference natively — no vendored deps/ tree needed.
@@ -339,22 +367,20 @@ impl nexum::host::http::Host for HostState {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let mut args = std::env::args().skip(1);
-    let wasm_path = args.next().ok_or_else(|| {
-        anyhow::anyhow!("usage: nexum-engine <path-to-component.wasm> [<nexum.toml>]")
-    })?;
-    let explicit_manifest = args.next().map(PathBuf::from);
+    let cli = Cli::parse();
+    let wasm_path = cli.wasm_path;
+    let explicit_manifest = cli.manifest_path;
 
-    println!("nexum-engine: loading component from {wasm_path}");
+    println!(
+        "nexum-engine: loading component from {}",
+        wasm_path.display()
+    );
 
     // Load the manifest from the explicit path if given, otherwise from
     // `nexum.toml` next to the component file. Missing → fallback (with
     // deprecation warning).
-    let manifest_path = explicit_manifest.or_else(|| {
-        PathBuf::from(&wasm_path)
-            .parent()
-            .map(|p| p.join("nexum.toml"))
-    });
+    let manifest_path =
+        explicit_manifest.or_else(|| wasm_path.parent().map(|p| p.join("nexum.toml")));
     let loaded = match manifest_path.as_deref() {
         Some(p) if p.exists() => {
             println!("nexum-engine: loading manifest from {}", p.display());
