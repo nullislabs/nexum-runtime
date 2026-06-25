@@ -135,8 +135,10 @@ impl Supervisor {
             }
             let legacy = dir.join("nexum.toml");
             if legacy.exists() {
-                eprintln!(
-                    "[deprecation] nexum.toml is deprecated; rename to module.toml \
+                warn!(
+                    target: "manifest",
+                    path = %legacy.display(),
+                    "nexum.toml is deprecated; rename to module.toml \
                      (ADR-0001). Support will be removed in 0.3."
                 );
                 return Some(legacy);
