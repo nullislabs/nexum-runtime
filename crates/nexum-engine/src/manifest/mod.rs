@@ -21,7 +21,7 @@
 //!
 //! - [`types`]: the serde `Manifest` shape + `LoadedManifest` the engine
 //!   actually consumes, plus the `KNOWN_CAPABILITIES` registry.
-//! - [`load`]: `module.toml` -> `LoadedManifest`, plus the host/URL
+//! - [`mod@load`]: `module.toml` -> `LoadedManifest`, plus the host/URL
 //!   helpers the `http` backend uses at request time.
 //! - [`capabilities`]: WIT-import vs declared-capabilities cross-check.
 //! - [`error`]: `ParseError`, `CapabilityViolation`.

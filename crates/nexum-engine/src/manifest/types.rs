@@ -1,7 +1,7 @@
 //! Data structures: `Manifest`, sections, and `LoadedManifest`.
 //!
 //! Plain serde shapes plus the `KNOWN_CAPABILITIES` registry. The parsing
-//! and validation logic lives in [`super::load`]; capability enforcement
+//! and validation logic lives in [`mod@super::load`]; capability enforcement
 //! in [`super::capabilities`].
 
 use serde::Deserialize;

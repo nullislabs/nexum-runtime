@@ -5,7 +5,7 @@
 //! natively - no vendored `deps/` tree needed. The world name is fully
 //! qualified.
 //!
-//! Every `Host` trait impl in [`crate::host::impls`] consumes types
+//! Every `Host` trait impl in `crate::host::impls` consumes types
 //! generated here.
 
 wasmtime::component::bindgen!({
