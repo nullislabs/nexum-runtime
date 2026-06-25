@@ -13,6 +13,7 @@
 //! directly, which made `check_one` / `fetch_balance` only reachable
 //! from a real WASM build and excluded MockHost coverage.
 
+use shepherd_sdk::address::parse_address_list;
 use shepherd_sdk::config::{self, ConfigError};
 use shepherd_sdk::host::{Host, HostError, HostErrorKind, LogLevel};
 use shepherd_sdk::prelude::{Address, U256};
@@ -135,7 +136,7 @@ pub fn parse_config(entries: &[(String, String)]) -> Result<Settings, HostError>
     let addresses_raw = config::get_required(entries, "addresses").map_err(config_err)?;
     let change_threshold_raw =
         config::get_required(entries, "change_threshold").map_err(config_err)?;
-    let addresses = parse_addresses(addresses_raw).map_err(|e| invalid_input(e.to_string()))?;
+    let addresses = parse_address_list(addresses_raw).map_err(|e| invalid_input(e.to_string()))?;
     let change_threshold = change_threshold_raw
         .parse::<U256>()
         .map_err(|e| invalid_input(format!("change_threshold: {e}")))?;
@@ -143,56 +144,6 @@ pub fn parse_config(entries: &[(String, String)]) -> Result<Settings, HostError>
         addresses,
         change_threshold,
     })
-}
-
-/// Typed errors returned by [`parse_addresses`]. Replaces the prior
-/// `Result<_, String>` API (rubric prohibits stringly-typed errors).
-/// The Display impls preserve the same wording the previous
-/// formatter produced so any operator-facing log strings stay
-/// stable.
-#[derive(Debug, thiserror::Error)]
-#[non_exhaustive]
-pub enum AddressListParseError {
-    /// One of the comma-separated entries failed to parse as an
-    /// EVM address.
-    #[error("address #{index} ({raw:?}): {message}")]
-    InvalidAddress {
-        /// Zero-based position of the offending entry in the
-        /// comma-separated list.
-        index: usize,
-        /// The trimmed source string that failed to parse.
-        raw: String,
-        /// Human-readable parse-error detail from
-        /// `<Address as FromStr>::Err`.
-        message: String,
-    },
-    /// The whole list was empty (or contained only whitespace).
-    #[error("expected at least one address")]
-    Empty,
-}
-
-/// Parse a comma-separated address list, stripping whitespace.
-fn parse_addresses(raw: &str) -> Result<Vec<Address>, AddressListParseError> {
-    let mut out = Vec::new();
-    for (i, part) in raw.split(',').enumerate() {
-        let trimmed = part.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-        let addr =
-            trimmed
-                .parse::<Address>()
-                .map_err(|e| AddressListParseError::InvalidAddress {
-                    index: i,
-                    raw: trimmed.to_owned(),
-                    message: e.to_string(),
-                })?;
-        out.push(addr);
-    }
-    if out.is_empty() {
-        return Err(AddressListParseError::Empty);
-    }
-    Ok(out)
 }
 
 fn invalid_input(message: impl Into<String>) -> HostError {
@@ -265,35 +216,6 @@ mod tests {
         assert_eq!(abs_diff(a, b), U256::from(70_u64));
         assert_eq!(abs_diff(b, a), U256::from(70_u64));
         assert_eq!(abs_diff(a, a), U256::ZERO);
-    }
-
-    #[test]
-    fn parse_addresses_handles_whitespace_and_multiple() {
-        let raw = "  0x70997970C51812dc3A010C7d01b50e0d17dc79C8 ,\
-                   0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266";
-        let parsed = parse_addresses(raw).unwrap();
-        assert_eq!(parsed.len(), 2);
-        assert_eq!(
-            parsed[0],
-            address!("70997970C51812dc3A010C7d01b50e0d17dc79C8"),
-        );
-    }
-
-    #[test]
-    fn parse_addresses_skips_empty_segments() {
-        let parsed = parse_addresses("0x70997970C51812dc3A010C7d01b50e0d17dc79C8,,").unwrap();
-        assert_eq!(parsed.len(), 1);
-    }
-
-    #[test]
-    fn parse_addresses_rejects_empty_list() {
-        assert!(parse_addresses("").is_err());
-        assert!(parse_addresses(", ,").is_err());
-    }
-
-    #[test]
-    fn parse_addresses_rejects_malformed() {
-        assert!(parse_addresses("not-an-address").is_err());
     }
 
     #[test]
