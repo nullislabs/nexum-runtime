@@ -313,7 +313,12 @@ fn is_valid_env_name(s: &str) -> bool {
     chars.all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_')
 }
 
-#[derive(Debug, thiserror::Error)]
+/// `IntoStaticStr` exposes the snake_case variant name for the
+/// `tracing::error!` / `metrics::counter!` call sites in `main.rs`
+/// when an `engine.toml` substitution fails at boot, matching the
+/// pattern used on every other engine-side error enum.
+#[derive(Debug, thiserror::Error, IntoStaticStr)]
+#[strum(serialize_all = "snake_case")]
 #[non_exhaustive]
 pub enum EnvVarError {
     #[error(

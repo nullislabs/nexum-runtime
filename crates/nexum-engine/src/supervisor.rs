@@ -880,7 +880,12 @@ fn project_log(chain_id: u64, log: &alloy_rpc_types_eth::Log) -> nexum::host::ty
 /// instead of `to_string()`-ing it - keeps the typed chain intact for
 /// the supervisor's `tracing::warn!(error = %err, ...)` log line at
 /// the call site (where the `Display` chain prints the parse detail).
-#[derive(Debug, thiserror::Error)]
+///
+/// `IntoStaticStr` exposes the snake_case variant name as a
+/// `&'static str` so the warn log can carry
+/// `error_kind = address | topic` without a match-ladder.
+#[derive(Debug, thiserror::Error, strum::IntoStaticStr)]
+#[strum(serialize_all = "snake_case")]
 #[non_exhaustive]
 enum FilterError {
     /// `[[subscriptions]].address` did not parse as an EVM address.
