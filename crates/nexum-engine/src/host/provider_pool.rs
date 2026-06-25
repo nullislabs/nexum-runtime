@@ -20,6 +20,7 @@ use alloy_rpc_types_eth::{Filter, Header, Log};
 use futures::stream::Stream;
 use futures::stream::StreamExt as _;
 use serde_json::value::RawValue;
+use strum::IntoStaticStr;
 use thiserror::Error;
 use tracing::info;
 
@@ -157,7 +158,13 @@ pub type BlockStream = Pin<Box<dyn Stream<Item = Result<Header, ProviderError>> 
 pub type LogStream = Pin<Box<dyn Stream<Item = Result<Log, ProviderError>> + Send>>;
 
 /// Errors surfaced by [`ProviderPool`].
-#[derive(Debug, Error)]
+///
+/// `IntoStaticStr` produces the snake_case variant name as
+/// `&'static str` for metric labels and structured-log fields; the
+/// per-variant Display still carries the detail via `thiserror`.
+#[derive(Debug, Error, IntoStaticStr)]
+#[strum(serialize_all = "snake_case")]
+#[non_exhaustive]
 pub enum ProviderError {
     /// Chain id absent from the engine config.
     #[error("unknown chain {0} (no engine.toml entry)")]

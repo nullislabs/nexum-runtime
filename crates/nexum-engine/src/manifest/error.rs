@@ -1,11 +1,17 @@
 //! Error types for manifest parsing and capability enforcement.
 
+use strum::IntoStaticStr;
 use thiserror::Error;
 
 use super::types::KNOWN_CAPABILITIES;
 
 /// Errors returned while loading or validating a manifest.
-#[derive(Debug, Error)]
+///
+/// `IntoStaticStr` exposes the snake_case variant name as a
+/// `&'static str` for the manifest-loader's `tracing::warn!` /
+/// `metrics::counter!` call sites.
+#[derive(Debug, Error, IntoStaticStr)]
+#[strum(serialize_all = "snake_case")]
 #[non_exhaustive]
 pub enum ParseError {
     /// Failed to read the manifest file from disk.

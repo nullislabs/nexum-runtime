@@ -19,6 +19,7 @@
 use std::collections::BTreeMap;
 
 use cowprotocol::{Chain, OrderBookApi, OrderCreation, OrderUid};
+use strum::IntoStaticStr;
 use thiserror::Error;
 
 /// Process-wide pool of `OrderBookApi` clients keyed by EVM chain id.
@@ -120,7 +121,14 @@ impl OrderBookPool {
     }
 }
 
-#[derive(Debug, Error)]
+/// `IntoStaticStr` exposes the snake_case variant name as a
+/// `&'static str` (`"unknown_chain"`, `"bad_method"`, ...) so the
+/// `shepherd_cow_api_*` metric labels and structured-log fields stay
+/// in sync with the Rust source of truth instead of growing a
+/// `match err { ... => "decode" ... }` ladder per call site.
+#[derive(Debug, Error, IntoStaticStr)]
+#[strum(serialize_all = "snake_case")]
+#[non_exhaustive]
 pub enum CowApiError {
     #[error("unknown chain {0} (no cowprotocol::Chain variant)")]
     UnknownChain(u64),

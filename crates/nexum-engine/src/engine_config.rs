@@ -20,6 +20,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
+use strum::IntoStaticStr;
 use thiserror::Error;
 use tracing::{info, warn};
 
@@ -30,7 +31,11 @@ use tracing::{info, warn};
 /// `supervisor.rs` top-level dispatch. The variants carry the
 /// upstream error via `#[from]` so the caller in `main.rs` (which
 /// uses `anyhow`) gets a free conversion through `?`.
-#[derive(Debug, Error)]
+///
+/// `IntoStaticStr` exposes the snake_case variant name for metric
+/// labels and structured-log `error_kind` fields.
+#[derive(Debug, Error, IntoStaticStr)]
+#[strum(serialize_all = "snake_case")]
 #[non_exhaustive]
 pub enum EngineConfigError {
     /// Failed to read the config file from disk.
