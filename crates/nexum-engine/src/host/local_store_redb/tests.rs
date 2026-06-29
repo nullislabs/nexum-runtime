@@ -91,3 +91,160 @@ fn module_handles_share_underlying_data() {
 fn store_prefix(name: &str) -> Vec<u8> {
     keccak256(name.as_bytes()).to_vec()
 }
+
+// ---------------------------------------------------------------------------
+// Concurrent access tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn concurrent_writes_from_different_namespaces() {
+    let (_dir, store) = fresh();
+
+    let handles: Vec<_> = (0..8)
+        .map(|i| {
+            let s = store.clone();
+            std::thread::spawn(move || {
+                let ms = s.module(&format!("ns-{i}")).unwrap();
+                for j in 0..100 {
+                    let key = format!("key-{j}");
+                    let val = format!("val-{i}-{j}").into_bytes();
+                    ms.set(&key, &val).unwrap();
+                }
+            })
+        })
+        .collect();
+
+    for h in handles {
+        h.join().expect("thread panicked");
+    }
+
+    for i in 0..8 {
+        let ms = store.module(&format!("ns-{i}")).unwrap();
+        for j in 0..100 {
+            let key = format!("key-{j}");
+            let expected = format!("val-{i}-{j}").into_bytes();
+            assert_eq!(
+                ms.get(&key).unwrap().as_deref(),
+                Some(expected.as_slice()),
+            );
+        }
+    }
+}
+
+#[test]
+fn concurrent_reads_during_writes() {
+    let (_dir, store) = fresh();
+    let ms = store.module("rw").unwrap();
+
+    // Pre-populate namespace "rw" with 50 keys.
+    for j in 0..50 {
+        ms.set(&format!("k-{j}"), b"old").unwrap();
+    }
+
+    let writer_ms = ms.clone();
+    let writer = std::thread::spawn(move || {
+        for j in 0..50 {
+            writer_ms.set(&format!("k-{j}"), b"new").unwrap();
+        }
+    });
+
+    let readers: Vec<_> = (0..4)
+        .map(|_| {
+            let reader_ms = ms.clone();
+            std::thread::spawn(move || {
+                for _ in 0..100 {
+                    for j in 0..50 {
+                        let val = reader_ms.get(&format!("k-{j}")).unwrap();
+                        let val = val.expect("key must exist");
+                        assert!(
+                            val == b"old" || val == b"new",
+                            "unexpected value: {:?}",
+                            val,
+                        );
+                    }
+                }
+            })
+        })
+        .collect();
+
+    writer.join().expect("writer panicked");
+    for r in readers {
+        r.join().expect("reader panicked");
+    }
+
+    // Final state: all keys must be "new".
+    for j in 0..50 {
+        assert_eq!(
+            ms.get(&format!("k-{j}")).unwrap().as_deref(),
+            Some(&b"new"[..]),
+        );
+    }
+}
+
+#[test]
+fn list_keys_races_with_delete() {
+    let (_dir, store) = fresh();
+    let ms = store.module("race").unwrap();
+
+    // Pre-populate namespace "race" with 100 keys.
+    for i in 0..100 {
+        ms.set(&format!("k:{i}"), b"x").unwrap();
+    }
+
+    let deleter_ms = ms.clone();
+    let deleter = std::thread::spawn(move || {
+        for i in 0..100 {
+            deleter_ms.delete(&format!("k:{i}")).unwrap();
+        }
+    });
+
+    let lister_ms = ms.clone();
+    let lister = std::thread::spawn(move || {
+        for _ in 0..50 {
+            let keys = lister_ms.list_keys("k:").unwrap();
+            assert!(
+                keys.len() <= 100,
+                "list_keys returned more keys than expected: {}",
+                keys.len(),
+            );
+        }
+    });
+
+    deleter.join().expect("deleter panicked");
+    lister.join().expect("lister panicked");
+}
+
+#[test]
+fn stress_many_writers_one_namespace() {
+    let (_dir, store) = fresh();
+    let ms = store.module("shared").unwrap();
+
+    let handles: Vec<_> = (0..8)
+        .map(|i| {
+            let ms = ms.clone();
+            std::thread::spawn(move || {
+                for j in 0..100 {
+                    let key = format!("t{i}-k{j}");
+                    let val = format!("v-{i}-{j}").into_bytes();
+                    ms.set(&key, &val).unwrap();
+                }
+            })
+        })
+        .collect();
+
+    for h in handles {
+        h.join().expect("thread panicked");
+    }
+
+    // Verify all 800 keys are present with correct values.
+    for i in 0..8 {
+        for j in 0..100 {
+            let key = format!("t{i}-k{j}");
+            let expected = format!("v-{i}-{j}").into_bytes();
+            assert_eq!(
+                ms.get(&key).unwrap().as_deref(),
+                Some(expected.as_slice()),
+            );
+        }
+    }
+}
