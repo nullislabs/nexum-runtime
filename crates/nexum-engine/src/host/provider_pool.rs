@@ -350,6 +350,7 @@ mod tests {
             ChainConfig {
                 rpc_url: rpc_url.to_owned(),
                 orderbook_url: None,
+                require_ws: false,
             },
         );
         EngineConfig {
