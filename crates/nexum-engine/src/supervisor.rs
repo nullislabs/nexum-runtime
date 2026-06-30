@@ -71,6 +71,8 @@ struct LoadedModule {
     subscriptions: Vec<Subscription>,
     /// Fuel budget refilled before each `on_event` invocation.
     fuel_per_event: u64,
+    /// Memory cap applied to the wasmtime store on reinstantiation.
+    memory_limit: usize,
     /// Cached for COW-1033 restart: re-instantiating from the original
     /// wasm bytes avoids re-reading the file on every restart. The
     /// `Component` itself is internally `Arc`-backed by wasmtime.
@@ -353,6 +355,7 @@ impl Supervisor {
             store,
             subscriptions: loaded_manifest.manifest.subscriptions.clone(),
             fuel_per_event: limits_cfg.fuel(),
+            memory_limit: limits_cfg.memory(),
             alive: init_succeeded,
             failure_count: 0,
             next_attempt: None,
@@ -437,11 +440,15 @@ impl Supervisor {
         )?;
         wasmtime_wasi::p2::add_to_linker_async(&mut linker)?;
 
+        let module = &mut self.modules[idx];
         let wasi = WasiCtxBuilder::new().inherit_stdio().build();
         let limits = wasmtime::StoreLimitsBuilder::new()
-            .memory_size(DEFAULT_MEMORY_LIMIT)
+            .memory_size(module.memory_limit)
             .build();
-        let module = &mut self.modules[idx];
+        let module_store = self
+            .local_store
+            .module(&module.name)
+            .map_err(|e| anyhow!("local-store namespace for {}: {e}", module.name))?;
         let mut store = Store::new(
             &self.engine,
             HostState {
@@ -453,7 +460,7 @@ impl Supervisor {
                 module_namespace: module.name.clone(),
                 cow: self.cow_pool.clone(),
                 chain: self.provider_pool.clone(),
-                store: self.local_store.clone(),
+                store: module_store,
             },
         );
         store.limiter(|state| &mut state.limits);
@@ -531,13 +538,25 @@ impl Supervisor {
                 // effort; a warn is enough.
                 let module_name = self.modules[idx].name.clone();
                 let key = format!("last_dispatched_block:{chain_id}");
-                if let Err(e) = local_store.set(&module_name, &key, &block_number.to_le_bytes()) {
-                    warn!(
-                        module = %module_name,
-                        chain_id,
-                        error = %e,
-                        "failed to persist last_dispatched_block marker",
-                    );
+                match local_store.module(&module_name) {
+                    Ok(ms) => {
+                        if let Err(e) = ms.set(&key, &block_number.to_le_bytes()) {
+                            warn!(
+                                module = %module_name,
+                                chain_id,
+                                error = %e,
+                                "failed to persist last_dispatched_block marker",
+                            );
+                        }
+                    }
+                    Err(e) => {
+                        warn!(
+                            module = %module_name,
+                            chain_id,
+                            error = %e,
+                            "failed to open module store for progress marker",
+                        );
+                    }
                 }
                 dispatched += 1;
             }

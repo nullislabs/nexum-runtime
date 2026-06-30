@@ -497,6 +497,7 @@ async fn boot_fixture(wasm: &Path, manifest_relative: &str) -> Supervisor {
     let provider_pool = crate::host::provider_pool::ProviderPool::empty();
     let (_dir, local_store) = temp_local_store();
     let manifest = fixture_module_toml(manifest_relative);
+    let limits = crate::engine_config::ModuleLimits::default();
     Supervisor::boot_single(
         &engine,
         &linker,
@@ -505,6 +506,7 @@ async fn boot_fixture(wasm: &Path, manifest_relative: &str) -> Supervisor {
         &cow_pool,
         &provider_pool,
         &local_store,
+        &limits,
     )
     .await
     .expect("boot_single")
@@ -596,6 +598,7 @@ chain_id = 1
             log_level: "info".into(),
             metrics: crate::engine_config::MetricsSection::default(),
         },
+        limits: crate::engine_config::ModuleLimits::default(),
         chains: std::collections::BTreeMap::new(),
         modules: vec![
             crate::engine_config::ModuleEntry {
@@ -721,6 +724,7 @@ fail_first_n = "1"
     let cow_pool = crate::host::cow_orderbook::OrderBookPool::default();
     let provider_pool = crate::host::provider_pool::ProviderPool::empty();
     let (_dir, store) = temp_local_store();
+    let limits = crate::engine_config::ModuleLimits::default();
     let mut supervisor = Supervisor::boot_single(
         &engine,
         &linker,
@@ -729,6 +733,7 @@ fail_first_n = "1"
         &cow_pool,
         &provider_pool,
         &store,
+        &limits,
     )
     .await
     .expect("boot_single");
@@ -807,6 +812,7 @@ async fn poison_pill_quarantines_module_after_threshold() {
     // test wall-clock under 4 s.
     let policy =
         crate::runtime::poison_policy::PoisonPolicy::new(3, std::time::Duration::from_secs(60));
+    let limits = crate::engine_config::ModuleLimits::default();
     let mut supervisor = Supervisor::boot_single(
         &engine,
         &linker,
@@ -815,6 +821,7 @@ async fn poison_pill_quarantines_module_after_threshold() {
         &cow_pool,
         &provider_pool,
         &store,
+        &limits,
     )
     .await
     .expect("boot_single")
@@ -935,6 +942,7 @@ chain_id = 100
             log_level: "info".into(),
             metrics: crate::engine_config::MetricsSection::default(),
         },
+        limits: crate::engine_config::ModuleLimits::default(),
         chains: std::collections::BTreeMap::new(),
         modules: vec![
             crate::engine_config::ModuleEntry {
@@ -1028,6 +1036,7 @@ chain_id = 100
             log_level: "info".into(),
             metrics: crate::engine_config::MetricsSection::default(),
         },
+        limits: crate::engine_config::ModuleLimits::default(),
         chains: std::collections::BTreeMap::new(),
         modules: vec![
             crate::engine_config::ModuleEntry {
