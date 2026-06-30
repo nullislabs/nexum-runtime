@@ -9,6 +9,24 @@ use crate::host::error::internal_error;
 use crate::host::provider_pool::ProviderError;
 use crate::host::state::HostState;
 
+/// Methods that could sign transactions or expose sensitive node
+/// internals. We warn when a module calls one so operators can audit.
+const DANGEROUS_METHODS: &[&str] = &[
+    "eth_sign",
+    "eth_signTransaction",
+    "eth_sendTransaction",
+    "personal_sign",
+    "personal_unlockAccount",
+    "personal_sendTransaction",
+];
+
+/// Prefixes whose entire namespace is considered dangerous.
+const DANGEROUS_PREFIXES: &[&str] = &["admin_", "debug_", "miner_"];
+
+fn is_dangerous_method(method: &str) -> bool {
+    DANGEROUS_METHODS.contains(&method) || DANGEROUS_PREFIXES.iter().any(|p| method.starts_with(p))
+}
+
 impl nexum::host::chain::Host for HostState {
     async fn request(
         &mut self,
@@ -17,6 +35,14 @@ impl nexum::host::chain::Host for HostState {
         params: String,
     ) -> Result<String, HostError> {
         let start = Instant::now();
+        if is_dangerous_method(&method) {
+            tracing::warn!(
+                chain_id,
+                %method,
+                "module called a dangerous RPC method — ensure your RPC \
+                 endpoint is read-only or this call is intentional"
+            );
+        }
         tracing::debug!(chain_id, %method, "chain::request");
         let result = match self.chain.request(chain_id, method, params).await {
             Ok(body) => Ok(body),
