@@ -14,8 +14,8 @@ use super::types::{KNOWN_CAPABILITIES, LoadedManifest, Manifest};
 /// Read `module.toml` from `path`, parse, validate, and emit a deprecation
 /// warning if `[capabilities]` is absent (0.1-compat fallback).
 pub fn load(path: &Path) -> Result<LoadedManifest, ParseError> {
-    let raw = std::fs::read_to_string(path).map_err(ParseError::Io)?;
-    let manifest: Manifest = toml::from_str(&raw).map_err(ParseError::Toml)?;
+    let raw = std::fs::read_to_string(path)?;
+    let manifest: Manifest = toml::from_str(&raw)?;
 
     let caps = manifest.capabilities.as_ref();
     if caps.is_none() {
@@ -100,21 +100,15 @@ pub fn host_allowed(host: &str, allowlist: &[String]) -> bool {
 }
 
 /// Extract the host component from a URL. Returns `None` for non-http(s)
-/// schemes or malformed input. Intentionally simple - adds no `url`
-/// crate dependency.
-pub fn extract_host(url: &str) -> Option<&str> {
-    let after_scheme = url
-        .strip_prefix("https://")
-        .or_else(|| url.strip_prefix("http://"))?;
-    let host_end = after_scheme
-        .find('/')
-        .or_else(|| after_scheme.find('?'))
-        .unwrap_or(after_scheme.len());
-    let host = &after_scheme[..host_end];
-    // strip optional user-info and port.
-    let host = host.rsplit('@').next().unwrap_or(host);
-    let host = host.split(':').next().unwrap_or(host);
-    if host.is_empty() { None } else { Some(host) }
+/// schemes or malformed input. Delegates to `url::Url::parse` so we
+/// inherit RFC 3986 handling of user-info, port, IDNA, IPv6 brackets,
+/// etc.
+pub fn extract_host(url: &str) -> Option<String> {
+    let parsed = url::Url::parse(url).ok()?;
+    match parsed.scheme() {
+        "http" | "https" => parsed.host_str().map(|h| h.to_owned()),
+        _ => None,
+    }
 }
 
 fn stringify_toml_value(v: &toml::Value) -> String {
@@ -227,15 +221,21 @@ enabled  = true
     #[test]
     fn extract_host_handles_common_shapes() {
         assert_eq!(
-            extract_host("https://api.example.com/v1/x"),
+            extract_host("https://api.example.com/v1/x").as_deref(),
             Some("api.example.com")
         );
-        assert_eq!(extract_host("http://example.com"), Some("example.com"));
         assert_eq!(
-            extract_host("https://user:pw@host.example.com:8443/x"),
+            extract_host("http://example.com").as_deref(),
+            Some("example.com")
+        );
+        assert_eq!(
+            extract_host("https://user:pw@host.example.com:8443/x").as_deref(),
             Some("host.example.com")
         );
-        assert_eq!(extract_host("https://example.com?q=1"), Some("example.com"));
+        assert_eq!(
+            extract_host("https://example.com?q=1").as_deref(),
+            Some("example.com")
+        );
         assert_eq!(extract_host("ftp://example.com"), None);
         assert_eq!(extract_host("not a url"), None);
     }

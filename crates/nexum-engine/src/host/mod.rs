@@ -5,8 +5,7 @@
 //! - [`state`]: `HostState` struct + `WasiView` impl, the receiver
 //!   every WIT `Host` trait is implemented for.
 //! - [`error`]: small constructors that build the WIT `HostError`
-//!   shape (`unimplemented`, `internal_error`) plus the lowercase
-//!   `hex_encode` shared by the `cow-api` submission path.
+//!   shape (`unimplemented`, `internal_error`).
 //! - [`cow_orderbook`], [`provider_pool`], [`local_store_redb`]:
 //!   capability backends. Pure code with no bindgen types, so each
 //!   can be unit-tested without spinning up a wasmtime store.

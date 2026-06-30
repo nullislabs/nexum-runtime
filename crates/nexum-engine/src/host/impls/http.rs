@@ -30,8 +30,8 @@ impl nexum::host::http::Host for HostState {
                 });
             }
         };
-        if !host_allowed(host, &self.http_allowlist) {
-            warn!(host, "[http] denied by allowlist");
+        if !host_allowed(&host, &self.http_allowlist) {
+            warn!(host = %host, "[http] denied by allowlist");
             return Err(HostError {
                 domain: "http".into(),
                 kind: HostErrorKind::Denied,

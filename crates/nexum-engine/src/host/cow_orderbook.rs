@@ -136,6 +136,5 @@ pub enum CowApiError {
     Orderbook(#[from] cowprotocol::Error),
 }
 
-
 #[cfg(test)]
 mod tests;

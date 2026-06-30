@@ -8,9 +8,9 @@
 //! The 32-byte hash prefix has two properties that the old
 //! `[len:u8][name][key]` scheme lacked:
 //!
-//! - **Fixed width** - no length field to forge; a module cannot craft a
+//! - **Fixed width** — no length field to forge; a module cannot craft a
 //!   key that bleeds into another module's prefix range.
-//! - **ENS-compatible** - keccak256 is the same hash used by ENS node
+//! - **ENS-compatible** — keccak256 is the same hash used by ENS node
 //!   derivation, so module identities can be derived from ENS names
 //!   without extra hashing in the future (ADR-0003).
 
@@ -28,11 +28,22 @@ const TABLE: TableDefinition<'static, &[u8], &[u8]> = TableDefinition::new("nexu
 const PREFIX_LEN: usize = 32;
 
 /// Process-wide handle to the local-store redb database. Cheap to
-/// clone; the per-module view is constructed by setting the namespace
-/// prefix at call time.
+/// clone. Use [`LocalStore::module`] to obtain a [`ModuleStore`]
+/// handle with a pre-computed namespace prefix.
 #[derive(Debug, Clone)]
 pub struct LocalStore {
     db: Arc<Database>,
+}
+
+/// Per-module handle carrying the pre-computed 32-byte keccak256
+/// namespace prefix plus an `Arc<Database>` reference. Hashing
+/// happens once (in [`LocalStore::module`]); every subsequent
+/// `get`/`set`/`delete`/`list_keys` call concatenates without
+/// rehashing.
+#[derive(Debug, Clone)]
+pub struct ModuleStore {
+    db: Arc<Database>,
+    prefix: Vec<u8>,
 }
 
 impl LocalStore {
@@ -48,10 +59,28 @@ impl LocalStore {
         Ok(Self { db: Arc::new(db) })
     }
 
-    /// Fetch a value for `(namespace, key)`. Returns `Ok(None)` when
-    /// no entry exists; the module never observes the prefix.
-    pub fn get(&self, namespace: &str, key: &str) -> Result<Option<Vec<u8>>, StorageError> {
-        let full = build_key(namespace, key)?;
+    /// Return a [`ModuleStore`] with the keccak256 prefix pre-computed.
+    /// Rejects the empty string so callers can rely on a non-trivial
+    /// prefix.
+    pub fn module(&self, namespace: &str) -> Result<ModuleStore, StorageError> {
+        if namespace.is_empty() {
+            return Err(StorageError::InvalidNamespace(
+                "module namespace must not be empty".into(),
+            ));
+        }
+        let prefix = keccak256(namespace.as_bytes()).to_vec();
+        Ok(ModuleStore {
+            db: Arc::clone(&self.db),
+            prefix,
+        })
+    }
+}
+
+impl ModuleStore {
+    /// Fetch a value for `key`. Returns `Ok(None)` when no entry
+    /// exists; the module never observes the prefix.
+    pub fn get(&self, key: &str) -> Result<Option<Vec<u8>>, StorageError> {
+        let full = self.build_key(key);
         let txn = self.db.begin_read().map_err(StorageError::Txn)?;
         let table = txn.open_table(TABLE).map_err(StorageError::Table)?;
         let value = table
@@ -62,8 +91,8 @@ impl LocalStore {
     }
 
     /// Insert or overwrite.
-    pub fn set(&self, namespace: &str, key: &str, value: &[u8]) -> Result<(), StorageError> {
-        let full = build_key(namespace, key)?;
+    pub fn set(&self, key: &str, value: &[u8]) -> Result<(), StorageError> {
+        let full = self.build_key(key);
         let txn = self.db.begin_write().map_err(StorageError::Txn)?;
         {
             let mut table = txn.open_table(TABLE).map_err(StorageError::Table)?;
@@ -75,9 +104,9 @@ impl LocalStore {
         Ok(())
     }
 
-    /// Delete. Idempotent - deleting a missing key is a no-op.
-    pub fn delete(&self, namespace: &str, key: &str) -> Result<(), StorageError> {
-        let full = build_key(namespace, key)?;
+    /// Delete. Idempotent — deleting a missing key is a no-op.
+    pub fn delete(&self, key: &str) -> Result<(), StorageError> {
+        let full = self.build_key(key);
         let txn = self.db.begin_write().map_err(StorageError::Txn)?;
         {
             let mut table = txn.open_table(TABLE).map_err(StorageError::Table)?;
@@ -89,12 +118,11 @@ impl LocalStore {
         Ok(())
     }
 
-    /// Enumerate keys in `namespace` whose raw key (post-prefix) starts
-    /// with `prefix`. Returns only the module-visible key strings - the
+    /// Enumerate keys whose raw key (post-prefix) starts with
+    /// `prefix`. Returns only the module-visible key strings — the
     /// host strips the namespace prefix.
-    pub fn list_keys(&self, namespace: &str, prefix: &str) -> Result<Vec<String>, StorageError> {
-        let ns_prefix = namespace_prefix(namespace)?;
-        let full_prefix = build_key(namespace, prefix)?;
+    pub fn list_keys(&self, prefix: &str) -> Result<Vec<String>, StorageError> {
+        let full_prefix = self.build_key(prefix);
         let txn = self.db.begin_read().map_err(StorageError::Txn)?;
         let table = txn.open_table(TABLE).map_err(StorageError::Table)?;
         let mut out = Vec::new();
@@ -112,32 +140,21 @@ impl LocalStore {
             if !key_bytes.starts_with(&full_prefix) {
                 break;
             }
-            if let Ok(s) = std::str::from_utf8(&key_bytes[ns_prefix.len()..]) {
+            if let Ok(s) = std::str::from_utf8(&key_bytes[self.prefix.len()..]) {
                 out.push(s.to_owned());
             }
         }
         Ok(out)
     }
-}
 
-/// Returns the 32-byte keccak256 hash of `namespace` as a `Vec<u8>`.
-/// Rejects the empty string so callers can rely on a non-trivial prefix.
-fn namespace_prefix(namespace: &str) -> Result<Vec<u8>, StorageError> {
-    if namespace.is_empty() {
-        return Err(StorageError::InvalidNamespace(
-            "module namespace must not be empty".into(),
-        ));
+    fn build_key(&self, key: &str) -> Vec<u8> {
+        let mut out = self.prefix.clone();
+        out.extend_from_slice(key.as_bytes());
+        out
     }
-    Ok(keccak256(namespace.as_bytes()).to_vec())
 }
 
-fn build_key(namespace: &str, key: &str) -> Result<Vec<u8>, StorageError> {
-    let mut out = namespace_prefix(namespace)?;
-    out.extend_from_slice(key.as_bytes());
-    Ok(out)
-}
-
-/// Errors surfaced by [`LocalStore`].
+/// Errors surfaced by [`LocalStore`] and [`ModuleStore`].
 #[derive(Debug, Error)]
 pub enum StorageError {
     #[error("open redb: {0}")]

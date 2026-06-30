@@ -27,6 +27,10 @@ use tracing::{info, warn};
 pub struct EngineConfig {
     #[serde(default)]
     pub engine: EngineSection,
+    /// Per-module wasmtime resource limits. Applies uniformly to every
+    /// module; per-module overrides land in 0.3.
+    #[serde(default)]
+    pub limits: ModuleLimits,
     /// Per-chain RPC URLs keyed by EVM chain id (decimal in TOML).
     /// Used by the `chain::request` host call and as the alloy provider
     /// pool seed.
@@ -80,6 +84,41 @@ pub struct ChainConfig {
     /// transport (required for `eth_subscribe`); `http://` and `https://`
     /// engage the HTTP transport (request/response only).
     pub rpc_url: String,
+}
+
+/// Default fuel budget per `on_event` invocation (~1 billion WASM
+/// instructions).
+const DEFAULT_FUEL_PER_EVENT: u64 = 1_000_000_000;
+
+/// Default linear-memory cap per module store (64 MiB).
+const DEFAULT_MEMORY_LIMIT: usize = 64 * 1024 * 1024;
+
+/// Per-module wasmtime resource limits. Both fields are optional;
+/// omitted values resolve to built-in defaults.
+///
+/// ```toml
+/// [limits]
+/// fuel_per_event = 1_000_000_000
+/// memory_bytes   = 67_108_864
+/// ```
+#[derive(Debug, Default, Deserialize)]
+pub struct ModuleLimits {
+    /// Fuel budget granted per `on_event` invocation.
+    pub fuel_per_event: Option<u64>,
+    /// Linear-memory cap in bytes per module store.
+    pub memory_bytes: Option<usize>,
+}
+
+impl ModuleLimits {
+    /// Resolved fuel budget (override or default).
+    pub fn fuel(&self) -> u64 {
+        self.fuel_per_event.unwrap_or(DEFAULT_FUEL_PER_EVENT)
+    }
+
+    /// Resolved memory cap (override or default).
+    pub fn memory(&self) -> usize {
+        self.memory_bytes.unwrap_or(DEFAULT_MEMORY_LIMIT)
+    }
 }
 
 fn default_state_dir() -> PathBuf {

@@ -21,13 +21,12 @@ use wasmtime::{Engine, Store};
 use wasmtime_wasi::WasiCtxBuilder;
 
 use crate::bindings::{Config, Shepherd, nexum};
-use crate::engine_config::{EngineConfig, ModuleEntry};
+use crate::engine_config::{EngineConfig, ModuleEntry, ModuleLimits};
 use crate::host::cow_orderbook::OrderBookPool;
 use crate::host::local_store_redb::LocalStore;
 use crate::host::provider_pool::ProviderPool;
 use crate::host::state::HostState;
 use crate::manifest::{self, LoadedManifest, Subscription};
-use crate::runtime::limits::{DEFAULT_FUEL_PER_EVENT, DEFAULT_MEMORY_LIMIT};
 
 /// Owns every loaded module and exposes the dispatch surface the
 /// event loop needs.
@@ -42,6 +41,8 @@ struct LoadedModule {
     /// Subscriptions copied from `module.toml`. The supervisor reads
     /// these on every event to decide whether to dispatch.
     subscriptions: Vec<Subscription>,
+    /// Fuel budget refilled before each `on_event` invocation.
+    fuel_per_event: u64,
     /// Set to `false` when `on_event` traps. Dead modules are silently
     /// skipped on every subsequent dispatch. Full restart-with-backoff
     /// lands in 0.3.
@@ -64,10 +65,17 @@ impl Supervisor {
     ) -> Result<Self> {
         let mut modules = Vec::with_capacity(engine_cfg.modules.len());
         for entry in &engine_cfg.modules {
-            let loaded =
-                Self::load_one(engine, linker, entry, cow_pool, provider_pool, local_store)
-                    .await
-                    .with_context(|| format!("load module {}", entry.path.display()))?;
+            let loaded = Self::load_one(
+                engine,
+                linker,
+                entry,
+                cow_pool,
+                provider_pool,
+                local_store,
+                &engine_cfg.limits,
+            )
+            .await
+            .with_context(|| format!("load module {}", entry.path.display()))?;
             modules.push(loaded);
         }
         info!(count = modules.len(), "supervisor up");
@@ -78,6 +86,7 @@ impl Supervisor {
     /// pair. Used by the CLI-positional invocation so `just run`
     /// against the example module keeps working without an
     /// `engine.toml`.
+    #[allow(clippy::too_many_arguments)]
     pub async fn boot_single(
         engine: &Engine,
         linker: &Linker<HostState>,
@@ -86,13 +95,22 @@ impl Supervisor {
         cow_pool: &OrderBookPool,
         provider_pool: &ProviderPool,
         local_store: &LocalStore,
+        limits: &ModuleLimits,
     ) -> Result<Self> {
         let entry = ModuleEntry {
             path: wasm.to_path_buf(),
             manifest: manifest.map(Path::to_path_buf),
         };
-        let loaded =
-            Self::load_one(engine, linker, &entry, cow_pool, provider_pool, local_store).await?;
+        let loaded = Self::load_one(
+            engine,
+            linker,
+            &entry,
+            cow_pool,
+            provider_pool,
+            local_store,
+            limits,
+        )
+        .await?;
         Ok(Self {
             modules: vec![loaded],
         })
@@ -105,6 +123,7 @@ impl Supervisor {
         cow_pool: &OrderBookPool,
         provider_pool: &ProviderPool,
         local_store: &LocalStore,
+        limits_cfg: &ModuleLimits,
     ) -> Result<LoadedModule> {
         // Canonical name is module.toml (ADR-0001). nexum.toml is accepted
         // with a deprecation warning during the 0.1→0.2 transition.
@@ -156,9 +175,18 @@ impl Supervisor {
         } else {
             loaded_manifest.manifest.module.name.clone()
         };
+        let module_store = local_store
+            .module(&module_namespace)
+            .map_err(|e| anyhow!("local-store namespace for {module_namespace}: {e}"))?;
         let limits = wasmtime::StoreLimitsBuilder::new()
-            .memory_size(DEFAULT_MEMORY_LIMIT)
+            .memory_size(limits_cfg.memory())
             .build();
+        info!(
+            module = %module_namespace,
+            fuel = limits_cfg.fuel(),
+            memory_bytes = limits_cfg.memory(),
+            "applied module resource limits",
+        );
         let mut store = Store::new(
             engine,
             HostState {
@@ -170,11 +198,11 @@ impl Supervisor {
                 module_namespace: module_namespace.clone(),
                 cow: cow_pool.clone(),
                 chain: provider_pool.clone(),
-                store: local_store.clone(),
+                store: module_store,
             },
         );
         store.limiter(|state| &mut state.limits);
-        store.set_fuel(DEFAULT_FUEL_PER_EVENT)?;
+        store.set_fuel(limits_cfg.fuel())?;
         let bindings = Shepherd::instantiate_async(&mut store, &component, linker)
             .await
             .map_err(Error::from)
@@ -202,7 +230,7 @@ impl Supervisor {
             ),
         }
         // Refuel after init so the first on_event starts with a full budget.
-        store.set_fuel(DEFAULT_FUEL_PER_EVENT)?;
+        store.set_fuel(limits_cfg.fuel())?;
 
         // Surface any `[[subscription]]` entries the host cannot
         // service yet, so an operator running 0.2 against a 0.3
@@ -221,6 +249,7 @@ impl Supervisor {
             bindings,
             store,
             subscriptions: loaded_manifest.manifest.subscriptions.clone(),
+            fuel_per_event: limits_cfg.fuel(),
             alive: true,
         })
     }
@@ -293,7 +322,7 @@ impl Supervisor {
                 continue;
             }
             // Refuel before each invocation so each event gets a fresh budget.
-            if let Err(e) = module.store.set_fuel(DEFAULT_FUEL_PER_EVENT) {
+            if let Err(e) = module.store.set_fuel(module.fuel_per_event) {
                 error!(module = %module.name, error = %e, "set_fuel failed - skipping");
                 continue;
             }
@@ -345,7 +374,7 @@ impl Supervisor {
         if !target.alive {
             return false;
         }
-        if let Err(e) = target.store.set_fuel(DEFAULT_FUEL_PER_EVENT) {
+        if let Err(e) = target.store.set_fuel(target.fuel_per_event) {
             error!(module = %module_name, error = %e, "set_fuel failed - skipping");
             return false;
         }
@@ -426,7 +455,6 @@ fn build_alloy_filter(
     }
     Ok(filter)
 }
-
 
 #[cfg(test)]
 mod tests;

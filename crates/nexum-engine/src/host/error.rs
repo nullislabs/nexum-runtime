@@ -1,6 +1,5 @@
 //! Small constructors that wrap the WIT `HostError` shape, used by
-//! every `Host` trait impl, plus the lowercase hex encoder shared by
-//! the `cow-api` submission path.
+//! every `Host` trait impl.
 
 use crate::bindings::HostError;
 use crate::bindings::nexum::host::types::HostErrorKind;
@@ -26,17 +25,4 @@ pub(crate) fn internal_error(domain: &str, detail: impl Into<String>) -> HostErr
         message: detail.into(),
         data: None,
     }
-}
-
-/// Lowercase hex encoder. Kept in the engine binary rather than
-/// pulling a `hex` crate just for one call site. Writes into the
-/// pre-allocated buffer to avoid the per-byte `String` allocation
-/// `format!("{b:02x}")` would do.
-pub(crate) fn hex_encode(bytes: &[u8]) -> String {
-    use std::fmt::Write as _;
-    let mut s = String::with_capacity(bytes.len() * 2);
-    for b in bytes {
-        write!(s, "{b:02x}").expect("writing to String never fails");
-    }
-    s
 }

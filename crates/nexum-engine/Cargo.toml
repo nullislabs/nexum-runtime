@@ -45,9 +45,9 @@ reqwest.workspace = true
 # `request-batch` impls can hand a raw `(method, params)` pair to
 # alloy's JSON-RPC layer without reimplementing the codec.
 alloy-provider.workspace = true
-alloy-rpc-client    = { version = "1.5", default-features = false }
-alloy-rpc-types-eth = { version = "1.5", default-features = false, features = ["std"] }
-alloy-transport     = { version = "1.5", default-features = false }
+alloy-rpc-client    = { version = "1.8", default-features = false }
+alloy-rpc-types-eth.workspace = true
+alloy-transport     = { version = "1.8", default-features = false }
 alloy-transport-ws.workspace = true
 alloy-primitives.workspace = true
 futures.workspace = true

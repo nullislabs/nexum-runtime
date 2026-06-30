@@ -7,7 +7,7 @@ use std::time::Instant;
 use crate::bindings::nexum::host::types::HostErrorKind;
 use crate::bindings::{HostError, shepherd};
 use crate::host::cow_orderbook::CowApiError;
-use crate::host::error::{hex_encode, internal_error, unimplemented};
+use crate::host::error::{internal_error, unimplemented};
 use crate::host::state::HostState;
 
 impl shepherd::cow::cow_api::Host for HostState {
@@ -58,7 +58,10 @@ impl shepherd::cow::cow_api::Host for HostState {
         let start = Instant::now();
         tracing::debug!(chain_id, bytes = order_data.len(), "cow-api::submit-order");
         let result = match self.cow.submit_order_json(chain_id, &order_data).await {
-            Ok(uid) => Ok(format!("0x{}", hex_encode(uid.as_slice()))),
+            Ok(uid) => Ok(format!(
+                "0x{}",
+                alloy_primitives::hex::encode(uid.as_slice())
+            )),
             Err(CowApiError::UnknownChain(id)) => Err(unimplemented(
                 "cow-api",
                 format!("chain {id} not in cowprotocol"),
