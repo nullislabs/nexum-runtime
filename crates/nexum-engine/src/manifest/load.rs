@@ -241,6 +241,51 @@ enabled  = true
     }
 
     #[test]
+    fn extract_host_rejects_ssrf_bypass_attempts() {
+        // Userinfo confusion: the actual host is evil.com, not allowed.com
+        assert_eq!(
+            extract_host("http://allowed.com@evil.com/path").as_deref(),
+            Some("evil.com")
+        );
+        // URL-encoded @ must NOT resolve to "allowed.com" (bypass)
+        assert_ne!(
+            extract_host("http://allowed.com%40evil.com/path").as_deref(),
+            Some("allowed.com")
+        );
+        // IPv6 loopback
+        assert_eq!(extract_host("http://[::1]/path").as_deref(), Some("[::1]"));
+        // Port is stripped from host — allowlist must match host only
+        assert_eq!(
+            extract_host("http://api.cow.fi:8080/v1").as_deref(),
+            Some("api.cow.fi")
+        );
+        // Fragment containing slash should not affect host extraction
+        assert_eq!(
+            extract_host("https://api.cow.fi/path#frag/with/slash").as_deref(),
+            Some("api.cow.fi")
+        );
+        // Query string containing slash should not affect host extraction
+        assert_eq!(
+            extract_host("https://api.cow.fi/path?q=/evil/path").as_deref(),
+            Some("api.cow.fi")
+        );
+    }
+
+    #[test]
+    fn host_allowed_rejects_port_mismatch() {
+        // Allowlist has "api.cow.fi" — host_allowed checks host only (no port),
+        // because extract_host already strips port. Port enforcement is
+        // operational, not host-level.
+        let allow = vec!["api.cow.fi".to_string()];
+        let host = extract_host("http://api.cow.fi:8080/v1").unwrap();
+        assert!(host_allowed(&host, &allow));
+
+        // But a different host should still be rejected
+        let evil_host = extract_host("http://allowed.com@evil.com/path").unwrap();
+        assert!(!host_allowed(&evil_host, &allow));
+    }
+
+    #[test]
     fn host_allowed_exact_and_wildcard() {
         let allow = vec!["api.cow.fi".to_string(), "*.discord.com".to_string()];
         assert!(host_allowed("api.cow.fi", &allow));
