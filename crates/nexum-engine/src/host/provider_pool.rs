@@ -14,7 +14,6 @@
 use std::collections::BTreeMap;
 use std::pin::Pin;
 use std::sync::Arc;
-use std::time::Duration;
 
 use alloy_provider::{DynProvider, Provider, ProviderBuilder, WsConnect};
 use alloy_rpc_types_eth::{Filter, Header, Log};
@@ -97,11 +96,8 @@ impl ProviderPool {
             .await
             .map_err(|source| ProviderError::Rpc {
                 method: "eth_subscribe(newHeads)".into(),
-<<<<<<< HEAD
-=======
                 code: None,
                 data: None,
->>>>>>> 5375073 (chore(rust-idiomatic): M5 compliance pass (cherry-pick M4 + M5 deploy fixes) (#67))
                 source,
             })?;
         let stream = sub.into_stream().map(Ok::<_, ProviderError>);
@@ -123,11 +119,8 @@ impl ProviderPool {
             .await
             .map_err(|source| ProviderError::Rpc {
                 method: "eth_subscribe(logs)".into(),
-<<<<<<< HEAD
-=======
                 code: None,
                 data: None,
->>>>>>> 5375073 (chore(rust-idiomatic): M5 compliance pass (cherry-pick M4 + M5 deploy fixes) (#67))
                 source,
             })?;
         let stream = sub.into_stream().map(Ok::<_, ProviderError>);
@@ -158,29 +151,10 @@ impl ProviderPool {
         // error branch so the success path moves the original string
         // straight into alloy without an extra allocation.
         let method_for_err = method.clone();
-<<<<<<< HEAD
-        let result: Box<RawValue> = tokio::time::timeout(
-            Duration::from_secs(30),
-            provider.raw_request(method.into(), params),
-        )
-        .await
-        .map_err(|_| ProviderError::Timeout {
-            method: method_for_err.clone(),
-        })?
-        .map_err(|source| ProviderError::Rpc {
-            method: method_for_err,
-            source,
-        })?;
-=======
         let result: Box<RawValue> =
             provider
                 .raw_request(method.into(), params)
                 .await
-<<<<<<< HEAD
-                .map_err(|source| ProviderError::Rpc {
-                    method: method_for_err,
-                    source,
-=======
                 .map_err(|source| {
                     // When the node returns a JSON-RPC error response
                     // (`{"error": {"code":..., "data":...}}`) - typically
@@ -204,9 +178,7 @@ impl ProviderPool {
                         data,
                         source,
                     }
->>>>>>> 5375073 (chore(rust-idiomatic): M5 compliance pass (cherry-pick M4 + M5 deploy fixes) (#67))
                 })?;
->>>>>>> 36366cf (chore(rust-idiomatic): M4 compliance pass (blockers + majors) (#66))
         Ok(result.get().to_owned())
     }
 }
@@ -256,32 +228,15 @@ pub enum ProviderError {
         source: serde_json::Error,
     },
     /// The node returned an error for the dispatched call.
-<<<<<<< HEAD
-=======
     ///
     /// When the underlying alloy `RpcError` carries a JSON-RPC
     /// `ErrorResp` payload (the normal shape for `eth_call` reverts)
     /// the structured `code` and `data` fields are propagated; for
     /// transport-side failures both are `None`.
->>>>>>> 5375073 (chore(rust-idiomatic): M5 compliance pass (cherry-pick M4 + M5 deploy fixes) (#67))
     #[error("rpc `{method}` failed: {source}")]
     Rpc {
         /// RPC method name.
         method: String,
-<<<<<<< HEAD
-        /// Transport-side error.
-        #[source]
-        source: alloy_transport::TransportError,
-<<<<<<< HEAD
-    },
-    /// The RPC call did not complete within the configured timeout.
-    #[error("rpc `{method}` timed out after 30s")]
-    Timeout {
-        /// RPC method name.
-        method: String,
-=======
->>>>>>> 36366cf (chore(rust-idiomatic): M4 compliance pass (blockers + majors) (#66))
-=======
         /// JSON-RPC error code from `ErrorResp.code`. `None` when
         /// the failure was transport-level (no structured response).
         code: Option<i64>,
@@ -294,7 +249,6 @@ pub enum ProviderError {
         /// Transport-side typed error.
         #[source]
         source: alloy_transport::TransportError,
->>>>>>> 5375073 (chore(rust-idiomatic): M5 compliance pass (cherry-pick M4 + M5 deploy fixes) (#67))
     },
 }
 

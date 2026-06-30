@@ -538,7 +538,6 @@ impl Supervisor {
                 // effort; a warn is enough.
                 let module_name = self.modules[idx].name.clone();
                 let key = format!("last_dispatched_block:{chain_id}");
-<<<<<<< HEAD
                 match local_store.module(&module_name) {
                     Ok(ms) => {
                         if let Err(e) = ms.set(&key, &block_number.to_le_bytes()) {
@@ -558,15 +557,6 @@ impl Supervisor {
                             "failed to open module store for progress marker",
                         );
                     }
-=======
-                if let Err(e) = local_store.set(&module_name, &key, &block_number.to_le_bytes()) {
-                    warn!(
-                        module = %module_name,
-                        chain_id,
-                        error = %e,
-                        "failed to persist last_dispatched_block marker",
-                    );
->>>>>>> 36366cf (chore(rust-idiomatic): M4 compliance pass (blockers + majors) (#66))
                 }
                 dispatched += 1;
             }
