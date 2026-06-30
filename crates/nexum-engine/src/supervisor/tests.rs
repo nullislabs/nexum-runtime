@@ -272,6 +272,7 @@ async fn boot_production_module(
 ) -> Supervisor {
     let cow_pool = crate::host::cow_orderbook::OrderBookPool::default();
     let provider_pool = crate::host::provider_pool::ProviderPool::empty();
+    let limits = ModuleLimits::default();
     Supervisor::boot_single(
         engine,
         linker,
@@ -280,6 +281,7 @@ async fn boot_production_module(
         &cow_pool,
         &provider_pool,
         local_store,
+        &limits,
     )
     .await
     .expect("boot_single")
