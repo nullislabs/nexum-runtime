@@ -44,6 +44,13 @@ impl shepherd::cow::cow_api::Host for HostState {
                 message: msg,
                 data: None,
             }),
+            Err(CowApiError::HttpError { status, body }) => Err(HostError {
+                domain: "cow-api".into(),
+                kind: HostErrorKind::Internal,
+                code: status as i32,
+                message: format!("HTTP {status}"),
+                data: Some(body),
+            }),
             Err(err) => Err(internal_error("cow-api", err.to_string())),
         };
         tracing::trace!(elapsed_ms = ?start.elapsed(), "cow-api::request done");

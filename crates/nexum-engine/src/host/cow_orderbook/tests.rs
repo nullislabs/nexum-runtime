@@ -115,9 +115,7 @@ async fn request_post_with_body_is_forwarded() {
 }
 
 #[tokio::test]
-async fn request_4xx_response_is_returned_verbatim() {
-    // The host must NOT surface a 4xx as an error - the module
-    // needs the structured JSON body to decode `OrderPostError`.
+async fn request_4xx_response_surfaces_http_error_with_body() {
     let mock = MockServer::start().await;
     let error_body = r#"{"errorType":"InsufficientFee","description":"fee too low"}"#;
     Mock::given(method("POST"))
@@ -128,7 +126,7 @@ async fn request_4xx_response_is_returned_verbatim() {
         .await;
 
     let pool = pool_with_mainnet_at(&mock);
-    let body = pool
+    let err = pool
         .request(
             Chain::Mainnet.id(),
             "POST",
@@ -136,8 +134,14 @@ async fn request_4xx_response_is_returned_verbatim() {
             Some(r#"{"test":true}"#),
         )
         .await
-        .expect("4xx body is returned, not an Err");
-    assert_eq!(body, error_body);
+        .unwrap_err();
+    match err {
+        CowApiError::HttpError { status, body } => {
+            assert_eq!(status, 400);
+            assert_eq!(body, error_body);
+        }
+        other => panic!("expected HttpError, got: {other:?}"),
+    }
 }
 
 #[tokio::test]
@@ -219,14 +223,15 @@ async fn request_rejects_malformed_path() {
     // passthrough returns Ok even for nonsensical paths.
     let mock = MockServer::start().await;
     let pool = pool_with_mainnet_at(&mock);
-    // wiremock returns 404 for any un-mocked route — the response
-    // body is still surfaced to the caller.
-    let result = pool
+    // wiremock returns 404 for any un-mocked route — now surfaced
+    // as HttpError (not Ok) since we distinguish HTTP status codes.
+    let err = pool
         .request(Chain::Mainnet.id(), "GET", "://not-a-path", None)
-        .await;
+        .await
+        .unwrap_err();
     assert!(
-        result.is_ok(),
-        "Url::join treats this as a relative path, so no BadPath error"
+        matches!(err, CowApiError::HttpError { status: 404, .. }),
+        "Url::join treats this as a relative path; wiremock 404 surfaces as HttpError"
     );
 }
 
@@ -252,7 +257,7 @@ async fn request_network_error_on_dead_server() {
 }
 
 #[tokio::test]
-async fn request_5xx_response_is_returned_verbatim() {
+async fn request_5xx_response_surfaces_http_error_with_body() {
     let mock = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/api/v1/health"))
@@ -262,11 +267,17 @@ async fn request_5xx_response_is_returned_verbatim() {
         .await;
 
     let pool = pool_with_mainnet_at(&mock);
-    let body = pool
+    let err = pool
         .request(Chain::Mainnet.id(), "GET", "/api/v1/health", None)
         .await
-        .expect("5xx body is returned, not an Err");
-    assert_eq!(body, r#"{"error":"internal"}"#);
+        .unwrap_err();
+    match err {
+        CowApiError::HttpError { status, body } => {
+            assert_eq!(status, 500);
+            assert_eq!(body, r#"{"error":"internal"}"#);
+        }
+        other => panic!("expected HttpError, got: {other:?}"),
+    }
 }
 
 #[tokio::test]

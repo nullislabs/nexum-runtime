@@ -17,6 +17,7 @@
 //! host call boundary.
 
 use std::collections::BTreeMap;
+use std::time::Duration;
 
 use cowprotocol::{Chain, OrderBookApi, OrderCreation, OrderUid};
 use strum::IntoStaticStr;
@@ -35,7 +36,10 @@ impl Default for OrderBookPool {
     /// Override individual entries via `OrderBookApi::new_with_base_url` for
     /// barn or staging targets.
     fn default() -> Self {
-        let http = reqwest::Client::new();
+        let http = reqwest::Client::builder()
+            .timeout(Duration::from_secs(30))
+            .build()
+            .expect("reqwest client builder");
         let chains = [
             Chain::Mainnet,
             Chain::Gnosis,
@@ -97,11 +101,15 @@ impl OrderBookPool {
         };
 
         let response = request.send().await.map_err(CowApiError::Network)?;
-        // Surface the orderbook's structured 4xx / 5xx bodies verbatim
-        // so the guest can decode `{"errorType": "...", "description":
-        // "..."}` - projecting them into HostError here loses the
-        // detail the guest needs to recover.
+        let status = response.status().as_u16();
         let text = response.text().await.map_err(CowApiError::Network)?;
+        // Non-2xx responses are surfaced as HttpError so the guest can
+        // distinguish 404 (not found) from 200 (success) via HostError.code.
+        // The full response body is preserved in the error for structured
+        // decoding (e.g. `{"errorType": "...", "description": "..."}`).
+        if status >= 400 {
+            return Err(CowApiError::HttpError { status, body: text });
+        }
         Ok(text)
     }
 
@@ -136,6 +144,8 @@ pub enum CowApiError {
     BadMethod(String),
     #[error("invalid path: {0}")]
     BadPath(String),
+    #[error("HTTP {status}")]
+    HttpError { status: u16, body: String },
     #[error("network: {0}")]
     Network(#[from] reqwest::Error),
     #[error("decode OrderCreation JSON: {0}")]
