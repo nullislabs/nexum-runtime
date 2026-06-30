@@ -224,7 +224,10 @@ async fn request_rejects_malformed_path() {
     let result = pool
         .request(Chain::Mainnet.id(), "GET", "://not-a-path", None)
         .await;
-    assert!(result.is_ok(), "Url::join treats this as a relative path, so no BadPath error");
+    assert!(
+        result.is_ok(),
+        "Url::join treats this as a relative path, so no BadPath error"
+    );
 }
 
 #[tokio::test]
@@ -235,9 +238,7 @@ async fn request_network_error_on_dead_server() {
     let mut clients = std::collections::BTreeMap::new();
     clients.insert(
         Chain::Mainnet.id(),
-        OrderBookApi::new_with_base_url(
-            "http://127.0.0.1:1/".parse().expect("valid url"),
-        ),
+        OrderBookApi::new_with_base_url("http://127.0.0.1:1/".parse().expect("valid url")),
     );
     let pool = OrderBookPool {
         clients,
@@ -255,9 +256,7 @@ async fn request_5xx_response_is_returned_verbatim() {
     let mock = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/api/v1/health"))
-        .respond_with(
-            ResponseTemplate::new(500).set_body_string(r#"{"error":"internal"}"#),
-        )
+        .respond_with(ResponseTemplate::new(500).set_body_string(r#"{"error":"internal"}"#))
         .expect(1)
         .mount(&mock)
         .await;

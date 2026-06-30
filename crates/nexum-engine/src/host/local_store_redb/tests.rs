@@ -123,10 +123,7 @@ fn concurrent_writes_from_different_namespaces() {
         for j in 0..100 {
             let key = format!("key-{j}");
             let expected = format!("val-{i}-{j}").into_bytes();
-            assert_eq!(
-                ms.get(&key).unwrap().as_deref(),
-                Some(expected.as_slice()),
-            );
+            assert_eq!(ms.get(&key).unwrap().as_deref(), Some(expected.as_slice()),);
         }
     }
 }
@@ -241,10 +238,7 @@ fn stress_many_writers_one_namespace() {
         for j in 0..100 {
             let key = format!("t{i}-k{j}");
             let expected = format!("v-{i}-{j}").into_bytes();
-            assert_eq!(
-                ms.get(&key).unwrap().as_deref(),
-                Some(expected.as_slice()),
-            );
+            assert_eq!(ms.get(&key).unwrap().as_deref(), Some(expected.as_slice()),);
         }
     }
 }
