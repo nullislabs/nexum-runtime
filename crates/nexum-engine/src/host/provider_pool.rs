@@ -14,6 +14,7 @@
 use std::collections::BTreeMap;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::time::Duration;
 
 use alloy_provider::{DynProvider, Provider, ProviderBuilder, WsConnect};
 use alloy_rpc_types_eth::{Filter, Header, Log};
@@ -140,14 +141,19 @@ impl ProviderPool {
         // error branch so the success path moves the original string
         // straight into alloy without an extra allocation.
         let method_for_err = method.clone();
-        let result: Box<RawValue> =
-            provider
-                .raw_request(method.into(), params)
-                .await
-                .map_err(|e| ProviderError::Rpc {
-                    method: method_for_err,
-                    detail: e.to_string(),
-                })?;
+        let result: Box<RawValue> = tokio::time::timeout(
+            Duration::from_secs(30),
+            provider.raw_request(method.into(), params),
+        )
+        .await
+        .map_err(|_| ProviderError::Rpc {
+            method: method_for_err.clone(),
+            detail: "request timed out after 30s".into(),
+        })?
+        .map_err(|e| ProviderError::Rpc {
+            method: method_for_err,
+            detail: e.to_string(),
+        })?;
         Ok(result.get().to_owned())
     }
 }
