@@ -1,0 +1,87 @@
+[package]
+name = "nexum-runtime"
+version = "0.2.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "nexum-engine"
+path = "src/main.rs"
+
+[dependencies]
+# WASM Component Model runtime.
+wasmtime.workspace = true
+wasmtime-wasi.workspace = true
+
+# Async + error plumbing.
+anyhow.workspace = true
+thiserror.workspace = true
+# `strum::IntoStaticStr` on error enums gives metric labels (`error_kind`)
+# free via a snake_case `&'static str` for every variant. Used at
+# `tracing::warn!(error_kind = <variant_name>.into(), ...)` sites and
+# any `metrics::counter!(... "error_kind" => kind)` recordings, so the
+# Prometheus labels stay in lock-step with the Rust enum source of
+# truth instead of needing a `match err { ... => "connect" ... }`
+# ladder per call site. Pinned via the workspace so every consumer
+# moves in lockstep.
+strum.workspace = true
+tokio.workspace = true
+clap.workspace = true
+
+# Manifest parsing.
+serde.workspace = true
+toml.workspace = true
+serde_json = { workspace = true, features = ["std"] }
+
+# Observability. `tracing` replaces the prior `eprintln!` debug log
+# so the engine can drop into a structured log pipeline in production.
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+# Prometheus exporter. `metrics` is the facade every
+# recording site (dispatch, host backends) calls; the exporter
+# crate installs the recorder + binds the `/metrics` HTTP listener.
+metrics.workspace = true
+metrics-exporter-prometheus.workspace = true
+
+# `cow-api` backend. cowprotocol pulls `OrderBookApi`, `OrderCreation`,
+# `OrderUid`, the orderbook base URL table per `Chain`, and the typed
+# error surface the host re-projects into `HostError`. Pinned via the
+# workspace so every crate that touches cowprotocol moves in lockstep.
+cowprotocol.workspace = true
+# REST passthrough for `cow_api::request`. cowprotocol pulls reqwest
+# transitively for its own client; we depend on it directly so the
+# import is explicit and survives any future cowprotocol feature
+# rearrangement.
+reqwest.workspace = true
+
+# `chain` backend. Each configured chain owns a `DynProvider` built
+# from a `WsConnect`/`Http` transport so the host's `request` /
+# `request-batch` impls can hand a raw `(method, params)` pair to
+# alloy's JSON-RPC layer without reimplementing the codec.
+alloy-provider.workspace = true
+alloy-rpc-client.workspace = true
+alloy-rpc-types-eth.workspace = true
+alloy-transport.workspace = true
+alloy-transport-ws.workspace = true
+alloy-primitives.workspace = true
+futures.workspace = true
+
+# `local-store` backend. Per-module namespacing is enforced
+# host-side via a `[len:u8][module_name][raw_key]` prefix.
+redb.workspace = true
+
+# Misc.
+getrandom.workspace = true
+url.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+wiremock.workspace = true
