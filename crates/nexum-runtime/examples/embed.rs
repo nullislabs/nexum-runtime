@@ -29,7 +29,7 @@ async fn main() -> anyhow::Result<()> {
     let cfg = EngineConfig {
         modules: vec![ModuleEntry {
             path: "target/wasm32-wasip2/release/example.wasm".into(),
-            manifest: Some("modules/example/module.toml".into()),
+            manifest: Some("nexum/modules/example/module.toml".into()),
         }],
         ..EngineConfig::default()
     };

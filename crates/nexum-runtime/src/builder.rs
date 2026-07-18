@@ -802,7 +802,9 @@ mod tests {
             .parent()
             .expect("crates dir")
             .parent()
-            .expect("repo root")
+            .expect("nexum root")
+            .parent()
+            .expect("workspace root")
             .join("target/wasm32-wasip2/release/price_alert.wasm");
         if !wasm.exists() {
             eprintln!(
@@ -927,7 +929,9 @@ every_n_blocks = "1"
             .parent()
             .expect("crates dir")
             .parent()
-            .expect("repo root")
+            .expect("nexum root")
+            .parent()
+            .expect("workspace root")
             .join("target/wasm32-wasip2/release/example.wasm");
         if !wasm.exists() {
             eprintln!(

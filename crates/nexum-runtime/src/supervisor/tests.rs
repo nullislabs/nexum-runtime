@@ -251,8 +251,11 @@ async fn run_drains_reconnect_tasks_cleanly_on_shutdown() {
 /// Path to the pre-built example WASM component. Tests that need it
 /// call `example_wasm_or_skip()` which skips gracefully if absent.
 fn example_wasm() -> PathBuf {
-    // CARGO_MANIFEST_DIR → crates/nexum-runtime
+    // CARGO_MANIFEST_DIR → nexum/crates/nexum-runtime; three parents up
+    // is the workspace root carrying `target/`.
     Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
         .parent()
         .unwrap()
         .parent()
@@ -553,6 +556,8 @@ const SEPOLIA: u64 = 11_155_111;
 fn module_wasm(module_name: &str) -> PathBuf {
     let artifact = module_name.replace('-', "_");
     Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
         .parent()
         .unwrap()
         .parent()

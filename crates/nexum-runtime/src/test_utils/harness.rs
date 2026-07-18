@@ -297,7 +297,8 @@ mod tests {
         let wasm = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .and_then(Path::parent)
-            .expect("repo root")
+            .and_then(Path::parent)
+            .expect("workspace root")
             .join("target/wasm32-wasip2/release")
             .join(file);
         if wasm.exists() {
