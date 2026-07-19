@@ -30,7 +30,7 @@ wit_bindgen::generate!({
 
 use std::sync::OnceLock;
 
-use nexum::host::{local_store, logging, types};
+use nexum::host::{local_store, types};
 
 /// Number of consecutive events to trap on. Set from `[config].fail_first_n`
 /// at init; defaults to `1` (trap once, recover on second event).
@@ -48,12 +48,9 @@ impl Guest for FlakyBomb {
             .and_then(|(_, v)| v.parse().ok())
             .unwrap_or(1);
         FAIL_FIRST_N.set(n).ok();
-        // Minimal SDK-free fixture: no tracing subscriber is installed,
-        // so log through the raw host binding directly.
-        logging::log(
-            logging::Level::Info,
-            &format!("flaky-bomb init: will trap on the first {n} event(s)"),
-        );
+        // Installs the nexum-sdk tracing bridge, so log via `tracing`.
+        nexum_sdk::install_host_tracing!();
+        tracing::info!("flaky-bomb init: will trap on the first {n} event(s)");
         Ok(())
     }
 
@@ -73,10 +70,7 @@ impl Guest for FlakyBomb {
 
         let n = FAIL_FIRST_N.get().copied().unwrap_or(1);
         if attempt <= n {
-            logging::log(
-                logging::Level::Warn,
-                &format!("flaky-bomb attempt {attempt}/{n}: burning fuel to trigger OutOfFuel"),
-            );
+            tracing::warn!("flaky-bomb attempt {attempt}/{n}: burning fuel to trigger OutOfFuel");
             // Burn fuel until wasmtime traps with `OutOfFuel`. The
             // supervisor catches the trap + schedules a backoff
             // restart. After the backoff window the supervisor
@@ -89,10 +83,7 @@ impl Guest for FlakyBomb {
                 std::hint::black_box(x);
             }
         }
-        logging::log(
-            logging::Level::Info,
-            &format!("flaky-bomb attempt {attempt}: ok, recovered"),
-        );
+        tracing::info!("flaky-bomb attempt {attempt}: ok, recovered");
         Ok(())
     }
 }

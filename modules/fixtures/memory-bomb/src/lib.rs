@@ -19,18 +19,15 @@ wit_bindgen::generate!({
     generate_all,
 });
 
-use nexum::host::{logging, types};
+use nexum::host::types;
 
 struct MemoryBomb;
 
 impl Guest for MemoryBomb {
     fn init(_config: Vec<(String, String)>) -> Result<(), Fault> {
-        // Minimal SDK-free fixture: no tracing subscriber is installed,
-        // so log through the raw host binding directly.
-        logging::log(
-            logging::Level::Info,
-            "memory-bomb init (will exhaust memory)",
-        );
+        // Installs the nexum-sdk tracing bridge, so log via `tracing`.
+        nexum_sdk::install_host_tracing!();
+        tracing::info!("memory-bomb init (will exhaust memory)");
         Ok(())
     }
 

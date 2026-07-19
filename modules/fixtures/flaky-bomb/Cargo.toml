@@ -10,4 +10,6 @@ description = "Evil-by-design fixture: traps on the first N events (via unreacha
 crate-type = ["cdylib"]
 
 [dependencies]
+nexum-sdk = { path = "../../../crates/nexum-sdk" }
+tracing = { version = "0.1", default-features = false }
 wit-bindgen = { version = "0.59", default-features = false, features = ["macros", "realloc"] }

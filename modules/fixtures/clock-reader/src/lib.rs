@@ -23,15 +23,15 @@ wit_bindgen::generate!({
     generate_all,
 });
 
-use nexum::host::{logging, types};
+use nexum::host::types;
 
 struct ClockReader;
 
 impl Guest for ClockReader {
     fn init(_config: Vec<(String, String)>) -> Result<(), Fault> {
-        // Minimal SDK-free fixture: no tracing subscriber is installed,
-        // so log through the raw host binding directly.
-        logging::log(logging::Level::Info, "clock-reader init");
+        // Installs the nexum-sdk tracing bridge, so log via `tracing`.
+        nexum_sdk::install_host_tracing!();
+        tracing::info!("clock-reader init");
         Ok(())
     }
 
@@ -43,7 +43,7 @@ impl Guest for ClockReader {
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_secs())
             .unwrap_or(0);
-        logging::log(logging::Level::Info, &format!("clock wall {secs}"));
+        tracing::info!("clock wall {secs}");
         Ok(())
     }
 }

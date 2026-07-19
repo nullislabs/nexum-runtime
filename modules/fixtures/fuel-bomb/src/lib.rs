@@ -20,15 +20,15 @@ wit_bindgen::generate!({
     generate_all,
 });
 
-use nexum::host::{logging, types};
+use nexum::host::types;
 
 struct FuelBomb;
 
 impl Guest for FuelBomb {
     fn init(_config: Vec<(String, String)>) -> Result<(), Fault> {
-        // Minimal SDK-free fixture: no tracing subscriber is installed,
-        // so log through the raw host binding directly.
-        logging::log(logging::Level::Info, "fuel-bomb init (will exhaust fuel)");
+        // Installs the nexum-sdk tracing bridge, so log via `tracing`.
+        nexum_sdk::install_host_tracing!();
+        tracing::info!("fuel-bomb init (will exhaust fuel)");
         Ok(())
     }
 

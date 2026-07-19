@@ -1,7 +1,7 @@
 //! # example (reference Shepherd module)
 //!
 //! The minimal reference module: one handler per event, each logging a
-//! one-line summary through the raw host `logging` binding. It carries
+//! one-line summary via `tracing`. It carries
 //! no strategy layer and no `[config]` behaviour, so it doubles as the
 //! smallest end-to-end demonstration of `#[nexum_sdk::module]` - the
 //! attribute supplies the wit-bindgen call, the host adapter, the
@@ -13,71 +13,56 @@
 #![cfg_attr(not(test), warn(unused_crate_dependencies))]
 #![allow(clippy::too_many_arguments)]
 
-use nexum::host::{logging, types};
+use nexum::host::types;
 
 struct ExampleModule;
 
 #[nexum_sdk::module]
 impl ExampleModule {
     fn init(config: Vec<(String, String)>) -> Result<(), Fault> {
+        install_tracing();
         let name = config
             .iter()
             .find(|(k, _)| k == "name")
             .map(|(_, v)| v.as_str())
             .unwrap_or("unknown");
-        logging::log(
-            logging::Level::Info,
-            &format!("example module init (name={name})"),
-        );
+        tracing::info!("example module init (name={name})");
         Ok(())
     }
 
     fn on_block(block: types::Block) -> Result<(), Fault> {
-        logging::log(
-            logging::Level::Info,
-            &format!(
-                "block {} on chain {} (ts={}ms)",
-                block.number, block.chain_id, block.timestamp
-            ),
+        tracing::info!(
+            "block {} on chain {} (ts={}ms)",
+            block.number,
+            block.chain_id,
+            block.timestamp
         );
         Ok(())
     }
 
     fn on_chain_logs(batch: types::ChainLogs) -> Result<(), Fault> {
-        logging::log(
-            logging::Level::Info,
-            &format!("received {} chain-log entries", batch.logs.len()),
-        );
+        tracing::info!("received {} chain-log entries", batch.logs.len());
         Ok(())
     }
 
     fn on_tick(tick: types::Tick) -> Result<(), Fault> {
-        logging::log(
-            logging::Level::Info,
-            &format!("tick fired at {}ms", tick.fired_at),
-        );
+        tracing::info!("tick fired at {}ms", tick.fired_at);
         Ok(())
     }
 
     fn on_message(msg: types::Message) -> Result<(), Fault> {
-        logging::log(
-            logging::Level::Info,
-            &format!("message on topic {}", msg.content_topic),
-        );
+        tracing::info!("message on topic {}", msg.content_topic);
         Ok(())
     }
 
     fn on_intent_status(update: types::IntentStatusUpdate) -> Result<(), Fault> {
         let body = nexum_sdk::status_body::StatusBody::decode(&update.status)
             .map_err(|err| Fault::InvalidInput(err.to_string()))?;
-        logging::log(
-            logging::Level::Info,
-            &format!(
-                "intent status update from venue {}: {:?} ({} receipt bytes)",
-                update.venue,
-                body.status,
-                update.receipt.len(),
-            ),
+        tracing::info!(
+            "intent status update from venue {}: {:?} ({} receipt bytes)",
+            update.venue,
+            body.status,
+            update.receipt.len(),
         );
         Ok(())
     }

@@ -1374,6 +1374,8 @@ checksum = "c8d4a3bb8b1e0c1050499d1815f5ab16d04f0959b233085fb31653fbfc9d98f9"
 name = "clock-reader"
 version = "0.1.0"
 dependencies = [
+ "nexum-sdk",
+ "tracing",
  "wit-bindgen 0.59.0",
 ]
 
@@ -2059,6 +2061,7 @@ name = "example"
 version = "0.1.0"
 dependencies = [
  "nexum-sdk",
+ "tracing",
  "wit-bindgen 0.59.0",
 ]
 
@@ -2147,6 +2150,8 @@ checksum = "0ce7134b9999ecaf8bcd65542e436736ef32ddca1b3e06094cb6ec5755203b80"
 name = "flaky-bomb"
 version = "0.1.0"
 dependencies = [
+ "nexum-sdk",
+ "tracing",
  "wit-bindgen 0.59.0",
 ]
 
@@ -2192,6 +2197,8 @@ checksum = "42703706b716c37f96a77aea830392ad231f44c9e9a67872fa5548707e11b11c"
 name = "fuel-bomb"
 version = "0.1.0"
 dependencies = [
+ "nexum-sdk",
+ "tracing",
  "wit-bindgen 0.59.0",
 ]
 
@@ -3170,6 +3177,8 @@ dependencies = [
 name = "memory-bomb"
 version = "0.1.0"
 dependencies = [
+ "nexum-sdk",
+ "tracing",
  "wit-bindgen 0.59.0",
 ]
 
@@ -4765,6 +4774,8 @@ checksum = "0c790de23124f9ab44544d7ac05d60440adc586479ce501c1d6d7da3cd8c9cf5"
 name = "slow-host"
 version = "0.1.0"
 dependencies = [
+ "nexum-sdk",
+ "tracing",
  "wit-bindgen 0.59.0",
 ]
 

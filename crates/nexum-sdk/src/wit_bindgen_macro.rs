@@ -388,3 +388,37 @@ macro_rules! __bind_host_cap_via_wit_bindgen {
         }
     };
 }
+
+/// Install the guest tracing facade routing `tracing::*` events to the
+/// bound `nexum:host/logging` import, for modules that generate their own
+/// wit-bindgen world (e.g. minimal fixtures) rather than going through
+/// `#[nexum_sdk::module]`. Call once at the top of `Guest::init`, then use
+/// `tracing::info!(...)` and friends. Unlike [`bind_host_via_wit_bindgen!`]
+/// it binds only the logging seam, so it pulls no unused chain/local-store
+/// adapters into a `-D warnings` wasm build.
+#[macro_export]
+macro_rules! install_host_tracing {
+    () => {{
+        struct HostLogSink;
+        impl $crate::tracing::LogSink for HostLogSink {
+            fn log(&self, level: $crate::Level, message: &str) {
+                // `Level` is a set of associated consts, so compare rather
+                // than match; the five tiers are total, hence the `Trace`
+                // fallthrough.
+                let wire = if level == $crate::Level::ERROR {
+                    nexum::host::logging::Level::Error
+                } else if level == $crate::Level::WARN {
+                    nexum::host::logging::Level::Warn
+                } else if level == $crate::Level::INFO {
+                    nexum::host::logging::Level::Info
+                } else if level == $crate::Level::DEBUG {
+                    nexum::host::logging::Level::Debug
+                } else {
+                    nexum::host::logging::Level::Trace
+                };
+                nexum::host::logging::log(wire, message);
+            }
+        }
+        $crate::tracing::init(HostLogSink);
+    }};
+}
