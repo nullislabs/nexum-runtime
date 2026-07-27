@@ -271,12 +271,14 @@ mod tests {
 
     /// The pre-built module wasm named `file`, or `None` with a skip note.
     fn module_wasm_or_skip(file: &str) -> Option<PathBuf> {
-        let wasm = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .and_then(Path::parent)
-            .expect("repo root")
-            .join("target/wasm32-wasip2/release")
-            .join(file);
+        // Workspace root: the topmost ancestor with a `Cargo.toml`.
+        let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let root = manifest
+            .ancestors()
+            .filter(|d| d.join("Cargo.toml").is_file())
+            .last()
+            .unwrap_or(manifest);
+        let wasm = root.join("target/wasm32-wasip2/release").join(file);
         if wasm.exists() {
             Some(wasm)
         } else {

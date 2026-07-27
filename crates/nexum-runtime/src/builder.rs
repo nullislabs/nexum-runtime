@@ -680,6 +680,17 @@ mod tests {
     use crate::test_utils::Prebuilt;
     use wasmtime::component::Linker;
 
+    /// Workspace root: the topmost ancestor with a `Cargo.toml`.
+    fn workspace_root() -> std::path::PathBuf {
+        let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        manifest
+            .ancestors()
+            .filter(|d| d.join("Cargo.toml").is_file())
+            .last()
+            .unwrap_or(manifest)
+            .to_path_buf()
+    }
+
     /// The preset shortcut reaches the supervisor boot, which bails on the
     /// default config's empty module set.
     #[tokio::test]
@@ -907,11 +918,7 @@ mod tests {
     /// module fixture is not built (`just build-module`).
     #[tokio::test]
     async fn e2e_preset_with_components_launches_through_overridden_logs() {
-        let repo_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .expect("crates dir")
-            .parent()
-            .expect("repo root");
+        let repo_root = workspace_root();
         let wasm = repo_root.join("target/wasm32-wasip2/release/example.wasm");
         if !wasm.exists() {
             eprintln!(
@@ -920,7 +927,7 @@ mod tests {
             );
             return;
         }
-        let manifest = repo_root.join("modules/example/module.toml");
+        let manifest = repo_root.join("nexum/modules/example/module.toml");
 
         let dir = tempfile::tempdir().expect("tempdir");
         let mut config = EngineConfig::default();
@@ -947,12 +954,7 @@ mod tests {
     /// Every module failing `init` aborts launch instead of idling.
     #[tokio::test]
     async fn launch_bails_when_all_modules_fail_init() {
-        let wasm = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .expect("crates dir")
-            .parent()
-            .expect("repo root")
-            .join("target/wasm32-wasip2/release/price_alert.wasm");
+        let wasm = workspace_root().join("target/wasm32-wasip2/release/price_alert.wasm");
         if !wasm.exists() {
             eprintln!(
                 "SKIP: {} not found - build with `cargo build -p price-alert --target wasm32-wasip2 --release`",
@@ -1068,12 +1070,7 @@ every_n_blocks = "1"
     /// fixture is not built (`just build-module`).
     #[tokio::test]
     async fn e2e_builder_launch_exposes_logs_and_stops_on_shutdown() {
-        let wasm = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .expect("crates dir")
-            .parent()
-            .expect("repo root")
-            .join("target/wasm32-wasip2/release/example.wasm");
+        let wasm = workspace_root().join("target/wasm32-wasip2/release/example.wasm");
         if !wasm.exists() {
             eprintln!(
                 "SKIP: {} not found - run `just build-module` to enable E2E tests",
@@ -1081,11 +1078,7 @@ every_n_blocks = "1"
             );
             return;
         }
-        let manifest = wasm
-            .ancestors()
-            .nth(3)
-            .expect("repo root")
-            .join("modules/example/module.toml");
+        let manifest = workspace_root().join("nexum/modules/example/module.toml");
 
         let dir = tempfile::tempdir().expect("tempdir");
         let mut config = EngineConfig::default();
