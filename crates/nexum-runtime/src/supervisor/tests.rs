@@ -307,7 +307,7 @@ fn example_wasm() -> PathBuf {
 }
 
 fn example_module_toml() -> PathBuf {
-    workspace_root().join("nexum/modules/example/module.toml")
+    workspace_root().join("modules/example/module.toml")
 }
 
 /// Returns `None` and prints a skip message if the fixture isn't built.
@@ -651,7 +651,7 @@ async fn e2e_price_alert_block_dispatch() {
     let Some(wasm) = module_wasm_or_skip("price-alert") else {
         return;
     };
-    let manifest = production_module_toml("nexum/modules/examples/price-alert/module.toml");
+    let manifest = production_module_toml("modules/examples/price-alert/module.toml");
     let engine = make_wasmtime_engine();
     let linker = make_linker(&engine);
     let (_dir, store) = temp_local_store();
@@ -667,7 +667,7 @@ async fn e2e_balance_tracker_block_dispatch() {
     let Some(wasm) = module_wasm_or_skip("balance-tracker") else {
         return;
     };
-    let manifest = production_module_toml("nexum/modules/examples/balance-tracker/module.toml");
+    let manifest = production_module_toml("modules/examples/balance-tracker/module.toml");
     let engine = make_wasmtime_engine();
     let linker = make_linker(&engine);
     let (_dir, store) = temp_local_store();
@@ -1072,7 +1072,7 @@ async fn dispatch_deadline_cuts_off_a_blocked_host_call_and_recovers() {
     let components =
         crate::test_utils::mock_components_from(chain, crate::test_utils::MockStateStore::new());
 
-    let manifest = fixture_module_toml("nexum/modules/fixtures/slow-host/module.toml");
+    let manifest = fixture_module_toml("modules/fixtures/slow-host/module.toml");
     // 1s is the floor the resolver saturates up to; short enough to keep
     // the test quick, long enough to prove the call was cut off (the park
     // is an hour) rather than never started.
@@ -1183,7 +1183,7 @@ async fn resource_limit_fuel_bomb_traps_and_marks_module_dead() {
     let Some(wasm) = module_wasm_or_skip("fuel-bomb") else {
         return;
     };
-    let mut supervisor = boot_fixture(&wasm, "nexum/modules/fixtures/fuel-bomb/module.toml").await;
+    let mut supervisor = boot_fixture(&wasm, "modules/fixtures/fuel-bomb/module.toml").await;
     assert_eq!(supervisor.module_count(), 1);
     assert_eq!(supervisor.alive_count(), 1, "loads alive");
 
@@ -1271,7 +1271,7 @@ chain_id = 1
             crate::engine_config::ModuleEntry {
                 path: bomb_wasm.clone(),
                 manifest: Some(fixture_module_toml(
-                    "nexum/modules/fixtures/fuel-bomb/module.toml",
+                    "modules/fixtures/fuel-bomb/module.toml",
                 )),
             },
             crate::engine_config::ModuleEntry {
@@ -1324,8 +1324,7 @@ async fn resource_limit_memory_bomb_traps_and_marks_module_dead() {
     let Some(wasm) = module_wasm_or_skip("memory-bomb") else {
         return;
     };
-    let mut supervisor =
-        boot_fixture(&wasm, "nexum/modules/fixtures/memory-bomb/module.toml").await;
+    let mut supervisor = boot_fixture(&wasm, "modules/fixtures/memory-bomb/module.toml").await;
     assert_eq!(supervisor.module_count(), 1);
     assert_eq!(supervisor.alive_count(), 1);
 
@@ -1469,7 +1468,7 @@ async fn poison_pill_quarantines_module_after_threshold() {
     let Some(wasm) = module_wasm_or_skip("fuel-bomb") else {
         return;
     };
-    let manifest = production_module_toml("nexum/modules/fixtures/fuel-bomb/module.toml");
+    let manifest = production_module_toml("modules/fixtures/fuel-bomb/module.toml");
     let engine = make_wasmtime_engine();
     let linker = make_linker(&engine);
     let (_dir, store) = temp_local_store();
@@ -1637,7 +1636,7 @@ async fn dying_run_leaves_a_panic_record() {
     let linker = make_linker(&engine);
     let (_dir, store) = temp_local_store();
     let (components, logs) = components_with_logs(store);
-    let manifest = fixture_module_toml("nexum/modules/fixtures/fuel-bomb/module.toml");
+    let manifest = fixture_module_toml("modules/fixtures/fuel-bomb/module.toml");
     let limits = ModuleLimits::default();
     let mut supervisor = Supervisor::boot_single(
         &engine,
@@ -1692,7 +1691,7 @@ async fn facade_panic_leaves_stderr_host_interface_and_panic_records() {
     let linker = make_linker(&engine);
     let (_dir, store) = temp_local_store();
     let (components, logs) = components_with_logs(store);
-    let manifest = fixture_module_toml("nexum/modules/fixtures/panic-bomb/module.toml");
+    let manifest = fixture_module_toml("modules/fixtures/panic-bomb/module.toml");
     let limits = ModuleLimits::default();
     let mut supervisor = Supervisor::boot_single(
         &engine,
@@ -2060,7 +2059,7 @@ chain_id = 100
             crate::engine_config::ModuleEntry {
                 path: bomb_wasm,
                 manifest: Some(fixture_module_toml(
-                    "nexum/modules/fixtures/fuel-bomb/module.toml",
+                    "modules/fixtures/fuel-bomb/module.toml",
                 )),
             },
             crate::engine_config::ModuleEntry {

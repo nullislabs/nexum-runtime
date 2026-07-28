@@ -927,7 +927,7 @@ mod tests {
             );
             return;
         }
-        let manifest = repo_root.join("nexum/modules/example/module.toml");
+        let manifest = repo_root.join("modules/example/module.toml");
 
         let dir = tempfile::tempdir().expect("tempdir");
         let mut config = EngineConfig::default();
@@ -1078,7 +1078,7 @@ every_n_blocks = "1"
             );
             return;
         }
-        let manifest = workspace_root().join("nexum/modules/example/module.toml");
+        let manifest = workspace_root().join("modules/example/module.toml");
 
         let dir = tempfile::tempdir().expect("tempdir");
         let mut config = EngineConfig::default();
