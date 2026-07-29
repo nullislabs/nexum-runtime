@@ -47,6 +47,10 @@
             wasm-tools
             wabt
             just
+            # Search tooling the agent workflow leans on: ripgrep for text,
+            # ast-grep for syntax-aware Rust queries and rewrites.
+            ripgrep
+            ast-grep
             pkg-config
             openssl
           ] ++ lib.optionals stdenv.isLinux [ mold ];
