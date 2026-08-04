@@ -600,12 +600,22 @@ impl<T: RuntimeTypes> Supervisor<T> {
                 info!(manifest = %p.display(), "loading module manifest");
                 manifest::load(p, registry)?
             }
-            _ => {
-                warn!(
-                    component = %entry.path.display(),
-                    "no module.toml - falling back to anonymous module"
-                );
-                manifest::fallback_manifest()
+            // Reachable only via an operator-configured explicit path:
+            // sibling discovery returns a candidate only after `.exists()`.
+            Some(p) => {
+                return Err(anyhow!(
+                    "manifest {} not found for component {}",
+                    p.display(),
+                    entry.path.display(),
+                ));
+            }
+            None => {
+                return Err(anyhow!(
+                    "no module.toml for component {}; ship one next to the component \
+                     or pass its path explicitly (an empty `required = []` under \
+                     [capabilities] grants nothing)",
+                    entry.path.display(),
+                ));
             }
         };
         let module_namespace = if loaded_manifest.manifest.module.name.is_empty() {
@@ -792,12 +802,22 @@ impl<T: RuntimeTypes> Supervisor<T> {
                 info!(manifest = %p.display(), "loading provider manifest");
                 manifest::load(p, registry)?
             }
-            _ => {
-                warn!(
-                    component = %entry.path.display(),
-                    "no module.toml - falling back to anonymous provider"
-                );
-                manifest::fallback_manifest()
+            // Reachable only via an operator-configured explicit path:
+            // sibling discovery returns a candidate only after `.exists()`.
+            Some(p) => {
+                return Err(anyhow!(
+                    "manifest {} not found for component {}",
+                    p.display(),
+                    entry.path.display(),
+                ));
+            }
+            None => {
+                return Err(anyhow!(
+                    "no module.toml for component {}; ship one next to the component \
+                     or pass its path explicitly (an empty `required = []` under \
+                     [capabilities] grants nothing)",
+                    entry.path.display(),
+                ));
             }
         };
         let namespace = if loaded_manifest.manifest.module.name.is_empty() {
@@ -818,9 +838,7 @@ impl<T: RuntimeTypes> Supervisor<T> {
 
         // The manifest kind is the discriminator: an [[adapters]] entry
         // must name a registered provider kind, caught here before
-        // instantiation. A fallback manifest has the default worker kind,
-        // so a provider must ship a module.toml that declares its kind
-        // explicitly.
+        // instantiation.
         let (kind, service) = match &loaded_manifest.manifest.module.kind {
             ComponentKind::Worker => {
                 return Err(anyhow!(

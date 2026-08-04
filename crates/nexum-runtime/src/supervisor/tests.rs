@@ -2368,7 +2368,8 @@ async fn boot_rejects_provider_whose_manifest_is_an_event_module() {
     let manifest = dir.path().join("module.toml");
     std::fs::write(
         &manifest,
-        "[module]\nname = \"acme\"\nkind = \"event-module\"\n",
+        "[module]\nname = \"acme\"\nkind = \"event-module\"\n\n\
+         [capabilities]\nrequired = []\n",
     )
     .expect("write manifest");
 
@@ -2407,8 +2408,11 @@ async fn boot_rejects_an_unregistered_provider_kind() {
 
     let dir = tempfile::tempdir().expect("tempdir");
     let manifest = dir.path().join("module.toml");
-    std::fs::write(&manifest, "[module]\nname = \"bad\"\nkind = \"gadget\"\n")
-        .expect("write manifest");
+    std::fs::write(
+        &manifest,
+        "[module]\nname = \"bad\"\nkind = \"gadget\"\n\n[capabilities]\nrequired = []\n",
+    )
+    .expect("write manifest");
 
     let config = EngineConfig {
         adapters: vec![crate::engine_config::AdapterEntry {
@@ -2479,7 +2483,9 @@ async fn boot_admits_a_registered_provider_kind_past_the_kind_gate() {
 }
 
 /// A module subscribing to an extension kind no wired extension declares
-/// is refused at boot, preserving the unknown-kind fail-fast.
+/// is refused at boot, preserving the unknown-kind fail-fast. The manifest
+/// declares `[capabilities]` deliberately: a caps-less one now fails
+/// earlier, at the manifest load (see the precedence test below).
 #[tokio::test]
 async fn boot_refuses_an_undeclared_extension_subscription_kind() {
     let Some(wasm) = example_wasm_or_skip() else {
@@ -2526,5 +2532,316 @@ kind = "acme-status"
     assert!(
         msg.contains("unknown event kind acme-status"),
         "the refusal names the kind: {msg}",
+    );
+}
+
+// ── Fail-closed manifest requirements (issue #60) ─────────────────────
+
+/// The pre-built wasm named `file`, or `None` with a skip note.
+fn built_wasm_or_skip(file: &str) -> Option<PathBuf> {
+    let p = workspace_root()
+        .join("target/wasm32-wasip2/release")
+        .join(file);
+    if p.exists() {
+        Some(p)
+    } else {
+        eprintln!(
+            "SKIP: {} not found - run `just build` to enable E2E tests",
+            p.display()
+        );
+        None
+    }
+}
+
+/// A manifest without a [capabilities] section refuses boot with the
+/// typed manifest error; the module never loads with implicit grants.
+#[tokio::test]
+async fn boot_refuses_a_manifest_without_capabilities() {
+    let Some(wasm) = example_wasm_or_skip() else {
+        return;
+    };
+    let dir = tempfile::tempdir().expect("tempdir");
+    let manifest = dir.path().join("module.toml");
+    std::fs::write(
+        &manifest,
+        "[module]\nname = \"example\"\n\n[[subscription]]\nkind = \"block\"\nchain_id = 1\n",
+    )
+    .expect("write manifest");
+
+    let engine = make_wasmtime_engine();
+    let linker = make_linker(&engine);
+    let (_dir, local_store) = temp_local_store();
+    let components = test_components(local_store);
+    let limits = ModuleLimits::default();
+
+    let err = Supervisor::boot_single(
+        &engine,
+        &linker,
+        &wasm,
+        Some(&manifest),
+        &components,
+        &limits,
+        &core_extensions(),
+        None,
+    )
+    .await
+    .err()
+    .expect("a caps-less manifest must refuse boot");
+    let msg = format!("{err:#}");
+    assert!(
+        msg.contains("no [capabilities] section"),
+        "the refusal names the missing section: {msg}",
+    );
+    assert!(
+        msg.contains("required = []"),
+        "the refusal states the two-line fix: {msg}",
+    );
+}
+
+/// A component with no module.toml anywhere refuses boot, naming the
+/// component path; the manifest refusal precedes the compile step, so no
+/// wasm needs to exist.
+#[tokio::test]
+async fn boot_refuses_a_component_without_module_toml() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let wasm = dir.path().join("orphan.wasm");
+
+    let engine = make_wasmtime_engine();
+    let linker = make_linker(&engine);
+    let (_store_dir, local_store) = temp_local_store();
+    let components = test_components(local_store);
+    let limits = ModuleLimits::default();
+
+    let err = Supervisor::boot_single(
+        &engine,
+        &linker,
+        &wasm,
+        None,
+        &components,
+        &limits,
+        &core_extensions(),
+        None,
+    )
+    .await
+    .err()
+    .expect("a component without any module.toml must refuse boot");
+    let msg = format!("{err:#}");
+    assert!(
+        msg.contains("no module.toml") && msg.contains("orphan.wasm"),
+        "the refusal names the component: {msg}",
+    );
+    assert!(
+        msg.contains("required = []"),
+        "the refusal carries the migration hint: {msg}",
+    );
+}
+
+/// A typo'd explicit manifest path refuses boot naming the missing path;
+/// previously this fell through to the full-grant fallback manifest.
+#[tokio::test]
+async fn boot_refuses_a_nonexistent_explicit_manifest_path() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let wasm = dir.path().join("mod.wasm");
+    let manifest = dir.path().join("modle.toml");
+
+    let engine = make_wasmtime_engine();
+    let linker = make_linker(&engine);
+    let (_store_dir, local_store) = temp_local_store();
+    let components = test_components(local_store);
+    let limits = ModuleLimits::default();
+
+    let err = Supervisor::boot_single(
+        &engine,
+        &linker,
+        &wasm,
+        Some(&manifest),
+        &components,
+        &limits,
+        &core_extensions(),
+        None,
+    )
+    .await
+    .err()
+    .expect("a nonexistent explicit manifest path must refuse boot");
+    let msg = format!("{err:#}");
+    assert!(
+        msg.contains("modle.toml") && msg.contains("not found"),
+        "the refusal names the missing manifest path: {msg}",
+    );
+}
+
+/// A caps-less provider manifest under an [[adapters]] entry with a live
+/// operator http_allow is refused at load. The fallback used to link
+/// wasi:http past enforcement AND hand the provider the operator's
+/// allowlist, so this pins the closed provider HTTP escape.
+#[tokio::test]
+async fn boot_refuses_a_capsless_provider_manifest_despite_operator_http_allow() {
+    let engine = make_wasmtime_engine();
+    let components = crate::test_utils::mock_components();
+    let extensions = acme_extensions();
+    let linker =
+        crate::supervisor::build_linker::<crate::test_utils::MockTypes>(&engine, &extensions)
+            .expect("build_linker");
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let manifest = dir.path().join("module.toml");
+    std::fs::write(
+        &manifest,
+        "[module]\nname = \"acme\"\nkind = \"acme-adapter\"\n",
+    )
+    .expect("write manifest");
+
+    let config = EngineConfig {
+        adapters: vec![crate::engine_config::AdapterEntry {
+            path: dir.path().join("acme.wasm"),
+            manifest: Some(manifest),
+            http_allow: vec!["api.acme.example".into()],
+            messaging_topics: Vec::new(),
+        }],
+        ..Default::default()
+    };
+
+    let err =
+        match Supervisor::boot(&engine, &linker, &config, &components, &extensions, None).await {
+            Ok(_) => panic!("a caps-less provider manifest must be refused"),
+            Err(err) => err,
+        };
+    let msg = format!("{err:#}");
+    assert!(
+        msg.contains("no [capabilities] section"),
+        "the refusal is the manifest load error, not a later gate: {msg}",
+    );
+}
+
+/// The missing-capabilities refusal precedes the unknown-subscription-kind
+/// and unclaimed-section gates that used to fire first on a caps-less
+/// manifest; it also precedes the compile step, so no wasm needs to exist.
+#[tokio::test]
+async fn capsless_manifest_reports_missing_capabilities_before_other_gates() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let wasm = dir.path().join("mod.wasm");
+    let manifest = dir.path().join("module.toml");
+    std::fs::write(
+        &manifest,
+        r#"
+[module]
+name = "example"
+
+[venue]
+body_version = 2
+
+[[subscription]]
+kind = "acme-status"
+"#,
+    )
+    .expect("write manifest");
+
+    let engine = make_wasmtime_engine();
+    let linker = make_linker(&engine);
+    let (_store_dir, local_store) = temp_local_store();
+    let components = test_components(local_store);
+    let limits = ModuleLimits::default();
+
+    let err = Supervisor::boot_single(
+        &engine,
+        &linker,
+        &wasm,
+        Some(&manifest),
+        &components,
+        &limits,
+        &core_extensions(),
+        None,
+    )
+    .await
+    .err()
+    .expect("a caps-less manifest must refuse boot");
+    let msg = format!("{err:#}");
+    assert!(
+        msg.contains("no [capabilities] section"),
+        "the manifest refusal fires first: {msg}",
+    );
+    assert!(
+        !msg.contains("unknown event kind") && !msg.contains("no wired extension claims"),
+        "the later gates must not be reached: {msg}",
+    );
+}
+
+/// Red-team regression for issue #60: balance-tracker booted with (i) a
+/// manifest declaring only logging is refused for its undeclared imports,
+/// and (ii) a caps-less manifest is refused at the manifest load. The
+/// omission arm used to link chain.request with no declaration at all.
+#[tokio::test]
+async fn boot_denies_undeclared_imports_and_capsless_manifest_for_balance_tracker() {
+    let Some(wasm) = built_wasm_or_skip("balance_tracker.wasm") else {
+        return;
+    };
+    let engine = make_wasmtime_engine();
+    let linker = make_linker(&engine);
+    let (_store_dir, local_store) = temp_local_store();
+    let components = test_components(local_store);
+    let limits = ModuleLimits::default();
+
+    // (i) declaring only logging: the chain / local-store imports the
+    // component carries are undeclared, so enforcement refuses the boot.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let manifest = dir.path().join("module.toml");
+    std::fs::write(
+        &manifest,
+        r#"
+[module]
+name = "balance-tracker"
+
+[capabilities]
+required = ["logging"]
+
+[[subscription]]
+kind = "block"
+chain_id = 1
+"#,
+    )
+    .expect("write manifest");
+    let err = Supervisor::boot_single(
+        &engine,
+        &linker,
+        &wasm,
+        Some(&manifest),
+        &components,
+        &limits,
+        &core_extensions(),
+        None,
+    )
+    .await
+    .err()
+    .expect("undeclared imports must refuse boot");
+    let msg = format!("{err:#}");
+    assert!(
+        msg.contains("capability violation"),
+        "the boot error is a capability violation: {msg}",
+    );
+    assert!(
+        msg.contains("chain") || msg.contains("local-store"),
+        "the violation names an undeclared capability: {msg}",
+    );
+
+    // (ii) omitting [capabilities] entirely: refused at the manifest load,
+    // never reaching enforcement with implicit grants.
+    std::fs::write(&manifest, "[module]\nname = \"balance-tracker\"\n").expect("write manifest");
+    let err = Supervisor::boot_single(
+        &engine,
+        &linker,
+        &wasm,
+        Some(&manifest),
+        &components,
+        &limits,
+        &core_extensions(),
+        None,
+    )
+    .await
+    .err()
+    .expect("a caps-less manifest must refuse boot");
+    let msg = format!("{err:#}");
+    assert!(
+        msg.contains("no [capabilities] section"),
+        "omission is a manifest load error: {msg}",
     );
 }

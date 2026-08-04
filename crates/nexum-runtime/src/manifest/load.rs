@@ -3,54 +3,49 @@
 
 use std::path::Path;
 
-use tracing::{info, warn};
+use tracing::info;
 
 use super::capabilities::CapabilityRegistry;
 use super::error::ParseError;
 use super::types::{LoadedManifest, Manifest};
 
 /// Read, parse, and validate `module.toml`; declared capability names are
-/// checked against `registry`. Warns if `[capabilities]` is absent
-/// (0.1-compat fallback).
+/// checked against `registry`. A manifest without a `[capabilities]`
+/// section is refused: capabilities are deny-by-default and every manifest
+/// must declare them explicitly (an empty `required = []` grants nothing).
 pub fn load(path: &Path, registry: &CapabilityRegistry) -> Result<LoadedManifest, ParseError> {
     let raw = std::fs::read_to_string(path)?;
     let manifest: Manifest = toml::from_str(&raw)?;
 
     validate_module_name(&manifest.module.name)?;
 
-    let caps = manifest.capabilities.as_ref();
-    if caps.is_none() {
-        warn!(
+    let caps = manifest
+        .capabilities
+        .as_ref()
+        .ok_or(ParseError::MissingCapabilities)?;
+
+    for name in caps.required.iter().chain(caps.optional.iter()) {
+        if !registry.is_known(name) {
+            return Err(ParseError::UnknownCapability {
+                name: name.clone(),
+                known: registry.known_names(),
+            });
+        }
+    }
+    if !caps.required.is_empty() {
+        info!(target: "manifest", required = %caps.required.join(", "), "required capabilities");
+    }
+    if !caps.optional.is_empty() {
+        info!(
             target: "manifest",
-            "no [capabilities] section in module.toml - defaulting to \
-             all-required (0.1 behaviour). This default will be removed \
-             in 0.3; add an explicit [capabilities] block."
+            optional = %caps.optional.join(", "),
+            "optional capabilities (advisory in 0.2; trap-stub fallback ships in 0.3)",
         );
     }
 
-    if let Some(c) = caps {
-        for name in c.required.iter().chain(c.optional.iter()) {
-            if !registry.is_known(name) {
-                return Err(ParseError::UnknownCapability {
-                    name: name.clone(),
-                    known: registry.known_names(),
-                });
-            }
-        }
-        if !c.required.is_empty() {
-            info!(target: "manifest", required = %c.required.join(", "), "required capabilities");
-        }
-        if !c.optional.is_empty() {
-            info!(
-                target: "manifest",
-                optional = %c.optional.join(", "),
-                "optional capabilities (advisory in 0.2; trap-stub fallback ships in 0.3)",
-            );
-        }
-    }
-
     let http_allowlist = caps
-        .and_then(|c| c.http.as_ref())
+        .http
+        .as_ref()
         .map(|h| h.allow.clone())
         .unwrap_or_default();
     if !http_allowlist.is_empty() {
@@ -68,21 +63,6 @@ pub fn load(path: &Path, registry: &CapabilityRegistry) -> Result<LoadedManifest
         http_allowlist,
         config,
     })
-}
-
-/// The 0.1-fallback manifest used when no `module.toml` is found; warns.
-pub fn fallback_manifest() -> LoadedManifest {
-    warn!(
-        target: "manifest",
-        "no module.toml found - defaulting to all-required (0.1 \
-         behaviour). This default will be removed in 0.3; ship a \
-         module.toml alongside your component."
-    );
-    LoadedManifest {
-        manifest: Manifest::default(),
-        http_allowlist: Vec::new(),
-        config: Vec::new(),
-    }
 }
 
 /// Reject a `[module].name` that is not a single safe path component, so it
@@ -320,6 +300,9 @@ required = ["clock"]
 [module]
 name = "example"
 
+[capabilities]
+required = []
+
 [config]
 chain_id = 1
 label    = "mainnet"
@@ -410,6 +393,8 @@ max_state_bytes    = 52428800
 
     #[test]
     fn load_rejects_module_name_that_escapes_the_state_dir() {
+        // The caps-less manifests below also assert precedence: name
+        // validation runs before the [capabilities] presence check.
         for bad in ["../evil", "a/b", "a\\b", "..", "/etc/passwd", "foo/../bar"] {
             // Single-quoted TOML literal string: no backslash-escape processing.
             let toml = format!("[module]\nname = '{bad}'\n");
@@ -428,9 +413,47 @@ max_state_bytes    = 52428800
     fn load_accepts_plain_module_name() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("module.toml");
-        std::fs::write(&path, "[module]\nname = \"twap-monitor\"\n").unwrap();
+        std::fs::write(
+            &path,
+            "[module]\nname = \"twap-monitor\"\n\n[capabilities]\nrequired = []\n",
+        )
+        .unwrap();
         let loaded = load(&path, &CapabilityRegistry::core()).unwrap();
         assert_eq!(loaded.manifest.module.name, "twap-monitor");
+    }
+
+    /// A manifest without a [capabilities] section is a hard parse error;
+    /// the message tells the author the two-line fix.
+    #[test]
+    fn load_rejects_missing_capabilities_section() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("module.toml");
+        std::fs::write(&path, "[module]\nname = \"bare\"\n").unwrap();
+        let err = load(&path, &CapabilityRegistry::core()).unwrap_err();
+        assert!(matches!(err, ParseError::MissingCapabilities), "{err:?}");
+        let msg = err.to_string();
+        assert!(msg.contains("[capabilities]"), "{msg}");
+        assert!(msg.contains("required = []"), "{msg}");
+    }
+
+    /// An explicit empty [capabilities] block is valid and grants nothing.
+    #[test]
+    fn load_accepts_empty_capabilities_block() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("module.toml");
+        std::fs::write(
+            &path,
+            "[module]\nname = \"minimal\"\n\n[capabilities]\nrequired = []\n",
+        )
+        .unwrap();
+        let loaded = load(&path, &CapabilityRegistry::core()).unwrap();
+        let caps = loaded
+            .manifest
+            .capabilities
+            .as_ref()
+            .expect("caps section parsed");
+        assert!(caps.required.is_empty());
+        assert!(caps.optional.is_empty());
     }
 
     #[test]

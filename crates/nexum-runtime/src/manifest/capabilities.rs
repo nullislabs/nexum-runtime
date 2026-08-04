@@ -159,17 +159,19 @@ impl CapabilityRegistry {
 
 /// Check that every capability-bearing WIT import is covered by the
 /// manifest's declarations; call after loading the component, before
-/// instantiation. The WASI surface is gated fail-closed even in the
-/// 0.1-fallback (no `[capabilities]`), where the registry surface stays
-/// permissive. `component_imports` are the import name parts.
+/// instantiation. Absent `[capabilities]` collapses to the empty set, so
+/// every gated import is denied; `load()` refuses such a manifest first,
+/// and this layer is defence in depth for hand-constructed manifests.
+/// `component_imports` are the import name parts.
 pub fn enforce_capabilities<'a>(
     loaded: &LoadedManifest,
     component_imports: impl Iterator<Item = &'a str>,
     registry: &CapabilityRegistry,
 ) -> Result<(), CapabilityError> {
-    let caps = loaded.manifest.capabilities.as_ref();
-    let fallback = caps.is_none();
-    let declared: HashSet<&str> = caps
+    let declared: HashSet<&str> = loaded
+        .manifest
+        .capabilities
+        .as_ref()
         .into_iter()
         .flat_map(|c| c.required.iter().chain(c.optional.iter()))
         .map(String::as_str)
@@ -178,7 +180,7 @@ pub fn enforce_capabilities<'a>(
     for import_name in component_imports {
         let without_version = import_name.split('@').next().unwrap_or(import_name);
         // `wasi:http` is gated by the registry below; the rest of the WASI
-        // surface is gated here, fail-closed even in 0.1-fallback.
+        // surface is gated here.
         if without_version.starts_with("wasi:") && !without_version.starts_with(WASI_HTTP_PREFIX) {
             match classify_wasi(import_name) {
                 WasiGate::Ambient => {}
@@ -196,10 +198,6 @@ pub fn enforce_capabilities<'a>(
                     });
                 }
             }
-            continue;
-        }
-        // Registry surface stays permissive in 0.1-fallback.
-        if fallback {
             continue;
         }
         if let Some(cap) = registry.wit_import_to_cap(import_name)
@@ -309,12 +307,46 @@ mod tests {
     }
 
     #[test]
-    fn enforce_passes_when_caps_absent() {
-        // 0.1-fallback: no capabilities section -> all imports allowed
+    fn enforce_rejects_registry_import_when_caps_absent() {
+        // No [capabilities] section collapses to the empty set: a
+        // registry-mapped import is denied, never granted by omission.
         let loaded = manifest_no_caps();
-        let imports = ["nexum:host/chain@0.1.0", "nexum:host/remote-store@0.1.0"];
         let r = registry_with_ext();
+        let err =
+            enforce_capabilities(&loaded, ["nexum:host/chain@0.1.0"].into_iter(), &r).unwrap_err();
+        let CapabilityError::Undeclared(v) = err else {
+            panic!("expected undeclared: {err:?}")
+        };
+        assert_eq!(v.capability, "chain");
+        assert_eq!(v.wit_import, "nexum:host/chain@0.1.0");
+    }
+
+    /// Absent caps with only ambient wasi imports still enforce clean; the
+    /// boot-time refusal of a caps-less manifest lives in `load()`, not here.
+    #[test]
+    fn enforce_accepts_ambient_wasi_when_caps_absent() {
+        let loaded = manifest_no_caps();
+        let r = registry_with_ext();
+        let imports = ["wasi:io/streams@0.2.6", "wasi:clocks/wall-clock@0.2.6"];
         assert!(enforce_capabilities(&loaded, imports.into_iter(), &r).is_ok());
+    }
+
+    /// Absent caps deny `wasi:http` at link time; the old fallback skipped
+    /// the registry mapping that gates it.
+    #[test]
+    fn enforce_rejects_wasi_http_when_caps_absent() {
+        let loaded = manifest_no_caps();
+        let r = registry_with_ext();
+        let err = enforce_capabilities(
+            &loaded,
+            ["wasi:http/outgoing-handler@0.2.12"].into_iter(),
+            &r,
+        )
+        .unwrap_err();
+        let CapabilityError::Undeclared(v) = err else {
+            panic!("expected undeclared: {err:?}")
+        };
+        assert_eq!(v.capability, "http");
     }
 
     #[test]
@@ -505,14 +537,15 @@ mod tests {
     }
 
     #[test]
-    fn fallback_gates_wasi_but_stays_permissive_on_registry_surface() {
-        // No [capabilities] section -> 0.1-fallback: registry imports pass,
-        // but the WASI surface is still gated fail-closed.
+    fn absent_caps_deny_registry_and_gated_wasi() {
+        // No [capabilities] section is the empty set on every surface:
+        // registry imports and gated wasi are denied, ambient wasi passes,
+        // and an unknown wasi namespace stays refused fail-closed.
         let loaded = manifest_no_caps();
         let r = registry_with_ext();
         assert!(
             enforce_capabilities(&loaded, ["nexum:host/remote-store@0.1.0"].into_iter(), &r)
-                .is_ok()
+                .is_err()
         );
         assert!(enforce_capabilities(&loaded, ["wasi:io/streams@0.2.6"].into_iter(), &r).is_ok());
         assert!(enforce_capabilities(&loaded, ["wasi:sockets/tcp@0.2.6"].into_iter(), &r).is_err());

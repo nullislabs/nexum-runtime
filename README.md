@@ -39,7 +39,9 @@ Without Nix, any Rust 1.94+ toolchain with the `wasm32-wasip2` target, `cargo-ne
 just run           # builds the example module and runs the engine with it
 ```
 
-The engine takes a component wasm and its `module.toml` (capabilities + config):
+The engine takes a component wasm and its `module.toml` (capabilities + config).
+The manifest is mandatory: pass its path, or ship a `module.toml` next to the wasm.
+Every manifest must declare a `[capabilities]` block; an empty `required = []` grants nothing.
 
 ```sh
 cargo run -p nexum-cli -- target/wasm32-wasip2/release/example.wasm modules/example/module.toml
