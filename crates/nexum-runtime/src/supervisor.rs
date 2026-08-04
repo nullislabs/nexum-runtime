@@ -540,10 +540,9 @@ fn unconfigured_chain(module: &str, chain_id: u64, chains: &ConfiguredChains) ->
 }
 
 /// Read, digest-verify, and compile one component artifact: the only
-/// production compile path. Hashes and compiles the same read-once
-/// buffer, so the bytes verified are the bytes compiled; a mismatch or
-/// `require_component_digest` refusal precedes any compile. The digest
-/// is always returned, even unpinned.
+/// production compile path. The read-once buffer makes the verified bytes
+/// the compiled bytes; any refusal precedes compile. Always returns the
+/// digest, even unpinned.
 fn read_verified_component(
     engine: &Engine,
     path: &Path,

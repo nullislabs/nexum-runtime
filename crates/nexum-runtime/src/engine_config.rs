@@ -201,10 +201,8 @@ pub struct EngineSection {
     /// treated as `1`.
     #[serde(default = "default_log_backfill_concurrency")]
     pub log_backfill_concurrency: usize,
-    /// Refuse to boot any module or provider whose manifest declares no
-    /// `[module].component` digest. A present digest is always verified
-    /// regardless; when false (the default) an absent digest loads with a
-    /// warning.
+    /// Refuse to boot any module or provider without a `[module].component`
+    /// digest; a present digest is always verified regardless. Default false.
     #[serde(default)]
     pub require_component_digest: bool,
 }

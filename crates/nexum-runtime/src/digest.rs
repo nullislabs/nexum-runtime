@@ -26,9 +26,8 @@ impl ContentDigest {
 impl FromStr for ContentDigest {
     type Err = DigestParseError;
 
-    /// Strict `sha256:<64 hex chars>` grammar: mixed-case hex parses, an
-    /// unknown scheme, a `0x` prefix, or an empty string is a hard error
-    /// (fail closed).
+    /// Strict `sha256:<64 hex chars>` grammar, fail closed: an unknown
+    /// scheme, `0x` prefix, or empty string is a hard error; mixed-case hex parses.
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let Some((scheme, payload)) = s.split_once(':') else {
             return Err(DigestParseError::MissingScheme(s.to_owned()));

@@ -3344,8 +3344,6 @@ async fn boot_rejects_a_module_colliding_with_an_adapter_name() {
     );
 }
 
-// ── Component digest verification (#64) ───────────────────────────────
-
 /// The committed pinned fixture pair: a byte-stable `.wat` component and
 /// the manifest pinning its real sha256.
 fn pinned_fixture() -> (PathBuf, PathBuf) {

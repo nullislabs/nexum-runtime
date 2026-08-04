@@ -163,12 +163,12 @@ impl<'de> Deserialize<'de> for Subscription {
 pub struct ModuleSection {
     #[serde(default)]
     pub name: String,
-    #[allow(dead_code)] // Parsed for future version-pinning; no reader yet.
+    #[allow(dead_code)] // Parsed but has no reader.
     #[serde(default)]
     pub version: String,
-    /// Pinned artifact digest (`sha256:<64 hex chars>`), verified against
-    /// the loaded bytes before compile. Absent loads unverified (a hard
-    /// error under `[engine] require_component_digest`).
+    /// Pinned artifact digest (`sha256:<64 hex chars>`), verified against the
+    /// loaded bytes before compile; absent loads unverified unless
+    /// `[engine] require_component_digest` is set.
     #[serde(default)]
     pub component: Option<String>,
     /// Component kind; defaults to the worker (`event-module`), a provider
