@@ -160,14 +160,18 @@ impl<'de> Deserialize<'de> for Subscription {
 }
 
 #[derive(Debug, Deserialize, Default)]
-#[allow(dead_code)] // version + component parsed for future 0.3 hash-verification.
 pub struct ModuleSection {
     #[serde(default)]
     pub name: String,
+    #[allow(dead_code)] // Parsed for future version-pinning; no reader yet.
     #[serde(default)]
     pub version: String,
+    /// Pinned content digest of the component artifact
+    /// (`sha256:<64 hex chars>`). Absent loads unverified with a warning
+    /// (hard error under `[engine] require_component_digest`); present is
+    /// strictly verified against the loaded bytes before compilation.
     #[serde(default)]
-    pub component: String,
+    pub component: Option<String>,
     /// Component kind; defaults to the worker (`event-module`), a provider
     /// names its registered kind.
     #[serde(default)]
@@ -255,4 +259,7 @@ pub struct LoadedManifest {
     /// module's `init`. Scalars become their text form; arrays and tables
     /// their TOML representation.
     pub config: Vec<(String, String)>,
+    /// `[module].component` parsed to its typed digest; `None` when the
+    /// manifest declares no pin.
+    pub component_digest: Option<crate::digest::ContentDigest>,
 }

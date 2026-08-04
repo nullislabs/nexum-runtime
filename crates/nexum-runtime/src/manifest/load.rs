@@ -17,6 +17,20 @@ pub fn load(path: &Path, registry: &CapabilityRegistry) -> Result<LoadedManifest
 
     validate_module_name(&manifest.module.name)?;
 
+    // A malformed pin is a manifest error here, before any compile cost;
+    // the supervisor's read-verify-compile helper checks the pinned value
+    // against the loaded bytes.
+    let component_digest = manifest
+        .module
+        .component
+        .as_deref()
+        .map(str::parse)
+        .transpose()
+        .map_err(|source| ParseError::InvalidComponentDigest {
+            value: manifest.module.component.clone().unwrap_or_default(),
+            source,
+        })?;
+
     let caps = manifest
         .capabilities
         .as_ref()
@@ -60,6 +74,7 @@ pub fn load(path: &Path, registry: &CapabilityRegistry) -> Result<LoadedManifest
         manifest,
         http_allowlist,
         config,
+        component_digest,
     })
 }
 
@@ -448,6 +463,68 @@ max_state_bytes    = 52428800
             .expect("caps section parsed");
         assert!(caps.required.is_empty());
         assert!(caps.optional.is_empty());
+    }
+
+    /// Write `toml` to a temp `module.toml` and run the loader on it.
+    fn load_inline(toml: &str) -> Result<LoadedManifest, ParseError> {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("module.toml");
+        std::fs::write(&path, toml).unwrap();
+        load(&path, &CapabilityRegistry::core())
+    }
+
+    /// The minimal manifest around one `[module].component` line.
+    fn digest_manifest(component_line: &str) -> String {
+        format!("[module]\nname = \"pinned\"\n{component_line}\n\n[capabilities]\nrequired = []\n")
+    }
+
+    #[test]
+    fn load_rejects_a_non_hex_component_digest() {
+        let err = load_inline(&digest_manifest(&format!(
+            "component = \"sha256:{}\"",
+            "z".repeat(64)
+        )))
+        .unwrap_err();
+        assert!(
+            matches!(err, ParseError::InvalidComponentDigest { ref value, .. } if value.contains("zz")),
+            "{err:?}",
+        );
+    }
+
+    #[test]
+    fn load_rejects_a_schemeless_component_digest() {
+        let err = load_inline(&digest_manifest("component = \"notahash\"")).unwrap_err();
+        assert!(
+            matches!(err, ParseError::InvalidComponentDigest { ref value, .. } if value == "notahash"),
+            "{err:?}",
+        );
+    }
+
+    #[test]
+    fn load_rejects_an_explicitly_empty_component_digest() {
+        // `component = ""` is present-but-empty: it must fail parse rather
+        // than degrade to the absent (unverified) case.
+        let err = load_inline(&digest_manifest("component = \"\"")).unwrap_err();
+        assert!(
+            matches!(err, ParseError::InvalidComponentDigest { ref value, .. } if value.is_empty()),
+            "{err:?}",
+        );
+    }
+
+    #[test]
+    fn load_defaults_an_absent_component_digest_to_none() {
+        let loaded = load_inline(&digest_manifest("")).expect("absent digest loads");
+        assert!(loaded.manifest.module.component.is_none());
+        assert!(loaded.component_digest.is_none());
+    }
+
+    #[test]
+    fn load_parses_a_valid_component_digest_and_round_trips() {
+        let pin = format!("sha256:{}", "ab".repeat(32));
+        let loaded = load_inline(&digest_manifest(&format!("component = \"{pin}\"")))
+            .expect("valid digest loads");
+        let digest = loaded.component_digest.expect("digest parsed");
+        assert_eq!(digest.to_string(), pin);
     }
 
     #[test]

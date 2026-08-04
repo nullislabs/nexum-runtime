@@ -263,10 +263,12 @@ mod tests {
 
     #[test]
     fn kind_component_and_config_reach_the_loaded_manifest() {
+        const DIGEST: &str =
+            "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
         let loaded = load_core(
             &TestManifest::new("feeder")
                 .kind("price-provider")
-                .component_digest("sha256:abc123")
+                .component_digest(DIGEST)
                 .cap("logging")
                 .config("threshold", "2500.00")
                 .config("quoted", "a \"quoted\" value"),
@@ -276,7 +278,7 @@ mod tests {
             loaded.manifest.module.kind,
             ComponentKind::Provider("price-provider".into()),
         );
-        assert_eq!(loaded.manifest.module.component, "sha256:abc123");
+        assert_eq!(loaded.manifest.module.component.as_deref(), Some(DIGEST));
         assert_eq!(
             loaded.config,
             vec![

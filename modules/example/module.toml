@@ -3,9 +3,12 @@
 [module]
 name = "example"
 version = "0.1.0"
-# Placeholder content hash. 0.2 parses but does not verify this; 0.3 will
-# compare it against the sha256 of the loaded component bytes.
-component = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+# Optional pinned content hash of the component wasm, strictly verified
+# against the loaded bytes when present:
+#   component = "sha256:<64 hex chars>"   (sha256sum of the .wasm)
+# Absent, the engine loads unverified with a warning; setting
+# [engine] require_component_digest = true in engine.toml makes an
+# absent pin a boot error.
 
 [capabilities]
 # 0.2 reference engine provides all listed capabilities; this list is a

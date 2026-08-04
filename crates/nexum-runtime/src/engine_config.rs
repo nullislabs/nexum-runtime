@@ -201,6 +201,12 @@ pub struct EngineSection {
     /// treated as `1`.
     #[serde(default = "default_log_backfill_concurrency")]
     pub log_backfill_concurrency: usize,
+    /// Refuse to boot any module or provider whose manifest declares no
+    /// `[module].component` digest. A present digest is always strictly
+    /// verified regardless of this flag; when false (the 0.2 default) an
+    /// absent digest loads with a warning. 0.3 intends to default to true.
+    #[serde(default)]
+    pub require_component_digest: bool,
 }
 
 impl Default for EngineSection {
@@ -210,6 +216,7 @@ impl Default for EngineSection {
             log_level: default_log_level(),
             metrics: MetricsSection::default(),
             log_backfill_concurrency: default_log_backfill_concurrency(),
+            require_component_digest: false,
         }
     }
 }
@@ -877,6 +884,16 @@ rpc_url = "wss://example.test/x"
         let cfg = load_or_default(Some(&path)).expect("the file parses");
         assert!(!cfg.defaulted, "a loaded engine.toml is not defaulted");
         assert_eq!(cfg.chains.len(), 1);
+    }
+
+    #[test]
+    fn require_component_digest_defaults_false_and_parses() {
+        // False is the 0.2 fail-open dev default; the operator flips it
+        // per deployment.
+        assert!(!EngineConfig::default().engine.require_component_digest);
+        let cfg: EngineConfig = toml::from_str("[engine]\nrequire_component_digest = true\n")
+            .expect("the [engine] flag parses");
+        assert!(cfg.engine.require_component_digest);
     }
 
     #[test]

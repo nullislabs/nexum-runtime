@@ -291,6 +291,7 @@ mod tests {
             },
             http_allowlist: vec![],
             config: vec![],
+            component_digest: None,
         }
     }
 
@@ -299,6 +300,7 @@ mod tests {
             manifest: Manifest::default(),
             http_allowlist: vec![],
             config: vec![],
+            component_digest: None,
         }
     }
 
