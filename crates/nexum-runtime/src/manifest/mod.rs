@@ -3,8 +3,7 @@
 //! `load` parses and validates a manifest; `capabilities` cross-checks a
 //! component's WIT imports against its declared `[capabilities]`; `types`
 //! holds the serde shapes and `LoadedManifest`; `error` the error types.
-//! A manifest with no `[capabilities]` section falls back to all-required,
-//! with a deprecation warning.
+//! A manifest with no `[capabilities]` section is refused at load.
 
 mod capabilities;
 mod error;
@@ -13,7 +12,7 @@ mod types;
 
 pub(crate) use capabilities::enforce_capabilities;
 pub use capabilities::{CapabilityRegistry, NamespaceCaps};
-pub(crate) use load::{fallback_manifest, host_allowed, load};
+pub(crate) use load::{host_allowed, load};
 pub use types::ExtensionSections;
 pub(crate) use types::{ComponentKind, LoadedManifest, ResourceSection, Subscription};
 // CapabilityViolation, ParseError, and the *Section structs are

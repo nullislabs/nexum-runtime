@@ -594,20 +594,8 @@ impl<T: RuntimeTypes> Supervisor<T> {
         extensions: &[Arc<dyn Extension<T>>],
         provider_manifests: &[ProviderManifest],
     ) -> Result<LoadedModule<T>> {
-        let manifest_path = resolve_manifest_path(&entry.path, entry.manifest.as_deref());
-        let loaded_manifest: LoadedManifest = match manifest_path.as_deref() {
-            Some(p) if p.exists() => {
-                info!(manifest = %p.display(), "loading module manifest");
-                manifest::load(p, registry)?
-            }
-            _ => {
-                warn!(
-                    component = %entry.path.display(),
-                    "no module.toml - falling back to anonymous module"
-                );
-                manifest::fallback_manifest()
-            }
-        };
+        let loaded_manifest =
+            load_required_manifest(&entry.path, entry.manifest.as_deref(), registry, "module")?;
         let module_namespace = if loaded_manifest.manifest.module.name.is_empty() {
             "module".to_owned()
         } else {
@@ -786,20 +774,8 @@ impl<T: RuntimeTypes> Supervisor<T> {
         kinds: &ProviderKinds<T>,
         extensions: &[Arc<dyn Extension<T>>],
     ) -> Result<LoadedProvider> {
-        let manifest_path = resolve_manifest_path(&entry.path, entry.manifest.as_deref());
-        let loaded_manifest: LoadedManifest = match manifest_path.as_deref() {
-            Some(p) if p.exists() => {
-                info!(manifest = %p.display(), "loading provider manifest");
-                manifest::load(p, registry)?
-            }
-            _ => {
-                warn!(
-                    component = %entry.path.display(),
-                    "no module.toml - falling back to anonymous provider"
-                );
-                manifest::fallback_manifest()
-            }
-        };
+        let loaded_manifest =
+            load_required_manifest(&entry.path, entry.manifest.as_deref(), registry, "provider")?;
         let namespace = if loaded_manifest.manifest.module.name.is_empty() {
             "provider".to_owned()
         } else {
@@ -818,9 +794,7 @@ impl<T: RuntimeTypes> Supervisor<T> {
 
         // The manifest kind is the discriminator: an [[adapters]] entry
         // must name a registered provider kind, caught here before
-        // instantiation. A fallback manifest has the default worker kind,
-        // so a provider must ship a module.toml that declares its kind
-        // explicitly.
+        // instantiation.
         let (kind, service) = match &loaded_manifest.manifest.module.kind {
             ComponentKind::Worker => {
                 return Err(anyhow!(
@@ -1698,6 +1672,34 @@ pub fn build_provider_linker<T: RuntimeTypes>(
     wasmtime_wasi::p2::add_to_linker_async(&mut linker)?;
     wasmtime_wasi_http::p2::add_only_http_to_linker_async(&mut linker)?;
     Ok(linker)
+}
+
+/// Load the mandatory manifest for `component`; missing or unresolved
+/// refuses the boot.
+fn load_required_manifest(
+    component: &Path,
+    explicit: Option<&Path>,
+    registry: &CapabilityRegistry,
+    role: &'static str,
+) -> Result<LoadedManifest> {
+    match resolve_manifest_path(component, explicit).as_deref() {
+        Some(p) if p.exists() => {
+            info!(manifest = %p.display(), role, "loading component manifest");
+            Ok(manifest::load(p, registry)?)
+        }
+        // Explicit paths only: sibling discovery requires `.exists()`.
+        Some(p) => Err(anyhow!(
+            "manifest {} not found for component {}",
+            p.display(),
+            component.display(),
+        )),
+        None => Err(anyhow!(
+            "no module.toml for component {}; ship one next to the component \
+             or pass its path explicitly (an empty `required = []` under \
+             [capabilities] grants nothing)",
+            component.display(),
+        )),
+    }
 }
 
 /// Resolve a component's manifest: explicit override, else sibling

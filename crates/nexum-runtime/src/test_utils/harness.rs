@@ -26,7 +26,7 @@ use crate::host::logs::{LogPipeline, LogRecord};
 
 /// Where the module manifest comes from.
 enum ManifestSource {
-    /// No manifest; the loader falls back to a sibling `module.toml`.
+    /// No manifest; boot fails unless a `module.toml` sibling exists.
     None,
     /// An existing manifest file.
     Path(PathBuf),
@@ -35,7 +35,7 @@ enum ManifestSource {
 }
 
 /// Builder for a [`TestRuntime`]; the launched handle shares the same mock
-/// backends.
+/// backends. A manifest is mandatory.
 pub struct TestRuntimeBuilder<E = ()>
 where
     E: Clone + Send + Sync + 'static,
