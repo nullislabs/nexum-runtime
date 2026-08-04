@@ -9,9 +9,8 @@ use super::capabilities::CapabilityRegistry;
 use super::error::ParseError;
 use super::types::{LoadedManifest, Manifest};
 
-/// Read, parse, and validate `module.toml`; declared capability names are
-/// checked against `registry`. A manifest without a `[capabilities]`
-/// section is refused (an empty `required = []` grants nothing).
+/// Parse and validate `module.toml`; no `[capabilities]` section refuses the
+/// manifest (`required = []` is valid).
 pub fn load(path: &Path, registry: &CapabilityRegistry) -> Result<LoadedManifest, ParseError> {
     let raw = std::fs::read_to_string(path)?;
     let manifest: Manifest = toml::from_str(&raw)?;
@@ -38,7 +37,7 @@ pub fn load(path: &Path, registry: &CapabilityRegistry) -> Result<LoadedManifest
         info!(
             target: "manifest",
             optional = %caps.optional.join(", "),
-            "optional capabilities (advisory in 0.2; trap-stub fallback ships in 0.3)",
+            "optional capabilities (advisory)",
         );
     }
 
@@ -392,8 +391,7 @@ max_state_bytes    = 52428800
 
     #[test]
     fn load_rejects_module_name_that_escapes_the_state_dir() {
-        // Caps-less on purpose: name validation precedes the
-        // [capabilities] presence check.
+        // Name validation precedes the [capabilities] presence check.
         for bad in ["../evil", "a/b", "a\\b", "..", "/etc/passwd", "foo/../bar"] {
             // Single-quoted TOML literal string: no backslash-escape processing.
             let toml = format!("[module]\nname = '{bad}'\n");

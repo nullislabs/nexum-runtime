@@ -1674,8 +1674,8 @@ pub fn build_provider_linker<T: RuntimeTypes>(
     Ok(linker)
 }
 
-/// Resolve and load the mandatory manifest for `component`; `role` labels
-/// the log line. A missing or unresolved manifest refuses the boot.
+/// Load the mandatory manifest for `component`; missing or unresolved
+/// refuses the boot.
 fn load_required_manifest(
     component: &Path,
     explicit: Option<&Path>,
@@ -1687,8 +1687,7 @@ fn load_required_manifest(
             info!(manifest = %p.display(), role, "loading component manifest");
             Ok(manifest::load(p, registry)?)
         }
-        // Reachable only via an operator-configured explicit path: sibling
-        // discovery returns a candidate only after `.exists()`.
+        // Explicit paths only: sibling discovery requires `.exists()`.
         Some(p) => Err(anyhow!(
             "manifest {} not found for component {}",
             p.display(),

@@ -2483,9 +2483,8 @@ async fn boot_admits_a_registered_provider_kind_past_the_kind_gate() {
 }
 
 /// A module subscribing to an extension kind no wired extension declares
-/// is refused at boot, preserving the unknown-kind fail-fast. The manifest
-/// declares `[capabilities]` deliberately: a caps-less one fails earlier,
-/// at the manifest load.
+/// is refused at boot; `[capabilities]` is declared so the kind gate is
+/// what fails.
 #[tokio::test]
 async fn boot_refuses_an_undeclared_extension_subscription_kind() {
     let Some(wasm) = example_wasm_or_skip() else {
@@ -2535,11 +2534,8 @@ kind = "acme-status"
     );
 }
 
-// ── Fail-closed manifest requirements (#60) ───────────────────────────
-
-/// A component with no module.toml anywhere refuses boot, naming the
-/// component path; the refusal precedes the compile step, so no wasm
-/// needs to exist.
+/// No module.toml anywhere refuses boot before compile; no wasm needs to
+/// exist.
 #[tokio::test]
 async fn boot_refuses_a_component_without_module_toml() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -2607,8 +2603,8 @@ async fn boot_refuses_a_nonexistent_explicit_manifest_path() {
     );
 }
 
-/// The live operator `http_allow` is deliberate: it must not stand in for
-/// the provider's own `[capabilities]` declaration.
+/// Operator `http_allow` must not stand in for the provider's own
+/// `[capabilities]` declaration.
 #[tokio::test]
 async fn boot_refuses_a_capsless_provider_manifest_despite_operator_http_allow() {
     let engine = make_wasmtime_engine();
@@ -2648,9 +2644,8 @@ async fn boot_refuses_a_capsless_provider_manifest_despite_operator_http_allow()
     );
 }
 
-/// The missing-capabilities refusal precedes the unknown-subscription-kind
-/// and unclaimed-section gates, and the compile step, so no wasm needs to
-/// exist.
+/// The missing-capabilities refusal precedes the kind and section gates
+/// and the compile.
 #[tokio::test]
 async fn capsless_manifest_reports_missing_capabilities_before_other_gates() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -2705,9 +2700,8 @@ kind = "acme-status"
     );
 }
 
-/// A manifest withholding only `chain` is refused naming that import.
-/// Every other import is declared so the violation is deterministic,
-/// whatever order the component reports its imports in.
+/// Only `chain` is undeclared, so the refusal is deterministic regardless
+/// of import order.
 #[tokio::test]
 async fn boot_denies_an_undeclared_chain_import_for_balance_tracker() {
     let Some(wasm) = module_wasm_or_skip("balance-tracker") else {

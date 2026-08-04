@@ -157,10 +157,8 @@ impl CapabilityRegistry {
     }
 }
 
-/// Check that every capability-bearing WIT import is covered by the
-/// manifest's declarations; call after loading the component, before
-/// instantiation. Absent `[capabilities]` is the empty set: every gated
-/// import is denied. `component_imports` are the import name parts.
+/// Deny every gated import the manifest does not declare; absent
+/// `[capabilities]` is the empty set. Runs before instantiation.
 pub fn enforce_capabilities<'a>(
     loaded: &LoadedManifest,
     component_imports: impl Iterator<Item = &'a str>,
