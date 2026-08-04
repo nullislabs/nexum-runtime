@@ -3672,3 +3672,53 @@ async fn boot_requires_a_provider_digest_when_the_engine_flag_is_set() {
     let msg = format!("{err:#}");
     assert!(msg.contains("require_component_digest"), "{msg}");
 }
+
+/// The `[[modules]]` leg of `boot()` threads the flag too: `boot_single`
+/// covers the `just run` override path only, so without this a hardcoded
+/// `false` on the module loop would pass the whole suite.
+#[tokio::test]
+async fn boot_requires_a_module_digest_when_the_engine_flag_is_set() {
+    let engine = make_wasmtime_engine();
+    let linker = make_linker(&engine);
+    let (_store_dir, local_store) = temp_local_store();
+    let components = test_components(local_store);
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let wasm = dir.path().join("module.wasm");
+    std::fs::write(&wasm, b"unpinned artifact bytes").expect("write artifact");
+    let manifest = dir.path().join("module.toml");
+    std::fs::write(
+        &manifest,
+        "[module]\nname = \"unpinned\"\n\n[capabilities]\nrequired = []\n",
+    )
+    .expect("write manifest");
+
+    let config = EngineConfig {
+        engine: crate::engine_config::EngineSection {
+            require_component_digest: true,
+            ..Default::default()
+        },
+        modules: vec![crate::engine_config::ModuleEntry {
+            path: wasm,
+            manifest: Some(manifest),
+        }],
+        ..Default::default()
+    };
+
+    let err = match Supervisor::boot(
+        &engine,
+        &linker,
+        &config,
+        &components,
+        &core_extensions(),
+        None,
+    )
+    .await
+    {
+        Ok(_) => panic!("an unpinned module must refuse under the flag"),
+        Err(err) => err,
+    };
+    let msg = format!("{err:#}");
+    assert!(msg.contains("require_component_digest"), "{msg}");
+    assert!(!msg.contains("compile"), "refusal precedes compile: {msg}");
+}
