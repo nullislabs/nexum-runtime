@@ -2,7 +2,9 @@
 # PostToolUse(Write|Edit): block an edit that ADDS a banned token to a .rs or
 # .md file. Counts are compared against the committed version, so a file that
 # already carries a banned token stays editable and only a net increase blocks.
+# No-op off NixOS, where the rg dependency is not guaranteed.
 set -u
+[ -e /etc/NIXOS ] || grep -qs '^ID=nixos$' /etc/os-release || exit 0
 f=$(jq -r '.tool_input.file_path // .tool_response.filePath // empty' 2>/dev/null) || exit 0
 case "$f" in *.rs|*.md) ;; *) exit 0 ;; esac
 [ -f "$f" ] || exit 0

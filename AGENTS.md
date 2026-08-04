@@ -52,7 +52,7 @@ Run `just fmt` and `just lint` before each commit, because CI fails on any rustf
 The hooks in `.claude/hooks/` support this loop.
 `rustfmt-on-edit.sh` formats each edited `.rs` file.
 `nextest-on-stop.sh` runs nextest for the crates with uncommitted `.rs` changes at the end of a turn.
-Each hook exits without work when `rustfmt`, `cargo`, or `cargo-nextest` is absent, so both stay silent outside the dev shell.
+Each hook runs only on a NixOS machine, and exits without work when `rustfmt`, `cargo`, or `cargo-nextest` is absent, so all stay silent outside the dev shell.
 
 ## House rules
 

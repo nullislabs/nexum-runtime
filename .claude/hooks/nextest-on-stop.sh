@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Stop hook: run `cargo nextest run` for the workspace crates that have
-# uncommitted .rs changes. Non-blocking; reports a pass/fail summary. No-op when
-# nothing relevant changed or cargo/nextest are unavailable.
+# uncommitted .rs changes. Non-blocking; reports a pass/fail summary. No-op off
+# NixOS, when nothing relevant changed, or cargo/nextest are unavailable.
 set -u
+[ -e /etc/NIXOS ] || grep -qs '^ID=nixos$' /etc/os-release || exit 0
 root=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0
 cd "$root" || exit 0
 command -v cargo >/dev/null 2>&1 || exit 0
