@@ -90,6 +90,10 @@ redb.workspace = true
 # Misc.
 url.workspace = true
 
+# Content digests: sha256 over loaded component bytes, compared against
+# the manifest's `[module].component` pin before compilation.
+sha2.workspace = true
+
 # Enabled by `test-utils`: the `TestRuntime` harness temp-files inline
 # manifests before boot, and the in-process mock RPC transports implement
 # the tower service seam over alloy's JSON-RPC packet types.

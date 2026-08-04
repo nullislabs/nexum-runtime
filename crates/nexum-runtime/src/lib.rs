@@ -27,6 +27,7 @@ pub mod addons;
 pub mod bindings;
 pub mod bootstrap;
 pub mod builder;
+pub mod digest;
 pub mod engine_config;
 pub mod host;
 pub mod manifest;
