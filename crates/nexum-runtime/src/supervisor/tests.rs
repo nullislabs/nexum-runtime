@@ -2876,8 +2876,6 @@ chain_id = 1
     );
 }
 
-// ── Namespace ledger (name pre-pass) ──────────────────────────────────
-
 /// A cross-role duplicate is refused; the error names both roles and paths.
 #[test]
 fn claim_namespace_rejects_cross_role_duplicate_with_both_paths() {
@@ -2921,8 +2919,7 @@ fn claim_namespace_is_byte_exact() {
 }
 
 /// A module name collision refuses the boot before any compile: neither
-/// wasm exists, so reaching `Component::from_file` would surface a compile
-/// error instead of the claim error asserted here.
+/// wasm exists, so a compile attempt would error first.
 #[tokio::test]
 async fn boot_rejects_duplicate_module_names_before_any_compile() {
     let engine = make_wasmtime_engine();
@@ -2980,8 +2977,7 @@ async fn boot_rejects_duplicate_module_names_before_any_compile() {
 }
 
 /// An adapter and a module sharing a name refuse the boot: one ledger
-/// spans both roles. Neither wasm exists, so no compile precedes the
-/// refusal.
+/// spans both roles, and no compile precedes the refusal.
 #[tokio::test]
 async fn boot_rejects_a_module_colliding_with_an_adapter_name() {
     let engine = make_wasmtime_engine();

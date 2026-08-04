@@ -413,9 +413,8 @@ fn enforce_extension_uniqueness<T: RuntimeTypes>(
     Ok(())
 }
 
-/// Names claimed by the boot pre-pass: name to (role, claimant path).
-/// One ledger spans both roles: they derive the same keccak local-store
-/// namespace.
+/// Boot pre-pass claims: name to (role, claimant path). One ledger spans
+/// both roles: they derive the same keccak local-store namespace.
 type NamespaceLedger = BTreeMap<String, (&'static str, PathBuf)>;
 
 /// Claim `name` for `path`, refusing a second claimant. Equality is
@@ -913,9 +912,7 @@ impl<T: RuntimeTypes> Supervisor<T> {
         })
     }
 
-    /// Load one `[[adapters]]` entry against its pre-pass-resolved
-    /// manifest: resolve its kind, enforce the scoped-transport
-    /// capabilities, build a supervised store with the operator's grants,
+    /// Load one `[[adapters]]` entry against its pre-pass-resolved manifest
     /// and hand the instance to its kind to install. A failed `init` loads
     /// the provider dead and unroutable, permanently.
     // One flat argument per shared input threaded onto the store, matching
