@@ -3049,3 +3049,69 @@ async fn e2e_boot_rejects_duplicate_module_names() {
         "the refusal names the claimant path: {msg}",
     );
 }
+
+/// An adapter and a module sharing a name refuse the boot, pinning that
+/// `boot()` claims both roles into ONE ledger: with a ledger per role the
+/// adapter would instead reach `Component::from_file` and fail on its
+/// absent wasm. Neither wasm exists, so no compile can precede the refusal.
+#[tokio::test]
+async fn boot_rejects_a_module_colliding_with_an_adapter_name() {
+    let engine = make_wasmtime_engine();
+    let components = crate::test_utils::mock_components();
+    let extensions = acme_extensions();
+    let linker =
+        crate::supervisor::build_linker::<crate::test_utils::MockTypes>(&engine, &extensions)
+            .expect("build_linker");
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let adapter_manifest = dir.path().join("adapter.toml");
+    std::fs::write(
+        &adapter_manifest,
+        "[module]\nname = \"dup\"\nkind = \"acme-adapter\"\n\n\
+         [capabilities]\nrequired = [\"chain\"]\n",
+    )
+    .expect("write adapter manifest");
+    let module_manifest = dir.path().join("module.toml");
+    std::fs::write(
+        &module_manifest,
+        "[module]\nname = \"dup\"\n\n[capabilities]\nrequired = [\"logging\"]\n",
+    )
+    .expect("write module manifest");
+
+    let config = EngineConfig {
+        adapters: vec![crate::engine_config::AdapterEntry {
+            path: dir.path().join("missing-adapter.wasm"),
+            manifest: Some(adapter_manifest),
+            http_allow: Vec::new(),
+            messaging_topics: Vec::new(),
+        }],
+        modules: vec![crate::engine_config::ModuleEntry {
+            path: dir.path().join("missing-module.wasm"),
+            manifest: Some(module_manifest),
+        }],
+        ..Default::default()
+    };
+
+    let err =
+        match Supervisor::boot(&engine, &linker, &config, &components, &extensions, None).await {
+            Ok(_) => panic!("a module colliding with an adapter name must refuse the boot"),
+            Err(err) => err,
+        };
+    let msg = format!("{err:#}");
+    assert!(
+        msg.contains("name dup is claimed twice"),
+        "the refusal is the claim collision: {msg}",
+    );
+    assert!(
+        msg.contains("adapter") && msg.contains("module"),
+        "the refusal names both roles: {msg}",
+    );
+    assert!(
+        msg.contains("missing-adapter.wasm") && msg.contains("missing-module.wasm"),
+        "the refusal names both claimant paths: {msg}",
+    );
+    assert!(
+        !msg.contains("compile"),
+        "one ledger spans both roles, so no compile precedes the refusal: {msg}",
+    );
+}

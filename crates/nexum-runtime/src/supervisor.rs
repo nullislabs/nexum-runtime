@@ -441,8 +441,17 @@ fn claim_namespace(
     Ok(())
 }
 
+/// Namespace a module falls back to when `[module].name` is empty. The
+/// pre-pass and `load_one` must pass the same literal or the ledger claims
+/// a name the store never uses.
+const MODULE_FALLBACK_NAME: &str = "module";
+
+/// Namespace a provider falls back to when `[module].name` is empty; the
+/// pre-pass and `load_provider` counterpart of [`MODULE_FALLBACK_NAME`].
+const PROVIDER_FALLBACK_NAME: &str = "provider";
+
 /// The namespace a loaded manifest claims: `[module].name`, or the role
-/// literal when the manifest leaves it empty.
+/// fallback when the manifest leaves it empty.
 fn manifest_namespace(loaded: &LoadedManifest, fallback: &str) -> String {
     if loaded.manifest.module.name.is_empty() {
         fallback.to_owned()
@@ -507,7 +516,7 @@ impl<T: RuntimeTypes> Supervisor<T> {
             .with_context(|| format!("load provider {}", entry.path.display()))?;
             claim_namespace(
                 &mut ledger,
-                &manifest_namespace(&loaded, "provider"),
+                &manifest_namespace(&loaded, PROVIDER_FALLBACK_NAME),
                 "adapter",
                 &entry.path,
             )?;
@@ -520,7 +529,7 @@ impl<T: RuntimeTypes> Supervisor<T> {
                     .with_context(|| format!("load module {}", entry.path.display()))?;
             claim_namespace(
                 &mut ledger,
-                &manifest_namespace(&loaded, "module"),
+                &manifest_namespace(&loaded, MODULE_FALLBACK_NAME),
                 "module",
                 &entry.path,
             )?;
@@ -761,7 +770,7 @@ impl<T: RuntimeTypes> Supervisor<T> {
         extensions: &[Arc<dyn Extension<T>>],
         provider_manifests: &[ProviderManifest],
     ) -> Result<LoadedModule<T>> {
-        let module_namespace = manifest_namespace(&loaded_manifest, "module");
+        let module_namespace = manifest_namespace(&loaded_manifest, MODULE_FALLBACK_NAME);
 
         // Run the extension install predicates before any compile cost:
         // every section must be claimed, and every claiming extension
@@ -917,11 +926,11 @@ impl<T: RuntimeTypes> Supervisor<T> {
         })
     }
 
-    /// Load one `[[adapters]]` entry: resolve its manifest and kind,
-    /// enforce the scoped-transport capabilities, build a supervised store
-    /// with the operator's grants, and hand the instance to its kind to
-    /// install. A failed `init` loads the provider dead and unroutable,
-    /// permanently.
+    /// Load one `[[adapters]]` entry against the manifest the boot pre-pass
+    /// already resolved and claimed: resolve its kind, enforce the
+    /// scoped-transport capabilities, build a supervised store with the
+    /// operator's grants, and hand the instance to its kind to install. A
+    /// failed `init` loads the provider dead and unroutable, permanently.
     // One flat argument per shared input threaded onto the store, matching
     // the module load path.
     #[allow(clippy::too_many_arguments)]
@@ -936,7 +945,7 @@ impl<T: RuntimeTypes> Supervisor<T> {
         kinds: &ProviderKinds<T>,
         extensions: &[Arc<dyn Extension<T>>],
     ) -> Result<LoadedProvider> {
-        let namespace = manifest_namespace(&loaded_manifest, "provider");
+        let namespace = manifest_namespace(&loaded_manifest, PROVIDER_FALLBACK_NAME);
 
         // Run the extension install predicates before any compile cost:
         // every section must be claimed, and every claiming extension
