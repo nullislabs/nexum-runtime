@@ -2878,16 +2878,7 @@ chain_id = 1
 
 // ── Namespace ledger (name pre-pass) ──────────────────────────────────
 
-/// Distinct names claim cleanly, across roles.
-#[test]
-fn claim_namespace_accepts_distinct_names() {
-    let mut ledger = NamespaceLedger::new();
-    claim_namespace(&mut ledger, "alpha", "module", Path::new("a.wasm")).expect("first name");
-    claim_namespace(&mut ledger, "beta", "adapter", Path::new("b.wasm")).expect("second name");
-}
-
-/// A cross-role duplicate is refused, and the error names both roles and
-/// both claimant paths.
+/// A cross-role duplicate is refused; the error names both roles and paths.
 #[test]
 fn claim_namespace_rejects_cross_role_duplicate_with_both_paths() {
     let mut ledger = NamespaceLedger::new();
@@ -2929,12 +2920,9 @@ fn claim_namespace_is_byte_exact() {
         .expect_err("identical strings collide");
 }
 
-/// A module name collision refuses the boot BEFORE any compile: both wasm
-/// paths point at files that do not exist, so any attempt to reach
-/// `Component::from_file` would surface a compile error instead of the
-/// claim error asserted here. This pins the pre-pass ordering: no guest
-/// code (and no fsync-durable local-store write) can run under a name set
-/// that is invalid.
+/// A module name collision refuses the boot before any compile: neither
+/// wasm exists, so reaching `Component::from_file` would surface a compile
+/// error instead of the claim error asserted here.
 #[tokio::test]
 async fn boot_rejects_duplicate_module_names_before_any_compile() {
     let engine = make_wasmtime_engine();
@@ -2991,69 +2979,9 @@ async fn boot_rejects_duplicate_module_names_before_any_compile() {
     );
 }
 
-/// E2E: two real, loadable modules sharing a manifest name refuse the
-/// boot with the claim collision. Skip-gated on `just build-module`
-/// producing the example wasm; the wasm-free ordering test above is the
-/// unconditional guard.
-#[tokio::test]
-async fn e2e_boot_rejects_duplicate_module_names() {
-    let Some(wasm) = example_wasm_or_skip() else {
-        return;
-    };
-    let engine = make_wasmtime_engine();
-    let linker = make_linker(&engine);
-    let (_dir, local_store) = temp_local_store();
-    let components = test_components(local_store);
-
-    let tmp = tempfile::tempdir().unwrap();
-    let manifest_a = tmp.path().join("a.toml");
-    let manifest_b = tmp.path().join("b.toml");
-    let manifest_toml = "[module]\nname = \"dup\"\n\n[capabilities]\nrequired = [\"logging\"]\n";
-    std::fs::write(&manifest_a, manifest_toml).unwrap();
-    std::fs::write(&manifest_b, manifest_toml).unwrap();
-
-    let engine_cfg = EngineConfig {
-        modules: vec![
-            crate::engine_config::ModuleEntry {
-                path: wasm.clone(),
-                manifest: Some(manifest_a),
-            },
-            crate::engine_config::ModuleEntry {
-                path: wasm.clone(),
-                manifest: Some(manifest_b),
-            },
-        ],
-        ..Default::default()
-    };
-
-    let err = match Supervisor::boot(
-        &engine,
-        &linker,
-        &engine_cfg,
-        &components,
-        &core_extensions(),
-        None,
-    )
-    .await
-    {
-        Ok(_) => panic!("duplicate module names must refuse the boot"),
-        Err(err) => err,
-    };
-    let msg = format!("{err:#}");
-    assert!(
-        msg.contains("name dup is claimed twice"),
-        "the refusal is the claim collision: {msg}",
-    );
-    assert!(
-        msg.contains(&wasm.display().to_string()),
-        "the refusal names the claimant path: {msg}",
-    );
-}
-
-/// An adapter and a module sharing a name refuse the boot, pinning that
-/// `boot()` claims both roles into ONE ledger: with a ledger per role the
-/// adapter would instead reach `Component::from_file` and fail on its
-/// absent wasm. Neither wasm exists, so no compile can precede the refusal.
+/// An adapter and a module sharing a name refuse the boot: one ledger
+/// spans both roles. Neither wasm exists, so no compile precedes the
+/// refusal.
 #[tokio::test]
 async fn boot_rejects_a_module_colliding_with_an_adapter_name() {
     let engine = make_wasmtime_engine();

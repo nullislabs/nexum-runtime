@@ -413,14 +413,13 @@ fn enforce_extension_uniqueness<T: RuntimeTypes>(
     Ok(())
 }
 
-/// Names claimed by the boot pre-pass: name to (role, claimant component
-/// path). One ledger spans modules and adapters because both roles derive
-/// the same keccak local-store namespace from the name.
+/// Names claimed by the boot pre-pass: name to (role, claimant path).
+/// One ledger spans both roles: they derive the same keccak local-store
+/// namespace.
 type NamespaceLedger = BTreeMap<String, (&'static str, PathBuf)>;
 
-/// Claim `name` for `path`, refusing a second claimant byte-for-byte:
-/// equality mirrors `keccak256(name.as_bytes())`, so no trimming, case
-/// folding, or Unicode normalisation applies.
+/// Claim `name` for `path`, refusing a second claimant. Equality is
+/// byte-exact, mirroring `keccak256(name.as_bytes())`.
 fn claim_namespace(
     ledger: &mut NamespaceLedger,
     name: &str,
@@ -430,9 +429,7 @@ fn claim_namespace(
     if let Some((held_role, held_path)) = ledger.get(name) {
         return Err(anyhow!(
             "name {name} is claimed twice: {held_role} {} and {role} {}; \
-             [module].name must be unique across [[modules]] and [[adapters]] \
-             because it derives the local-store namespace, log-run identity, \
-             and chain-log routing",
+             [module].name must be unique across [[modules]] and [[adapters]]",
             held_path.display(),
             path.display(),
         ));
@@ -441,17 +438,13 @@ fn claim_namespace(
     Ok(())
 }
 
-/// Namespace a module falls back to when `[module].name` is empty. The
-/// pre-pass and `load_one` must pass the same literal or the ledger claims
-/// a name the store never uses.
+/// Fallback namespace for a module with an empty `[module].name`.
 const MODULE_FALLBACK_NAME: &str = "module";
 
-/// Namespace a provider falls back to when `[module].name` is empty; the
-/// pre-pass and `load_provider` counterpart of [`MODULE_FALLBACK_NAME`].
+/// Fallback namespace for a provider with an empty `[module].name`.
 const PROVIDER_FALLBACK_NAME: &str = "provider";
 
-/// The namespace a loaded manifest claims: `[module].name`, or the role
-/// fallback when the manifest leaves it empty.
+/// `[module].name`, or `fallback` when it is empty.
 fn manifest_namespace(loaded: &LoadedManifest, fallback: &str) -> String {
     if loaded.manifest.module.name.is_empty() {
         fallback.to_owned()
@@ -498,12 +491,8 @@ impl<T: RuntimeTypes> Supervisor<T> {
         // every module store built below already routes to the installed
         // instances. Providers link only their kind's scoped imports.
         let provider_registry = CapabilityRegistry::provider();
-        // Name pre-pass: resolve every manifest and claim every adapter and
-        // module name before any component compiles, instantiates, or runs
-        // `init`. Rejection must precede all guest code because a colliding
-        // component booted earlier would otherwise commit fsync-durable
-        // local-store writes into the shared namespace before the second
-        // claimant is refused; a failed boot rolls nothing back.
+        // Name pre-pass: claim every adapter and module name before any
+        // component compiles or runs guest code.
         let mut ledger = NamespaceLedger::new();
         let mut adapter_manifests = Vec::with_capacity(engine_cfg.adapters.len());
         for entry in &engine_cfg.adapters {
@@ -630,9 +619,8 @@ impl<T: RuntimeTypes> Supervisor<T> {
             manifest: manifest.map(Path::to_path_buf),
         };
         // The single-module override path serves `just run`; providers
-        // are configured through `engine.toml`, so none boot here. Exactly
-        // one component boots, so there is no namespace ledger to claim
-        // into; the manifest still resolves before load.
+        // are configured through `engine.toml`, so none boot here. One
+        // component boots, so there is no ledger to claim into.
         let loaded_manifest =
             load_required_manifest(&entry.path, entry.manifest.as_deref(), &registry, "module")?;
         let extension_kinds = extension_subscription_vocabulary(extensions);
@@ -740,11 +728,10 @@ impl<T: RuntimeTypes> Supervisor<T> {
                 ext: components.ext.clone(),
                 chain: components.chain.clone(),
                 chain_response_max_bytes,
-                // Provider stores carry this live handle too, yet a
-                // provider guest cannot reach it ONLY because
+                // Provider stores carry this live handle too; provider
+                // guests cannot reach it only because
                 // `build_provider_linker` links nothing but `kind.link`
-                // plus WASI. Any future `ProviderKind` that links a
-                // store-touching import reopens cross-role writes.
+                // plus WASI.
                 store: module_store,
                 services,
             },
@@ -926,11 +913,11 @@ impl<T: RuntimeTypes> Supervisor<T> {
         })
     }
 
-    /// Load one `[[adapters]]` entry against the manifest the boot pre-pass
-    /// already resolved and claimed: resolve its kind, enforce the
-    /// scoped-transport capabilities, build a supervised store with the
-    /// operator's grants, and hand the instance to its kind to install. A
-    /// failed `init` loads the provider dead and unroutable, permanently.
+    /// Load one `[[adapters]]` entry against its pre-pass-resolved
+    /// manifest: resolve its kind, enforce the scoped-transport
+    /// capabilities, build a supervised store with the operator's grants,
+    /// and hand the instance to its kind to install. A failed `init` loads
+    /// the provider dead and unroutable, permanently.
     // One flat argument per shared input threaded onto the store, matching
     // the module load path.
     #[allow(clippy::too_many_arguments)]
