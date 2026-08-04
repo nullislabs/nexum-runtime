@@ -594,30 +594,8 @@ impl<T: RuntimeTypes> Supervisor<T> {
         extensions: &[Arc<dyn Extension<T>>],
         provider_manifests: &[ProviderManifest],
     ) -> Result<LoadedModule<T>> {
-        let manifest_path = resolve_manifest_path(&entry.path, entry.manifest.as_deref());
-        let loaded_manifest: LoadedManifest = match manifest_path.as_deref() {
-            Some(p) if p.exists() => {
-                info!(manifest = %p.display(), "loading module manifest");
-                manifest::load(p, registry)?
-            }
-            // Reachable only via an operator-configured explicit path:
-            // sibling discovery returns a candidate only after `.exists()`.
-            Some(p) => {
-                return Err(anyhow!(
-                    "manifest {} not found for component {}",
-                    p.display(),
-                    entry.path.display(),
-                ));
-            }
-            None => {
-                return Err(anyhow!(
-                    "no module.toml for component {}; ship one next to the component \
-                     or pass its path explicitly (an empty `required = []` under \
-                     [capabilities] grants nothing)",
-                    entry.path.display(),
-                ));
-            }
-        };
+        let loaded_manifest =
+            load_required_manifest(&entry.path, entry.manifest.as_deref(), registry, "module")?;
         let module_namespace = if loaded_manifest.manifest.module.name.is_empty() {
             "module".to_owned()
         } else {
@@ -796,30 +774,8 @@ impl<T: RuntimeTypes> Supervisor<T> {
         kinds: &ProviderKinds<T>,
         extensions: &[Arc<dyn Extension<T>>],
     ) -> Result<LoadedProvider> {
-        let manifest_path = resolve_manifest_path(&entry.path, entry.manifest.as_deref());
-        let loaded_manifest: LoadedManifest = match manifest_path.as_deref() {
-            Some(p) if p.exists() => {
-                info!(manifest = %p.display(), "loading provider manifest");
-                manifest::load(p, registry)?
-            }
-            // Reachable only via an operator-configured explicit path:
-            // sibling discovery returns a candidate only after `.exists()`.
-            Some(p) => {
-                return Err(anyhow!(
-                    "manifest {} not found for component {}",
-                    p.display(),
-                    entry.path.display(),
-                ));
-            }
-            None => {
-                return Err(anyhow!(
-                    "no module.toml for component {}; ship one next to the component \
-                     or pass its path explicitly (an empty `required = []` under \
-                     [capabilities] grants nothing)",
-                    entry.path.display(),
-                ));
-            }
-        };
+        let loaded_manifest =
+            load_required_manifest(&entry.path, entry.manifest.as_deref(), registry, "provider")?;
         let namespace = if loaded_manifest.manifest.module.name.is_empty() {
             "provider".to_owned()
         } else {
@@ -1716,6 +1672,37 @@ pub fn build_provider_linker<T: RuntimeTypes>(
     wasmtime_wasi::p2::add_to_linker_async(&mut linker)?;
     wasmtime_wasi_http::p2::add_only_http_to_linker_async(&mut linker)?;
     Ok(linker)
+}
+
+/// Resolve and load the mandatory manifest for `component`; `role` labels
+/// the log line. A manifest that does not resolve, or resolves to a path
+/// that does not exist, refuses the boot: capabilities are deny-by-default,
+/// so an absent declaration is never an implicit grant.
+fn load_required_manifest(
+    component: &Path,
+    explicit: Option<&Path>,
+    registry: &CapabilityRegistry,
+    role: &'static str,
+) -> Result<LoadedManifest> {
+    match resolve_manifest_path(component, explicit).as_deref() {
+        Some(p) if p.exists() => {
+            info!(manifest = %p.display(), role, "loading component manifest");
+            Ok(manifest::load(p, registry)?)
+        }
+        // Reachable only via an operator-configured explicit path: sibling
+        // discovery returns a candidate only after `.exists()`.
+        Some(p) => Err(anyhow!(
+            "manifest {} not found for component {}",
+            p.display(),
+            component.display(),
+        )),
+        None => Err(anyhow!(
+            "no module.toml for component {}; ship one next to the component \
+             or pass its path explicitly (an empty `required = []` under \
+             [capabilities] grants nothing)",
+            component.display(),
+        )),
+    }
 }
 
 /// Resolve a component's manifest: explicit override, else sibling

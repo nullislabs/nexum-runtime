@@ -2537,22 +2537,6 @@ kind = "acme-status"
 
 // ── Fail-closed manifest requirements (issue #60) ─────────────────────
 
-/// The pre-built wasm named `file`, or `None` with a skip note.
-fn built_wasm_or_skip(file: &str) -> Option<PathBuf> {
-    let p = workspace_root()
-        .join("target/wasm32-wasip2/release")
-        .join(file);
-    if p.exists() {
-        Some(p)
-    } else {
-        eprintln!(
-            "SKIP: {} not found - run `just build` to enable E2E tests",
-            p.display()
-        );
-        None
-    }
-}
-
 /// A manifest without a [capabilities] section refuses boot with the
 /// typed manifest error; the module never loads with implicit grants.
 #[tokio::test]
@@ -2767,12 +2751,14 @@ kind = "acme-status"
 }
 
 /// Red-team regression for issue #60: balance-tracker booted with (i) a
-/// manifest declaring only logging is refused for its undeclared imports,
-/// and (ii) a caps-less manifest is refused at the manifest load. The
-/// omission arm used to link chain.request with no declaration at all.
+/// manifest that omits only `chain` is refused for that one import, and
+/// (ii) a caps-less manifest is refused at the manifest load. The omission
+/// arm used to link chain.request with no declaration at all. Arm (i)
+/// declares every other import so the violation is deterministic, whatever
+/// order the component reports its imports in.
 #[tokio::test]
 async fn boot_denies_undeclared_imports_and_capsless_manifest_for_balance_tracker() {
-    let Some(wasm) = built_wasm_or_skip("balance_tracker.wasm") else {
+    let Some(wasm) = module_wasm_or_skip("balance-tracker") else {
         return;
     };
     let engine = make_wasmtime_engine();
@@ -2781,8 +2767,8 @@ async fn boot_denies_undeclared_imports_and_capsless_manifest_for_balance_tracke
     let components = test_components(local_store);
     let limits = ModuleLimits::default();
 
-    // (i) declaring only logging: the chain / local-store imports the
-    // component carries are undeclared, so enforcement refuses the boot.
+    // (i) withholding only `chain`: the component's chain import is the
+    // sole undeclared one, so enforcement refuses the boot naming it.
     let dir = tempfile::tempdir().expect("tempdir");
     let manifest = dir.path().join("module.toml");
     std::fs::write(
@@ -2792,7 +2778,7 @@ async fn boot_denies_undeclared_imports_and_capsless_manifest_for_balance_tracke
 name = "balance-tracker"
 
 [capabilities]
-required = ["logging"]
+required = ["logging", "local-store"]
 
 [[subscription]]
 kind = "block"
@@ -2819,8 +2805,8 @@ chain_id = 1
         "the boot error is a capability violation: {msg}",
     );
     assert!(
-        msg.contains("chain") || msg.contains("local-store"),
-        "the violation names an undeclared capability: {msg}",
+        msg.contains("nexum:host/chain"),
+        "the violation names the withheld chain import: {msg}",
     );
 
     // (ii) omitting [capabilities] entirely: refused at the manifest load,
