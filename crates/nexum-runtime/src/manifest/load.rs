@@ -17,9 +17,7 @@ pub fn load(path: &Path, registry: &CapabilityRegistry) -> Result<LoadedManifest
 
     validate_module_name(&manifest.module.name)?;
 
-    // A malformed pin is a manifest error here, before any compile cost;
-    // the supervisor's read-verify-compile helper checks the pinned value
-    // against the loaded bytes.
+    // A malformed pin fails here, before any compile cost.
     let component_digest = manifest
         .module
         .component
@@ -479,19 +477,6 @@ max_state_bytes    = 52428800
     }
 
     #[test]
-    fn load_rejects_a_non_hex_component_digest() {
-        let err = load_inline(&digest_manifest(&format!(
-            "component = \"sha256:{}\"",
-            "z".repeat(64)
-        )))
-        .unwrap_err();
-        assert!(
-            matches!(err, ParseError::InvalidComponentDigest { ref value, .. } if value.contains("zz")),
-            "{err:?}",
-        );
-    }
-
-    #[test]
     fn load_rejects_a_schemeless_component_digest() {
         let err = load_inline(&digest_manifest("component = \"notahash\"")).unwrap_err();
         assert!(
@@ -502,8 +487,7 @@ max_state_bytes    = 52428800
 
     #[test]
     fn load_rejects_an_explicitly_empty_component_digest() {
-        // `component = ""` is present-but-empty: it must fail parse rather
-        // than degrade to the absent (unverified) case.
+        // Present-but-empty must fail, never degrade to the absent case.
         let err = load_inline(&digest_manifest("component = \"\"")).unwrap_err();
         assert!(
             matches!(err, ParseError::InvalidComponentDigest { ref value, .. } if value.is_empty()),

@@ -166,10 +166,9 @@ pub struct ModuleSection {
     #[allow(dead_code)] // Parsed for future version-pinning; no reader yet.
     #[serde(default)]
     pub version: String,
-    /// Pinned content digest of the component artifact
-    /// (`sha256:<64 hex chars>`). Absent loads unverified with a warning
-    /// (hard error under `[engine] require_component_digest`); present is
-    /// strictly verified against the loaded bytes before compilation.
+    /// Pinned artifact digest (`sha256:<64 hex chars>`), verified against
+    /// the loaded bytes before compile. Absent loads unverified (a hard
+    /// error under `[engine] require_component_digest`).
     #[serde(default)]
     pub component: Option<String>,
     /// Component kind; defaults to the worker (`event-module`), a provider

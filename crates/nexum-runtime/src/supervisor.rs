@@ -262,8 +262,7 @@ struct LoadedModule<T: RuntimeTypes> {
     local_store_bytes: u64,
     /// Cached for restart; `Component` is internally `Arc`-backed.
     component: Component,
-    /// sha256 of the loaded artifact bytes, always computed at load (even
-    /// unpinned) for restart observability and integrity-tagged reuse.
+    /// sha256 of the loaded artifact bytes, computed even when unpinned.
     component_digest: ContentDigest,
     /// Cached for restart: the manifest `[config]` passed to `init`.
     init_config: Config,
@@ -306,9 +305,8 @@ struct LoadedProvider {
     sections: manifest::ExtensionSections,
     /// Cached for restart, like a module's.
     component: Component,
-    /// sha256 of the loaded artifact bytes, always computed at load; also
-    /// threaded onto [`ProviderManifest`] for integrity-tagged
-    /// registrations.
+    /// sha256 of the loaded artifact bytes; also threaded onto
+    /// [`ProviderManifest`].
     component_digest: ContentDigest,
     /// Cached for restart: the manifest `[config]` handed to `init`.
     init_config: Config,
@@ -542,13 +540,10 @@ fn unconfigured_chain(module: &str, chain_id: u64, chains: &ConfiguredChains) ->
 }
 
 /// Read, digest-verify, and compile one component artifact: the only
-/// production compile path for modules and providers. Hashes and compiles
-/// the same read-once buffer, so the bytes verified are the bytes compiled
-/// (a separate `Component::from_file` would reopen the artifact-swap
-/// window this check closes), and a pinned mismatch or a
-/// `require_component_digest` refusal lands before any compile cost. The
-/// computed digest is always returned, even unpinned, for observability
-/// and integrity-tagged reuse.
+/// production compile path. Hashes and compiles the same read-once
+/// buffer, so the bytes verified are the bytes compiled; a mismatch or
+/// `require_component_digest` refusal precedes any compile. The digest
+/// is always returned, even unpinned.
 fn read_verified_component(
     engine: &Engine,
     path: &Path,
@@ -581,9 +576,8 @@ fn read_verified_component(
             "no [module].component digest - loading unverified",
         ),
     }
-    // `CodeBuilder` is byte-for-byte what `Component::from_file` runs over
-    // its own read: WAT text acceptance and path-annotated parse errors
-    // included.
+    // `CodeBuilder` matches `Component::from_file` semantics (WAT
+    // acceptance, path-annotated errors) over the already-read bytes.
     let component = CodeBuilder::new(engine)
         .wasm_binary_or_text(&bytes, Some(path))
         .and_then(|builder| builder.compile_component())
@@ -1733,8 +1727,8 @@ impl<T: RuntimeTypes> Supervisor<T> {
     async fn try_restart(&mut self, idx: usize) {
         let name = self.modules[idx].name.clone();
         let failure_count = self.modules[idx].failure_count;
-        // The digest names the exact artifact bytes this restart reuses;
-        // restarts never re-read the file, so the boot-time digest holds.
+        // Restarts reuse the cached component, never re-reading the file,
+        // so the boot-time digest holds.
         info!(
             module = %name,
             failure_count,
@@ -1831,8 +1825,6 @@ impl<T: RuntimeTypes> Supervisor<T> {
     async fn try_restart_provider(&mut self, idx: usize) {
         let name = self.providers[idx].name.clone();
         let failure_count = self.providers[idx].failure_count;
-        // Same boot-time digest as a module restart: the cached component
-        // is reused, never re-read.
         info!(
             adapter = %name,
             failure_count,

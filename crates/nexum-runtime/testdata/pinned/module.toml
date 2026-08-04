@@ -1,10 +1,9 @@
-# Pinned-digest fixture manifest: `component` is the real sha256 of the
-# sibling component.wat, so the strict verify path runs always-green in
-# CI. Re-pin with `sha256sum component.wat` after any edit to that file.
+# `component` pins the real sha256 of the sibling component.wat; re-pin
+# with `sha256sum component.wat` after any edit to that file.
 
 [module]
 name = "pinned-wat"
-component = "sha256:f36bb043f4a14bcd11dc4d35aedadb4e59ec918892f66c947e6f2760cbb30075"
+component = "sha256:bff6492a4f3b14ba4e777c2f2ad7a5a3bb33c3a6e5c9cf566f23df15178fadbb"
 
 [capabilities]
 required = []

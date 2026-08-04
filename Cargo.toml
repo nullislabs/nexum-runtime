@@ -168,8 +168,7 @@ rand = "0.10"
 # Hex codec for test fixtures and receipt rendering.
 hex = "0.4"
 
-# Content digests over loaded component bytes, verified against the
-# manifest's `[module].component` pin. Already in the graph transitively.
+# Content digests for loaded component bytes.
 sha2 = "0.10"
 
 # Dev/test helpers.

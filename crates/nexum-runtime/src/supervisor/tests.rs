@@ -3344,7 +3344,7 @@ async fn boot_rejects_a_module_colliding_with_an_adapter_name() {
     );
 }
 
-// ── component digest verification (issue #64) ─────────────────────────
+// ── Component digest verification (#64) ───────────────────────────────
 
 /// The committed pinned fixture pair: a byte-stable `.wat` component and
 /// the manifest pinning its real sha256.
@@ -3353,17 +3353,15 @@ fn pinned_fixture() -> (PathBuf, PathBuf) {
     (dir.join("component.wat"), dir.join("module.toml"))
 }
 
-/// The all-zeros digest the deleted manifest placeholders carried.
+/// The all-zeros placeholder digest.
 fn zeros_digest() -> ContentDigest {
     format!("sha256:{}", "0".repeat(64))
         .parse()
         .expect("the placeholder spelling parses")
 }
 
-/// The helper rejects a pinned digest the bytes do not hash to, before
-/// any compile: the file content is not wasm, yet the error is the
-/// mismatch, not a compile failure. A self-hashing test cannot catch an
-/// elided comparison; this one pins the comparison itself.
+/// A pinned digest the bytes do not hash to is refused before any
+/// compile: the content is not wasm, yet the error is the mismatch.
 #[test]
 fn read_verified_component_rejects_a_mismatched_digest() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -3392,7 +3390,7 @@ fn read_verified_component_rejects_a_mismatched_digest() {
 }
 
 /// With `require_component_digest` set, an unpinned artifact is refused
-/// before any compile; the bytes are deliberately not wasm.
+/// before any compile (the bytes are not wasm).
 #[test]
 fn read_verified_component_requires_a_digest_when_the_flag_is_set() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -3408,9 +3406,8 @@ fn read_verified_component_requires_a_digest_when_the_flag_is_set() {
     assert!(!msg.contains("compile"), "refusal precedes compile: {msg}");
 }
 
-/// The committed fixture manifest's real pin verifies and compiles, even
-/// under `require_component_digest`: manifest parse, strict verify, and
-/// WAT-text compile all run always-green with no per-machine wasm build.
+/// The committed fixture's real pin verifies and compiles under the
+/// strict flag, with no per-machine wasm build.
 #[test]
 fn read_verified_component_verifies_the_committed_pinned_fixture() {
     let (wat, manifest) = pinned_fixture();
@@ -3438,9 +3435,8 @@ fn read_verified_component_computes_a_digest_for_unpinned_loads() {
     assert_eq!(actual, ContentDigest::of_bytes(&bytes));
 }
 
-/// No production `Component::from_file` call remains in the supervisor:
-/// every artifact must flow through the read-verify-compile helper, or a
-/// separate read reopens the artifact-swap window the digest check closes.
+/// Every production compile must flow through the helper: a separate
+/// `Component::from_file` read would reopen the artifact-swap window.
 #[test]
 fn no_production_component_from_file_call_remains() {
     let src = include_str!("../supervisor.rs");
@@ -3450,10 +3446,8 @@ fn no_production_component_from_file_call_remains() {
     );
 }
 
-/// A manifest still pinning the deleted all-zeros placeholder is a hard
-/// boot error against real bytes: the sentinel can no longer escape as a
-/// silently-inert field. Always green - verification precedes compile, so
-/// the artifact bytes need not be wasm.
+/// A stale all-zeros placeholder pin is a hard boot error against real
+/// bytes; verification precedes compile, so the bytes need not be wasm.
 #[tokio::test]
 async fn boot_single_refuses_a_mismatched_component_digest() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -3463,9 +3457,9 @@ async fn boot_single_refuses_a_mismatched_component_digest() {
     std::fs::write(
         &manifest,
         format!(
-            "[module]\nname = \"pinned\"\ncomponent = \"sha256:{}\"\n\n\
+            "[module]\nname = \"pinned\"\ncomponent = \"{}\"\n\n\
              [capabilities]\nrequired = []\n",
-            "0".repeat(64),
+            zeros_digest(),
         ),
     )
     .expect("write manifest");
@@ -3581,10 +3575,8 @@ async fn e2e_boot_single_accepts_a_matching_pinned_digest() {
     assert_eq!(supervisor.alive_count(), 1);
 }
 
-/// The provider load path runs the same verify: an `[[adapters]]` entry
-/// with a stale pin fails on the digest, proving `load_provider` goes
-/// through the shared helper. Always green - the artifact bytes are not
-/// wasm and verification precedes compile.
+/// The provider leg runs the same verify: an `[[adapters]]` entry with
+/// a stale pin fails on the digest before any compile.
 #[tokio::test]
 async fn boot_refuses_a_provider_with_a_mismatched_digest() {
     let engine = make_wasmtime_engine();
@@ -3602,8 +3594,8 @@ async fn boot_refuses_a_provider_with_a_mismatched_digest() {
         &manifest,
         format!(
             "[module]\nname = \"acme\"\nkind = \"acme-adapter\"\n\
-             component = \"sha256:{}\"\n\n[capabilities]\nrequired = [\"chain\"]\n",
-            "0".repeat(64),
+             component = \"{}\"\n\n[capabilities]\nrequired = [\"chain\"]\n",
+            zeros_digest(),
         ),
     )
     .expect("write manifest");
@@ -3673,9 +3665,8 @@ async fn boot_requires_a_provider_digest_when_the_engine_flag_is_set() {
     assert!(msg.contains("require_component_digest"), "{msg}");
 }
 
-/// The `[[modules]]` leg of `boot()` threads the flag too: `boot_single`
-/// covers the `just run` override path only, so without this a hardcoded
-/// `false` on the module loop would pass the whole suite.
+/// The `[[modules]]` leg of `boot()` threads the flag too; `boot_single`
+/// covers only the `just run` override path.
 #[tokio::test]
 async fn boot_requires_a_module_digest_when_the_engine_flag_is_set() {
     let engine = make_wasmtime_engine();

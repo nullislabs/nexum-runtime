@@ -186,8 +186,7 @@ pub struct ProviderManifest {
     /// The provider's extension-owned manifest sections.
     pub sections: ExtensionSections,
     /// sha256 of the loaded provider artifact, for integrity-tagged
-    /// registrations. Provider components are the only hashable
-    /// registration bearers; compiled-in extensions have no artifact.
+    /// registrations.
     pub component_digest: crate::digest::ContentDigest,
 }
 

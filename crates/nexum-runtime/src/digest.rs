@@ -1,7 +1,4 @@
-//! Content digests for loaded component artifacts.
-//!
-//! Deliberately manifest-free so integrity-tagged extension registrations
-//! can consume it without pulling in manifest types.
+//! Content digests for loaded component artifacts; kept manifest-free.
 
 use std::fmt;
 use std::path::PathBuf;
@@ -41,8 +38,7 @@ impl FromStr for ContentDigest {
                 scheme: scheme.to_owned(),
             });
         }
-        // const-hex tolerates a `0x` prefix; the strict grammar does not,
-        // so refuse it as the non-hex character it is here.
+        // const-hex tolerates a `0x` prefix; the strict grammar does not.
         if payload.starts_with("0x") || payload.starts_with("0X") {
             return Err(DigestParseError::Hex {
                 value: s.to_owned(),
@@ -184,8 +180,6 @@ mod tests {
 
     #[test]
     fn rejects_a_0x_prefixed_payload() {
-        // const-hex would strip the prefix and accept the remaining 64
-        // chars; the strict grammar must not.
         let value = format!("sha256:0x{}", "a".repeat(64));
         let err = value.parse::<ContentDigest>().unwrap_err();
         assert!(matches!(err, DigestParseError::Hex { .. }), "{err:?}");
