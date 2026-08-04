@@ -11,8 +11,7 @@ use super::types::{LoadedManifest, Manifest};
 
 /// Read, parse, and validate `module.toml`; declared capability names are
 /// checked against `registry`. A manifest without a `[capabilities]`
-/// section is refused: capabilities are deny-by-default and every manifest
-/// must declare them explicitly (an empty `required = []` grants nothing).
+/// section is refused (an empty `required = []` grants nothing).
 pub fn load(path: &Path, registry: &CapabilityRegistry) -> Result<LoadedManifest, ParseError> {
     let raw = std::fs::read_to_string(path)?;
     let manifest: Manifest = toml::from_str(&raw)?;
@@ -393,8 +392,8 @@ max_state_bytes    = 52428800
 
     #[test]
     fn load_rejects_module_name_that_escapes_the_state_dir() {
-        // The caps-less manifests below also assert precedence: name
-        // validation runs before the [capabilities] presence check.
+        // Caps-less on purpose: name validation precedes the
+        // [capabilities] presence check.
         for bad in ["../evil", "a/b", "a\\b", "..", "/etc/passwd", "foo/../bar"] {
             // Single-quoted TOML literal string: no backslash-escape processing.
             let toml = format!("[module]\nname = '{bad}'\n");
@@ -422,8 +421,6 @@ max_state_bytes    = 52428800
         assert_eq!(loaded.manifest.module.name, "twap-monitor");
     }
 
-    /// A manifest without a [capabilities] section is a hard parse error;
-    /// the message tells the author the two-line fix.
     #[test]
     fn load_rejects_missing_capabilities_section() {
         let dir = tempfile::tempdir().unwrap();
@@ -436,7 +433,6 @@ max_state_bytes    = 52428800
         assert!(msg.contains("required = []"), "{msg}");
     }
 
-    /// An explicit empty [capabilities] block is valid and grants nothing.
     #[test]
     fn load_accepts_empty_capabilities_block() {
         let dir = tempfile::tempdir().unwrap();

@@ -26,8 +26,7 @@ pub enum ParseError {
     /// state directory.
     #[error("manifest: [module].name {0:?} must not contain '/', '\\', or '..'")]
     InvalidModuleName(String),
-    /// No `[capabilities]` section; capabilities are deny-by-default, so
-    /// every manifest must declare one (an empty `required = []` is valid).
+    /// No `[capabilities]` section; every manifest must declare one.
     #[error(
         "manifest: no [capabilities] section; capabilities are deny-by-default - \
          declare an explicit [capabilities] block (an empty `required = []` \

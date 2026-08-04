@@ -159,10 +159,8 @@ impl CapabilityRegistry {
 
 /// Check that every capability-bearing WIT import is covered by the
 /// manifest's declarations; call after loading the component, before
-/// instantiation. Absent `[capabilities]` collapses to the empty set, so
-/// every gated import is denied; `load()` refuses such a manifest first,
-/// and this layer is defence in depth for hand-constructed manifests.
-/// `component_imports` are the import name parts.
+/// instantiation. Absent `[capabilities]` is the empty set: every gated
+/// import is denied. `component_imports` are the import name parts.
 pub fn enforce_capabilities<'a>(
     loaded: &LoadedManifest,
     component_imports: impl Iterator<Item = &'a str>,
@@ -308,8 +306,6 @@ mod tests {
 
     #[test]
     fn enforce_rejects_registry_import_when_caps_absent() {
-        // No [capabilities] section collapses to the empty set: a
-        // registry-mapped import is denied, never granted by omission.
         let loaded = manifest_no_caps();
         let r = registry_with_ext();
         let err =
@@ -321,8 +317,6 @@ mod tests {
         assert_eq!(v.wit_import, "nexum:host/chain@0.1.0");
     }
 
-    /// Absent caps with only ambient wasi imports still enforce clean; the
-    /// boot-time refusal of a caps-less manifest lives in `load()`, not here.
     #[test]
     fn enforce_accepts_ambient_wasi_when_caps_absent() {
         let loaded = manifest_no_caps();
@@ -331,8 +325,6 @@ mod tests {
         assert!(enforce_capabilities(&loaded, imports.into_iter(), &r).is_ok());
     }
 
-    /// Absent caps deny `wasi:http` at link time; the old fallback skipped
-    /// the registry mapping that gates it.
     #[test]
     fn enforce_rejects_wasi_http_when_caps_absent() {
         let loaded = manifest_no_caps();
@@ -534,25 +526,6 @@ mod tests {
             enforce_capabilities(&declared, ["wasi:sockets/tcp@0.2.6"].into_iter(), &r).is_ok()
         );
         assert!(enforce_capabilities(&none, ["wasi:filesystem/types"].into_iter(), &r).is_err());
-    }
-
-    #[test]
-    fn absent_caps_deny_registry_and_gated_wasi() {
-        // No [capabilities] section is the empty set on every surface:
-        // registry imports and gated wasi are denied, ambient wasi passes,
-        // and an unknown wasi namespace stays refused fail-closed.
-        let loaded = manifest_no_caps();
-        let r = registry_with_ext();
-        assert!(
-            enforce_capabilities(&loaded, ["nexum:host/remote-store@0.1.0"].into_iter(), &r)
-                .is_err()
-        );
-        assert!(enforce_capabilities(&loaded, ["wasi:io/streams@0.2.6"].into_iter(), &r).is_ok());
-        assert!(enforce_capabilities(&loaded, ["wasi:sockets/tcp@0.2.6"].into_iter(), &r).is_err());
-        assert!(matches!(
-            enforce_capabilities(&loaded, ["wasi:nn/tensor@0.2.0"].into_iter(), &r).unwrap_err(),
-            CapabilityError::UnknownWasi { .. }
-        ));
     }
 
     #[test]

@@ -26,9 +26,9 @@ pub struct Cli {
     pub wasm: Option<PathBuf>,
 
     /// Optional positional path to the module's `module.toml` manifest.
-    /// Only consulted alongside the positional `wasm` shortcut. A manifest
-    /// is mandatory: when omitted, a `module.toml` sibling of the wasm must
-    /// exist, or the engine refuses to boot.
+    /// Only consulted alongside the positional `wasm` shortcut. When
+    /// omitted, a `module.toml` sibling of the wasm must exist, or the
+    /// engine refuses to boot.
     pub manifest: Option<PathBuf>,
 
     /// Optional explicit path to the engine-wide `engine.toml` config.

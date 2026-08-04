@@ -1675,9 +1675,7 @@ pub fn build_provider_linker<T: RuntimeTypes>(
 }
 
 /// Resolve and load the mandatory manifest for `component`; `role` labels
-/// the log line. A manifest that does not resolve, or resolves to a path
-/// that does not exist, refuses the boot: capabilities are deny-by-default,
-/// so an absent declaration is never an implicit grant.
+/// the log line. A missing or unresolved manifest refuses the boot.
 fn load_required_manifest(
     component: &Path,
     explicit: Option<&Path>,

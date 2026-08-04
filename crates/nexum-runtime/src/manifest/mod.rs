@@ -3,8 +3,7 @@
 //! `load` parses and validates a manifest; `capabilities` cross-checks a
 //! component's WIT imports against its declared `[capabilities]`; `types`
 //! holds the serde shapes and `LoadedManifest`; `error` the error types.
-//! A manifest with no `[capabilities]` section is refused at load:
-//! capabilities are deny-by-default and must be declared explicitly.
+//! A manifest with no `[capabilities]` section is refused at load.
 
 mod capabilities;
 mod error;
