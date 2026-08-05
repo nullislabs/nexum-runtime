@@ -14,6 +14,7 @@ use super::Supervisor;
 use super::load::{LoadedProvider, run_init};
 use super::store::{self, build_linker, build_provider_linker};
 use crate::bindings::EventModule;
+use crate::host::actor::Liveness;
 use crate::host::component::RuntimeTypes;
 use crate::host::extension::{HostServices, Installed, ProviderInstance};
 use crate::host::logs::RunId;
@@ -151,10 +152,9 @@ impl Health {
         }
     }
 
-    /// A restart succeeded. The failure count survives unless the caller's
-    /// role resets it, so a still-crashing component keeps climbing the
-    /// backoff curve.
-    pub(super) fn restart_succeeded(&mut self, reset_failures: bool) {
+    /// A restart succeeded. Private so the per-role reset choice is made
+    /// only by [`commit_module_restart`] and [`commit_provider_restart`].
+    fn restart_succeeded(&mut self, reset_failures: bool) {
         self.state = LifecycleState::Alive;
         if reset_failures {
             self.failure_count = 0;
@@ -244,7 +244,7 @@ impl<T: RuntimeTypes> Supervisor<T> {
         .increment(1);
         match self.reinstantiate_one(idx).await {
             Ok(()) => {
-                self.modules[idx].health.restart_succeeded(false);
+                commit_module_restart(&mut self.modules[idx].health);
                 info!(module = %name, "restart succeeded");
             }
             Err(e) => {
@@ -267,12 +267,9 @@ impl<T: RuntimeTypes> Supervisor<T> {
         let policy = self.policy;
         for idx in 0..self.providers.len() {
             let provider = &mut self.providers[idx];
-            if provider.health.dispatchable()
-                && let Some(died_at) = provider.liveness.dead_since()
+            if let Some(verdict) =
+                record_provider_death(&mut provider.health, &provider.liveness, now, policy)
             {
-                // Backoff counts from the death, not from this sweep, so a
-                // trap whose backoff already elapsed restarts right below.
-                let verdict = provider.health.record_trap(died_at, now, policy);
                 warn!(
                     adapter = %provider.name,
                     failure_count = verdict.failure_count,
@@ -326,9 +323,11 @@ impl<T: RuntimeTypes> Supervisor<T> {
         let provider = &mut self.providers[idx];
         match outcome {
             Ok(Installed::Live) => {
-                provider.run_seq += 1;
-                provider.liveness.mark_alive();
-                provider.health.restart_succeeded(true);
+                commit_provider_restart(
+                    &mut provider.run_seq,
+                    &provider.liveness,
+                    &mut provider.health,
+                );
                 info!(adapter = %name, "adapter restart succeeded");
             }
             Ok(Installed::Dead) => {
@@ -370,6 +369,36 @@ impl<T: RuntimeTypes> Supervisor<T> {
         )
         .await
     }
+}
+
+/// Fold the shared liveness into a provider's health, counting the backoff
+/// from the death instant rather than from the sweep that noticed it.
+fn record_provider_death(
+    health: &mut Health,
+    liveness: &Liveness,
+    now: Instant,
+    policy: PoisonPolicy,
+) -> Option<TrapVerdict> {
+    if !health.dispatchable() {
+        return None;
+    }
+    let died_at = liveness.dead_since()?;
+    Some(health.record_trap(died_at, now, policy))
+}
+
+/// Commit a successful module restart. The failure count survives, so a
+/// module that keeps trapping keeps climbing the backoff curve.
+fn commit_module_restart(health: &mut Health) {
+    health.restart_succeeded(false);
+}
+
+/// Commit a successful provider reinstall: new run sequence, revived
+/// liveness, and a reset failure count, because a reinstall is a fresh
+/// instance where the module path recovers in place.
+fn commit_provider_restart(run_seq: &mut u64, liveness: &Liveness, health: &mut Health) {
+    *run_seq += 1;
+    liveness.mark_alive();
+    health.restart_succeeded(true);
 }
 
 /// Slide a failed provider restart's next attempt further out.
@@ -565,5 +594,65 @@ mod health_tests {
         );
         assert!(health.is_poisoned());
         assert!(!health.due_restart(t0 + secs(3600)));
+    }
+
+    #[test]
+    fn a_provider_death_is_recorded_from_the_death_instant() {
+        let liveness = Liveness::default();
+        liveness.mark_dead();
+        let died_at = liveness.dead_since().expect("marked dead");
+        // The sweep notices five seconds after the death, well past the
+        // one-second backoff the first trap earns.
+        let sweep = died_at + secs(5);
+        let mut health = Health::alive();
+        let verdict = record_provider_death(&mut health, &liveness, sweep, policy(5, 600))
+            .expect("an unrecorded death is a trap");
+        assert_eq!(verdict.failure_count, 1);
+        assert_eq!(verdict.backoff, secs(1));
+        assert!(
+            health.due_restart(sweep),
+            "backoff runs from the death, not from the sweep that noticed it",
+        );
+    }
+
+    #[test]
+    fn a_provider_death_is_recorded_once() {
+        let liveness = Liveness::default();
+        let mut health = Health::alive();
+        let now = Instant::now();
+        assert!(
+            record_provider_death(&mut health, &liveness, now, policy(5, 600)).is_none(),
+            "a live provider has nothing to record",
+        );
+        liveness.mark_dead();
+        assert!(record_provider_death(&mut health, &liveness, now, policy(5, 600)).is_some());
+        assert!(
+            record_provider_death(&mut health, &liveness, now, policy(5, 600)).is_none(),
+            "the liveness stays dead until the reinstall, so the gate is health",
+        );
+        assert_eq!(health.failure_count(), 1);
+    }
+
+    #[test]
+    fn a_module_restart_keeps_the_curve_and_a_provider_restart_resets_it() {
+        let t0 = Instant::now();
+        let mut module = Health::alive();
+        module.record_trap(t0, t0, policy(9, 600));
+        module.record_trap(t0 + secs(2), t0 + secs(2), policy(9, 600));
+        commit_module_restart(&mut module);
+        assert!(module.dispatchable());
+        assert_eq!(module.failure_count(), 2);
+
+        let mut provider = Health::alive();
+        provider.record_trap(t0, t0, policy(9, 600));
+        provider.record_trap(t0 + secs(2), t0 + secs(2), policy(9, 600));
+        let liveness = Liveness::default();
+        liveness.mark_dead();
+        let mut run_seq = 7;
+        commit_provider_restart(&mut run_seq, &liveness, &mut provider);
+        assert!(provider.dispatchable());
+        assert_eq!(provider.failure_count(), 0);
+        assert!(liveness.is_alive());
+        assert_eq!(run_seq, 8);
     }
 }

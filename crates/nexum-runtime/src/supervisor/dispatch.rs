@@ -322,11 +322,14 @@ impl<T: RuntimeTypes> Supervisor<T> {
                     format!("run terminated abnormally: {}", trap.root_cause()),
                 ));
                 if let Some(recent) = verdict.poisoned {
+                    // A string field, not a `Display` one: the two record
+                    // through different visitor methods and print differently.
+                    let last_error = trap.to_string();
                     warn!(
                         module = %module.name,
                         recent_failures = recent,
                         window_secs = poison_policy.window.as_secs(),
-                        last_error = %trap,
+                        last_error,
                         "module poisoned - quarantined; remove from engine.toml + restart to clear",
                     );
                     metrics::gauge!(
