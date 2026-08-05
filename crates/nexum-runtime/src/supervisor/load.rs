@@ -31,6 +31,7 @@ use crate::host::extension::{HostServices, Installed, ProviderInstance, Provider
 use crate::host::logs::RunId;
 use crate::host::state::HostState;
 use crate::manifest::{self, CapabilityRegistry, ComponentKind, LoadedManifest, Subscription};
+use crate::module_id::ModuleId;
 use crate::runtime::dispatch_rate::TokenBucket;
 
 /// The compiled artifact and `init` inputs cached for restarts; restarts
@@ -74,7 +75,7 @@ pub(super) struct LiveInstance<T: RuntimeTypes> {
 }
 
 pub(super) struct LoadedModule<T: RuntimeTypes> {
-    pub(super) name: String,
+    pub(super) name: ModuleId,
     pub(super) live: LiveInstance<T>,
     pub(super) seed: ModuleSeed,
     /// Subscriptions copied from `module.toml`, read on every event to
@@ -89,7 +90,7 @@ pub(super) struct LoadedModule<T: RuntimeTypes> {
 /// bookkeeping. Liveness is shared with the installed actor.
 pub(super) struct LoadedProvider {
     /// The provider's namespace: its manifest name.
-    pub(super) name: String,
+    pub(super) name: ModuleId,
     /// Registered kind the restart sweep reinstalls through.
     pub(super) kind: &'static str,
     /// Extension-owned manifest sections.
@@ -178,19 +179,20 @@ pub(super) async fn module<T: RuntimeTypes>(
     require_component_digest: bool,
     provider_manifests: &[ProviderManifest],
 ) -> Result<LoadedModule<T>> {
-    let module_namespace = manifest_namespace(&loaded_manifest, MODULE_FALLBACK_NAME);
+    let module_namespace: ModuleId =
+        manifest_namespace(&loaded_manifest, MODULE_FALLBACK_NAME).into();
     let registry = capability_registry(&shared.extensions);
     let sections = &loaded_manifest.manifest.extensions;
     let ((), component, digest) = admit_and_verify(
         shared,
-        &module_namespace,
+        module_namespace.as_str(),
         &entry.path,
         &loaded_manifest,
         &registry,
         require_component_digest,
         || {
             for ext in &shared.extensions {
-                ext.admit_worker(&module_namespace, sections, provider_manifests)
+                ext.admit_worker(module_namespace.as_str(), sections, provider_manifests)
                     .with_context(|| format!("install refused for {}", entry.path.display()))?;
             }
             info!(component = %entry.path.display(), "compiling component");
@@ -229,7 +231,7 @@ pub(super) async fn module<T: RuntimeTypes>(
         .map_err(Error::from)
         .with_context(|| format!("instantiate {}", entry.path.display()))?;
 
-    let config = default_init_config(&loaded_manifest.config, &module_namespace);
+    let config = default_init_config(&loaded_manifest.config, module_namespace.as_str());
     // A failed `init` leaves guest state uninitialised, so the module
     // loads dead and the dispatcher skips it rather than waste dispatches.
     let init_succeeded =
@@ -305,7 +307,7 @@ pub(super) async fn provider<T: RuntimeTypes>(
     limits_cfg: &ModuleLimits,
     require_component_digest: bool,
 ) -> Result<LoadedProvider> {
-    let namespace = manifest_namespace(&loaded_manifest, PROVIDER_FALLBACK_NAME);
+    let namespace: ModuleId = manifest_namespace(&loaded_manifest, PROVIDER_FALLBACK_NAME).into();
     // The provider registry scopes capabilities to transports: a core-only
     // declaration fails at manifest load, an undeclared transport import
     // fails after compile, and the linker withholds the same interfaces.
@@ -313,14 +315,14 @@ pub(super) async fn provider<T: RuntimeTypes>(
     let sections = loaded_manifest.manifest.extensions.clone();
     let ((kind, service), component, digest) = admit_and_verify(
         shared,
-        &namespace,
+        namespace.as_str(),
         &entry.path,
         &loaded_manifest,
         &registry,
         require_component_digest,
         || {
             for ext in &shared.extensions {
-                ext.admit_provider(&namespace, &sections)
+                ext.admit_provider(namespace.as_str(), &sections)
                     .with_context(|| format!("install refused for {}", entry.path.display()))?;
             }
             // The manifest kind is the discriminator: an [[adapters]] entry
@@ -380,7 +382,7 @@ pub(super) async fn provider<T: RuntimeTypes>(
     // the provider's store, and carrying it here would cycle.
     let store = store::build(shared, &spec, run.clone(), HostServices::default())?;
 
-    let config = default_init_config(&loaded_manifest.config, &namespace);
+    let config = default_init_config(&loaded_manifest.config, namespace.as_str());
     let liveness = Liveness::default();
     let installed = kind
         .install(

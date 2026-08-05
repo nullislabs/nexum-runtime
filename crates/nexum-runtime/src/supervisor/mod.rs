@@ -263,7 +263,7 @@ fn project_manifests(providers: &[LoadedProvider]) -> Vec<ProviderManifest> {
     providers
         .iter()
         .map(|p| ProviderManifest {
-            name: p.name.clone(),
+            name: p.name.to_string(),
             kind: p.kind,
             sections: p.sections.clone(),
             component_digest: p.seed.artifact.digest,

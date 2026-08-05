@@ -411,7 +411,7 @@ fn scripted_provider(engine: &wasmtime::Engine) -> crate::supervisor::load::Load
     const EMPTY_COMPONENT: &[u8] = b"(component)";
     let limits = ModuleLimits::default();
     crate::supervisor::load::LoadedProvider {
-        name: "scripted".to_owned(),
+        name: "scripted".into(),
         kind: "scripted-adapter",
         sections: manifest::ExtensionSections::default(),
         seed: crate::supervisor::load::ProviderSeed {

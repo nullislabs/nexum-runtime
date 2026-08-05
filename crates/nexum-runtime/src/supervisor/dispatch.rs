@@ -17,6 +17,7 @@ use crate::host::component::RuntimeTypes;
 use crate::host::extension::ExtensionEvent;
 use crate::host::logs::{LogRecord, LogSource};
 use crate::manifest::Subscription;
+use crate::module_id::ModuleId;
 
 impl<T: RuntimeTypes> Supervisor<T> {
     /// Revive providers before modules at every multi-target entry point:
@@ -58,7 +59,7 @@ impl<T: RuntimeTypes> Supervisor<T> {
             ) {
                 persist_progress_marker(
                     &self.shared.components.store,
-                    &self.modules[idx].name,
+                    self.modules[idx].name.as_str(),
                     chain,
                     block_number,
                 );
@@ -75,14 +76,14 @@ impl<T: RuntimeTypes> Supervisor<T> {
     /// is never recorded as done before the module processed it.
     pub async fn dispatch_chain_log(
         &mut self,
-        module_name: &str,
+        module_name: &ModuleId,
         chain: Chain,
         log: alloy_rpc_types_eth::Log,
         cursor_key: Option<&str>,
     ) -> bool {
         let now = Instant::now();
         sweep(&self.shared, &mut self.providers, self.policy, now).await;
-        let Some(idx) = self.modules.iter().position(|m| m.name == module_name) else {
+        let Some(idx) = self.modules.iter().position(|m| m.name == *module_name) else {
             warn!(module = %module_name, "no such module - dropping chain-log");
             return false;
         };
@@ -125,7 +126,7 @@ impl<T: RuntimeTypes> Supervisor<T> {
             commit_chain_log_cursor(
                 &self.shared.components.store,
                 &mut self.chain_log_cursors,
-                module_name,
+                module_name.as_str(),
                 key,
                 block,
                 removed,
@@ -206,7 +207,7 @@ impl<T: RuntimeTypes> Supervisor<T> {
             );
             metrics::counter!(
                 "nexum_runtime_dispatch_dropped_total",
-                "module" => module.name.clone(),
+                "module" => module.name.to_string(),
                 "event_kind" => event_kind,
             )
             .increment(1);
@@ -254,7 +255,7 @@ impl<T: RuntimeTypes> Supervisor<T> {
                 );
                 metrics::histogram!(
                     "nexum_runtime_event_latency_seconds",
-                    "module" => module.name.clone(),
+                    "module" => module.name.to_string(),
                     "event_kind" => event_kind,
                 )
                 .record(elapsed.as_secs_f64());
@@ -277,7 +278,7 @@ impl<T: RuntimeTypes> Supervisor<T> {
                 );
                 metrics::counter!(
                     "nexum_runtime_module_errors_total",
-                    "module" => module.name.clone(),
+                    "module" => module.name.to_string(),
                     "error_kind" => kind,
                 )
                 .increment(1);
@@ -300,7 +301,7 @@ impl<T: RuntimeTypes> Supervisor<T> {
                 );
                 metrics::counter!(
                     "nexum_runtime_module_errors_total",
-                    "module" => module.name.clone(),
+                    "module" => module.name.to_string(),
                     "error_kind" => "trap",
                 )
                 .increment(1);
@@ -326,7 +327,7 @@ impl<T: RuntimeTypes> Supervisor<T> {
                     );
                     metrics::gauge!(
                         "nexum_runtime_module_poisoned",
-                        "module" => module.name.clone(),
+                        "module" => module.name.to_string(),
                     )
                     .set(1.0);
                 }

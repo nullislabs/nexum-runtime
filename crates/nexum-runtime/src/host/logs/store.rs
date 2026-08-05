@@ -3,12 +3,12 @@
 
 use std::collections::HashMap;
 use std::collections::VecDeque;
-use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::SystemTime;
 
 use super::{LogRecord, RunId};
 use crate::engine_config::LogRetentionLimits;
+use crate::module_id::ModuleId;
 
 /// A page of a run's retained records plus the cursor to resume from.
 #[derive(Debug, Clone, Default)]
@@ -129,7 +129,7 @@ impl ModuleRuns {
 }
 
 struct Inner {
-    modules: HashMap<Arc<str>, ModuleRuns>,
+    modules: HashMap<ModuleId, ModuleRuns>,
     limits: LogRetentionLimits,
 }
 
@@ -193,7 +193,7 @@ impl RunLogStore for InMemoryRunLogStore {
         let inner = self.inner.lock().expect("log store mutex poisoned");
         inner
             .modules
-            .get(&*run.module)
+            .get(run.module.as_str())
             .and_then(|entry| entry.rings.get(run))
             .map(|ring| ring.page(cursor))
             .unwrap_or_default()

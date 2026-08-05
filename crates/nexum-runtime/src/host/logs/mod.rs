@@ -19,6 +19,8 @@ use std::time::SystemTime;
 use strum::IntoStaticStr;
 use tracing_core::Level;
 
+use crate::module_id::ModuleId;
+
 pub use stdio::StdioStream;
 pub use store::{InMemoryRunLogStore, LogPage, RunLogStore, RunMeta};
 
@@ -26,7 +28,7 @@ pub use store::{InMemoryRunLogStore, LogPage, RunLogStore, RunMeta};
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct RunId {
     /// Module namespace this run belongs to.
-    pub module: Arc<str>,
+    pub module: ModuleId,
     /// Monotonic run counter within the module; 0 is the first boot.
     pub seq: u64,
     /// Wall-clock instant the run was instantiated.
@@ -35,7 +37,7 @@ pub struct RunId {
 
 impl RunId {
     /// Mint a run for `module` at sequence `seq`.
-    pub fn new(module: impl Into<Arc<str>>, seq: u64) -> Self {
+    pub fn new(module: impl Into<ModuleId>, seq: u64) -> Self {
         Self {
             module: module.into(),
             seq,
@@ -129,7 +131,7 @@ impl LogRouter {
 
 /// Emit one record as a host tracing event at its own level.
 fn emit_tracing(record: &LogRecord) {
-    let module = &*record.run.module;
+    let module = record.run.module.as_str();
     let run = record.run.seq;
     let source: &'static str = record.source.into();
     let message = record.message.as_str();

@@ -13,6 +13,7 @@ use super::cursors::{chainlog_cursor_key, read_chain_log_cursor};
 use crate::bindings::nexum;
 use crate::host::component::RuntimeTypes;
 use crate::manifest::Subscription;
+use crate::module_id::ModuleId;
 
 impl<T: RuntimeTypes> Supervisor<T> {
     /// Chains any alive module subscribes to block events on, sorted by
@@ -60,7 +61,7 @@ impl<T: RuntimeTypes> Supervisor<T> {
                                 );
                                 let seed = read_chain_log_cursor(
                                     &self.shared.components.store,
-                                    &module.name,
+                                    module.name.as_str(),
                                     &key,
                                 );
                                 (Some(key), seed)
@@ -108,7 +109,7 @@ impl<T: RuntimeTypes> Supervisor<T> {
 /// and resume block.
 pub struct ChainLogSub {
     /// Module that declared the subscription; also its store namespace.
-    pub module: String,
+    pub module: ModuleId,
     /// Chain the filter applies to.
     pub chain: Chain,
     /// Alloy filter the poller opens with.
