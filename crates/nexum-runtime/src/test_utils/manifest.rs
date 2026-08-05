@@ -2,6 +2,61 @@
 
 use std::path::{Path, PathBuf};
 
+/// Where one boot entry's manifest comes from.
+#[derive(Debug, Clone)]
+pub enum ManifestSource {
+    /// No explicit path; the loader falls back to discovery beside the component.
+    Beside,
+    /// A path handed to the loader as-is, existing or not.
+    Path(PathBuf),
+    /// Manifest text written out at boot.
+    Toml(String),
+}
+
+impl ManifestSource {
+    /// Materialise inline text at `path`; [`Beside`](Self::Beside) resolves to nothing.
+    pub fn resolve(&self, path: &Path) -> Option<PathBuf> {
+        match self {
+            Self::Beside => None,
+            Self::Path(explicit) => Some(explicit.clone()),
+            Self::Toml(toml) => {
+                std::fs::write(path, toml).expect("write the test manifest");
+                Some(path.to_path_buf())
+            }
+        }
+    }
+}
+
+impl From<TestManifest> for ManifestSource {
+    fn from(manifest: TestManifest) -> Self {
+        Self::Toml(manifest.to_toml())
+    }
+}
+
+impl From<&TestManifest> for ManifestSource {
+    fn from(manifest: &TestManifest) -> Self {
+        Self::Toml(manifest.to_toml())
+    }
+}
+
+impl From<String> for ManifestSource {
+    fn from(toml: String) -> Self {
+        Self::Toml(toml)
+    }
+}
+
+impl From<PathBuf> for ManifestSource {
+    fn from(path: PathBuf) -> Self {
+        Self::Path(path)
+    }
+}
+
+impl From<&Path> for ManifestSource {
+    fn from(path: &Path) -> Self {
+        Self::Path(path.to_path_buf())
+    }
+}
+
 /// Builder for positive-path manifest TOML.
 #[derive(Debug, Clone)]
 pub struct TestManifest {
@@ -299,6 +354,27 @@ mod tests {
                 if kind == "acme-status" && filters.get("scope").is_some_and(|v| v == "primary")),
             "attribute filters ride the same table: {subs:?}",
         );
+    }
+
+    #[test]
+    fn manifest_sources_resolve_to_what_the_loader_receives() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let at = dir.path().join("module.toml");
+
+        assert_eq!(ManifestSource::Beside.resolve(&at), None);
+        assert!(!at.exists(), "a discovered manifest writes nothing");
+
+        let explicit = dir.path().join("absent.toml");
+        assert_eq!(
+            ManifestSource::from(explicit.clone()).resolve(&at),
+            Some(explicit),
+            "an explicit path passes through untouched",
+        );
+        assert!(!at.exists(), "an explicit path writes nothing");
+
+        let inline = ManifestSource::from(TestManifest::new("inline").cap("logging"));
+        assert_eq!(inline.resolve(&at).as_deref(), Some(at.as_path()));
+        assert_eq!(load_path(&at).manifest.module.name, "inline");
     }
 
     #[test]

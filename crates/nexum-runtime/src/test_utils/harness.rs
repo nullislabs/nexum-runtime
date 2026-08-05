@@ -20,6 +20,7 @@ use alloy_chains::Chain;
 use alloy_rpc_types_eth::{Header, Log};
 
 use super::clock::ManualClock;
+use super::manifest::ManifestSource;
 use super::rpc::FakeNode;
 use super::{HARNESS_POLL_INTERVAL, MockStateStore, MockTypes, Prebuilt};
 use crate::builder::{RuntimeBuilder, RuntimeHandle};
@@ -27,16 +28,6 @@ use crate::engine_config::{EngineConfig, ModuleLimits};
 use crate::host::component::ComponentsBuilder;
 use crate::host::extension::Extension;
 use crate::host::logs::{LogPipeline, LogRecord};
-
-/// Where the module manifest comes from.
-enum ManifestSource {
-    /// No manifest; boot fails unless a `module.toml` sibling exists.
-    None,
-    /// An existing manifest file.
-    Path(PathBuf),
-    /// Manifest TOML written to a temp file at launch.
-    Inline(String),
-}
 
 /// Builder for a [`TestRuntime`]; the launched handle shares the same mock
 /// backends. A manifest is mandatory.
@@ -69,7 +60,7 @@ impl<E: Clone + Send + Sync + 'static> TestRuntime<E> {
     pub fn builder_with_ext(wasm: impl Into<PathBuf>, ext: E) -> TestRuntimeBuilder<E> {
         TestRuntimeBuilder {
             wasm: wasm.into(),
-            manifest: ManifestSource::None,
+            manifest: ManifestSource::Beside,
             extensions: Vec::new(),
             ext,
             limits: ModuleLimits::default(),
@@ -90,7 +81,7 @@ impl<E: Clone + Send + Sync + 'static> TestRuntimeBuilder<E> {
 
     /// Write `toml` to a temp file at launch and load the module from it.
     pub fn manifest_inline(mut self, toml: impl Into<String>) -> Self {
-        self.manifest = ManifestSource::Inline(toml.into());
+        self.manifest = ManifestSource::Toml(toml.into());
         self
     }
 
@@ -143,15 +134,7 @@ impl<E: Clone + Send + Sync + 'static> TestRuntimeBuilder<E> {
         // (unused, in-memory backends) state directory.
         let tmp = tempfile::tempdir()?;
 
-        let manifest = match self.manifest {
-            ManifestSource::None => None,
-            ManifestSource::Path(path) => Some(path),
-            ManifestSource::Inline(toml) => {
-                let path = tmp.path().join("module.toml");
-                std::fs::write(&path, toml)?;
-                Some(path)
-            }
-        };
+        let manifest = self.manifest.resolve(&tmp.path().join("module.toml"));
 
         let mut config = EngineConfig::default();
         config.engine.state_dir = tmp.path().to_path_buf();
