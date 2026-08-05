@@ -2876,7 +2876,6 @@ chain_id = 1
     );
 }
 
-/// A cross-role duplicate is refused; the error names both roles and paths.
 #[test]
 fn claim_namespace_rejects_cross_role_duplicate_with_both_paths() {
     let mut ledger = NamespaceLedger::new();
@@ -2905,8 +2904,6 @@ fn claim_namespace_rejects_cross_role_duplicate_with_both_paths() {
     );
 }
 
-/// Equality is byte-exact, mirroring `keccak256(name.as_bytes())`: case
-/// variants are distinct names, identical strings collide.
 #[test]
 fn claim_namespace_is_byte_exact() {
     let mut ledger = NamespaceLedger::new();
@@ -2918,8 +2915,6 @@ fn claim_namespace_is_byte_exact() {
         .expect_err("identical strings collide");
 }
 
-/// A module name collision refuses the boot before any compile: neither
-/// wasm exists, so a compile attempt would error first.
 #[tokio::test]
 async fn boot_rejects_duplicate_module_names_before_any_compile() {
     let engine = make_wasmtime_engine();
@@ -2976,8 +2971,7 @@ async fn boot_rejects_duplicate_module_names_before_any_compile() {
     );
 }
 
-/// An adapter and a module sharing a name refuse the boot: one ledger
-/// spans both roles, and no compile precedes the refusal.
+/// One ledger spans both roles.
 #[tokio::test]
 async fn boot_rejects_a_module_colliding_with_an_adapter_name() {
     let engine = make_wasmtime_engine();

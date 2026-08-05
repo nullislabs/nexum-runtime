@@ -413,12 +413,10 @@ fn enforce_extension_uniqueness<T: RuntimeTypes>(
     Ok(())
 }
 
-/// Boot pre-pass claims: name to (role, claimant path). One ledger spans
-/// both roles: they derive the same keccak local-store namespace.
+/// One ledger spans both roles: they derive the same keccak local-store namespace.
 type NamespaceLedger = BTreeMap<String, (&'static str, PathBuf)>;
 
-/// Claim `name` for `path`, refusing a second claimant. Equality is
-/// byte-exact, mirroring `keccak256(name.as_bytes())`.
+/// Claim `name` for `path`, refusing a second claimant.
 fn claim_namespace(
     ledger: &mut NamespaceLedger,
     name: &str,
@@ -490,8 +488,7 @@ impl<T: RuntimeTypes> Supervisor<T> {
         // every module store built below already routes to the installed
         // instances. Providers link only their kind's scoped imports.
         let provider_registry = CapabilityRegistry::provider();
-        // Name pre-pass: claim every adapter and module name before any
-        // component compiles or runs guest code.
+        // Every name is claimed before any component compiles or runs guest code.
         let mut ledger = NamespaceLedger::new();
         let mut adapter_manifests = Vec::with_capacity(engine_cfg.adapters.len());
         for entry in &engine_cfg.adapters {
@@ -618,8 +615,7 @@ impl<T: RuntimeTypes> Supervisor<T> {
             manifest: manifest.map(Path::to_path_buf),
         };
         // The single-module override path serves `just run`; providers
-        // are configured through `engine.toml`, so none boot here. One
-        // component boots, so there is no ledger to claim into.
+        // are configured through `engine.toml`, so none boot here.
         let loaded_manifest =
             load_required_manifest(&entry.path, entry.manifest.as_deref(), &registry, "module")?;
         let extension_kinds = extension_subscription_vocabulary(extensions);
@@ -727,10 +723,8 @@ impl<T: RuntimeTypes> Supervisor<T> {
                 ext: components.ext.clone(),
                 chain: components.chain.clone(),
                 chain_response_max_bytes,
-                // Provider stores carry this live handle too; provider
-                // guests cannot reach it only because
-                // `build_provider_linker` links nothing but `kind.link`
-                // plus WASI.
+                // Provider guests never reach this: `build_provider_linker`
+                // links only `kind.link` plus WASI.
                 store: module_store,
                 services,
             },
@@ -912,9 +906,8 @@ impl<T: RuntimeTypes> Supervisor<T> {
         })
     }
 
-    /// Load one `[[adapters]]` entry against its pre-pass-resolved manifest
-    /// and hand the instance to its kind to install. A failed `init` loads
-    /// the provider dead and unroutable, permanently.
+    /// Load one `[[adapters]]` entry; a failed `init` loads the provider
+    /// dead and unroutable, permanently.
     // One flat argument per shared input threaded onto the store, matching
     // the module load path.
     #[allow(clippy::too_many_arguments)]
