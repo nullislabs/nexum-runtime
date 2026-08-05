@@ -2875,6 +2875,67 @@ async fn boot_refuses_an_unconfigured_chain_via_engine_config() {
     );
 }
 
+/// The gate runs in the manifest pre-pass, so a later module's
+/// unconfigured chain refuses the boot before an earlier module compiles
+/// or runs `init`. Both wasm paths are absent: with the check at load
+/// time the first module's compile error would surface instead.
+#[tokio::test]
+async fn an_unconfigured_chain_refuses_boot_before_an_earlier_module_loads() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let first_wasm = dir.path().join("first.wasm");
+    let first_manifest = dir.path().join("first.toml");
+    std::fs::write(
+        &first_manifest,
+        "[module]\nname = \"first\"\n\n[capabilities]\nrequired = [\"logging\"]\n",
+    )
+    .expect("write first manifest");
+    let second_wasm = dir.path().join("second.wasm");
+    let second_manifest = unconfigured_chain_manifest(dir.path(), "kind = \"block\"");
+
+    let engine = make_wasmtime_engine();
+    let linker = make_linker(&engine);
+    let (_store_dir, local_store) = temp_local_store();
+    let components = test_components(local_store);
+
+    let engine_cfg = EngineConfig {
+        chains: crate::test_utils::test_chain_configs(),
+        modules: vec![
+            crate::engine_config::ModuleEntry {
+                path: first_wasm,
+                manifest: Some(first_manifest),
+            },
+            crate::engine_config::ModuleEntry {
+                path: second_wasm,
+                manifest: Some(second_manifest),
+            },
+        ],
+        ..Default::default()
+    };
+
+    let err = match Supervisor::boot(
+        &engine,
+        &linker,
+        &engine_cfg,
+        &components,
+        &core_extensions(),
+        None,
+    )
+    .await
+    {
+        Ok(_) => panic!("an unconfigured chain subscription must refuse the boot"),
+        Err(err) => err,
+    };
+    let msg = format!("{err:#}");
+    assert!(
+        msg.contains("module example subscribes to chain 424242"),
+        "the refusal is the chain gate: {msg}",
+    );
+    assert!(
+        !msg.contains("compile"),
+        "no earlier module reached the compile step: {msg}",
+    );
+}
+
 /// On the defaulted dev path (no engine.toml found) the refusal says so
 /// instead of listing zero configured chains.
 #[tokio::test]
@@ -2932,6 +2993,17 @@ fn configured_chains_normalise_named_and_numeric_spellings() {
     let chains = ConfiguredChains::from_config(&cfg);
     assert!(chains.contains(11_155_111));
     assert!(!chains.contains(1));
+}
+
+/// An engine.toml that parsed but declares no `[chains]` gets the
+/// configured-list wording with an explicit "none", not the defaulted
+/// missing-file wording.
+#[test]
+fn unconfigured_chain_message_says_none_when_engine_toml_declares_no_chains() {
+    let chains = ConfiguredChains::from_config(&EngineConfig::default());
+    let msg = crate::supervisor::unconfigured_chain("example", 424_242, &chains).to_string();
+    assert!(msg.contains("configured chains: none"), "{msg}");
+    assert!(!msg.contains("no engine.toml was found"), "{msg}");
 }
 
 /// No module.toml anywhere refuses boot before compile; no wasm needs to

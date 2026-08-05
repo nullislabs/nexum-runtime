@@ -494,6 +494,28 @@ impl ConfiguredChains {
     }
 }
 
+/// Refuse a manifest whose chain-naming subscriptions target a chain the
+/// operator never configured. Pure manifest + config, so it runs in the
+/// manifest pre-pass beside the namespace claim: a later module's typo
+/// must not land after an earlier module has committed durable
+/// local-store writes, because a failed boot rolls nothing back.
+fn enforce_configured_chains(
+    module: &str,
+    loaded: &LoadedManifest,
+    chains: &ConfiguredChains,
+) -> Result<()> {
+    for sub in &loaded.manifest.subscriptions {
+        let (Subscription::Block { chain_id } | Subscription::ChainLog { chain_id, .. }) = sub
+        else {
+            continue;
+        };
+        if !chains.contains(*chain_id) {
+            return Err(unconfigured_chain(module, *chain_id, chains));
+        }
+    }
+    Ok(())
+}
+
 /// Boot error for a subscription naming a chain the operator never
 /// configured; worded against the missing engine.toml when the config is
 /// the built-in default.
@@ -541,8 +563,9 @@ impl<T: RuntimeTypes> Supervisor<T> {
         // every module store built below already routes to the installed
         // instances. Providers link only their kind's scoped imports.
         let provider_registry = CapabilityRegistry::provider();
-        // Every name is claimed before any component compiles or runs guest code.
+        // Every name is claimed and every subscribed chain gated against `[chains]` before any component compiles or runs guest code.
         let mut ledger = NamespaceLedger::new();
+        let configured_chains = ConfiguredChains::from_config(engine_cfg);
         let mut adapter_manifests = Vec::with_capacity(engine_cfg.adapters.len());
         for entry in &engine_cfg.adapters {
             let loaded = load_required_manifest(
@@ -565,12 +588,10 @@ impl<T: RuntimeTypes> Supervisor<T> {
             let loaded =
                 load_required_manifest(&entry.path, entry.manifest.as_deref(), &registry, "module")
                     .with_context(|| format!("load module {}", entry.path.display()))?;
-            claim_namespace(
-                &mut ledger,
-                &manifest_namespace(&loaded, MODULE_FALLBACK_NAME),
-                "module",
-                &entry.path,
-            )?;
+            let namespace = manifest_namespace(&loaded, MODULE_FALLBACK_NAME);
+            claim_namespace(&mut ledger, &namespace, "module", &entry.path)?;
+            enforce_configured_chains(&namespace, &loaded, &configured_chains)
+                .with_context(|| format!("load module {}", entry.path.display()))?;
             module_manifests.push(loaded);
         }
         let mut providers = Vec::with_capacity(engine_cfg.adapters.len());
@@ -602,7 +623,6 @@ impl<T: RuntimeTypes> Supervisor<T> {
             .collect();
 
         let extension_kinds = extension_subscription_vocabulary(extensions);
-        let configured_chains = ConfiguredChains::from_config(engine_cfg);
         let mut modules = Vec::with_capacity(engine_cfg.modules.len());
         for (entry, loaded_manifest) in engine_cfg.modules.iter().zip(module_manifests) {
             let loaded = Self::load_one(
@@ -616,7 +636,6 @@ impl<T: RuntimeTypes> Supervisor<T> {
                 clocks.as_ref(),
                 services.clone(),
                 &extension_kinds,
-                &configured_chains,
                 extensions,
                 &provider_manifests,
             )
@@ -676,6 +695,11 @@ impl<T: RuntimeTypes> Supervisor<T> {
         // are configured through `engine.toml`, so none boot here.
         let loaded_manifest =
             load_required_manifest(&entry.path, entry.manifest.as_deref(), &registry, "module")?;
+        enforce_configured_chains(
+            &manifest_namespace(&loaded_manifest, MODULE_FALLBACK_NAME),
+            &loaded_manifest,
+            configured_chains,
+        )?;
         let extension_kinds = extension_subscription_vocabulary(extensions);
         let loaded = Self::load_one(
             engine,
@@ -688,7 +712,6 @@ impl<T: RuntimeTypes> Supervisor<T> {
             clocks.as_ref(),
             services.clone(),
             &extension_kinds,
-            configured_chains,
             extensions,
             &[],
         )
@@ -806,7 +829,6 @@ impl<T: RuntimeTypes> Supervisor<T> {
         clocks: Option<&WasiClockOverride>,
         services: HostServices,
         extension_kinds: &BTreeSet<&'static str>,
-        configured_chains: &ConfiguredChains,
         extensions: &[Arc<dyn Extension<T>>],
         provider_manifests: &[ProviderManifest],
     ) -> Result<LoadedModule<T>> {
@@ -820,23 +842,6 @@ impl<T: RuntimeTypes> Supervisor<T> {
         for ext in extensions {
             ext.admit_worker(&module_namespace, sections, provider_manifests)
                 .with_context(|| format!("install refused for {}", entry.path.display()))?;
-        }
-
-        // Every chain-naming subscription must target a configured chain:
-        // a pure manifest+config membership test, so a typo'd chain_id
-        // refuses the boot before any compile cost or guest code runs.
-        for sub in &loaded_manifest.manifest.subscriptions {
-            let (Subscription::Block { chain_id } | Subscription::ChainLog { chain_id, .. }) = sub
-            else {
-                continue;
-            };
-            if !configured_chains.contains(*chain_id) {
-                return Err(unconfigured_chain(
-                    &module_namespace,
-                    *chain_id,
-                    configured_chains,
-                ));
-            }
         }
 
         // Compile + instantiate.
