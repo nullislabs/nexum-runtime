@@ -1,5 +1,4 @@
-//! One-expression supervisor boot: manifests in a scenario directory, an
-//! engine config over them, and the real [`Supervisor::boot`] admission path.
+//! One-expression supervisor boot through the real [`Supervisor::boot`] path.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -18,8 +17,7 @@ use crate::preset::CoreRuntime;
 use crate::supervisor::{Supervisor, WasiClockOverride, build_linker};
 use crate::test_utils::wasm::test_wasmtime_engine;
 
-/// One `[[modules]]` or `[[adapters]]` entry: which component to load, where
-/// its manifest comes from, and the operator grants an adapter carries.
+/// One `[[modules]]` or `[[adapters]]` entry.
 pub struct Entry {
     wasm: Option<PathBuf>,
     manifest: ManifestSource,
@@ -38,8 +36,7 @@ impl Entry {
         }
     }
 
-    /// Load this entry from `wasm` rather than the scenario-wide component,
-    /// which is what a multi-component boot needs.
+    /// Load this entry from `wasm` rather than the scenario-wide component.
     pub fn wasm(mut self, wasm: impl Into<PathBuf>) -> Self {
         self.wasm = Some(wasm.into());
         self
@@ -89,8 +86,7 @@ impl From<&Path> for Entry {
     }
 }
 
-/// Builder collapsing the tempdir + write-manifests + engine-config + boot
-/// ritual; every terminal goes through the real [`Supervisor::boot`] path.
+/// Every terminal boots through the real [`Supervisor::boot`] admission path.
 pub struct BootScenario<T: RuntimeTypes = CoreRuntime> {
     dir: TempDir,
     components: Components<T>,
@@ -103,8 +99,7 @@ pub struct BootScenario<T: RuntimeTypes = CoreRuntime> {
 }
 
 impl BootScenario<CoreRuntime> {
-    /// A scenario on the core lattice production runs: a fresh redb store
-    /// under the scenario directory and an empty provider pool.
+    /// A fresh redb store under the scenario directory and an empty provider pool.
     pub fn new() -> Self {
         let dir = tempfile::tempdir().expect("scenario tempdir");
         let store = LocalStore::open(dir.path().join("scenario.redb")).expect("scenario store");
@@ -121,8 +116,7 @@ impl BootScenario<CoreRuntime> {
 }
 
 impl<T: RuntimeTypes> BootScenario<T> {
-    /// A scenario over caller-supplied backends, for a lattice or a chain
-    /// leg the core preset does not give.
+    /// A scenario over caller-supplied backends.
     pub fn over(components: Components<T>) -> Self {
         Self::rooted(tempfile::tempdir().expect("scenario tempdir"), components)
     }
@@ -145,8 +139,7 @@ impl<T: RuntimeTypes> BootScenario<T> {
         self.dir.path()
     }
 
-    /// The component entries load unless they name their own; unset, entries
-    /// point at a nonexistent path, which only pre-compile refusals survive.
+    /// Scenario-wide component; unset, entries point at a nonexistent path.
     pub fn wasm(mut self, wasm: impl Into<PathBuf>) -> Self {
         self.wasm = Some(wasm.into());
         self
@@ -170,8 +163,7 @@ impl<T: RuntimeTypes> BootScenario<T> {
         self
     }
 
-    /// Wire extensions; they reach the linker and the boot gates together,
-    /// which is the same-slice invariant the supervisor requires.
+    /// Wire extensions; they reach the linker and the boot gates together.
     pub fn extensions(
         mut self,
         extensions: impl IntoIterator<Item = Arc<dyn Extension<T>>>,
@@ -180,8 +172,7 @@ impl<T: RuntimeTypes> BootScenario<T> {
         self
     }
 
-    /// Per-store WASI clock override threaded to boot; unset keeps the
-    /// ambient host clocks.
+    /// WASI clock override; unset keeps the ambient host clocks.
     pub fn clock(mut self, clocks: WasiClockOverride) -> Self {
         self.clocks = Some(clocks);
         self
@@ -216,8 +207,7 @@ impl<T: RuntimeTypes> BootScenario<T> {
         }
     }
 
-    /// Write every inline manifest and split the scenario into the config
-    /// `boot` reads and the backends it boots over.
+    /// Write inline manifests and split into engine config and launch backends.
     fn split(self) -> (EngineConfig, Launch<T>) {
         let dir = self.dir.path().to_path_buf();
         let default_wasm = self.wasm.unwrap_or_else(|| dir.join("component.wasm"));
@@ -261,8 +251,7 @@ impl<T: RuntimeTypes> BootScenario<T> {
     }
 }
 
-/// The scenario's backends, held apart from the config so the config can be
-/// inspected without booting.
+/// The scenario's backends, held apart from the config.
 struct Launch<T: RuntimeTypes> {
     dir: TempDir,
     components: Components<T>,
@@ -276,8 +265,7 @@ impl Default for BootScenario<CoreRuntime> {
     }
 }
 
-/// A booted supervisor plus the directory rooting its manifests and store;
-/// drop order keeps those files alive for the supervisor's lifetime.
+/// Booted supervisor; the held tempdir keeps its manifests and store alive.
 pub struct Booted<T: RuntimeTypes = CoreRuntime> {
     pub supervisor: Supervisor<T>,
     logs: LogPipeline,
@@ -300,8 +288,7 @@ impl<T: RuntimeTypes> Booted<T> {
     }
 }
 
-/// A boot refusal; assertions read the rendered context chain, so one
-/// helper is the choke point for every string-contains check.
+/// A boot refusal; assertions read the rendered context chain.
 #[derive(Debug)]
 pub struct Refusal(anyhow::Error);
 
@@ -337,8 +324,7 @@ mod tests {
     use crate::manifest::NamespaceCaps;
     use crate::test_utils::{example_wasm_or_skip, module_wasm_or_skip};
 
-    /// Claims the `[acme]` manifest section and nothing else, so wiring it
-    /// is observable at the pre-compile section gate alone.
+    /// Claims the `[acme]` manifest section and nothing else.
     struct AcmeExtension;
 
     impl Extension<CoreRuntime> for AcmeExtension {
@@ -398,8 +384,6 @@ mod tests {
         assert_eq!(booted.supervisor.alive_count(), 1);
     }
 
-    /// Two entries naming different components boot side by side, which a
-    /// single scenario-wide component cannot express.
     #[tokio::test]
     async fn per_entry_components_boot_alongside_the_scenario_default() {
         let Some(example) = example_wasm_or_skip() else {
@@ -426,8 +410,6 @@ mod tests {
         assert_eq!(booted.supervisor.module_count(), 2);
         assert_eq!(booted.supervisor.alive_count(), 2);
         assert_eq!(booted.supervisor.dispatch_block(block_on_chain(1)).await, 2);
-        // Only the clock-reader component logs a wall-clock reading, so the
-        // line proves the second entry ran its own wasm.
         assert!(
             booted
                 .records("clock-reader")
@@ -437,8 +419,6 @@ mod tests {
         );
     }
 
-    /// The clock override reaches the module store, not just the builder:
-    /// the guest reads back the pinned wall time it was booted under.
     #[tokio::test]
     async fn a_clock_override_reaches_the_booted_guest() {
         use std::time::{Duration, UNIX_EPOCH};
@@ -448,8 +428,7 @@ mod tests {
         let Some(wasm) = module_wasm_or_skip("clock-reader") else {
             return;
         };
-        // Far from the ambient clock, so an exact match can only come from
-        // the override.
+        // Far from the ambient clock; an exact match can only come from the override.
         const PINNED_SECS: u64 = 1_700_000_000;
 
         let clock = ManualClock::new();
@@ -500,8 +479,6 @@ mod tests {
             .lacks("compile");
     }
 
-    /// No manifest anywhere refuses on the discovery path, which an entry
-    /// that always writes one cannot reach.
     #[tokio::test]
     async fn a_component_without_any_manifest_refuses_on_discovery() {
         let scenario = BootScenario::new();
@@ -515,7 +492,6 @@ mod tests {
             .lacks("compile");
     }
 
-    /// An explicit path that does not exist refuses naming the path.
     #[tokio::test]
     async fn a_nonexistent_explicit_manifest_path_refuses() {
         let scenario = BootScenario::new();
@@ -529,8 +505,6 @@ mod tests {
             .lacks("compile");
     }
 
-    /// A wired extension claims the manifest section an unwired one refuses,
-    /// so boot gets past the section gate to the absent component.
     #[tokio::test]
     async fn a_wired_extension_claims_the_section_an_unwired_one_refuses() {
         BootScenario::new()
@@ -582,8 +556,7 @@ mod tests {
                     .http_allow(["api.acme.example"])
                     .messaging_topics(["/nexum/1/acme-orders/proto"]),
             );
-        // The launch half holds the scenario directory the manifests were
-        // written into.
+        // Holding _launch keeps the manifest tempdir alive for the asserts.
         let (config, _launch) = scenario.split();
 
         assert_eq!(config.limits.poison().max_failures, 3);

@@ -5,19 +5,16 @@ use std::path::{Path, PathBuf};
 /// Where one boot entry's manifest comes from.
 #[derive(Debug, Clone)]
 pub enum ManifestSource {
-    /// No explicit path, so the loader falls back to discovery beside the
-    /// component; this is what the missing-manifest refusals exercise.
+    /// No explicit path; the loader falls back to discovery beside the component.
     Beside,
     /// A path handed to the loader as-is, existing or not.
     Path(PathBuf),
-    /// Manifest text written out at boot, including deliberately malformed
-    /// grammar no builder can emit.
+    /// Manifest text written out at boot.
     Toml(String),
 }
 
 impl ManifestSource {
-    /// Materialise inline text at `path` and return what the entry hands
-    /// the loader; [`Beside`](Self::Beside) hands it nothing.
+    /// Materialise inline text at `path`; [`Beside`](Self::Beside) resolves to nothing.
     pub fn resolve(&self, path: &Path) -> Option<PathBuf> {
         match self {
             Self::Beside => None,
