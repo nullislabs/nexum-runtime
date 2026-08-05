@@ -3349,10 +3349,10 @@ fn pinned_fixture() -> (PathBuf, PathBuf) {
     (dir.join("component.wat"), dir.join("module.toml"))
 }
 
-fn zeros_digest() -> ContentDigest {
-    format!("sha256:{}", "0".repeat(64))
+fn wrong_digest() -> ContentDigest {
+    format!("sha256:{}", "1".repeat(64))
         .parse()
-        .expect("the placeholder spelling parses")
+        .expect("a syntactically valid non-matching pin parses")
 }
 
 #[test]
@@ -3362,7 +3362,7 @@ fn read_verified_component_rejects_a_mismatched_digest() {
     std::fs::write(&path, b"not the pinned bytes").expect("write artifact");
 
     let engine = make_wasmtime_engine();
-    let declared = zeros_digest();
+    let declared = wrong_digest();
     let err = read_verified_component(&engine, &path, Some(&declared), false)
         .err()
         .expect("a mismatched digest must refuse the component");
@@ -3443,7 +3443,7 @@ async fn boot_single_refuses_a_mismatched_component_digest() {
         format!(
             "[module]\nname = \"pinned\"\ncomponent = \"{}\"\n\n\
              [capabilities]\nrequired = []\n",
-            zeros_digest(),
+            wrong_digest(),
         ),
     )
     .expect("write manifest");
@@ -3573,7 +3573,7 @@ async fn boot_refuses_a_provider_with_a_mismatched_digest() {
         format!(
             "[module]\nname = \"acme\"\nkind = \"acme-adapter\"\n\
              component = \"{}\"\n\n[capabilities]\nrequired = [\"chain\"]\n",
-            zeros_digest(),
+            wrong_digest(),
         ),
     )
     .expect("write manifest");

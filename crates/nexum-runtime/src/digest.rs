@@ -50,6 +50,9 @@ impl FromStr for ContentDigest {
                     source,
                 }
             })?;
+        if digest == [0u8; 32] {
+            return Err(DigestParseError::Uncommitted);
+        }
         Ok(Self(digest))
     }
 }
@@ -76,6 +79,9 @@ pub enum DigestParseError {
         #[source]
         source: alloy_primitives::hex::FromHexError,
     },
+    /// All-zero digest: the uncommitted sentinel, never a real pin.
+    #[error("digest is the all-zero uncommitted sentinel; omit `component` instead")]
+    Uncommitted,
 }
 
 /// A loaded artifact hashing differently from its manifest's pin.
@@ -159,6 +165,14 @@ mod tests {
         let value = format!("sha256:{}", "z".repeat(64));
         let err = value.parse::<ContentDigest>().unwrap_err();
         assert!(matches!(err, DigestParseError::Hex { .. }), "{err:?}");
+    }
+
+    #[test]
+    fn rejects_the_all_zero_uncommitted_sentinel() {
+        let err = format!("sha256:{}", "0".repeat(64))
+            .parse::<ContentDigest>()
+            .unwrap_err();
+        assert!(matches!(err, DigestParseError::Uncommitted));
     }
 
     #[test]
