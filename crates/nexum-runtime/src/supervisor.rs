@@ -305,8 +305,7 @@ struct LoadedProvider {
     sections: manifest::ExtensionSections,
     /// Cached for restart, like a module's.
     component: Component,
-    /// sha256 of the loaded artifact bytes; also threaded onto
-    /// [`ProviderManifest`].
+    /// sha256 of the loaded artifact bytes, computed even when unpinned.
     component_digest: ContentDigest,
     /// Cached for restart: the manifest `[config]` handed to `init`.
     init_config: Config,
@@ -539,10 +538,7 @@ fn unconfigured_chain(module: &str, chain_id: u64, chains: &ConfiguredChains) ->
     )
 }
 
-/// Read, digest-verify, and compile one component artifact: the only
-/// production compile path. The read-once buffer makes the verified bytes
-/// the compiled bytes; any refusal precedes compile. Always returns the
-/// digest, even unpinned.
+/// The only production compile path; the verified bytes are the compiled bytes.
 fn read_verified_component(
     engine: &Engine,
     path: &Path,
@@ -575,8 +571,6 @@ fn read_verified_component(
             "no [module].component digest - loading unverified",
         ),
     }
-    // `CodeBuilder` matches `Component::from_file` semantics (WAT
-    // acceptance, path-annotated errors) over the already-read bytes.
     let component = CodeBuilder::new(engine)
         .wasm_binary_or_text(&bytes, Some(path))
         .and_then(|builder| builder.compile_component())
@@ -713,8 +707,7 @@ impl<T: RuntimeTypes> Supervisor<T> {
     }
 
     /// Construct from a single `(component, manifest)` pair, for `just run`
-    /// without an `engine.toml`. `configured_chains` and
-    /// `require_component_digest` apply the same gates as `boot`.
+    /// without an `engine.toml`.
     // One flat argument per shared backend and resource knob, plus the
     // optional clock override; bundling would obscure the call site.
     #[allow(clippy::too_many_arguments)]
@@ -1726,8 +1719,7 @@ impl<T: RuntimeTypes> Supervisor<T> {
     async fn try_restart(&mut self, idx: usize) {
         let name = self.modules[idx].name.clone();
         let failure_count = self.modules[idx].failure_count;
-        // Restarts reuse the cached component, never re-reading the file,
-        // so the boot-time digest holds.
+        // Restarts reuse the cached component, so the boot-time digest holds.
         info!(
             module = %name,
             failure_count,

@@ -1,4 +1,4 @@
-//! Content digests for loaded component artifacts; kept manifest-free.
+//! Content digests for loaded component artifacts.
 
 use std::fmt;
 use std::path::PathBuf;
@@ -8,16 +8,13 @@ use sha2::{Digest, Sha256};
 use strum::IntoStaticStr;
 use thiserror::Error;
 
-/// The one digest scheme the runtime accepts and emits.
 const SCHEME: &str = "sha256";
 
-/// sha256 digest of an artifact's bytes; [`of_bytes`](Self::of_bytes) is
-/// the single computation point in the workspace.
+/// sha256 digest of an artifact's bytes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ContentDigest([u8; 32]);
 
 impl ContentDigest {
-    /// Digest `bytes` with sha256.
     pub fn of_bytes(bytes: &[u8]) -> Self {
         Self(Sha256::digest(bytes).into())
     }
@@ -26,8 +23,7 @@ impl ContentDigest {
 impl FromStr for ContentDigest {
     type Err = DigestParseError;
 
-    /// Strict `sha256:<64 hex chars>` grammar, fail closed: an unknown
-    /// scheme, `0x` prefix, or empty string is a hard error; mixed-case hex parses.
+    /// Strict `sha256:<64 hex chars>` grammar; anything else is a hard error.
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let Some((scheme, payload)) = s.split_once(':') else {
             return Err(DigestParseError::MissingScheme(s.to_owned()));
@@ -37,7 +33,7 @@ impl FromStr for ContentDigest {
                 scheme: scheme.to_owned(),
             });
         }
-        // const-hex tolerates a `0x` prefix; the strict grammar does not.
+        // const-hex would tolerate a `0x` prefix; the strict grammar must not.
         if payload.starts_with("0x") || payload.starts_with("0X") {
             return Err(DigestParseError::Hex {
                 value: s.to_owned(),
@@ -65,33 +61,24 @@ impl fmt::Display for ContentDigest {
     }
 }
 
-/// Errors from parsing a pinned digest string.
 #[derive(Debug, Error, IntoStaticStr)]
 #[strum(serialize_all = "snake_case")]
 #[non_exhaustive]
 pub enum DigestParseError {
-    /// No `scheme:` prefix at all; an empty string lands here too.
+    /// No `scheme:` prefix; the empty string lands here too.
     #[error("digest {0:?} has no scheme prefix; expected sha256:<64 hex chars>")]
     MissingScheme(String),
-    /// A scheme other than `sha256`, refused fail-closed.
     #[error("unsupported digest scheme {scheme:?}; only sha256 is supported")]
-    UnsupportedScheme {
-        /// The unrecognised scheme spelling.
-        scheme: String,
-    },
-    /// The payload is not exactly 64 hex characters.
+    UnsupportedScheme { scheme: String },
     #[error("digest {value:?} has a malformed sha256 payload: {source}")]
     Hex {
-        /// The full digest string as written.
         value: String,
-        /// Underlying hex decode failure (bad length or bad character).
         #[source]
         source: alloy_primitives::hex::FromHexError,
     },
 }
 
-/// A loaded artifact hashing differently from its manifest's pin; the boot
-/// refuses the component.
+/// A loaded artifact hashing differently from its manifest's pin.
 #[derive(Debug, Error)]
 #[error(
     "component digest mismatch for {}: manifest declares {declared}, \
@@ -99,11 +86,8 @@ pub enum DigestParseError {
     path.display()
 )]
 pub struct DigestMismatch {
-    /// Artifact path as configured.
     pub path: PathBuf,
-    /// The manifest's pinned digest.
     pub declared: ContentDigest,
-    /// The digest the loaded bytes actually hash to.
     pub actual: ContentDigest,
 }
 

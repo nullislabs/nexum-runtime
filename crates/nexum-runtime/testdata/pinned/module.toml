@@ -1,5 +1,4 @@
-# `component` pins the real sha256 of the sibling component.wat; re-pin
-# with `sha256sum component.wat` after any edit to that file.
+# `component` pins the sibling component.wat; re-pin with `sha256sum` after edits.
 
 [module]
 name = "pinned-wat"

@@ -33,12 +33,9 @@ pub enum ParseError {
          grants nothing)"
     )]
     MissingCapabilities,
-    /// `[module].component` is present but not a valid pinned digest.
     #[error("manifest: [module].component {value:?} is not a valid digest: {source}")]
     InvalidComponentDigest {
-        /// The digest string as written.
         value: String,
-        /// Underlying digest grammar failure.
         #[source]
         source: crate::digest::DigestParseError,
     },

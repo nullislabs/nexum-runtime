@@ -274,8 +274,7 @@ mod tests {
             .to_toml()
     }
 
-    /// A block manifest plus a `[module].component` pin computed from the
-    /// wasm's real bytes, for the strict-verify launch path.
+    /// A block manifest plus a `[module].component` pin of the wasm's bytes.
     fn pinned_block_manifest(name: &str, chain_id: u64, wasm: &std::path::Path) -> String {
         let digest = crate::digest::ContentDigest::of_bytes(
             &std::fs::read(wasm).expect("read module wasm for pinning"),
@@ -338,8 +337,6 @@ mod tests {
         rt.wait().await.expect("clean shutdown");
     }
 
-    /// End-to-end with a real `[module].component` pin: the strict verify
-    /// admits the matching artifact and the module still dispatches.
     #[tokio::test]
     async fn harness_launches_with_a_pinned_component_digest() {
         let Some(wasm) = example_wasm_or_skip() else {

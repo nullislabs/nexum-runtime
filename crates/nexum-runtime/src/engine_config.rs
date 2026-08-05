@@ -201,8 +201,8 @@ pub struct EngineSection {
     /// treated as `1`.
     #[serde(default = "default_log_backfill_concurrency")]
     pub log_backfill_concurrency: usize,
-    /// Refuse to boot any module or provider without a `[module].component`
-    /// digest; a present digest is always verified regardless. Default false.
+    /// Refuse to boot any component without a `[module].component` pin; a
+    /// present pin is verified regardless.
     #[serde(default)]
     pub require_component_digest: bool,
 }

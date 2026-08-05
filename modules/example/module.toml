@@ -3,11 +3,8 @@
 [module]
 name = "example"
 version = "0.1.0"
-# Optional pinned content hash, verified against the loaded bytes when
-# present:
+# Optional content pin, verified when present:
 #   component = "sha256:<64 hex chars>"   (sha256sum of the .wasm)
-# Absent loads unverified; [engine] require_component_digest = true in
-# engine.toml makes an absent pin a boot error.
 
 [capabilities]
 # 0.2 reference engine provides all listed capabilities; this list is a

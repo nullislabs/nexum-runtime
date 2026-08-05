@@ -166,9 +166,8 @@ pub struct ModuleSection {
     #[allow(dead_code)] // Parsed but has no reader.
     #[serde(default)]
     pub version: String,
-    /// Pinned artifact digest (`sha256:<64 hex chars>`), verified against the
-    /// loaded bytes before compile; absent loads unverified unless
-    /// `[engine] require_component_digest` is set.
+    /// Pinned `sha256:<64 hex chars>` digest, verified against the loaded
+    /// bytes before compile.
     #[serde(default)]
     pub component: Option<String>,
     /// Component kind; defaults to the worker (`event-module`), a provider
@@ -258,7 +257,6 @@ pub struct LoadedManifest {
     /// module's `init`. Scalars become their text form; arrays and tables
     /// their TOML representation.
     pub config: Vec<(String, String)>,
-    /// `[module].component` parsed to its typed digest; `None` when the
-    /// manifest declares no pin.
+    /// `[module].component` parsed to its typed digest.
     pub component_digest: Option<crate::digest::ContentDigest>,
 }

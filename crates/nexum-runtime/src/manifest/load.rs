@@ -17,7 +17,6 @@ pub fn load(path: &Path, registry: &CapabilityRegistry) -> Result<LoadedManifest
 
     validate_module_name(&manifest.module.name)?;
 
-    // A malformed pin fails here, before any compile cost.
     let component_digest = manifest
         .module
         .component
@@ -463,7 +462,6 @@ max_state_bytes    = 52428800
         assert!(caps.optional.is_empty());
     }
 
-    /// Write `toml` to a temp `module.toml` and run the loader on it.
     fn load_inline(toml: &str) -> Result<LoadedManifest, ParseError> {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("module.toml");
@@ -471,7 +469,6 @@ max_state_bytes    = 52428800
         load(&path, &CapabilityRegistry::core())
     }
 
-    /// The minimal manifest around one `[module].component` line.
     fn digest_manifest(component_line: &str) -> String {
         format!("[module]\nname = \"pinned\"\n{component_line}\n\n[capabilities]\nrequired = []\n")
     }
@@ -487,7 +484,6 @@ max_state_bytes    = 52428800
 
     #[test]
     fn load_rejects_an_explicitly_empty_component_digest() {
-        // Present-but-empty must fail, never degrade to the absent case.
         let err = load_inline(&digest_manifest("component = \"\"")).unwrap_err();
         assert!(
             matches!(err, ParseError::InvalidComponentDigest { ref value, .. } if value.is_empty()),
