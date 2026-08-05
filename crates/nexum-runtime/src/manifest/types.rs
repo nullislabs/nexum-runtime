@@ -1,7 +1,6 @@
 //! Serde shapes: `Manifest`, its sections, and `LoadedManifest`.
 
 use std::collections::BTreeMap;
-use std::fmt;
 
 use serde::Deserialize;
 use serde::de::Error as _;
@@ -186,13 +185,15 @@ pub const WORKER_KIND: &str = "event-module";
 /// Component kind a manifest declares: the worker, or a provider spelling
 /// an extension registers. Defaults to the worker; an unregistered spelling
 /// is refused at boot.
-#[derive(Debug, Deserialize, Default, Clone, PartialEq, Eq)]
+#[derive(Debug, Deserialize, Default, Clone, PartialEq, Eq, derive_more::Display)]
 #[serde(from = "String")]
 pub enum ComponentKind {
     /// Event-driven worker (`event-module`).
     #[default]
+    #[display("{WORKER_KIND}")]
     Worker,
     /// A provider, named by its manifest spelling.
+    #[display("{_0}")]
     Provider(String),
 }
 
@@ -206,14 +207,6 @@ impl From<String> for ComponentKind {
     }
 }
 
-impl fmt::Display for ComponentKind {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Worker => f.write_str(WORKER_KIND),
-            Self::Provider(kind) => f.write_str(kind),
-        }
-    }
-}
 /// `[module.resources]` overrides; each unset field keeps the engine
 /// `[limits]` default.
 #[derive(Debug, Deserialize, Default)]
