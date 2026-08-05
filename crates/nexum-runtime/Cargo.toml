@@ -79,6 +79,8 @@ alloy-primitives.workspace = true
 # Typed EIP-155 chain ids for engine config keys, the provider/orderbook
 # pools, and the chain seam.
 alloy-chains.workspace = true
+# HTTP transport client carrying the per-chain request timeout.
+reqwest.workspace = true
 futures.workspace = true
 
 # `local-store` backend. Per-module namespacing is enforced

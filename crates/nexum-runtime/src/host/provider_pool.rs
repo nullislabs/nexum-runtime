@@ -17,6 +17,7 @@ use alloy_primitives::{B256, Bytes};
 use alloy_provider::{CanonicalEvent, DynProvider, Provider, ProviderBuilder, WsConnect};
 use alloy_rpc_client::ClientBuilder;
 use alloy_rpc_types_eth::{Filter, Header, Log};
+use alloy_transport::TransportErrorKind;
 use alloy_transport::layers::RetryBackoffLayer;
 use futures::stream::Stream;
 use futures::stream::StreamExt as _;
@@ -86,8 +87,14 @@ impl ProviderPool {
                 url = %crate::engine_config::redact_url(url),
                 "opening chain RPC provider",
             );
+            if chain_cfg.request_timeout_secs == 0 {
+                return Err(ProviderError::ZeroTimeout { chain: *chain });
+            }
+            let timeout = Duration::from_secs(chain_cfg.request_timeout_secs);
             let supports_pubsub = url.starts_with("ws://") || url.starts_with("wss://");
             let provider = if supports_pubsub {
+                // WS has no client-level timeout knob; only `request` bounds
+                // its calls there.
                 let client = ClientBuilder::default()
                     .layer(retry_layer())
                     .ws(WsConnect::new(url))
@@ -102,13 +109,20 @@ impl ProviderPool {
                     chain: *chain,
                     source,
                 })?;
-                let client = ClientBuilder::default().layer(retry_layer()).http(parsed);
+                // Client-level timeout: every call on this transport is
+                // bounded, not just `request`.
+                let http = reqwest::Client::builder()
+                    .timeout(timeout)
+                    .build()
+                    .map_err(|source| ProviderError::Connect {
+                        chain: *chain,
+                        source: TransportErrorKind::custom(source),
+                    })?;
+                let client = ClientBuilder::default()
+                    .layer(retry_layer())
+                    .http_with_client(http, parsed);
                 ProviderBuilder::new().connect_client(client).erased()
             };
-            if chain_cfg.request_timeout_secs == 0 {
-                return Err(ProviderError::ZeroTimeout { chain: *chain });
-            }
-            let timeout = Duration::from_secs(chain_cfg.request_timeout_secs);
             providers.insert(
                 *chain,
                 ChainEndpoint {
@@ -224,44 +238,13 @@ impl ProviderPool {
         Ok(Box::pin(stream))
     }
 
-    /// Current head block number (`eth_blockNumber`).
-    pub async fn block_number(&self, chain: Chain) -> Result<u64, ProviderError> {
-        let ep = self
-            .providers
+    /// Provider for `chain`; [`ProviderError::UnknownChain`] when the chain
+    /// has no engine config entry.
+    pub fn provider(&self, chain: Chain) -> Result<&DynProvider, ProviderError> {
+        self.providers
             .get(&chain)
-            .ok_or(ProviderError::UnknownChain(chain))?;
-        ep.provider
-            .get_block_number()
-            .await
-            .map_err(|source| ProviderError::Rpc {
-                method: "eth_blockNumber".into(),
-                code: None,
-                data: None,
-                source,
-            })
-    }
-
-    /// Canonical block hash at `number`; `None` for an unknown height.
-    pub async fn block_hash(
-        &self,
-        chain: Chain,
-        number: u64,
-    ) -> Result<Option<B256>, ProviderError> {
-        let ep = self
-            .providers
-            .get(&chain)
-            .ok_or(ProviderError::UnknownChain(chain))?;
-        // Default request kind: transaction hashes only, header-sized body.
-        ep.provider
-            .get_block_by_number(number.into())
-            .await
-            .map(|block| block.map(|b| b.header.hash))
-            .map_err(|source| ProviderError::Rpc {
-                method: "eth_getBlockByNumber".into(),
-                code: None,
-                data: None,
-                source,
-            })
+            .map(|ep| &ep.provider)
+            .ok_or(ProviderError::UnknownChain(chain))
     }
 
     /// Canonical (reorg-aware) log stream on `chain` from `start_block`. Each
@@ -482,11 +465,11 @@ mod tests {
         ));
     }
 
-    #[tokio::test]
-    async fn empty_pool_rejects_block_number() {
+    #[test]
+    fn empty_pool_rejects_provider_lookup() {
         let pool = ProviderPool::empty();
         assert!(matches!(
-            pool.block_number(Chain::from_id(1)).await,
+            pool.provider(Chain::from_id(1)),
             Err(ProviderError::UnknownChain(c)) if c == Chain::from_id(1)
         ));
     }
@@ -671,13 +654,56 @@ mod tests {
 
         let cfg = test_config_with_timeout(Chain::from_id(1), &server.uri(), 1);
         let pool = ProviderPool::from_config(&cfg).await.unwrap();
+        let started = std::time::Instant::now();
         let err = pool
             .request(Chain::from_id(1), ChainMethod::EthBlockNumber, "[]".into())
             .await
             .unwrap_err();
+        // The client-level reqwest timeout and the explicit tokio timeout
+        // race at the same deadline; either shape is a bounded failure.
         assert!(
-            matches!(err, ProviderError::Timeout { .. }),
-            "expected Timeout, got: {err:?}"
+            matches!(
+                err,
+                ProviderError::Timeout { .. } | ProviderError::Rpc { .. }
+            ),
+            "expected a timeout-shaped error, got: {err:?}"
+        );
+        assert!(
+            started.elapsed() < Duration::from_secs(30),
+            "request must fail at the configured timeout, not the 60 s hang",
+        );
+    }
+
+    #[tokio::test]
+    async fn hung_transport_fails_native_probe_within_timeout() {
+        use wiremock::{Mock, MockServer, ResponseTemplate, matchers::any};
+
+        // The head probe goes through the provider directly, with no tokio
+        // timeout around it; the client-level timeout must bound it. The
+        // node hangs for 60 s against a 1 s timeout, and the reqwest timeout
+        // error is not retryable, so the probe fails fast.
+        let server = MockServer::start().await;
+        Mock::given(any())
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_delay(Duration::from_secs(60))
+                    .set_body_string(r#"{"jsonrpc":"2.0","id":0,"result":"0x1"}"#),
+            )
+            .mount(&server)
+            .await;
+
+        let cfg = test_config_with_timeout(Chain::from_id(1), &server.uri(), 1);
+        let pool = ProviderPool::from_config(&cfg).await.unwrap();
+        let started = std::time::Instant::now();
+        let result = pool
+            .provider(Chain::from_id(1))
+            .unwrap()
+            .get_block_number()
+            .await;
+        assert!(result.is_err(), "hung node must not yield a head");
+        assert!(
+            started.elapsed() < Duration::from_secs(30),
+            "probe must fail within the configured timeout, not the 60 s hang",
         );
     }
 

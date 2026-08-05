@@ -16,6 +16,7 @@ use std::time::{Duration, Instant};
 
 use alloy_chains::Chain;
 use alloy_primitives::B256;
+use alloy_provider::Provider as _;
 use futures::StreamExt;
 use futures::stream::{BoxStream, select_all};
 use thiserror::Error;
@@ -242,7 +243,26 @@ async fn reconnecting_chain_log_task(
     // failed first open never abandons the backfill.
     let mut boot_resume: Option<u64> = initial_cursor;
     loop {
-        let head = match pool.block_number(chain).await {
+        // The registry never changes after boot, so a miss here only means a
+        // misconfigured chain; retry on the same backoff as a failed fetch.
+        let provider = match pool.provider(chain) {
+            Ok(provider) => provider,
+            Err(err) => {
+                attempt = attempt.saturating_add(1);
+                let backoff = backoff_for(attempt);
+                warn!(
+                    module = %module,
+                    chain_id,
+                    error = %err,
+                    attempt,
+                    backoff_ms = backoff.as_millis() as u64,
+                    "chain-log provider lookup failed - retrying after backoff",
+                );
+                tokio::time::sleep(backoff).await;
+                continue;
+            }
+        };
+        let head = match provider.get_block_number().await {
             Ok(head) => head,
             Err(err) => {
                 attempt = attempt.saturating_add(1);
@@ -264,8 +284,8 @@ async fn reconnecting_chain_log_task(
         // mismatch.
         let mut invalidated_tail: Option<u64> = None;
         if let Some(t) = &tail {
-            match pool.block_hash(chain, t.number).await {
-                Ok(Some(hash)) if hash == t.hash => {}
+            match provider.get_block_by_number(t.number.into()).await {
+                Ok(Some(block)) if block.header.hash == t.hash => {}
                 Ok(Some(_)) => invalidated_tail = Some(t.number),
                 Ok(None) | Err(_) => {
                     attempt = attempt.saturating_add(1);
