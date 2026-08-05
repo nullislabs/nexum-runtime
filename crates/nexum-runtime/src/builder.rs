@@ -186,6 +186,7 @@ impl<T: RuntimeTypes> LaunchRuntime for AssembledRuntime<'_, T> {
                 manifest,
                 &components,
                 &engine_cfg.limits,
+                &supervisor::ConfiguredChains::from_config(engine_cfg),
                 &extensions,
                 clocks,
             )
@@ -992,6 +993,10 @@ every_n_blocks = "1"
 
         let mut config = EngineConfig::default();
         config.engine.state_dir = dir.path().join("state");
+        // Declare the subscribed chain so the boot-time chain gate admits
+        // the module and the init failure stays the asserted path. The
+        // `http://` URL keeps the real pool lazy (never dialled at boot).
+        config.chains = crate::test_utils::test_chain_configs();
 
         let err = match RuntimeBuilder::new(&config)
             .with_types::<CoreRuntime>()
@@ -1009,6 +1014,48 @@ every_n_blocks = "1"
             Err(err) => err,
         };
         assert!(err.to_string().contains("failed initialisation"), "{err}");
+    }
+
+    /// The full builder path bails at boot on a subscription naming an
+    /// unconfigured chain, before any task spawns; the wasm path does not
+    /// exist, so reaching the compile step would change the error.
+    #[tokio::test]
+    async fn launch_bails_on_an_unconfigured_chain_subscription() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let wasm = dir.path().join("missing.wasm");
+        let manifest = dir.path().join("module.toml");
+        std::fs::write(
+            &manifest,
+            "[module]\nname = \"example\"\n\n[capabilities]\nrequired = [\"logging\"]\n\n\
+             [[subscription]]\nkind = \"block\"\nchain_id = 424242\n",
+        )
+        .expect("write manifest");
+
+        let mut config = EngineConfig::default();
+        config.engine.state_dir = dir.path().join("state");
+        config.chains = crate::test_utils::test_chain_configs();
+
+        let err = match RuntimeBuilder::new(&config)
+            .with_types::<CoreRuntime>()
+            .with_module_source(Some(wasm), Some(manifest))
+            .with_components(ComponentsBuilder::new(
+                ProviderPoolBuilder,
+                LocalStoreBuilder,
+                (),
+            ))
+            .with_add_ons(&[])
+            .launch()
+            .await
+        {
+            Ok(_) => panic!("an unconfigured chain subscription must abort launch"),
+            Err(err) => err,
+        };
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("module example subscribes to chain 424242")
+                && msg.contains("[chains.424242]"),
+            "the launch error is the boot-time chain refusal: {msg}",
+        );
     }
 
     /// Add-ons install before the supervisor boots, exactly once.

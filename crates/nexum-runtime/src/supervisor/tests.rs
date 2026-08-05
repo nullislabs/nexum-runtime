@@ -363,6 +363,16 @@ fn test_components(store: crate::host::local_store_redb::LocalStore) -> Componen
     }
 }
 
+/// The shared configured-chain set for `boot_single` call sites; see
+/// [`crate::test_utils::test_chain_configs`] for the honesty note on the
+/// fabricated operator contract.
+fn test_chains() -> ConfiguredChains {
+    ConfiguredChains::from_config(&EngineConfig {
+        chains: crate::test_utils::test_chain_configs(),
+        ..EngineConfig::default()
+    })
+}
+
 /// Return `(dir, store)` so the test holds the `TempDir` and cleans it up
 /// on drop.
 fn temp_local_store() -> (tempfile::TempDir, crate::host::local_store_redb::LocalStore) {
@@ -407,6 +417,7 @@ async fn e2e_supervisor_boots_example_module() {
         Some(example_module_toml()).as_deref(),
         &components,
         &limits,
+        &test_chains(),
         &core_extensions(),
         None,
     )
@@ -492,6 +503,7 @@ chain_id = 1
         Some(&manifest),
         &components,
         &limits,
+        &test_chains(),
         &core_extensions(),
         None,
     )
@@ -556,6 +568,7 @@ chain_id = 1
         Some(&manifest),
         &components,
         &limits,
+        &test_chains(),
         &core_extensions(),
         Some(clock.as_override()),
     )
@@ -651,6 +664,7 @@ async fn boot_production_module(
         Some(manifest),
         &components,
         &limits,
+        &test_chains(),
         &core_extensions(),
         None,
     )
@@ -945,7 +959,8 @@ chain_id = 1
             ..Default::default()
         },
         limits: crate::engine_config::ModuleLimits::default(),
-        chains: std::collections::HashMap::new(),
+        chains: crate::test_utils::test_chain_configs(),
+        defaulted: false,
         extensions: std::collections::HashMap::new(),
         modules: vec![
             crate::engine_config::ModuleEntry {
@@ -1100,6 +1115,7 @@ async fn dispatch_deadline_cuts_off_a_blocked_host_call_and_recovers() {
         Some(&manifest),
         &components,
         &limits,
+        &test_chains(),
         &[],
         None,
     )
@@ -1183,6 +1199,7 @@ async fn boot_fixture(wasm: &Path, manifest_relative: &str) -> DefaultSupervisor
         Some(&manifest),
         &components,
         &limits,
+        &test_chains(),
         &core_extensions(),
         None,
     )
@@ -1277,7 +1294,8 @@ chain_id = 1
             ..Default::default()
         },
         limits: crate::engine_config::ModuleLimits::default(),
-        chains: std::collections::HashMap::new(),
+        chains: crate::test_utils::test_chain_configs(),
+        defaulted: false,
         extensions: std::collections::HashMap::new(),
         modules: vec![
             crate::engine_config::ModuleEntry {
@@ -1411,6 +1429,7 @@ fail_first_n = "1"
         Some(&manifest),
         &components,
         &limits,
+        &test_chains(),
         &core_extensions(),
         None,
     )
@@ -1502,6 +1521,7 @@ async fn poison_pill_quarantines_module_after_threshold() {
         Some(&manifest),
         &components,
         &limits,
+        &test_chains(),
         &core_extensions(),
         None,
     )
@@ -1657,6 +1677,7 @@ async fn dying_run_leaves_a_panic_record() {
         Some(&manifest),
         &components,
         &limits,
+        &test_chains(),
         &core_extensions(),
         None,
     )
@@ -1712,6 +1733,7 @@ async fn facade_panic_leaves_stderr_host_interface_and_panic_records() {
         Some(&manifest),
         &components,
         &limits,
+        &test_chains(),
         &core_extensions(),
         None,
     )
@@ -1821,7 +1843,8 @@ chain_id = 100
             ..Default::default()
         },
         limits: crate::engine_config::ModuleLimits::default(),
-        chains: std::collections::HashMap::new(),
+        chains: crate::test_utils::test_chain_configs(),
+        defaulted: false,
         extensions: std::collections::HashMap::new(),
         modules: vec![
             crate::engine_config::ModuleEntry {
@@ -1936,7 +1959,8 @@ chain_id = 100
             },
             ..Default::default()
         },
-        chains: std::collections::HashMap::new(),
+        chains: crate::test_utils::test_chain_configs(),
+        defaulted: false,
         extensions: std::collections::HashMap::new(),
         modules: vec![
             crate::engine_config::ModuleEntry {
@@ -2065,7 +2089,8 @@ chain_id = 100
             },
             ..Default::default()
         },
-        chains: std::collections::HashMap::new(),
+        chains: crate::test_utils::test_chain_configs(),
+        defaulted: false,
         extensions: std::collections::HashMap::new(),
         modules: vec![
             crate::engine_config::ModuleEntry {
@@ -2642,6 +2667,7 @@ kind = "acme-status"
         Some(&manifest),
         &components,
         &limits,
+        &test_chains(),
         &core_extensions(),
         None,
     )
@@ -2654,6 +2680,258 @@ kind = "acme-status"
         msg.contains("unknown event kind acme-status"),
         "the refusal names the kind: {msg}",
     );
+}
+
+// ── Unconfigured chain subscriptions refuse the boot (issue #65) ──────
+
+/// Write a manifest subscribing to chain 424242 with the given
+/// subscription kind line(s) appended.
+fn unconfigured_chain_manifest(dir: &Path, subscription: &str) -> PathBuf {
+    let manifest = dir.join("module.toml");
+    std::fs::write(
+        &manifest,
+        format!(
+            "[module]\nname = \"example\"\n\n[capabilities]\nrequired = [\"logging\"]\n\n\
+             [[subscription]]\n{subscription}\nchain_id = 424242\n"
+        ),
+    )
+    .expect("write manifest");
+    manifest
+}
+
+/// A block subscription naming a chain absent from `[chains]` refuses the
+/// boot at the pre-compile gate: the wasm path does not exist, so any
+/// compile attempt would surface a compile error instead of this refusal.
+#[tokio::test]
+async fn boot_refuses_a_block_subscription_on_an_unconfigured_chain() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let wasm = dir.path().join("missing.wasm");
+    let manifest = unconfigured_chain_manifest(dir.path(), "kind = \"block\"");
+
+    let engine = make_wasmtime_engine();
+    let linker = make_linker(&engine);
+    let (_store_dir, local_store) = temp_local_store();
+    let components = test_components(local_store);
+    let limits = ModuleLimits::default();
+
+    let err = Supervisor::boot_single(
+        &engine,
+        &linker,
+        &wasm,
+        Some(&manifest),
+        &components,
+        &limits,
+        &test_chains(),
+        &core_extensions(),
+        None,
+    )
+    .await
+    .err()
+    .expect("an unconfigured chain subscription must refuse boot");
+    let msg = format!("{err:#}");
+    assert!(
+        msg.contains("module example subscribes to chain 424242"),
+        "the refusal names the module and the chain id: {msg}",
+    );
+    assert!(
+        msg.contains("[chains.424242]"),
+        "the refusal states the missing stanza: {msg}",
+    );
+    assert!(
+        msg.contains("configured chains: 1, 100, 11155111"),
+        "the refusal lists the configured set: {msg}",
+    );
+    assert!(
+        !msg.contains("compile"),
+        "the refusal precedes any compile of the missing wasm: {msg}",
+    );
+}
+
+/// The chain-log arm of the same gate.
+#[tokio::test]
+async fn boot_refuses_a_chain_log_subscription_on_an_unconfigured_chain() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let wasm = dir.path().join("missing.wasm");
+    let manifest = unconfigured_chain_manifest(dir.path(), "kind = \"chain-log\"");
+
+    let engine = make_wasmtime_engine();
+    let linker = make_linker(&engine);
+    let (_store_dir, local_store) = temp_local_store();
+    let components = test_components(local_store);
+    let limits = ModuleLimits::default();
+
+    let err = Supervisor::boot_single(
+        &engine,
+        &linker,
+        &wasm,
+        Some(&manifest),
+        &components,
+        &limits,
+        &test_chains(),
+        &core_extensions(),
+        None,
+    )
+    .await
+    .err()
+    .expect("an unconfigured chain-log subscription must refuse boot");
+    let msg = format!("{err:#}");
+    assert!(
+        msg.contains("module example subscribes to chain 424242")
+            && msg.contains("[chains.424242]"),
+        "the refusal names the module, the chain id, and the missing stanza: {msg}",
+    );
+}
+
+/// The positive twin: a configured chain clears the gate, and boot then
+/// reaches the compile step and fails only because the wasm is absent.
+#[tokio::test]
+async fn boot_admits_a_block_subscription_on_a_configured_chain_past_the_chain_gate() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let wasm = dir.path().join("missing.wasm");
+    let manifest = dir.path().join("module.toml");
+    std::fs::write(
+        &manifest,
+        "[module]\nname = \"example\"\n\n[capabilities]\nrequired = [\"logging\"]\n\n\
+         [[subscription]]\nkind = \"block\"\nchain_id = 1\n",
+    )
+    .expect("write manifest");
+
+    let engine = make_wasmtime_engine();
+    let linker = make_linker(&engine);
+    let (_store_dir, local_store) = temp_local_store();
+    let components = test_components(local_store);
+    let limits = ModuleLimits::default();
+
+    let err = Supervisor::boot_single(
+        &engine,
+        &linker,
+        &wasm,
+        Some(&manifest),
+        &components,
+        &limits,
+        &test_chains(),
+        &core_extensions(),
+        None,
+    )
+    .await
+    .err()
+    .expect("the absent wasm must fail the compile step");
+    let msg = format!("{err:#}");
+    assert!(
+        msg.contains("compile"),
+        "boot reached the compile step past the chain gate: {msg}",
+    );
+    assert!(
+        !msg.contains("subscribes to chain"),
+        "a configured chain must not trip the gate: {msg}",
+    );
+}
+
+/// The `Supervisor::boot` path enforces the same gate from an
+/// `EngineConfig` whose `[chains]` omit the subscribed id, wrapped in the
+/// per-module load context.
+#[tokio::test]
+async fn boot_refuses_an_unconfigured_chain_via_engine_config() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let wasm = dir.path().join("missing.wasm");
+    let manifest = unconfigured_chain_manifest(dir.path(), "kind = \"block\"");
+
+    let engine = make_wasmtime_engine();
+    let linker = make_linker(&engine);
+    let (_store_dir, local_store) = temp_local_store();
+    let components = test_components(local_store);
+
+    let engine_cfg = EngineConfig {
+        chains: crate::test_utils::test_chain_configs(),
+        modules: vec![crate::engine_config::ModuleEntry {
+            path: wasm,
+            manifest: Some(manifest),
+        }],
+        ..Default::default()
+    };
+
+    let err = match Supervisor::boot(
+        &engine,
+        &linker,
+        &engine_cfg,
+        &components,
+        &core_extensions(),
+        None,
+    )
+    .await
+    {
+        Ok(_) => panic!("an unconfigured chain subscription must refuse the boot"),
+        Err(err) => err,
+    };
+    let msg = format!("{err:#}");
+    assert!(
+        msg.contains("load module") && msg.contains("missing.wasm"),
+        "the refusal carries the load-module context: {msg}",
+    );
+    assert!(
+        msg.contains("module example subscribes to chain 424242")
+            && msg.contains("[chains.424242]"),
+        "the refusal names the module, the chain id, and the missing stanza: {msg}",
+    );
+}
+
+/// On the defaulted dev path (no engine.toml found) the refusal says so
+/// instead of listing zero configured chains.
+#[tokio::test]
+async fn boot_refusal_names_the_missing_engine_toml_on_the_defaulted_path() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let wasm = dir.path().join("missing.wasm");
+    let manifest = unconfigured_chain_manifest(dir.path(), "kind = \"block\"");
+
+    let engine = make_wasmtime_engine();
+    let linker = make_linker(&engine);
+    let (_store_dir, local_store) = temp_local_store();
+    let components = test_components(local_store);
+    let limits = ModuleLimits::default();
+    let defaulted_chains = ConfiguredChains::from_config(&EngineConfig {
+        defaulted: true,
+        ..EngineConfig::default()
+    });
+
+    let err = Supervisor::boot_single(
+        &engine,
+        &linker,
+        &wasm,
+        Some(&manifest),
+        &components,
+        &limits,
+        &defaulted_chains,
+        &core_extensions(),
+        None,
+    )
+    .await
+    .err()
+    .expect("the defaulted path must still refuse boot");
+    let msg = format!("{err:#}");
+    assert!(
+        msg.contains("no engine.toml was found"),
+        "the refusal names the missing engine.toml: {msg}",
+    );
+    assert!(
+        msg.contains("[chains.424242]"),
+        "the refusal states the stanza to create: {msg}",
+    );
+    assert!(
+        !msg.contains("configured chains:"),
+        "the defaulted wording replaces the empty configured list: {msg}",
+    );
+}
+
+/// Named and numeric `[chains.*]` spellings normalise to the same id, so
+/// `[chains.sepolia]` satisfies a `chain_id = 11155111` subscription.
+#[test]
+fn configured_chains_normalise_named_and_numeric_spellings() {
+    let cfg: EngineConfig =
+        toml::from_str("[chains.sepolia]\nrpc_url = \"http://localhost:8545\"\n")
+            .expect("named chain key parses");
+    let chains = ConfiguredChains::from_config(&cfg);
+    assert!(chains.contains(11_155_111));
+    assert!(!chains.contains(1));
 }
 
 /// No module.toml anywhere refuses boot before compile; no wasm needs to
@@ -2676,6 +2954,7 @@ async fn boot_refuses_a_component_without_module_toml() {
         None,
         &components,
         &limits,
+        &test_chains(),
         &core_extensions(),
         None,
     )
@@ -2712,6 +2991,7 @@ async fn boot_refuses_a_nonexistent_explicit_manifest_path() {
         Some(&manifest),
         &components,
         &limits,
+        &test_chains(),
         &core_extensions(),
         None,
     )
@@ -2801,6 +3081,7 @@ kind = "acme-status"
         Some(&manifest),
         &components,
         &limits,
+        &test_chains(),
         &core_extensions(),
         None,
     )
@@ -2859,6 +3140,7 @@ chain_id = 1
         Some(&manifest),
         &components,
         &limits,
+        &test_chains(),
         &core_extensions(),
         None,
     )

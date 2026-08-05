@@ -45,9 +45,12 @@ pub use harness::{TestRuntime, TestRuntimeBuilder};
 pub use store::{MockStateHandle, MockStateStore};
 pub use types::MockTypes;
 
+use std::collections::HashMap;
 use std::time::Duration;
 
-use crate::engine_config::ModuleLimits;
+use alloy_chains::Chain;
+
+use crate::engine_config::{ChainConfig, ModuleLimits};
 use crate::host::component::Components;
 use crate::host::logs::LogPipeline;
 use rpc::FakeNode;
@@ -58,6 +61,26 @@ pub(crate) const HARNESS_POLL_INTERVAL: Duration = Duration::from_millis(20);
 /// A fresh in-memory [`LogPipeline`] at default retention limits.
 pub(crate) fn in_memory_logs() -> LogPipeline {
     LogPipeline::in_memory(ModuleLimits::default().logs())
+}
+
+/// `[chains]` entries for every chain id the in-tree test manifests and
+/// fixtures name (mainnet, Gnosis, Sepolia). This synthesises an operator
+/// contract no real engine.toml backs; tests assert against this
+/// fabricated chain set by design. The `http://` URL keeps a real
+/// provider pool lazy: it is never dialled at boot.
+pub fn test_chain_configs() -> HashMap<Chain, ChainConfig> {
+    [1, 100, 11_155_111]
+        .into_iter()
+        .map(|id| {
+            (
+                Chain::from_id(id),
+                ChainConfig {
+                    rpc_url: "http://localhost:8545".to_owned(),
+                    request_timeout_secs: 30,
+                },
+            )
+        })
+        .collect()
 }
 
 /// A [`Components`] bundle over fresh mock backends, ready for

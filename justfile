@@ -23,6 +23,10 @@ build: build-engine build-module build-examples build-fixtures
 # Build the module then run the engine with it. The second argument is the
 # module's module.toml; a manifest is mandatory (an explicit path or a
 # module.toml sibling of the wasm), and the engine refuses to boot without one.
+# A module subscribing to block or chain-log events additionally needs an
+# engine.toml declaring each subscribed chain ([chains.N] with an rpc_url;
+# http(s) URLs are not dialled at boot). The example module has no
+# subscriptions, so this recipe runs without an engine.toml.
 run: build-module build-engine
     cargo run -p nexum-cli -- target/wasm32-wasip2/release/example.wasm modules/example/module.toml
 

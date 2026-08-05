@@ -468,6 +468,59 @@ fn registered_kinds<T: RuntimeTypes>(kinds: &ProviderKinds<T>) -> String {
     kinds.keys().copied().collect::<Vec<_>>().join(", ")
 }
 
+/// The operator's configured chain set, derived from `[chains]` in
+/// `engine.toml`. Carries the config's provenance so a refusal on the
+/// no-engine.toml dev path can say so instead of listing zero chains.
+#[derive(Debug, Clone)]
+pub struct ConfiguredChains {
+    /// Numeric EIP-155 ids; named and numeric `[chains.*]` keys normalise
+    /// to the same id through `Chain`.
+    ids: BTreeSet<u64>,
+    /// True when the config is the built-in default (no engine.toml found).
+    defaulted: bool,
+}
+
+impl ConfiguredChains {
+    /// Derive from `cfg.chains`, keeping the config's provenance marker.
+    pub fn from_config(cfg: &EngineConfig) -> Self {
+        Self {
+            ids: cfg.chains.keys().copied().map(Chain::id).collect(),
+            defaulted: cfg.defaulted,
+        }
+    }
+
+    fn contains(&self, chain_id: u64) -> bool {
+        self.ids.contains(&chain_id)
+    }
+}
+
+/// Boot error for a subscription naming a chain the operator never
+/// configured; worded against the missing engine.toml when the config is
+/// the built-in default.
+fn unconfigured_chain(module: &str, chain_id: u64, chains: &ConfiguredChains) -> Error {
+    if chains.defaulted {
+        return anyhow!(
+            "module {module} subscribes to chain {chain_id} but no engine.toml was found \
+             (running on defaults, no chains configured); create engine.toml with a \
+             [chains.{chain_id}] entry"
+        );
+    }
+    let configured = if chains.ids.is_empty() {
+        "none".to_owned()
+    } else {
+        chains
+            .ids
+            .iter()
+            .map(u64::to_string)
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    anyhow!(
+        "module {module} subscribes to chain {chain_id} but engine.toml declares no \
+         [chains.{chain_id}] entry; configured chains: {configured}"
+    )
+}
+
 impl<T: RuntimeTypes> Supervisor<T> {
     /// Compile and instantiate every module and provider in `engine_cfg`.
     /// The `Engine` and `Linker` are passed in.
@@ -549,6 +602,7 @@ impl<T: RuntimeTypes> Supervisor<T> {
             .collect();
 
         let extension_kinds = extension_subscription_vocabulary(extensions);
+        let configured_chains = ConfiguredChains::from_config(engine_cfg);
         let mut modules = Vec::with_capacity(engine_cfg.modules.len());
         for (entry, loaded_manifest) in engine_cfg.modules.iter().zip(module_manifests) {
             let loaded = Self::load_one(
@@ -562,6 +616,7 @@ impl<T: RuntimeTypes> Supervisor<T> {
                 clocks.as_ref(),
                 services.clone(),
                 &extension_kinds,
+                &configured_chains,
                 extensions,
                 &provider_manifests,
             )
@@ -593,7 +648,9 @@ impl<T: RuntimeTypes> Supervisor<T> {
     }
 
     /// Construct from a single `(component, manifest)` pair, for `just run`
-    /// without an `engine.toml`.
+    /// without an `engine.toml`. `configured_chains` still keys the
+    /// chain-subscription boot check; derive it from the loaded (possibly
+    /// defaulted) [`EngineConfig`].
     // One flat argument per shared backend and resource knob, plus the
     // optional clock override; bundling would obscure the call site.
     #[allow(clippy::too_many_arguments)]
@@ -604,6 +661,7 @@ impl<T: RuntimeTypes> Supervisor<T> {
         manifest: Option<&Path>,
         components: &Components<T>,
         limits: &ModuleLimits,
+        configured_chains: &ConfiguredChains,
         extensions: &[Arc<dyn Extension<T>>],
         clocks: Option<WasiClockOverride>,
     ) -> Result<Self> {
@@ -630,6 +688,7 @@ impl<T: RuntimeTypes> Supervisor<T> {
             clocks.as_ref(),
             services.clone(),
             &extension_kinds,
+            configured_chains,
             extensions,
             &[],
         )
@@ -747,6 +806,7 @@ impl<T: RuntimeTypes> Supervisor<T> {
         clocks: Option<&WasiClockOverride>,
         services: HostServices,
         extension_kinds: &BTreeSet<&'static str>,
+        configured_chains: &ConfiguredChains,
         extensions: &[Arc<dyn Extension<T>>],
         provider_manifests: &[ProviderManifest],
     ) -> Result<LoadedModule<T>> {
@@ -760,6 +820,23 @@ impl<T: RuntimeTypes> Supervisor<T> {
         for ext in extensions {
             ext.admit_worker(&module_namespace, sections, provider_manifests)
                 .with_context(|| format!("install refused for {}", entry.path.display()))?;
+        }
+
+        // Every chain-naming subscription must target a configured chain:
+        // a pure manifest+config membership test, so a typo'd chain_id
+        // refuses the boot before any compile cost or guest code runs.
+        for sub in &loaded_manifest.manifest.subscriptions {
+            let (Subscription::Block { chain_id } | Subscription::ChainLog { chain_id, .. }) = sub
+            else {
+                continue;
+            };
+            if !configured_chains.contains(*chain_id) {
+                return Err(unconfigured_chain(
+                    &module_namespace,
+                    *chain_id,
+                    configured_chains,
+                ));
+            }
         }
 
         // Compile + instantiate.
