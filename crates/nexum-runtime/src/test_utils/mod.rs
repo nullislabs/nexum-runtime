@@ -64,8 +64,7 @@ pub(crate) fn in_memory_logs() -> LogPipeline {
 }
 
 /// `[chains]` entries for every chain id the in-tree test manifests and
-/// fixtures name (mainnet, Gnosis, Sepolia). The `http://` URL is never
-/// dialled at boot.
+/// fixtures name; the `http://` URL is never dialled at boot.
 pub fn test_chain_configs() -> HashMap<Chain, ChainConfig> {
     [1, 100, 11_155_111]
         .into_iter()

@@ -2680,8 +2680,6 @@ kind = "acme-status"
     );
 }
 
-// ── Unconfigured chain subscriptions refuse the boot (#65) ────────────
-
 /// Manifest subscribing to chain 424242 with the given kind line(s).
 fn unconfigured_chain_manifest(dir: &Path, subscription: &str) -> PathBuf {
     let manifest = dir.join("module.toml");
@@ -2823,9 +2821,8 @@ async fn boot_admits_a_block_subscription_on_a_configured_chain_past_the_chain_g
     );
 }
 
-/// `Supervisor::boot` runs the gate in the manifest pre-pass: a later
-/// module's unconfigured chain refuses the boot before an earlier module
-/// compiles or runs `init` (both wasm paths are absent).
+/// A later module's unconfigured chain refuses the boot before an earlier
+/// module compiles or runs `init` (both wasm paths are absent).
 #[tokio::test]
 async fn an_unconfigured_chain_refuses_boot_before_an_earlier_module_loads() {
     let dir = tempfile::tempdir().expect("tempdir");

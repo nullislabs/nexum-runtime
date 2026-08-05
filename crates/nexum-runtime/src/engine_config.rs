@@ -150,9 +150,8 @@ pub struct EngineConfig {
     /// module, but the operator, not the author, scopes its transport here.
     #[serde(default)]
     pub adapters: Vec<AdapterEntry>,
-    /// True only when [`load_or_default`] found no engine.toml and fell
-    /// back to the built-in default; boot errors then name the missing
-    /// file instead of an empty `[chains]` set.
+    /// True when [`load_or_default`] found no engine.toml; boot errors
+    /// then name the missing file instead of an empty `[chains]` set.
     #[serde(skip)]
     pub defaulted: bool,
 }
