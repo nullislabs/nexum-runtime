@@ -13,16 +13,16 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use alloy_chains::Chain;
-use alloy_primitives::{B256, Bytes};
+use alloy_primitives::B256;
 use alloy_provider::{CanonicalEvent, DynProvider, Provider, ProviderBuilder, WsConnect};
 use alloy_rpc_client::ClientBuilder;
 use alloy_rpc_types_eth::{Filter, Header, Log};
-use alloy_transport::TransportErrorKind;
 use alloy_transport::layers::RetryBackoffLayer;
+use alloy_transport::{RpcError, TransportError};
+use anyhow::Context as _;
 use futures::stream::Stream;
 use futures::stream::StreamExt as _;
 use serde_json::value::RawValue;
-use strum::IntoStaticStr;
 use thiserror::Error;
 use tracing::info;
 
@@ -56,7 +56,7 @@ struct ChainEndpoint {
 }
 
 /// Providers keyed by chain; a missing entry is
-/// [`ProviderError::UnknownChain`].
+/// [`PoolError::UnknownChain`].
 #[derive(Debug, Clone)]
 pub struct ProviderPool {
     providers: Arc<HashMap<Chain, ChainEndpoint>>,
@@ -69,7 +69,7 @@ pub struct ProviderPool {
 impl ProviderPool {
     /// Open one provider per chain in `cfg.chains`; connection failures
     /// propagate and are fatal at boot.
-    pub async fn from_config(cfg: &EngineConfig) -> Result<Self, ProviderError> {
+    pub async fn from_config(cfg: &EngineConfig) -> anyhow::Result<Self> {
         let mut providers: HashMap<Chain, ChainEndpoint> = HashMap::new();
         // Sort by numeric id so the boot logs are deterministic
         // (`Chain` is not `Ord`).
@@ -87,9 +87,6 @@ impl ProviderPool {
                 url = %crate::engine_config::redact_url(url),
                 "opening chain RPC provider",
             );
-            if chain_cfg.request_timeout_secs == 0 {
-                return Err(ProviderError::ZeroTimeout { chain: *chain });
-            }
             let timeout = Duration::from_secs(chain_cfg.request_timeout_secs);
             let supports_pubsub = url.starts_with("ws://") || url.starts_with("wss://");
             let provider = if supports_pubsub {
@@ -98,23 +95,16 @@ impl ProviderPool {
                     .layer(retry_layer())
                     .ws(WsConnect::new(url))
                     .await
-                    .map_err(|source| ProviderError::Connect {
-                        chain: *chain,
-                        source,
-                    })?;
+                    .with_context(|| format!("connect chain {chain}"))?;
                 ProviderBuilder::new().connect_client(client).erased()
             } else {
-                let parsed: url::Url = url.parse().map_err(|source| ProviderError::ConnectUrl {
-                    chain: *chain,
-                    source,
-                })?;
+                let parsed: url::Url = url
+                    .parse()
+                    .with_context(|| format!("connect chain {chain}"))?;
                 let http = reqwest::Client::builder()
                     .timeout(timeout)
                     .build()
-                    .map_err(|source| ProviderError::Connect {
-                        chain: *chain,
-                        source: TransportErrorKind::custom(source),
-                    })?;
+                    .with_context(|| format!("connect chain {chain}"))?;
                 let client = ClientBuilder::default()
                     .layer(retry_layer())
                     .http_with_client(http, parsed);
@@ -183,61 +173,35 @@ impl ProviderPool {
 
     /// Follow canonical block headers on `chain`: WS via
     /// `eth_subscribe(newHeads)`, HTTP by polling at the chain's block time.
-    pub async fn subscribe_blocks(&self, chain: Chain) -> Result<BlockStream, ProviderError> {
+    pub async fn subscribe_blocks(&self, chain: Chain) -> Result<BlockStream, PoolError> {
         let ep = self
             .providers
             .get(&chain)
-            .ok_or(ProviderError::UnknownChain(chain))?;
+            .ok_or(PoolError::UnknownChain(chain))?;
         if ep.supports_pubsub {
-            let sub =
-                ep.provider
-                    .subscribe_blocks()
-                    .await
-                    .map_err(|source| ProviderError::Rpc {
-                        method: "eth_subscribe(newHeads)".into(),
-                        code: None,
-                        data: None,
-                        source,
-                    })?;
-            let stream = sub.into_stream().map(Ok::<_, ProviderError>);
+            let sub = ep.provider.subscribe_blocks().await?;
+            let stream = sub.into_stream().map(Ok::<_, TransportError>);
             return Ok(Box::pin(stream));
         }
         // Same-height replacements are not re-emitted.
-        let head = ep
-            .provider
-            .get_block_number()
-            .await
-            .map_err(|source| ProviderError::Rpc {
-                method: "eth_blockNumber".into(),
-                code: None,
-                data: None,
-                source,
-            })?;
+        let head = ep.provider.get_block_number().await?;
         let stream = ep
             .provider
             .watch_blocks_from(head)
             .poll_interval(self.poll_interval(chain))
             .into_stream()
             .buffered(self.log_backfill_concurrency.max(1))
-            .map(|item| {
-                item.map(|block| block.header)
-                    .map_err(|source| ProviderError::Rpc {
-                        method: "eth_getBlockByNumber".into(),
-                        code: None,
-                        data: None,
-                        source,
-                    })
-            });
+            .map(|item| item.map(|block| block.header));
         Ok(Box::pin(stream))
     }
 
-    /// Provider for `chain`; [`ProviderError::UnknownChain`] when the chain
+    /// Provider for `chain`; [`PoolError::UnknownChain`] when the chain
     /// has no engine config entry.
-    pub fn provider(&self, chain: Chain) -> Result<&DynProvider, ProviderError> {
+    pub fn provider(&self, chain: Chain) -> Result<&DynProvider, PoolError> {
         self.providers
             .get(&chain)
             .map(|ep| &ep.provider)
-            .ok_or(ProviderError::UnknownChain(chain))
+            .ok_or(PoolError::UnknownChain(chain))
     }
 
     /// Canonical (reorg-aware) log stream on `chain` from `start_block`. Each
@@ -248,11 +212,11 @@ impl ProviderPool {
         chain: Chain,
         filter: Filter,
         start_block: u64,
-    ) -> Result<CanonicalLogStream, ProviderError> {
+    ) -> Result<CanonicalLogStream, PoolError> {
         let ep = self
             .providers
             .get(&chain)
-            .ok_or(ProviderError::UnknownChain(chain))?;
+            .ok_or(PoolError::UnknownChain(chain))?;
         let stream = ep
             .provider
             .watch_canonical_logs_from(start_block, &filter)
@@ -273,12 +237,6 @@ impl ProviderPool {
                         logs: block_logs.logs,
                     }
                 })
-                .map_err(|source| ProviderError::Rpc {
-                    method: "eth_getLogs".into(),
-                    code: None,
-                    data: None,
-                    source,
-                })
             });
         Ok(Box::pin(stream))
     }
@@ -289,57 +247,24 @@ impl ProviderPool {
         chain: Chain,
         method: ChainMethod,
         params_json: String,
-    ) -> Result<String, ProviderError> {
+    ) -> Result<String, PoolError> {
         let ep = self
             .providers
             .get(&chain)
-            .ok_or(ProviderError::UnknownChain(chain))?;
+            .ok_or(PoolError::UnknownChain(chain))?;
         let name = method.as_str();
         // Pass the params through as a raw JSON value so alloy does
-        // not re-encode them on the way to the node.
-        let params: Box<RawValue> =
-            RawValue::from_string(params_json).map_err(|source| ProviderError::InvalidParams {
-                method: name.to_owned(),
-                source,
-            })?;
+        // not re-encode them on the way to the node. `SerError` is the
+        // variant alloy's own retry layer treats as terminal for a
+        // malformed request body.
+        let params: Box<RawValue> = RawValue::from_string(params_json)
+            .map_err(|source| PoolError::Rpc(RpcError::SerError(source)))?;
         let result: Box<RawValue> = tokio::time::timeout(
             ep.timeout,
             ep.provider.raw_request(Cow::Borrowed(name), params),
         )
         .await
-        .map_err(|_| ProviderError::Timeout {
-            method: name.to_owned(),
-        })?
-        .map_err(|source| {
-            // When the node returns a JSON-RPC error response
-            // (`{"error": {"code":..., "data":...}}`) - typically
-            // an `eth_call` revert - capture the structured
-            // payload and decode the hex `error.data` into raw
-            // bytes once here, so a guest receives the abi-encoded
-            // revert body directly. Transport-side failures
-            // (timeouts, serde, etc.) leave both `code` and `data`
-            // `None` so the projection can tell "no ErrorResp"
-            // apart from "ErrorResp with code = 0".
-            let (code, data) = match source.as_error_resp() {
-                Some(payload) => (
-                    Some(payload.code),
-                    // alloy decodes the hex `error.data` JSON string into
-                    // `Bytes` in one step; the guest binding is `Vec<u8>`,
-                    // so land it there once.
-                    payload
-                        .try_data_as::<Bytes>()
-                        .and_then(Result::ok)
-                        .map(|b| b.to_vec()),
-                ),
-                None => (None, None),
-            };
-            ProviderError::Rpc {
-                method: name.to_owned(),
-                code,
-                data,
-                source,
-            }
-        })?;
+        .map_err(|_| PoolError::Timeout)??;
         // Unbox the raw result into the returned String without
         // copying the body; the WIT boundary copy is the only one left.
         Ok(String::from(Box::<str>::from(result)))
@@ -347,7 +272,7 @@ impl ProviderPool {
 }
 
 /// Boxed stream of `newHeads`-style block headers.
-pub type BlockStream = Pin<Box<dyn Stream<Item = Result<Header, ProviderError>> + Send>>;
+pub type BlockStream = Pin<Box<dyn Stream<Item = Result<Header, TransportError>> + Send>>;
 /// One block's filter-matching logs; a block with no matching logs still
 /// yields a batch.
 #[derive(Debug, Clone)]
@@ -365,70 +290,22 @@ pub struct CanonicalLogBatch {
 /// Boxed canonical per-block log stream; reorg rollbacks carry
 /// `removed == true`.
 pub type CanonicalLogStream =
-    Pin<Box<dyn Stream<Item = Result<CanonicalLogBatch, ProviderError>> + Send>>;
+    Pin<Box<dyn Stream<Item = Result<CanonicalLogBatch, TransportError>> + Send>>;
 
-/// Errors surfaced by [`ProviderPool`]. Variant names serialize snake_case as
-/// `&'static str` for metric labels.
-#[derive(Debug, Error, IntoStaticStr)]
-#[strum(serialize_all = "snake_case")]
+/// Errors surfaced by [`ProviderPool`]; RPC failures pass through alloy's
+/// typed error and are classified at the WIT edge.
+#[derive(Debug, Error)]
 #[non_exhaustive]
-pub enum ProviderError {
+pub enum PoolError {
     /// Chain absent from the engine config.
     #[error("unknown chain {0} (no engine.toml entry)")]
     UnknownChain(Chain),
-    /// Could not open the underlying transport.
-    #[error("connect chain {chain}: {source}")]
-    Connect {
-        /// Chain we failed to dial.
-        chain: Chain,
-        /// Transport-side error.
-        #[source]
-        source: alloy_transport::TransportError,
-    },
-    /// HTTP RPC URL did not parse as a [`url::Url`].
-    #[error("connect chain {chain}: invalid URL: {source}")]
-    ConnectUrl {
-        /// Chain whose `rpc_url` was malformed.
-        chain: Chain,
-        /// Underlying parse failure.
-        #[source]
-        source: url::ParseError,
-    },
-    /// Guest-supplied JSON params did not parse.
-    #[error("invalid params JSON for `{method}`: {source}")]
-    InvalidParams {
-        /// RPC method name.
-        method: String,
-        /// JSON-parser detail.
-        #[source]
-        source: serde_json::Error,
-    },
-    /// `request_timeout_secs = 0`; rejected at boot.
-    #[error("chain {chain}: request_timeout_secs must not be 0")]
-    ZeroTimeout {
-        /// Chain with the misconfigured timeout.
-        chain: Chain,
-    },
-    /// RPC node did not respond within the per-request timeout.
-    #[error("rpc `{method}` timed out")]
-    Timeout {
-        /// RPC method name.
-        method: String,
-    },
-    /// Node returned an error for the dispatched call. JSON-RPC `ErrorResp`
-    /// payloads propagate `code`/`data`; transport failures leave both `None`.
-    #[error("rpc `{method}` failed: {source}")]
-    Rpc {
-        /// RPC method name.
-        method: String,
-        /// `ErrorResp.code`, `None` for transport-level failures.
-        code: Option<i64>,
-        /// Decoded `ErrorResp.data` (abi-encoded revert body), else `None`.
-        data: Option<Vec<u8>>,
-        /// Transport-side typed error.
-        #[source]
-        source: alloy_transport::TransportError,
-    },
+    /// The configured per-request timeout elapsed.
+    #[error("rpc request timed out")]
+    Timeout,
+    /// Transport or node failure from alloy's RPC layer.
+    #[error(transparent)]
+    Rpc(#[from] TransportError),
 }
 
 #[cfg(test)]
@@ -442,7 +319,7 @@ mod tests {
             .request(Chain::from_id(1), ChainMethod::EthBlockNumber, "[]".into())
             .await
             .unwrap_err();
-        assert!(matches!(err, ProviderError::UnknownChain(c) if c == Chain::from_id(1)));
+        assert!(matches!(err, PoolError::UnknownChain(c) if c == Chain::from_id(1)));
     }
 
     #[tokio::test]
@@ -451,7 +328,7 @@ mod tests {
         // Can't use .unwrap_err() because BlockStream doesn't impl Debug.
         assert!(matches!(
             pool.subscribe_blocks(Chain::from_id(1)).await,
-            Err(ProviderError::UnknownChain(c)) if c == Chain::from_id(1)
+            Err(PoolError::UnknownChain(c)) if c == Chain::from_id(1)
         ));
     }
 
@@ -460,7 +337,7 @@ mod tests {
         let pool = ProviderPool::empty();
         assert!(matches!(
             pool.provider(Chain::from_id(1)),
-            Err(ProviderError::UnknownChain(c)) if c == Chain::from_id(1)
+            Err(PoolError::UnknownChain(c)) if c == Chain::from_id(1)
         ));
     }
 
@@ -471,7 +348,7 @@ mod tests {
         // Can't use .unwrap_err() because CanonicalLogStream doesn't impl Debug.
         assert!(matches!(
             pool.watch_chain_logs(Chain::from_id(1), filter, 0),
-            Err(ProviderError::UnknownChain(c)) if c == Chain::from_id(1)
+            Err(PoolError::UnknownChain(c)) if c == Chain::from_id(1)
         ));
     }
 
@@ -519,8 +396,8 @@ mod tests {
             .await
             .unwrap_err();
         assert!(
-            matches!(err, ProviderError::InvalidParams { .. }),
-            "expected InvalidParams, got: {err:?}"
+            matches!(err, PoolError::Rpc(RpcError::SerError(_))),
+            "expected SerError, got: {err:?}"
         );
     }
 
@@ -533,7 +410,7 @@ mod tests {
             .await
             .unwrap_err();
         assert!(
-            matches!(err, ProviderError::Rpc { .. }),
+            matches!(err, PoolError::Rpc(_)),
             "expected Rpc error, got: {err:?}"
         );
     }
@@ -578,51 +455,9 @@ mod tests {
             .await
             .unwrap_err();
         assert!(
-            matches!(err, ProviderError::Rpc { .. }),
+            matches!(err, PoolError::Rpc(_)),
             "expected Rpc error from malformed response, got: {err:?}"
         );
-    }
-
-    #[test]
-    fn error_data_decodes_hex_string_and_ignores_non_hex() {
-        // The `try_data_as::<Bytes>` seam decodes the upstream
-        // `error.data` JSON string into bytes; a structured object or a
-        // non-hex string fails to deserialise, which the projection
-        // swallows to `None` (treated the same as "no revert body").
-        let decode = |json: &str| serde_json::from_str::<Bytes>(json).ok().map(|b| b.to_vec());
-        assert_eq!(decode("\"0x08c379a0\""), Some(vec![0x08, 0xc3, 0x79, 0xa0]));
-        assert_eq!(decode("{\"reason\":\"x\"}"), None);
-        assert_eq!(decode("\"not hex\""), None);
-    }
-
-    #[tokio::test]
-    async fn rpc_error_data_is_hex_decoded_from_upstream() {
-        use wiremock::{Mock, MockServer, ResponseTemplate, matchers::any};
-
-        // The node returns a JSON-RPC `ErrorResp` with a hex `data`
-        // payload (the `eth_call` revert shape). The host must capture
-        // the code and the DECODED revert bytes on `ProviderError::Rpc`.
-        let revert_bytes = vec![0x08, 0xc3, 0x79, 0xa0, 0xde, 0xad, 0xbe, 0xef];
-        let revert_hex = alloy_primitives::hex::encode_prefixed(&revert_bytes);
-        let server = MockServer::start().await;
-        Mock::given(any())
-            .respond_with(ResponseTemplate::new(200).set_body_string(format!(
-                r#"{{"jsonrpc":"2.0","id":0,"error":{{"code":-32000,"message":"execution reverted","data":"{revert_hex}"}}}}"#,
-            )))
-            .mount(&server)
-            .await;
-
-        let cfg = test_config(Chain::from_id(1), &server.uri());
-        let pool = ProviderPool::from_config(&cfg).await.unwrap();
-        let err = pool
-            .request(Chain::from_id(1), ChainMethod::EthCall, "[]".into())
-            .await
-            .unwrap_err();
-        let ProviderError::Rpc { code, data, .. } = err else {
-            panic!("expected Rpc error, got: {err:?}");
-        };
-        assert_eq!(code, Some(-32000));
-        assert_eq!(data, Some(revert_bytes));
     }
 
     #[tokio::test]
@@ -649,13 +484,17 @@ mod tests {
             .request(Chain::from_id(1), ChainMethod::EthBlockNumber, "[]".into())
             .await
             .unwrap_err();
-        // The reqwest and tokio timeouts race; either shape is a bounded failure.
+        // The reqwest and tokio timeouts race; whichever wins, the guest
+        // must see the dedicated timeout fault.
+        let chain_err = crate::bindings::nexum::host::chain::ChainError::from(err);
         assert!(
             matches!(
-                err,
-                ProviderError::Timeout { .. } | ProviderError::Rpc { .. }
+                chain_err,
+                crate::bindings::nexum::host::chain::ChainError::Fault(
+                    crate::bindings::nexum::host::types::Fault::Timeout
+                )
             ),
-            "expected a timeout-shaped error, got: {err:?}"
+            "expected a timeout fault, got: {chain_err:?}"
         );
         assert!(
             started.elapsed() < Duration::from_secs(30),

@@ -17,28 +17,19 @@ use std::time::{Duration, Instant};
 use alloy_chains::Chain;
 use alloy_primitives::B256;
 use alloy_provider::Provider as _;
+use alloy_transport::TransportError;
 use futures::StreamExt;
 use futures::stream::{BoxStream, select_all};
-use thiserror::Error;
 use tokio::sync::mpsc;
 use tracing::{info, warn};
 
 use crate::bindings::nexum;
 use crate::host::component::RuntimeTypes;
 use crate::host::extension::{ExtensionEvent, ExtensionEventStream};
-use crate::host::provider_pool::{ProviderError, ProviderPool};
+use crate::host::provider_pool::ProviderPool;
 use crate::runtime::restart_policy::backoff_for;
 use crate::supervisor::{ChainLogSub, Supervisor};
 use nexum_tasks::{TaskExecutor, TaskExit, TaskSet};
-
-/// Errors carried by the tagged block and chain-log streams.
-#[derive(Debug, Error)]
-#[non_exhaustive]
-pub enum StreamError {
-    /// Provider or transport failure opening or pumping the subscription.
-    #[error(transparent)]
-    Provider(#[from] ProviderError),
-}
 
 /// Uninterrupted-event duration before the backoff counter resets to 0.
 const HEALTHY_WINDOW: Duration = Duration::from_secs(60);
@@ -64,9 +55,9 @@ pub fn open_block_streams(
 ) -> Vec<TaggedBlockStream> {
     let mut streams = Vec::new();
     for &chain in chains {
-        let (tx, rx) = mpsc::channel::<Result<(Chain, alloy_rpc_types_eth::Header), StreamError>>(
-            RECONNECT_CHANNEL_BUF,
-        );
+        let (tx, rx) = mpsc::channel::<
+            Result<(Chain, alloy_rpc_types_eth::Header), (Chain, TransportError)>,
+        >(RECONNECT_CHANNEL_BUF);
         let pool = pool.clone();
         tasks.push(executor.spawn(reconnecting_block_task(pool, chain, tx)));
         let tagged: TaggedBlockStream = Box::pin(receiver_stream(rx));
@@ -117,7 +108,7 @@ fn receiver_stream<T: Send + 'static>(
 async fn reconnecting_block_task(
     pool: ProviderPool,
     chain: Chain,
-    tx: mpsc::Sender<Result<(Chain, alloy_rpc_types_eth::Header), StreamError>>,
+    tx: mpsc::Sender<Result<(Chain, alloy_rpc_types_eth::Header), (Chain, TransportError)>>,
 ) -> TaskExit {
     let chain_id = chain.id();
     let mut attempt: u32 = 0;
@@ -168,7 +159,7 @@ async fn reconnecting_block_task(
                     last_event = Some(now);
                     let tagged = item
                         .map(|header| (chain, header))
-                        .map_err(StreamError::from);
+                        .map_err(|err| (chain, err));
                     if tx.send(tagged).await.is_err() {
                         // Receiver dropped -> engine shutting down.
                         return TaskExit::ReceiverGone;
@@ -356,7 +347,7 @@ async fn reconnecting_chain_log_task(
                     );
                     for mut log in t.logs {
                         log.removed = true;
-                        let tagged = Ok((module.clone(), chain, log, cursor_key.clone()));
+                        let tagged = (module.clone(), chain, log, cursor_key.clone());
                         if tx.send(tagged).await.is_err() {
                             return TaskExit::ReceiverGone;
                         }
@@ -380,7 +371,7 @@ async fn reconnecting_chain_log_task(
                         Ok(batch) => {
                             for log in &batch.logs {
                                 let tagged =
-                                    Ok((module.clone(), chain, log.clone(), cursor_key.clone()));
+                                    (module.clone(), chain, log.clone(), cursor_key.clone());
                                 if tx.send(tagged).await.is_err() {
                                     return TaskExit::ReceiverGone;
                                 }
@@ -447,14 +438,14 @@ async fn reconnecting_chain_log_task(
 
 pub type TaggedBlockStream = std::pin::Pin<
     Box<
-        dyn futures::Stream<Item = Result<(Chain, alloy_rpc_types_eth::Header), StreamError>>
-            + Send,
+        dyn futures::Stream<
+                Item = Result<(Chain, alloy_rpc_types_eth::Header), (Chain, TransportError)>,
+            > + Send,
     >,
 >;
-/// One tagged chain-log item: `(module, chain, log, cursor_key)` or a stream
-/// error; `cursor_key` is `Some` for a `resume` subscription.
-pub type TaggedChainLog =
-    Result<(String, Chain, alloy_rpc_types_eth::Log, Option<Arc<str>>), StreamError>;
+/// One tagged chain-log item: `(module, chain, log, cursor_key)`;
+/// `cursor_key` is `Some` for a `resume` subscription.
+pub type TaggedChainLog = (String, Chain, alloy_rpc_types_eth::Log, Option<Arc<str>>);
 pub type TaggedChainLogStream =
     std::pin::Pin<Box<dyn futures::Stream<Item = TaggedChainLog> + Send>>;
 /// Drive the supervisor with events until `shutdown` resolves.
@@ -529,19 +520,15 @@ pub async fn run<T: RuntimeTypes, G>(
                     hash: header.hash.as_slice().to_vec(),
                     timestamp: header.timestamp.saturating_mul(1000),
                 }),
-                Some(Err(err)) => {
-                    warn!(error = %err, "block stream error - continuing");
+                Some(Err((chain, err))) => {
+                    warn!(chain_id = chain.id(), error = %err, "block stream error - continuing");
                     continue;
                 }
                 None => NextEvent::StreamPanic("block"),
             },
             next = chain_logs.next() => match next {
-                Some(Ok((module, chain, log, cursor_key))) => {
+                Some((module, chain, log, cursor_key)) => {
                     NextEvent::ChainLog(module, chain, Box::new(log), cursor_key)
-                }
-                Some(Err(err)) => {
-                    warn!(error = %err, "chain-log stream error - continuing");
-                    continue;
                 }
                 None => NextEvent::StreamPanic("chain-log"),
             },
@@ -726,11 +713,10 @@ mod tests {
     }
 
     async fn recv(stream: &mut TaggedChainLogStream) -> Log {
-        let item = tokio::time::timeout(Duration::from_secs(600), stream.next())
+        let (_, _, log, _) = tokio::time::timeout(Duration::from_secs(600), stream.next())
             .await
             .expect("delivery within the virtual window")
             .expect("stream alive");
-        let (_, _, log, _) = item.expect("no stream error");
         log
     }
 

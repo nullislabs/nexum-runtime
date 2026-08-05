@@ -41,9 +41,7 @@ impl ComponentBuilder for ProviderPoolBuilder {
     type Output = ProviderPool;
 
     async fn build(self, ctx: &BuilderContext<'_>) -> anyhow::Result<ProviderPool> {
-        ProviderPool::from_config(ctx.config)
-            .await
-            .map_err(Into::into)
+        ProviderPool::from_config(ctx.config).await
     }
 }
 

@@ -245,13 +245,28 @@ pub struct ChainConfig {
     /// `eth_subscribe`); `http(s)://` is request/response only.
     pub rpc_url: String,
     /// Per-request timeout in seconds; HTTP bounds every call, WS only
-    /// `chain::request`. Default 30, zero rejected at boot.
-    #[serde(default = "default_chain_request_timeout_secs")]
+    /// `chain::request`. Default 30, zero rejected at parse.
+    #[serde(
+        default = "default_chain_request_timeout_secs",
+        deserialize_with = "nonzero_timeout_secs"
+    )]
     pub request_timeout_secs: u64,
 }
 
 fn default_chain_request_timeout_secs() -> u64 {
     30
+}
+
+/// Reject `request_timeout_secs = 0`: a zero timeout would leave every
+/// request unbounded.
+fn nonzero_timeout_secs<'de, D: serde::Deserializer<'de>>(d: D) -> Result<u64, D::Error> {
+    let secs = u64::deserialize(d)?;
+    if secs == 0 {
+        return Err(serde::de::Error::custom(
+            "request_timeout_secs must not be 0",
+        ));
+    }
+    Ok(secs)
 }
 
 /// Default fuel budget per `on_event` invocation (~1e9 WASM instructions).
@@ -801,6 +816,23 @@ rpc_url = "wss://example.test/sepolia"
                 .expect("sepolia entry")
                 .rpc_url,
             "wss://example.test/sepolia",
+        );
+    }
+
+    #[test]
+    fn zero_request_timeout_is_rejected_at_parse() {
+        let err = toml::from_str::<EngineConfig>(
+            r#"
+[chains.1]
+rpc_url = "http://example.test/x"
+request_timeout_secs = 0
+"#,
+        )
+        .expect_err("a zero timeout must not parse");
+        assert!(
+            err.to_string()
+                .contains("request_timeout_secs must not be 0"),
+            "unexpected parse error: {err}"
         );
     }
 

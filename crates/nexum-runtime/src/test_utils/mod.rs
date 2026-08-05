@@ -126,7 +126,7 @@ mod tests {
 
     #[tokio::test]
     async fn pool_rejects_an_unconfigured_chain_before_the_node() {
-        use crate::host::provider_pool::ProviderError;
+        use crate::host::provider_pool::PoolError;
 
         let node = FakeNode::new();
         let pool = node.pool(&[Chain::from_id(1)], HARNESS_POLL_INTERVAL);
@@ -134,7 +134,7 @@ mod tests {
             .request(Chain::from_id(2), ChainMethod::EthBlockNumber, "[]".into())
             .await
             .expect_err("chain 2 is not registered");
-        assert!(matches!(err, ProviderError::UnknownChain(c) if c == Chain::from_id(2)));
+        assert!(matches!(err, PoolError::UnknownChain(c) if c == Chain::from_id(2)));
         assert!(
             node.recorded_requests().is_empty(),
             "the lookup failure never reaches the transport",
