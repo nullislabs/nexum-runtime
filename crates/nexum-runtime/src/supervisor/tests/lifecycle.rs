@@ -76,7 +76,7 @@ async fn dead_modules_excluded_from_subscription_lists() {
     let dir = tempfile::tempdir().unwrap();
     let manifest = dir.path().join("module.toml");
     // Manifest declares both a block and a chain-log subscription so the
-    // test genuinely exercises both filter paths — not just the trivially
+    // test genuinely exercises both filter paths, not just the trivially
     // empty chain_log case of a block-only module.
     std::fs::write(
         &manifest,

@@ -1396,7 +1396,7 @@ mod tests {
         let executor = manager.executor();
         let mut tasks = TaskSet::new();
 
-        // Two subscription tasks — both must drain before `run()` returns.
+        // Two subscription tasks: both must drain before `run()` returns.
         let block_streams = open_block_streams(
             &pool,
             &[Chain::mainnet(), Chain::from_id(100)],
