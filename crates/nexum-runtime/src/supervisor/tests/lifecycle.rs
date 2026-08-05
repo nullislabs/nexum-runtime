@@ -1,6 +1,9 @@
 //! Lifecycle: init failure, traps, restart backoff, and poison quarantine.
 
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use super::*;
+use crate::supervisor::lifecycle::sweep;
 
 // ── Init-failed modules must be marked dead ────────────────
 
@@ -659,4 +662,159 @@ async fn poison_pill_quarantines_module_after_threshold() {
         "poisoned module excluded from dispatch forever",
     );
     assert_eq!(supervisor.poisoned_count(), 1);
+}
+
+/// A provider kind whose `install` outcome the test flips, so one sweep
+/// sees a dead reinstall and the next a live one.
+struct ScriptedKind(Arc<AtomicBool>);
+
+#[async_trait::async_trait]
+impl ProviderKind<TestTypes> for ScriptedKind {
+    fn kind(&self) -> &'static str {
+        "scripted-adapter"
+    }
+
+    fn link(&self, _linker: &mut Linker<HostState<TestTypes>>) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    async fn install(
+        &self,
+        _instance: ProviderInstance<'_, TestTypes>,
+        _service: &Arc<dyn HostService>,
+    ) -> anyhow::Result<Installed> {
+        Ok(if self.0.load(Ordering::SeqCst) {
+            Installed::Live
+        } else {
+            Installed::Dead
+        })
+    }
+}
+
+struct ScriptedService;
+impl HostService for ScriptedService {}
+
+struct ScriptedExtension(Arc<AtomicBool>);
+
+impl Extension<TestTypes> for ScriptedExtension {
+    fn namespace(&self) -> &'static str {
+        "scripted"
+    }
+
+    fn capabilities(&self) -> manifest::NamespaceCaps {
+        manifest::NamespaceCaps {
+            prefix: "test:scripted/",
+            ifaces: &[],
+        }
+    }
+
+    fn link(&self, _linker: &mut Linker<HostState<TestTypes>>) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    fn service(&self) -> Option<Arc<dyn HostService>> {
+        Some(Arc::new(ScriptedService))
+    }
+
+    fn provider(&self) -> Option<Box<dyn ProviderKind<TestTypes>>> {
+        Some(Box::new(ScriptedKind(self.0.clone())))
+    }
+}
+
+/// The shared wiring the sweep reinstalls through, with the scripted kind
+/// registered. The `TempDir` keeps the local store alive.
+fn scripted_shared(live: &Arc<AtomicBool>) -> (tempfile::TempDir, Shared<TestTypes>) {
+    let (dir, store) = temp_local_store();
+    let extensions: Vec<Arc<dyn Extension<TestTypes>>> =
+        vec![Arc::new(ScriptedExtension(live.clone()))];
+    let services = HostServices::from_extensions(&extensions).expect("services");
+    let kinds =
+        crate::supervisor::admission::provider_kinds(&extensions, &services).expect("kinds");
+    let shared = Shared {
+        engine: make_wasmtime_engine(),
+        components: test_components(store),
+        extensions,
+        services,
+        kinds,
+        clocks: None,
+    };
+    (dir, shared)
+}
+
+/// A booted provider at run 0. The component is an empty valid one: the
+/// scripted kind never instantiates it.
+fn scripted_provider(engine: &wasmtime::Engine) -> crate::supervisor::load::LoadedProvider {
+    const EMPTY_COMPONENT: &[u8] = b"(component)";
+    let limits = ModuleLimits::default();
+    crate::supervisor::load::LoadedProvider {
+        name: "scripted".to_owned(),
+        kind: "scripted-adapter",
+        sections: manifest::ExtensionSections::default(),
+        seed: crate::supervisor::load::ProviderSeed {
+            artifact: crate::supervisor::load::CachedArtifact {
+                component: wasmtime::component::Component::new(engine, EMPTY_COMPONENT)
+                    .expect("empty component"),
+                digest: ContentDigest::of_bytes(EMPTY_COMPONENT),
+                init_config: Vec::new(),
+            },
+            spec: crate::supervisor::store::StoreSpec {
+                http_allowlist: Vec::new(),
+                http_limits: limits.http(),
+                messaging_topics: Vec::new(),
+                memory_limit: limits.memory(),
+                fuel: limits.fuel(),
+                chain_response_max_bytes: limits.chain_response_max_bytes(),
+                state_quota: limits.state_bytes(),
+            },
+        },
+        liveness: crate::host::actor::Liveness::default(),
+        run: crate::host::logs::RunId::new("scripted", 0),
+        health: crate::supervisor::lifecycle::Health::alive(),
+    }
+}
+
+/// The sweep mints a provider's successor run inside the reinstall and
+/// commits it only when the install comes back live: a dead reinstall
+/// defers with the run, the liveness, and the failure curve untouched,
+/// so the next attempt reuses the sequence rather than burning it.
+#[tokio::test]
+async fn a_dead_provider_reinstall_defers_without_committing_a_run() {
+    let live = Arc::new(AtomicBool::new(false));
+    let (_dir, shared) = scripted_shared(&live);
+    let mut provider = scripted_provider(&shared.engine);
+    let policy = crate::runtime::poison_policy::PoisonPolicy::new(9, Duration::from_secs(600));
+
+    // The actor trapped: the sweep discovers the death through the shared
+    // liveness and counts the 1 s backoff from the death instant.
+    provider.liveness.mark_dead();
+    let died_at = provider.liveness.dead_since().expect("marked dead");
+    let first = died_at + Duration::from_secs(5);
+    sweep(&shared, std::slice::from_mut(&mut provider), policy, first).await;
+
+    assert_eq!(provider.run.seq, 0, "a dead reinstall commits no run");
+    assert!(
+        !provider.liveness.is_alive(),
+        "a dead reinstall leaves the liveness dead",
+    );
+    assert_eq!(
+        provider.health.failure_count(),
+        2,
+        "one recorded trap plus one deferred restart",
+    );
+
+    live.store(true, Ordering::SeqCst);
+    let second = first + Duration::from_secs(10);
+    sweep(&shared, std::slice::from_mut(&mut provider), policy, second).await;
+
+    assert_eq!(
+        provider.run.seq, 1,
+        "the live reinstall commits the successor the failed attempt minted",
+    );
+    assert!(provider.liveness.is_alive());
+    assert!(provider.health.dispatchable());
+    assert_eq!(
+        provider.health.failure_count(),
+        0,
+        "a reinstall is a fresh instance, so the curve resets",
+    );
 }
