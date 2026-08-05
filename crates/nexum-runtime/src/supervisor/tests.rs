@@ -3422,13 +3422,37 @@ fn read_verified_component_computes_a_digest_for_unpinned_loads() {
     assert_eq!(actual, ContentDigest::of_bytes(&bytes));
 }
 
-/// A stray `Component::from_file` would reopen the artifact-swap window.
+/// A stray `Component::from_file` would reopen the artifact-swap window,
+/// and a compile call outside artifact.rs would bypass digest verification.
 #[test]
 fn no_production_component_from_file_call_remains() {
-    let src = include_str!("../supervisor.rs");
-    assert!(
-        !src.contains("Component::from_file("),
-        "supervisor.rs must compile components only via read_verified_component",
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/supervisor");
+    let mut compile_sites = Vec::new();
+    for entry in std::fs::read_dir(&dir).expect("read src/supervisor") {
+        let path = entry.expect("directory entry").path();
+        if path.extension().and_then(|e| e.to_str()) != Some("rs")
+            || path.file_name().and_then(|n| n.to_str()) == Some("tests.rs")
+        {
+            continue;
+        }
+        let src = std::fs::read_to_string(&path).expect("read supervisor source file");
+        let name = path
+            .file_name()
+            .expect("source file name")
+            .to_string_lossy()
+            .into_owned();
+        assert!(
+            !src.contains("Component::from_file("),
+            "{name} must compile components only via read_verified_component",
+        );
+        if src.contains("compile_component(") {
+            compile_sites.push(name);
+        }
+    }
+    assert_eq!(
+        compile_sites,
+        ["artifact.rs"],
+        "the only production compile call must live in artifact.rs",
     );
 }
 

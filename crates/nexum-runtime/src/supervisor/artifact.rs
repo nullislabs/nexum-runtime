@@ -1,0 +1,54 @@
+//! The single production compile path. Digest verification happens on the
+//! exact bytes handed to the compiler, so any refusal precedes compile and
+//! the verified bytes are the compiled bytes; a guard test pins every
+//! production compile call to this file.
+
+use std::path::Path;
+
+use anyhow::{Context, Error, Result, bail};
+use tracing::{debug, warn};
+use wasmtime::component::Component;
+use wasmtime::{CodeBuilder, Engine};
+
+use crate::digest::{ContentDigest, DigestMismatch};
+
+/// The only production compile path; the verified bytes are the compiled bytes.
+pub(super) fn read_verified_component(
+    engine: &Engine,
+    path: &Path,
+    declared: Option<&ContentDigest>,
+    require_digest: bool,
+) -> Result<(Component, ContentDigest)> {
+    let bytes =
+        std::fs::read(path).with_context(|| format!("read component {}", path.display()))?;
+    let actual = ContentDigest::of_bytes(&bytes);
+    match declared {
+        Some(declared) => {
+            if actual != *declared {
+                return Err(DigestMismatch {
+                    path: path.to_owned(),
+                    declared: *declared,
+                    actual,
+                }
+                .into());
+            }
+            debug!(component = %path.display(), digest = %actual, "component digest verified");
+        }
+        None if require_digest => bail!(
+            "no [module].component digest for {} and [engine] require_component_digest is set; \
+             pin the artifact's sha256 in its module.toml",
+            path.display(),
+        ),
+        None => warn!(
+            component = %path.display(),
+            digest = %actual,
+            "no [module].component digest - loading unverified",
+        ),
+    }
+    let component = CodeBuilder::new(engine)
+        .wasm_binary_or_text(&bytes, Some(path))
+        .and_then(|builder| builder.compile_component())
+        .map_err(Error::from)
+        .with_context(|| format!("compile {}", path.display()))?;
+    Ok((component, actual))
+}
