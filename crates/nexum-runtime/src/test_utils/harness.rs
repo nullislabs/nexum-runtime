@@ -274,73 +274,37 @@ impl<E> TestRuntime<E> {
 
 #[cfg(test)]
 mod tests {
-    use std::path::{Path, PathBuf};
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use super::*;
     use crate::host::extension::Extension;
     use crate::manifest::NamespaceCaps;
+    use crate::test_utils::{TestManifest, example_wasm_or_skip, module_wasm_or_skip};
 
-    /// The pre-built module wasm named `file`, or `None` with a skip note.
-    fn module_wasm_or_skip(file: &str) -> Option<PathBuf> {
-        // Workspace root: the topmost ancestor with a `Cargo.toml`.
-        let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
-        let root = manifest
-            .ancestors()
-            .filter(|d| d.join("Cargo.toml").is_file())
-            .last()
-            .unwrap_or(manifest);
-        let wasm = root.join("target/wasm32-wasip2/release").join(file);
-        if wasm.exists() {
-            Some(wasm)
-        } else {
-            eprintln!(
-                "SKIP: {} not found - run the `just ci` wasm build to enable the harness E2E tests",
-                wasm.display()
-            );
-            None
-        }
+    /// A block-only manifest for the example module.
+    fn example_block_manifest() -> String {
+        TestManifest::new("example")
+            .cap("logging")
+            .block_sub(1)
+            .to_toml()
     }
 
-    /// The pre-built example module, or `None` with a skip note.
-    fn example_wasm_or_skip() -> Option<PathBuf> {
-        module_wasm_or_skip("example.wasm")
-    }
-
-    /// A block-only manifest for the example module on `chain_id`.
-    fn block_manifest(name: &str, chain_id: u64) -> String {
-        format!(
-            r#"
-[module]
-name = "{name}"
-
-[capabilities]
-required = ["logging"]
-
-[[subscription]]
-kind     = "block"
-chain_id = {chain_id}
-"#
-        )
-    }
-
-    /// A chain-log manifest for the example module on `chain_id`, with no
-    /// address or topic filter so any pushed log matches.
-    fn chain_log_manifest(name: &str, chain_id: u64) -> String {
-        format!(
-            r#"
-[module]
-name = "{name}"
-
-[capabilities]
-required = ["logging"]
-
-[[subscription]]
-kind     = "chain-log"
-chain_id = {chain_id}
-"#
-        )
+    /// A block-driven price-alert manifest whose oracle read triggers above
+    /// the 2500.00 threshold.
+    fn price_alert_manifest() -> String {
+        TestManifest::new("price-alert")
+            .cap("logging")
+            .cap("chain")
+            .block_sub(1)
+            .config(
+                "oracle_address",
+                "0x694AA1769357215DE4FAC081bf1f309aDC325306",
+            )
+            .config("decimals", "8")
+            .config("threshold", "2500.00")
+            .config("direction", "above")
+            .to_toml()
     }
 
     /// A header carrying just the block number.
@@ -359,7 +323,7 @@ chain_id = {chain_id}
         };
 
         let mut rt = TestRuntime::builder(wasm)
-            .manifest_inline(block_manifest("example", 1))
+            .manifest_inline(example_block_manifest())
             .launch()
             .await
             .expect("launch example over the harness");
@@ -388,7 +352,12 @@ chain_id = {chain_id}
         };
 
         let mut rt = TestRuntime::builder(wasm)
-            .manifest_inline(chain_log_manifest("example", 1))
+            .manifest_inline(
+                TestManifest::new("example")
+                    .cap("logging")
+                    .chain_log_sub(1)
+                    .to_toml(),
+            )
             .launch()
             .await
             .expect("launch example on the chain-log leg");
@@ -439,7 +408,7 @@ chain_id = {chain_id}
 
         let mut rt = TestRuntime::builder_with_ext(wasm, calls.clone())
             .extension(extension)
-            .manifest_inline(block_manifest("example", 1))
+            .manifest_inline(example_block_manifest())
             .launch()
             .await
             .expect("launch with a trivial extension");
@@ -472,7 +441,7 @@ chain_id = {chain_id}
         };
 
         let mut rt = TestRuntime::builder(wasm)
-            .manifest_inline(block_manifest("example", 1))
+            .manifest_inline(example_block_manifest())
             .limits(ModuleLimits {
                 logs: LogLimitsSection {
                     bytes_per_run: Some(1),
@@ -510,7 +479,7 @@ chain_id = {chain_id}
     async fn harness_serves_chain_requests_to_the_module() {
         use crate::host::component::ChainMethod;
 
-        let Some(wasm) = module_wasm_or_skip("price_alert.wasm") else {
+        let Some(wasm) = module_wasm_or_skip("price-alert") else {
             return;
         };
 
@@ -530,25 +499,7 @@ chain_id = {chain_id}
             word(1),
         );
 
-        let builder = TestRuntime::builder(wasm).manifest_inline(
-            r#"
-[module]
-name = "price-alert"
-
-[capabilities]
-required = ["logging", "chain"]
-
-[[subscription]]
-kind     = "block"
-chain_id = 1
-
-[config]
-oracle_address = "0x694AA1769357215DE4FAC081bf1f309aDC325306"
-decimals = "8"
-threshold = "2500.00"
-direction = "above"
-"#,
-        );
+        let builder = TestRuntime::builder(wasm).manifest_inline(price_alert_manifest());
         builder.chain().on_method(ChainMethod::EthCall, result);
 
         let mut rt = builder
@@ -586,21 +537,11 @@ direction = "above"
 
         let mut rt = TestRuntime::builder(wasm)
             .manifest_inline(
-                r#"
-[module]
-name = "example"
-
-[capabilities]
-required = ["logging"]
-
-[[subscription]]
-kind     = "block"
-chain_id = 1
-
-[[subscription]]
-kind     = "chain-log"
-chain_id = 1
-"#,
+                TestManifest::new("example")
+                    .cap("logging")
+                    .block_sub(1)
+                    .chain_log_sub(1)
+                    .to_toml(),
             )
             .launch()
             .await
@@ -637,7 +578,7 @@ chain_id = 1
         };
 
         let mut rt = TestRuntime::builder(wasm)
-            .manifest_inline(block_manifest("example", 1))
+            .manifest_inline(example_block_manifest())
             .launch()
             .await
             .expect("launch example over the harness");
@@ -688,7 +629,7 @@ chain_id = 1
         };
 
         let mut rt = TestRuntime::builder(wasm)
-            .manifest_inline(block_manifest("example", 1))
+            .manifest_inline(example_block_manifest())
             .launch()
             .await
             .expect("launch example over the harness");
@@ -722,7 +663,7 @@ chain_id = 1
         use crate::engine_config::ChainLimitsSection;
         use crate::host::component::ChainMethod;
 
-        let Some(wasm) = module_wasm_or_skip("price_alert.wasm") else {
+        let Some(wasm) = module_wasm_or_skip("price-alert") else {
             return;
         };
 
@@ -741,25 +682,7 @@ chain_id = 1
         );
 
         let builder = TestRuntime::builder(wasm)
-            .manifest_inline(
-                r#"
-[module]
-name = "price-alert"
-
-[capabilities]
-required = ["logging", "chain"]
-
-[[subscription]]
-kind     = "block"
-chain_id = 1
-
-[config]
-oracle_address = "0x694AA1769357215DE4FAC081bf1f309aDC325306"
-decimals = "8"
-threshold = "2500.00"
-direction = "above"
-"#,
-            )
+            .manifest_inline(price_alert_manifest())
             .limits(ModuleLimits {
                 chain: ChainLimitsSection {
                     response_body_max_bytes: Some(16),
@@ -806,7 +729,7 @@ direction = "above"
         };
 
         let mut rt = TestRuntime::builder(wasm)
-            .manifest_inline(block_manifest("example", 1))
+            .manifest_inline(example_block_manifest())
             .launch()
             .await
             .expect("launch example over the harness");
@@ -833,7 +756,7 @@ direction = "above"
     async fn harness_guest_observes_the_clock_override() {
         use std::time::{Duration, UNIX_EPOCH};
 
-        let Some(wasm) = module_wasm_or_skip("clock_reader.wasm") else {
+        let Some(wasm) = module_wasm_or_skip("clock-reader") else {
             return;
         };
 
@@ -842,7 +765,12 @@ direction = "above"
         // exact match on this value can only come from the override.
         const PINNED_SECS: u64 = 1_700_000_000;
 
-        let builder = TestRuntime::builder(wasm).manifest_inline(block_manifest("clock-reader", 1));
+        let builder = TestRuntime::builder(wasm).manifest_inline(
+            TestManifest::new("clock-reader")
+                .cap("logging")
+                .block_sub(1)
+                .to_toml(),
+        );
         builder
             .clock()
             .set(UNIX_EPOCH + Duration::from_secs(PINNED_SECS));
