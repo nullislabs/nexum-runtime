@@ -83,7 +83,8 @@ async fn e2e_block_subscription_dispatched() {
 
 /// A `ManualClock` override threads through `boot_single` onto the module
 /// store and is behaviour-neutral: the module boots, dispatches a block,
-/// and stays alive as on the ambient clock.
+/// and stays alive as on the ambient clock. Guest observation of the
+/// pinned time is covered by the scenario clock test.
 #[cfg(feature = "test-utils")]
 #[tokio::test]
 async fn e2e_manual_clock_override_boots_and_dispatches() {
@@ -112,50 +113,40 @@ async fn e2e_manual_clock_override_boots_and_dispatches() {
         "the overridden-clock module dispatched",
     );
     assert_eq!(supervisor.alive_count(), 1, "module must remain alive");
-
-    // Advancing the shared handle is observable on the same source the store
-    // reads; the boot path did not clone away from it.
-    clock.advance(Duration::from_secs(1));
-    assert_eq!(
-        wasmtime_wasi::HostWallClock::now(&clock),
-        Duration::from_secs(1_700_000_001),
-    );
 }
 
-/// One test per production module through the real wit-bindgen and
-/// supervisor dispatch path, mirroring the example-module e2e shape.
-#[tokio::test]
-async fn e2e_price_alert_block_dispatch() {
-    let Some(wasm) = module_wasm_or_skip("price-alert") else {
+/// Boot one production module through the real wit-bindgen and supervisor
+/// dispatch path and land one block on its subscribed chain.
+async fn production_module_dispatches(module: &str, manifest: &str) {
+    let Some(wasm) = module_wasm_or_skip(module) else {
         return;
     };
     let mut booted = BootScenario::new()
         .wasm(wasm)
-        .module(workspace_manifest(
-            "modules/examples/price-alert/module.toml",
-        ))
+        .module(workspace_manifest(manifest))
         .boot()
         .await
         .expect("boot");
-    assert_eq!(booted.dispatch_block_on(SEPOLIA).await, 1);
+    assert_eq!(
+        booted.dispatch_block_on(SEPOLIA).await,
+        1,
+        "{module} took the dispatch",
+    );
     assert_eq!(booted.supervisor.alive_count(), 1);
+}
+
+#[tokio::test]
+async fn e2e_price_alert_block_dispatch() {
+    production_module_dispatches("price-alert", "modules/examples/price-alert/module.toml").await;
 }
 
 #[tokio::test]
 async fn e2e_balance_tracker_block_dispatch() {
-    let Some(wasm) = module_wasm_or_skip("balance-tracker") else {
-        return;
-    };
-    let mut booted = BootScenario::new()
-        .wasm(wasm)
-        .module(workspace_manifest(
-            "modules/examples/balance-tracker/module.toml",
-        ))
-        .boot()
-        .await
-        .expect("boot");
-    assert_eq!(booted.dispatch_block_on(SEPOLIA).await, 1);
-    assert_eq!(booted.supervisor.alive_count(), 1);
+    production_module_dispatches(
+        "balance-tracker",
+        "modules/examples/balance-tracker/module.toml",
+    )
+    .await;
 }
 
 /// End-to-end wasi:http path: http-probe fetches a loopback server on its

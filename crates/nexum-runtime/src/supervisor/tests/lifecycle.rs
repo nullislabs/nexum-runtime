@@ -22,16 +22,24 @@ fn bad_threshold_price_alert() -> TestManifest {
         .config("every_n_blocks", "1")
 }
 
-/// A module whose `init` fails is loaded but marked dead, so it receives
-/// no dispatches.
+/// A module whose `init` fails is loaded but marked dead: it takes no
+/// dispatch, neither its block nor its chain-log subscription reaches the
+/// chain-facing lists, and the dropped subscriptions stay attributable.
 #[tokio::test]
-async fn init_failure_marks_module_dead_and_excludes_from_dispatch() {
+async fn init_failure_marks_module_dead_excluding_dispatch_and_subscriptions() {
     let Some(wasm) = module_wasm_or_skip("price-alert") else {
         return;
     };
+    // Both a block and a filtered chain-log subscription, so the test
+    // exercises both filter paths rather than a trivially empty chain-log
+    // list.
     let mut booted = BootScenario::new()
         .wasm(wasm)
-        .module(bad_threshold_price_alert())
+        .module(bad_threshold_price_alert().chain_log_sub_filtered(
+            SEPOLIA,
+            Some("0xbA3cB449bD2B4ADddBc894D8697F5170800EAdeC"),
+            Some("0xcf5f9de2984132265203b5c335b25727702ca77262ff622e136baa7362bf1da9"),
+        ))
         .boot()
         .await
         .expect("the module loads; only init fails");
@@ -46,35 +54,6 @@ async fn init_failure_marks_module_dead_and_excludes_from_dispatch() {
         booted.dispatch_block_on(SEPOLIA).await,
         0,
         "no live module is subscribed to chain 11155111 blocks",
-    );
-}
-
-/// An init-failed (dead) module must not contribute its block or chain-log
-/// subscriptions to the chain-facing lists, while staying attributable as
-/// held-by-dead.
-#[tokio::test]
-async fn dead_modules_excluded_from_subscription_lists() {
-    let Some(wasm) = module_wasm_or_skip("price-alert") else {
-        return;
-    };
-    // Both a block and a filtered chain-log subscription, so the test
-    // exercises both filter paths rather than a trivially empty chain-log
-    // list.
-    let booted = BootScenario::new()
-        .wasm(wasm)
-        .module(bad_threshold_price_alert().chain_log_sub_filtered(
-            SEPOLIA,
-            Some("0xbA3cB449bD2B4ADddBc894D8697F5170800EAdeC"),
-            Some("0xcf5f9de2984132265203b5c335b25727702ca77262ff622e136baa7362bf1da9"),
-        ))
-        .boot()
-        .await
-        .expect("the module loads; only init fails");
-
-    assert_eq!(
-        booted.supervisor.alive_count(),
-        0,
-        "init-failed module is dead"
     );
     assert!(
         booted.supervisor.block_chains().is_empty(),
@@ -127,60 +106,49 @@ async fn alive_module_subscriptions_survive_alongside_dead_module() {
     );
 }
 
-/// The fuel-bomb fixture burns through the per-event fuel budget: the host
-/// catches the trap, marks the module dead, and never re-enters it.
-#[tokio::test]
-async fn resource_limit_fuel_bomb_traps_and_marks_module_dead() {
-    let Some(wasm) = module_wasm_or_skip("fuel-bomb") else {
+/// The bomb fixture traps on its first dispatch (fuel exhaustion or a
+/// rejected `memory.grow`): the host catches the trap without panicking,
+/// marks the module dead, and never re-enters it.
+async fn bomb_traps_and_marks_module_dead(module: &str) {
+    let Some(wasm) = module_wasm_or_skip(module) else {
         return;
     };
     let mut booted = BootScenario::new()
         .wasm(wasm)
-        .module(workspace_manifest("modules/fixtures/fuel-bomb/module.toml"))
+        .module(workspace_manifest(&format!(
+            "modules/fixtures/{module}/module.toml"
+        )))
         .boot()
         .await
         .expect("the bomb loads alive");
     assert_eq!(booted.supervisor.module_count(), 1);
-    assert_eq!(booted.supervisor.alive_count(), 1, "loads alive");
+    assert_eq!(booted.supervisor.alive_count(), 1, "{module} loads alive");
 
     assert_eq!(
         booted.dispatch_block_on(1).await,
         0,
-        "fuel-bomb trapped, no module accepted the dispatch",
+        "{module} trapped, no module accepted the dispatch",
     );
     assert_eq!(
         booted.supervisor.alive_count(),
         0,
-        "fuel-bomb is marked dead after the trap",
+        "{module} is marked dead after the trap",
     );
     assert_eq!(
         booted.dispatch_block_on(1).await,
         0,
-        "dead module excluded from second dispatch",
+        "dead {module} excluded from the second dispatch",
     );
 }
 
-/// The memory-bomb fixture allocates past the memory limit; wasmtime
-/// rejects the `memory.grow` and propagates a trap.
+#[tokio::test]
+async fn resource_limit_fuel_bomb_traps_and_marks_module_dead() {
+    bomb_traps_and_marks_module_dead("fuel-bomb").await;
+}
+
 #[tokio::test]
 async fn resource_limit_memory_bomb_traps_and_marks_module_dead() {
-    let Some(wasm) = module_wasm_or_skip("memory-bomb") else {
-        return;
-    };
-    let mut booted = BootScenario::new()
-        .wasm(wasm)
-        .module(workspace_manifest(
-            "modules/fixtures/memory-bomb/module.toml",
-        ))
-        .boot()
-        .await
-        .expect("the bomb loads alive");
-    assert_eq!(booted.supervisor.module_count(), 1);
-    assert_eq!(booted.supervisor.alive_count(), 1);
-
-    assert_eq!(booted.dispatch_block_on(1).await, 0);
-    assert_eq!(booted.supervisor.alive_count(), 0);
-    assert_eq!(booted.dispatch_block_on(1).await, 0);
+    bomb_traps_and_marks_module_dead("memory-bomb").await;
 }
 
 /// Isolation invariant: after the bomb traps, a healthy module beside it

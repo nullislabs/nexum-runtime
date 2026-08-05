@@ -138,27 +138,11 @@ fn claim_namespace_is_byte_exact() {
         .expect_err("identical strings collide");
 }
 
+/// One ledger spans both roles: the cross-role collision names both roles
+/// and claimant paths, and a module-module duplicate hits the same gate;
+/// neither reaches a compile.
 #[tokio::test]
-async fn boot_rejects_duplicate_module_names_before_any_compile() {
-    let scenario = BootScenario::new();
-    let (first, second) = (
-        scenario.dir().join("missing-a.wasm"),
-        scenario.dir().join("missing-b.wasm"),
-    );
-    scenario
-        .module(Entry::new(TestManifest::new("dup").cap("logging")).wasm(first))
-        .module(Entry::new(TestManifest::new("dup").cap("logging")).wasm(second))
-        .expect_refusal()
-        .await
-        .names("name dup is claimed twice")
-        .names("missing-a.wasm")
-        .names("missing-b.wasm")
-        .lacks("compile");
-}
-
-/// One ledger spans both roles.
-#[tokio::test]
-async fn boot_rejects_a_module_colliding_with_an_adapter_name() {
+async fn boot_rejects_duplicate_names_across_and_within_roles() {
     let scenario = BootScenario::over(mock_components()).extensions(acme_extensions());
     let (adapter_wasm, module_wasm) = (
         scenario.dir().join("missing-adapter.wasm"),
@@ -177,5 +161,13 @@ async fn boot_rejects_a_module_colliding_with_an_adapter_name() {
         .names("module")
         .names("missing-adapter.wasm")
         .names("missing-module.wasm")
+        .lacks("compile");
+
+    BootScenario::new()
+        .module(TestManifest::new("dup").cap("logging"))
+        .module(TestManifest::new("dup").cap("logging"))
+        .expect_refusal()
+        .await
+        .names("name dup is claimed twice")
         .lacks("compile");
 }

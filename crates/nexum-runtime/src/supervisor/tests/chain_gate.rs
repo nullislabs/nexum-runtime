@@ -13,35 +13,28 @@ async fn empty_supervisor_returns_no_subscriptions() {
     assert_eq!(booted.supervisor.module_count(), 0);
 }
 
-/// The refusal precedes compile; no wasm exists.
+/// The refusal precedes compile; no wasm exists. Block and chain-log
+/// subscriptions hit the same gate with the same wording: the module and
+/// chain id, the missing stanza, and the configured set.
 #[tokio::test]
-async fn boot_refuses_a_block_subscription_on_an_unconfigured_chain() {
-    BootScenario::new()
-        .module(
-            TestManifest::new("example")
-                .cap("logging")
-                .block_sub(424_242),
-        )
-        .expect_refusal()
-        .await
-        .names("module example subscribes to chain 424242")
-        .names("[chains.424242]")
-        .names("configured chains: 1, 100, 11155111")
-        .lacks("compile");
-}
-
-#[tokio::test]
-async fn boot_refuses_a_chain_log_subscription_on_an_unconfigured_chain() {
-    BootScenario::new()
-        .module(
-            TestManifest::new("example")
-                .cap("logging")
-                .chain_log_sub(424_242),
-        )
-        .expect_refusal()
-        .await
-        .names("module example subscribes to chain 424242")
-        .names("[chains.424242]");
+async fn boot_refuses_a_subscription_on_an_unconfigured_chain() {
+    for manifest in [
+        TestManifest::new("example")
+            .cap("logging")
+            .block_sub(424_242),
+        TestManifest::new("example")
+            .cap("logging")
+            .chain_log_sub(424_242),
+    ] {
+        BootScenario::new()
+            .module(manifest)
+            .expect_refusal()
+            .await
+            .names("module example subscribes to chain 424242")
+            .names("[chains.424242]")
+            .names("configured chains: 1, 100, 11155111")
+            .lacks("compile");
+    }
 }
 
 #[tokio::test]
