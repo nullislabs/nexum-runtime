@@ -10,10 +10,11 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Error, Result, anyhow};
 use tracing::{error, info, warn};
 
-use super::Supervisor;
-use super::load::{LoadedProvider, run_init};
+use super::Shared;
+use super::load::{LoadedModule, LoadedProvider, run_init};
 use super::store::{self, build_linker, build_provider_linker};
 use crate::bindings::EventModule;
+use crate::digest::ContentDigest;
 use crate::host::actor::Liveness;
 use crate::host::component::RuntimeTypes;
 use crate::host::extension::{HostServices, Installed, ProviderInstance};
@@ -153,7 +154,7 @@ impl Health {
     }
 
     /// A restart succeeded. Private so the per-role reset choice is made
-    /// only by [`commit_module_restart`] and [`commit_provider_restart`].
+    /// only by [`revive_one`] through [`Role::resets_failure_count`].
     fn restart_succeeded(&mut self, reset_failures: bool) {
         self.state = LifecycleState::Alive;
         if reset_failures {
@@ -168,45 +169,125 @@ impl Health {
     }
 }
 
-impl<T: RuntimeTypes> Supervisor<T> {
-    /// Rebuild a trapped module from its cached seed on a fresh `Store`
-    /// (the trapped instance is poisoned) and re-run `init`, preserving
-    /// name and subscriptions. On success the caller marks its health
-    /// alive; on failure the module stays dead and its failure count keeps
-    /// climbing.
-    pub(super) async fn reinstantiate_one(&mut self, idx: usize) -> Result<()> {
+/// Which supervised role an item plays; keys the per-role metric names and
+/// the compile-time tracing field keys.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, strum::IntoStaticStr)]
+pub(super) enum Role {
+    Module,
+    Adapter,
+}
+
+impl Role {
+    /// The metric label key naming the item.
+    const fn label(self) -> &'static str {
+        match self {
+            Self::Module => "module",
+            Self::Adapter => "adapter",
+        }
+    }
+
+    const fn errors_total(self) -> &'static str {
+        match self {
+            Self::Module => "shepherd_module_errors_total",
+            Self::Adapter => "shepherd_adapter_errors_total",
+        }
+    }
+
+    const fn restarts_total(self) -> &'static str {
+        match self {
+            Self::Module => "shepherd_module_restarts_total",
+            Self::Adapter => "shepherd_adapter_restarts_total",
+        }
+    }
+
+    const fn poisoned_gauge(self) -> &'static str {
+        match self {
+            Self::Module => "shepherd_module_poisoned",
+            Self::Adapter => "shepherd_adapter_poisoned",
+        }
+    }
+
+    /// A provider reinstall is a fresh instance, so its curve resets; a
+    /// module recovers in place and keeps climbing.
+    const fn resets_failure_count(self) -> bool {
+        matches!(self, Self::Adapter)
+    }
+}
+
+/// A supervised item the generic sweep can record deaths for and revive.
+/// Run identity mints and commits only inside a successful [`Sweepable::revive`],
+/// so a failed attempt never advances the run sequence.
+pub(super) trait Sweepable<T: RuntimeTypes> {
+    const ROLE: Role;
+    fn name(&self) -> &str;
+    fn health(&self) -> &Health;
+    fn health_mut(&mut self) -> &mut Health;
+    fn digest(&self) -> ContentDigest;
+    /// A death `health` has not recorded yet, with its instant.
+    fn detect_death(&self) -> Option<Instant>;
+    /// Poison thresholds for this item; defaults to the engine-wide policy
+    /// so a per-item override is a one-line impl.
+    fn poison_policy(&self, engine_default: PoisonPolicy) -> PoisonPolicy {
+        engine_default
+    }
+    /// Rebuild from the cached seed on a fresh store (the trapped one is
+    /// poisoned). Consumed monomorphised only, never as a trait object.
+    async fn revive(&mut self, shared: &Shared<T>) -> Result<()>;
+}
+
+impl<T: RuntimeTypes> Sweepable<T> for LoadedModule<T> {
+    const ROLE: Role = Role::Module;
+
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn health(&self) -> &Health {
+        &self.health
+    }
+
+    fn health_mut(&mut self) -> &mut Health {
+        &mut self.health
+    }
+
+    fn digest(&self) -> ContentDigest {
+        self.seed.artifact.digest
+    }
+
+    /// Module traps are recorded eagerly by the dispatch trap arm, so the
+    /// sweep never discovers one.
+    fn detect_death(&self) -> Option<Instant> {
+        None
+    }
+
+    /// Re-instantiate and re-run `init`, preserving name, subscriptions,
+    /// and the dispatch bucket; bindings, store, and run commit on success.
+    async fn revive(&mut self, shared: &Shared<T>) -> Result<()> {
         // Re-build the linker: core interfaces plus every extension hook,
         // identical to the boot-time linker. Cheap `add_to_linker` calls
         // against the cached `Engine`.
-        let linker = build_linker::<T>(&self.shared.engine, &self.shared.extensions)?;
-
-        // Disjoint borrows: the shared backends stay borrowed while the
-        // module slot is rebuilt in place.
-        let Self {
-            shared, modules, ..
-        } = self;
-        let module = &mut modules[idx];
+        let linker = build_linker::<T>(&shared.engine, &shared.extensions)?;
         // A restart is a new run: bump the sequence so its logs key
         // apart from the dead run's, which stays readable until evicted.
-        let run = RunId::new(module.name.clone(), module.live.run.seq + 1);
+        let run = RunId::new(self.name.clone(), self.live.run.seq + 1);
         let mut store = store::build(
             shared,
-            &module.seed.spec,
+            &self.seed.spec,
             run.clone(),
             shared.services.clone(),
         )?;
         let bindings =
-            EventModule::instantiate_async(&mut store, &module.seed.artifact.component, &linker)
+            EventModule::instantiate_async(&mut store, &self.seed.artifact.component, &linker)
                 .await
                 .map_err(Error::from)
-                .with_context(|| format!("reinstantiate {}", module.name))?;
+                .with_context(|| format!("reinstantiate {}", self.name))?;
         // Restart policy: an init fault defers the restart (backoff slides)
         // rather than loading the module permanently dead like boot does.
         match run_init(
             &bindings,
             &mut store,
-            &module.seed.artifact.init_config,
-            module.seed.event_deadline,
+            &self.seed.artifact.init_config,
+            self.seed.event_deadline,
         )
         .await?
         {
@@ -219,198 +300,209 @@ impl<T: RuntimeTypes> Supervisor<T> {
                 ));
             }
         }
-        module.live.bindings = bindings;
-        module.live.store = store;
-        module.live.run = run;
+        self.live.bindings = bindings;
+        self.live.store = store;
+        self.live.run = run;
         Ok(())
     }
+}
 
-    /// Re-instantiate a dead module in place. On success mark it alive
-    /// (keeping the failure count); on failure defer with a slid backoff.
-    pub(super) async fn try_restart(&mut self, idx: usize, now: Instant) {
-        let name = self.modules[idx].name.clone();
-        let failure_count = self.modules[idx].health.failure_count();
-        // Restarts reuse the cached component, so the boot-time digest holds.
-        info!(
-            module = %name,
-            failure_count,
-            digest = %self.modules[idx].seed.artifact.digest,
-            "restart attempt",
-        );
-        metrics::counter!(
-            "shepherd_module_restarts_total",
-            "module" => name.clone(),
-        )
-        .increment(1);
-        match self.reinstantiate_one(idx).await {
-            Ok(()) => {
-                commit_module_restart(&mut self.modules[idx].health);
-                info!(module = %name, "restart succeeded");
+impl<T: RuntimeTypes> Sweepable<T> for LoadedProvider {
+    const ROLE: Role = Role::Adapter;
+
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn health(&self) -> &Health {
+        &self.health
+    }
+
+    fn health_mut(&mut self) -> &mut Health {
+        &mut self.health
+    }
+
+    fn digest(&self) -> ContentDigest {
+        self.seed.artifact.digest
+    }
+
+    /// The shared liveness reports deaths the dispatch path cannot see;
+    /// the health gate records each one exactly once.
+    fn detect_death(&self) -> Option<Instant> {
+        provider_death(&self.health, &self.liveness)
+    }
+
+    /// Rebuild the store from the cached seed and reinstall through the
+    /// registered kind; run and liveness commit only on a live install.
+    async fn revive(&mut self, shared: &Shared<T>) -> Result<()> {
+        let (kind, service) = shared
+            .kinds
+            .get(self.kind)
+            .ok_or_else(|| anyhow!("provider kind {} is not registered", self.kind))?;
+        let linker = build_provider_linker::<T>(&shared.engine, kind.as_ref())?;
+        // A restart is a new run, like a module's.
+        let run = RunId::new(self.name.clone(), self.run.seq + 1);
+        let store = store::build(
+            shared,
+            &self.seed.spec,
+            run.clone(),
+            HostServices::default(),
+        )?;
+        match kind
+            .install(
+                ProviderInstance {
+                    component: &self.seed.artifact.component,
+                    linker: &linker,
+                    store,
+                    config: self.seed.artifact.init_config.clone(),
+                    sections: &self.sections,
+                    fuel_per_call: self.seed.spec.fuel,
+                    liveness: self.liveness.clone(),
+                },
+                service,
+            )
+            .await?
+        {
+            Installed::Live => {
+                self.run = run;
+                self.liveness.mark_alive();
+                Ok(())
             }
-            Err(e) => {
-                let deferral = self.modules[idx].health.defer_restart(now);
-                error!(
-                    module = %name,
+            Installed::Dead => Err(anyhow!("init returned fault on restart")),
+        }
+    }
+}
+
+/// A provider's unrecorded death: the shared liveness is dead while health
+/// still says alive, counted from the death instant rather than from the
+/// sweep that noticed it.
+fn provider_death(health: &Health, liveness: &Liveness) -> Option<Instant> {
+    if !health.dispatchable() {
+        return None;
+    }
+    liveness.dead_since()
+}
+
+/// Fold one role's items into recovery: record any death the item reports
+/// (backoff plus poison), then revive dead, unpoisoned items past their
+/// backoff.
+pub(super) async fn sweep<T: RuntimeTypes, S: Sweepable<T>>(
+    shared: &Shared<T>,
+    items: &mut [S],
+    engine_default: PoisonPolicy,
+    now: Instant,
+) {
+    for item in items.iter_mut() {
+        // Per-item poison tuning hook; both roles currently defer to the
+        // engine-wide default.
+        let policy = item.poison_policy(engine_default);
+        if let Some(died_at) = item.detect_death() {
+            let verdict = item.health_mut().record_trap(died_at, now, policy);
+            match S::ROLE {
+                Role::Module => warn!(
+                    module = %item.name(),
+                    failure_count = verdict.failure_count,
+                    backoff_ms = verdict.backoff.as_millis() as u64,
+                    "module trapped - marked dead; will restart after backoff",
+                ),
+                Role::Adapter => warn!(
+                    adapter = %item.name(),
+                    failure_count = verdict.failure_count,
+                    backoff_ms = verdict.backoff.as_millis() as u64,
+                    "adapter trapped - marked dead; will restart after backoff",
+                ),
+            }
+            metrics::counter!(
+                S::ROLE.errors_total(),
+                S::ROLE.label() => item.name().to_owned(),
+                "error_kind" => "trap",
+            )
+            .increment(1);
+            if let Some(recent) = verdict.poisoned {
+                match S::ROLE {
+                    Role::Module => warn!(
+                        module = %item.name(),
+                        recent_failures = recent,
+                        window_secs = policy.window.as_secs(),
+                        "module poisoned - quarantined; remove from engine.toml + restart to clear",
+                    ),
+                    Role::Adapter => warn!(
+                        adapter = %item.name(),
+                        recent_failures = recent,
+                        window_secs = policy.window.as_secs(),
+                        "adapter poisoned - quarantined; remove from engine.toml + restart to clear",
+                    ),
+                }
+                metrics::gauge!(
+                    S::ROLE.poisoned_gauge(),
+                    S::ROLE.label() => item.name().to_owned(),
+                )
+                .set(1.0);
+            }
+        }
+        if item.health().due_restart(now) {
+            revive_one(shared, item, now).await;
+        }
+    }
+}
+
+/// Revive one dead item in place. On success mark it alive with the
+/// role's failure-count reset choice; on failure defer with a slid backoff.
+pub(super) async fn revive_one<T: RuntimeTypes, S: Sweepable<T>>(
+    shared: &Shared<T>,
+    item: &mut S,
+    now: Instant,
+) {
+    let failure_count = item.health().failure_count();
+    // Revives reuse the cached component, so the boot-time digest holds.
+    match S::ROLE {
+        Role::Module => info!(
+            module = %item.name(),
+            failure_count,
+            digest = %item.digest(),
+            "restart attempt",
+        ),
+        Role::Adapter => info!(
+            adapter = %item.name(),
+            failure_count,
+            digest = %item.digest(),
+            "adapter restart attempt",
+        ),
+    }
+    metrics::counter!(
+        S::ROLE.restarts_total(),
+        S::ROLE.label() => item.name().to_owned(),
+    )
+    .increment(1);
+    match item.revive(shared).await {
+        Ok(()) => {
+            item.health_mut()
+                .restart_succeeded(S::ROLE.resets_failure_count());
+            match S::ROLE {
+                Role::Module => info!(module = %item.name(), "restart succeeded"),
+                Role::Adapter => info!(adapter = %item.name(), "adapter restart succeeded"),
+            }
+        }
+        Err(e) => {
+            let deferral = item.health_mut().defer_restart(now);
+            match S::ROLE {
+                Role::Module => error!(
+                    module = %item.name(),
                     failure_count = deferral.failure_count,
                     backoff_ms = deferral.backoff.as_millis() as u64,
                     error = %e,
                     "restart failed - will retry after backoff",
-                );
+                ),
+                Role::Adapter => error!(
+                    adapter = %item.name(),
+                    failure_count = deferral.failure_count,
+                    backoff_ms = deferral.backoff.as_millis() as u64,
+                    error = %format!("{e:#}"),
+                    "adapter restart failed - will retry after backoff",
+                ),
             }
         }
     }
-
-    /// Fold providers into recovery: record any trap the shared liveness
-    /// reports (backoff plus poison), then reinstall dead, unpoisoned
-    /// providers past their backoff. Runs at the head of every dispatch.
-    pub(super) async fn sweep_providers(&mut self, now: Instant) {
-        let policy = self.policy;
-        for idx in 0..self.providers.len() {
-            let provider = &mut self.providers[idx];
-            if let Some(verdict) =
-                record_provider_death(&mut provider.health, &provider.liveness, now, policy)
-            {
-                warn!(
-                    adapter = %provider.name,
-                    failure_count = verdict.failure_count,
-                    backoff_ms = verdict.backoff.as_millis() as u64,
-                    "adapter trapped - marked dead; will restart after backoff",
-                );
-                metrics::counter!(
-                    "shepherd_adapter_errors_total",
-                    "adapter" => provider.name.clone(),
-                    "error_kind" => "trap",
-                )
-                .increment(1);
-                if let Some(recent) = verdict.poisoned {
-                    warn!(
-                        adapter = %provider.name,
-                        recent_failures = recent,
-                        window_secs = policy.window.as_secs(),
-                        "adapter poisoned - quarantined; remove from engine.toml + restart to clear",
-                    );
-                    metrics::gauge!(
-                        "shepherd_adapter_poisoned",
-                        "adapter" => provider.name.clone(),
-                    )
-                    .set(1.0);
-                }
-            }
-            if self.providers[idx].health.due_restart(now) {
-                self.try_restart_provider(idx, now).await;
-            }
-        }
-    }
-
-    /// Reinstall a dead provider in place (fresh store, instance, `init`,
-    /// re-install). On success revive the shared liveness and reset the
-    /// failure count; on failure defer with a slid backoff.
-    pub(super) async fn try_restart_provider(&mut self, idx: usize, now: Instant) {
-        let name = self.providers[idx].name.clone();
-        let failure_count = self.providers[idx].health.failure_count();
-        info!(
-            adapter = %name,
-            failure_count,
-            digest = %self.providers[idx].seed.artifact.digest,
-            "adapter restart attempt",
-        );
-        metrics::counter!(
-            "shepherd_adapter_restarts_total",
-            "adapter" => name.clone(),
-        )
-        .increment(1);
-        let outcome = self.reinstall_provider(idx).await;
-        let provider = &mut self.providers[idx];
-        match outcome {
-            Ok(Installed::Live) => {
-                commit_provider_restart(
-                    &mut provider.run_seq,
-                    &provider.liveness,
-                    &mut provider.health,
-                );
-                info!(adapter = %name, "adapter restart succeeded");
-            }
-            Ok(Installed::Dead) => {
-                defer_provider_restart(provider, now, "init returned fault on restart");
-            }
-            Err(e) => defer_provider_restart(provider, now, &format!("{e:#}")),
-        }
-    }
-
-    /// Rebuild a provider from its cached seed and reinstall it over the
-    /// dead slot.
-    async fn reinstall_provider(&mut self, idx: usize) -> Result<Installed> {
-        let provider = &self.providers[idx];
-        let (kind, service) = self
-            .shared
-            .kinds
-            .get(provider.kind)
-            .ok_or_else(|| anyhow!("provider kind {} is not registered", provider.kind))?;
-        let linker = build_provider_linker::<T>(&self.shared.engine, kind.as_ref())?;
-        // A restart is a new run, like a module's.
-        let run = RunId::new(provider.name.clone(), provider.run_seq + 1);
-        let store = store::build(
-            &self.shared,
-            &provider.seed.spec,
-            run,
-            HostServices::default(),
-        )?;
-        kind.install(
-            ProviderInstance {
-                component: &provider.seed.artifact.component,
-                linker: &linker,
-                store,
-                config: provider.seed.artifact.init_config.clone(),
-                sections: &provider.sections,
-                fuel_per_call: provider.seed.spec.fuel,
-                liveness: provider.liveness.clone(),
-            },
-            service,
-        )
-        .await
-    }
-}
-
-/// Fold the shared liveness into a provider's health, counting the backoff
-/// from the death instant rather than from the sweep that noticed it.
-fn record_provider_death(
-    health: &mut Health,
-    liveness: &Liveness,
-    now: Instant,
-    policy: PoisonPolicy,
-) -> Option<TrapVerdict> {
-    if !health.dispatchable() {
-        return None;
-    }
-    let died_at = liveness.dead_since()?;
-    Some(health.record_trap(died_at, now, policy))
-}
-
-/// Commit a successful module restart. The failure count survives, so a
-/// module that keeps trapping keeps climbing the backoff curve.
-fn commit_module_restart(health: &mut Health) {
-    health.restart_succeeded(false);
-}
-
-/// Commit a successful provider reinstall: new run sequence, revived
-/// liveness, and a reset failure count, because a reinstall is a fresh
-/// instance where the module path recovers in place.
-fn commit_provider_restart(run_seq: &mut u64, liveness: &Liveness, health: &mut Health) {
-    *run_seq += 1;
-    liveness.mark_alive();
-    health.restart_succeeded(true);
-}
-
-/// Slide a failed provider restart's next attempt further out.
-fn defer_provider_restart(provider: &mut LoadedProvider, now: Instant, error: &str) {
-    let deferral = provider.health.defer_restart(now);
-    error!(
-        adapter = %provider.name,
-        failure_count = deferral.failure_count,
-        backoff_ms = deferral.backoff.as_millis() as u64,
-        error,
-        "adapter restart failed - will retry after backoff",
-    );
 }
 
 #[cfg(test)]
@@ -605,8 +697,8 @@ mod health_tests {
         // one-second backoff the first trap earns.
         let sweep = died_at + secs(5);
         let mut health = Health::alive();
-        let verdict = record_provider_death(&mut health, &liveness, sweep, policy(5, 600))
-            .expect("an unrecorded death is a trap");
+        let died = provider_death(&health, &liveness).expect("an unrecorded death is a trap");
+        let verdict = health.record_trap(died, sweep, policy(5, 600));
         assert_eq!(verdict.failure_count, 1);
         assert_eq!(verdict.backoff, secs(1));
         assert!(
@@ -621,13 +713,14 @@ mod health_tests {
         let mut health = Health::alive();
         let now = Instant::now();
         assert!(
-            record_provider_death(&mut health, &liveness, now, policy(5, 600)).is_none(),
+            provider_death(&health, &liveness).is_none(),
             "a live provider has nothing to record",
         );
         liveness.mark_dead();
-        assert!(record_provider_death(&mut health, &liveness, now, policy(5, 600)).is_some());
+        let died = provider_death(&health, &liveness).expect("marked dead");
+        health.record_trap(died, now, policy(5, 600));
         assert!(
-            record_provider_death(&mut health, &liveness, now, policy(5, 600)).is_none(),
+            provider_death(&health, &liveness).is_none(),
             "the liveness stays dead until the reinstall, so the gate is health",
         );
         assert_eq!(health.failure_count(), 1);
@@ -639,20 +732,15 @@ mod health_tests {
         let mut module = Health::alive();
         module.record_trap(t0, t0, policy(9, 600));
         module.record_trap(t0 + secs(2), t0 + secs(2), policy(9, 600));
-        commit_module_restart(&mut module);
+        module.restart_succeeded(Role::Module.resets_failure_count());
         assert!(module.dispatchable());
         assert_eq!(module.failure_count(), 2);
 
         let mut provider = Health::alive();
         provider.record_trap(t0, t0, policy(9, 600));
         provider.record_trap(t0 + secs(2), t0 + secs(2), policy(9, 600));
-        let liveness = Liveness::default();
-        liveness.mark_dead();
-        let mut run_seq = 7;
-        commit_provider_restart(&mut run_seq, &liveness, &mut provider);
+        provider.restart_succeeded(Role::Adapter.resets_failure_count());
         assert!(provider.dispatchable());
         assert_eq!(provider.failure_count(), 0);
-        assert!(liveness.is_alive());
-        assert_eq!(run_seq, 8);
     }
 }
