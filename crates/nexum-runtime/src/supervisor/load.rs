@@ -3,7 +3,6 @@
 //! provider's store is consumed by `kind.install`, so the two loaders stay
 //! role-specific.
 
-use std::collections::VecDeque;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
@@ -17,6 +16,7 @@ use super::admission::{
 };
 use super::artifact::read_verified_component;
 use super::dispatch::with_dispatch_deadline;
+use super::lifecycle::Health;
 use super::prepass::{MODULE_FALLBACK_NAME, PROVIDER_FALLBACK_NAME, manifest_namespace};
 use super::store::{
     self, HostStore, ResolvedLimits, StoreSpec, build_provider_linker, resolve_module_limits,
@@ -80,22 +80,9 @@ pub(super) struct LoadedModule<T: RuntimeTypes> {
     /// Subscriptions copied from `module.toml`, read on every event to
     /// decide dispatch.
     pub(super) subscriptions: Vec<Subscription>,
-    /// Set `false` when `on_event` traps; excluded from dispatch until
-    /// `next_attempt` passes. An init-failed module has `alive = false` +
-    /// `next_attempt = None`, so it never returns.
-    pub(super) alive: bool,
-    /// Consecutive trap failures since the last success; resets to 0 on
-    /// success and drives the restart backoff.
-    pub(super) failure_count: u32,
-    /// Earliest instant the supervisor may retry after a trap. `None` for
-    /// healthy modules and for init-failed modules (never rescheduled).
-    pub(super) next_attempt: Option<Instant>,
-    /// Sliding-window trap timestamps for the poison-pill check; entries
-    /// older than `PoisonPolicy.window` drop on push.
-    pub(super) failure_timestamps: VecDeque<Instant>,
-    /// Once `true` the module is permanently quarantined until an operator
-    /// removes it from `[[modules]]` and restarts the engine.
-    pub(super) poisoned: bool,
+    /// Lifecycle authority: alive/backoff/dead/poisoned plus the failure
+    /// history. Traps are recorded eagerly by the dispatch arm.
+    pub(super) health: Health,
 }
 
 /// One loaded provider; mirrors [`LoadedModule`]'s restart and poison
@@ -108,18 +95,14 @@ pub(super) struct LoadedProvider {
     /// Extension-owned manifest sections.
     pub(super) sections: manifest::ExtensionSections,
     pub(super) seed: ProviderSeed,
-    /// Trap flag shared with the installed actor.
+    /// Trap signal shared with the installed actor; feeds `health` at
+    /// sweep time and carries no lifecycle authority of its own.
     pub(super) liveness: Liveness,
     /// Sequence of the run currently installed; restarts increment it.
     pub(super) run_seq: u64,
-    /// The sweep's view of `liveness`: `true` against a dead liveness is
-    /// an unrecorded trap. Init failure leaves it `false` with
-    /// `next_attempt = None`, permanent.
-    pub(super) alive: bool,
-    pub(super) failure_count: u32,
-    pub(super) next_attempt: Option<Instant>,
-    pub(super) failure_timestamps: VecDeque<Instant>,
-    pub(super) poisoned: bool,
+    /// Lifecycle authority: `health` alive against a dead `liveness` is an
+    /// unrecorded trap the next sweep records.
+    pub(super) health: Health,
 }
 
 /// Shared admission prologue: refuse an unclaimed manifest section, run the
@@ -304,11 +287,11 @@ pub(super) async fn module<T: RuntimeTypes>(
             event_deadline: limits_cfg.event_deadline(),
         },
         subscriptions: loaded_manifest.manifest.subscriptions.clone(),
-        alive: init_succeeded,
-        failure_count: 0,
-        next_attempt: None,
-        failure_timestamps: VecDeque::new(),
-        poisoned: false,
+        health: if init_succeeded {
+            Health::alive()
+        } else {
+            Health::dead()
+        },
     })
 }
 
@@ -430,10 +413,10 @@ pub(super) async fn provider<T: RuntimeTypes>(
         },
         liveness,
         run_seq: 0,
-        alive: installed == Installed::Live,
-        failure_count: 0,
-        next_attempt: None,
-        failure_timestamps: VecDeque::new(),
-        poisoned: false,
+        health: if installed == Installed::Live {
+            Health::alive()
+        } else {
+            Health::dead()
+        },
     })
 }

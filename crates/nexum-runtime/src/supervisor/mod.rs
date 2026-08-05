@@ -183,7 +183,10 @@ impl<T: RuntimeTypes> Supervisor<T> {
     /// Modules currently alive. Not alive when `init` returned `Err`
     /// (permanent) or a trap's backoff has not elapsed.
     pub fn alive_count(&self) -> usize {
-        self.modules.iter().filter(|m| m.alive).count()
+        self.modules
+            .iter()
+            .filter(|m| m.health.dispatchable())
+            .count()
     }
 
     /// True when an init-failed module declared subscriptions. Lets the
@@ -192,13 +195,16 @@ impl<T: RuntimeTypes> Supervisor<T> {
     pub fn dead_modules_hold_subscriptions(&self) -> bool {
         self.modules
             .iter()
-            .any(|m| !m.alive && !m.subscriptions.is_empty())
+            .any(|m| !m.health.dispatchable() && !m.subscriptions.is_empty())
     }
 
     /// Modules currently poisoned.
     #[cfg_attr(not(test), allow(dead_code))]
     pub fn poisoned_count(&self) -> usize {
-        self.modules.iter().filter(|m| m.poisoned).count()
+        self.modules
+            .iter()
+            .filter(|m| m.health.is_poisoned())
+            .count()
     }
 
     /// The extension-owned services, shared by every module store.
@@ -299,8 +305,8 @@ fn assemble<T: RuntimeTypes>(
     providers: Vec<LoadedProvider>,
     policy: PoisonPolicy,
 ) -> Supervisor<T> {
-    let alive = modules.iter().filter(|m| m.alive).count();
-    let adapters_alive = providers.iter().filter(|p| p.alive).count();
+    let alive = modules.iter().filter(|m| m.health.dispatchable()).count();
+    let adapters_alive = providers.iter().filter(|p| p.health.dispatchable()).count();
     info!(
         loaded = modules.len(),
         alive,

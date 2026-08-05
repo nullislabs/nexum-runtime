@@ -4,7 +4,7 @@
 //! a restart with exponential backoff; the next eligible dispatch retries, and
 //! a successful call resets the failure counter.
 //!
-//! | failure_count | next_attempt delay |
+//! | failure_count | backoff delay |
 //! |---|---|
 //! | 1 | 1s |
 //! | 2 | 2s |
