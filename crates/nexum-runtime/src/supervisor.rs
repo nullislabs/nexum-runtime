@@ -14,7 +14,7 @@
 //! independent across chains.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -413,6 +413,43 @@ fn enforce_extension_uniqueness<T: RuntimeTypes>(
     Ok(())
 }
 
+/// One ledger spans both roles: they derive the same keccak local-store namespace.
+type NamespaceLedger = BTreeMap<String, (&'static str, PathBuf)>;
+
+/// Claim `name` for `path`, refusing a second claimant.
+fn claim_namespace(
+    ledger: &mut NamespaceLedger,
+    name: &str,
+    role: &'static str,
+    path: &Path,
+) -> Result<()> {
+    if let Some((held_role, held_path)) = ledger.get(name) {
+        return Err(anyhow!(
+            "name {name} is claimed twice: {held_role} {} and {role} {}; \
+             [module].name must be unique across [[modules]] and [[adapters]]",
+            held_path.display(),
+            path.display(),
+        ));
+    }
+    ledger.insert(name.to_owned(), (role, path.to_path_buf()));
+    Ok(())
+}
+
+/// Fallback namespace for a module with an empty `[module].name`.
+const MODULE_FALLBACK_NAME: &str = "module";
+
+/// Fallback namespace for a provider with an empty `[module].name`.
+const PROVIDER_FALLBACK_NAME: &str = "provider";
+
+/// `[module].name`, or `fallback` when it is empty.
+fn manifest_namespace(loaded: &LoadedManifest, fallback: &str) -> String {
+    if loaded.manifest.module.name.is_empty() {
+        fallback.to_owned()
+    } else {
+        loaded.manifest.module.name.clone()
+    }
+}
+
 /// Insert one kind row, refusing a duplicate manifest spelling.
 fn register_kind<T: RuntimeTypes>(
     kinds: &mut ProviderKinds<T>,
@@ -451,11 +488,44 @@ impl<T: RuntimeTypes> Supervisor<T> {
         // every module store built below already routes to the installed
         // instances. Providers link only their kind's scoped imports.
         let provider_registry = CapabilityRegistry::provider();
-        let mut providers = Vec::with_capacity(engine_cfg.adapters.len());
+        // Every name is claimed before any component compiles or runs guest code.
+        let mut ledger = NamespaceLedger::new();
+        let mut adapter_manifests = Vec::with_capacity(engine_cfg.adapters.len());
         for entry in &engine_cfg.adapters {
+            let loaded = load_required_manifest(
+                &entry.path,
+                entry.manifest.as_deref(),
+                &provider_registry,
+                "provider",
+            )
+            .with_context(|| format!("load provider {}", entry.path.display()))?;
+            claim_namespace(
+                &mut ledger,
+                &manifest_namespace(&loaded, PROVIDER_FALLBACK_NAME),
+                "adapter",
+                &entry.path,
+            )?;
+            adapter_manifests.push(loaded);
+        }
+        let mut module_manifests = Vec::with_capacity(engine_cfg.modules.len());
+        for entry in &engine_cfg.modules {
+            let loaded =
+                load_required_manifest(&entry.path, entry.manifest.as_deref(), &registry, "module")
+                    .with_context(|| format!("load module {}", entry.path.display()))?;
+            claim_namespace(
+                &mut ledger,
+                &manifest_namespace(&loaded, MODULE_FALLBACK_NAME),
+                "module",
+                &entry.path,
+            )?;
+            module_manifests.push(loaded);
+        }
+        let mut providers = Vec::with_capacity(engine_cfg.adapters.len());
+        for (entry, loaded_manifest) in engine_cfg.adapters.iter().zip(adapter_manifests) {
             let loaded = Self::load_provider(
                 engine,
                 entry,
+                loaded_manifest,
                 components,
                 &engine_cfg.limits,
                 &provider_registry,
@@ -480,11 +550,12 @@ impl<T: RuntimeTypes> Supervisor<T> {
 
         let extension_kinds = extension_subscription_vocabulary(extensions);
         let mut modules = Vec::with_capacity(engine_cfg.modules.len());
-        for entry in &engine_cfg.modules {
+        for (entry, loaded_manifest) in engine_cfg.modules.iter().zip(module_manifests) {
             let loaded = Self::load_one(
                 engine,
                 linker,
                 entry,
+                loaded_manifest,
                 components,
                 &engine_cfg.limits,
                 &registry,
@@ -545,11 +616,14 @@ impl<T: RuntimeTypes> Supervisor<T> {
         };
         // The single-module override path serves `just run`; providers
         // are configured through `engine.toml`, so none boot here.
+        let loaded_manifest =
+            load_required_manifest(&entry.path, entry.manifest.as_deref(), &registry, "module")?;
         let extension_kinds = extension_subscription_vocabulary(extensions);
         let loaded = Self::load_one(
             engine,
             linker,
             &entry,
+            loaded_manifest,
             components,
             limits,
             &registry,
@@ -649,6 +723,8 @@ impl<T: RuntimeTypes> Supervisor<T> {
                 ext: components.ext.clone(),
                 chain: components.chain.clone(),
                 chain_response_max_bytes,
+                // Provider guests never reach this: `build_provider_linker`
+                // links only `kind.link` plus WASI.
                 store: module_store,
                 services,
             },
@@ -664,6 +740,7 @@ impl<T: RuntimeTypes> Supervisor<T> {
         engine: &Engine,
         linker: &Linker<HostState<T>>,
         entry: &ModuleEntry,
+        loaded_manifest: LoadedManifest,
         components: &Components<T>,
         limits_cfg: &ModuleLimits,
         registry: &CapabilityRegistry,
@@ -673,13 +750,7 @@ impl<T: RuntimeTypes> Supervisor<T> {
         extensions: &[Arc<dyn Extension<T>>],
         provider_manifests: &[ProviderManifest],
     ) -> Result<LoadedModule<T>> {
-        let loaded_manifest =
-            load_required_manifest(&entry.path, entry.manifest.as_deref(), registry, "module")?;
-        let module_namespace = if loaded_manifest.manifest.module.name.is_empty() {
-            "module".to_owned()
-        } else {
-            loaded_manifest.manifest.module.name.clone()
-        };
+        let module_namespace = manifest_namespace(&loaded_manifest, MODULE_FALLBACK_NAME);
 
         // Run the extension install predicates before any compile cost:
         // every section must be claimed, and every claiming extension
@@ -835,17 +906,15 @@ impl<T: RuntimeTypes> Supervisor<T> {
         })
     }
 
-    /// Load one `[[adapters]]` entry: resolve its manifest and kind,
-    /// enforce the scoped-transport capabilities, build a supervised store
-    /// with the operator's grants, and hand the instance to its kind to
-    /// install. A failed `init` loads the provider dead and unroutable,
-    /// permanently.
+    /// Load one `[[adapters]]` entry; a failed `init` loads the provider
+    /// dead and unroutable, permanently.
     // One flat argument per shared input threaded onto the store, matching
     // the module load path.
     #[allow(clippy::too_many_arguments)]
     async fn load_provider(
         engine: &Engine,
         entry: &AdapterEntry,
+        loaded_manifest: LoadedManifest,
         components: &Components<T>,
         limits_cfg: &ModuleLimits,
         registry: &CapabilityRegistry,
@@ -853,13 +922,7 @@ impl<T: RuntimeTypes> Supervisor<T> {
         kinds: &ProviderKinds<T>,
         extensions: &[Arc<dyn Extension<T>>],
     ) -> Result<LoadedProvider> {
-        let loaded_manifest =
-            load_required_manifest(&entry.path, entry.manifest.as_deref(), registry, "provider")?;
-        let namespace = if loaded_manifest.manifest.module.name.is_empty() {
-            "provider".to_owned()
-        } else {
-            loaded_manifest.manifest.module.name.clone()
-        };
+        let namespace = manifest_namespace(&loaded_manifest, PROVIDER_FALLBACK_NAME);
 
         // Run the extension install predicates before any compile cost:
         // every section must be claimed, and every claiming extension
