@@ -118,7 +118,7 @@ pub(super) fn enforce_extension_uniqueness<T: RuntimeTypes>(
 
 /// Assemble the capability registry from the core namespace plus every
 /// extension's. Must agree with the linker built from the same `extensions`.
-pub(crate) fn capability_registry<T: RuntimeTypes>(
+pub(super) fn capability_registry<T: RuntimeTypes>(
     extensions: &[Arc<dyn Extension<T>>],
 ) -> CapabilityRegistry {
     let mut registry = CapabilityRegistry::core();

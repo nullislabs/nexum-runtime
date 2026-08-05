@@ -20,8 +20,6 @@ pub use prepass::ConfiguredChains;
 pub use store::{WasiClockOverride, build_linker, build_provider_linker};
 pub use subscriptions::ChainLogSub;
 
-pub(crate) use admission::capability_registry;
-
 use std::path::Path;
 use std::sync::Arc;
 
@@ -35,7 +33,7 @@ use crate::host::component::{Components, RuntimeTypes};
 use crate::host::extension::{Extension, HostServices, ProviderManifest};
 use crate::host::state::HostState;
 use crate::runtime::poison_policy::PoisonPolicy;
-use admission::{ProviderKinds, enforce_extension_uniqueness, provider_kinds};
+use admission::{ProviderKinds, capability_registry, enforce_extension_uniqueness, provider_kinds};
 use cursors::ChainLogCursors;
 use load::{LoadedModule, LoadedProvider};
 use prepass::{
