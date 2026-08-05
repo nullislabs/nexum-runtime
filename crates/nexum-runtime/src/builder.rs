@@ -113,6 +113,15 @@ fn finish_wait(joined: Option<TaskExit>) -> anyhow::Result<()> {
     }
 }
 
+/// The wasmtime config every launch builds its engine from; the test engine
+/// reads it too, so the host and the suite never diverge on a flag.
+pub(crate) fn wasmtime_config() -> wasmtime::Config {
+    let mut config = wasmtime::Config::new();
+    config.wasm_component_model(true);
+    config.consume_fuel(true);
+    config
+}
+
 /// A fully-assembled runtime: concrete backends, extensions, add-ons, and the
 /// optional module-source override. Implements [`LaunchRuntime`].
 pub struct AssembledRuntime<'a, T: RuntimeTypes> {
@@ -164,10 +173,7 @@ impl<T: RuntimeTypes> LaunchRuntime for AssembledRuntime<'_, T> {
             .collect::<anyhow::Result<Vec<_>>>()?;
 
         // wasmtime engine + linker - one of each, shared across modules.
-        let mut config = wasmtime::Config::new();
-        config.wasm_component_model(true);
-        config.consume_fuel(true);
-        let engine = Engine::new(&config)?;
+        let engine = Engine::new(&wasmtime_config())?;
         let linker = supervisor::build_linker::<T>(&engine, &extensions)?;
 
         // Boot supervisor - a module-source override wins over

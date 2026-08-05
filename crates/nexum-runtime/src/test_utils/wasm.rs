@@ -50,13 +50,10 @@ fn locate(wasm: PathBuf, ci: bool) -> Option<PathBuf> {
     None
 }
 
-/// A component-model wasmtime engine with fuel metering on, matching the
-/// production launch configuration.
+/// The wasmtime engine tests run guests on; built from the production launch
+/// config so the suite cannot drift from the host on an engine flag.
 pub fn test_wasmtime_engine() -> wasmtime::Engine {
-    let mut config = wasmtime::Config::new();
-    config.wasm_component_model(true);
-    config.consume_fuel(true);
-    wasmtime::Engine::new(&config).expect("wasmtime engine")
+    wasmtime::Engine::new(&crate::builder::wasmtime_config()).expect("wasmtime engine")
 }
 
 #[cfg(test)]
@@ -75,8 +72,13 @@ mod tests {
     }
 
     #[test]
-    fn workspace_root_is_a_cargo_workspace() {
-        assert!(workspace_root().join("Cargo.toml").is_file());
+    fn workspace_root_is_the_workspace_not_the_crate() {
+        let manifest = std::fs::read_to_string(workspace_root().join("Cargo.toml"))
+            .expect("the located root carries a Cargo.toml");
+        assert!(
+            manifest.contains("[workspace]"),
+            "the walk stopped at a member crate rather than the workspace root",
+        );
     }
 
     #[test]
