@@ -151,9 +151,8 @@ pub struct EngineConfig {
     #[serde(default)]
     pub adapters: Vec<AdapterEntry>,
     /// True only when [`load_or_default`] found no engine.toml and fell
-    /// back to the built-in default; boot errors word themselves against
-    /// the missing file instead of an empty `[chains]` set. Serde-skipped
-    /// so TOML round-trips are unaffected.
+    /// back to the built-in default; boot errors then name the missing
+    /// file instead of an empty `[chains]` set.
     #[serde(skip)]
     pub defaulted: bool,
 }

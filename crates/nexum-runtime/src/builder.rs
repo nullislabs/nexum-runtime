@@ -993,9 +993,8 @@ every_n_blocks = "1"
 
         let mut config = EngineConfig::default();
         config.engine.state_dir = dir.path().join("state");
-        // Declare the subscribed chain so the boot-time chain gate admits
-        // the module and the init failure stays the asserted path. The
-        // `http://` URL keeps the real pool lazy (never dialled at boot).
+        // Declare the subscribed chain so the chain gate admits the module
+        // and the init failure stays the asserted path.
         config.chains = crate::test_utils::test_chain_configs();
 
         let err = match RuntimeBuilder::new(&config)
@@ -1016,9 +1015,8 @@ every_n_blocks = "1"
         assert!(err.to_string().contains("failed initialisation"), "{err}");
     }
 
-    /// The full builder path bails at boot on a subscription naming an
-    /// unconfigured chain, before any task spawns; the wasm path does not
-    /// exist, so reaching the compile step would change the error.
+    /// The full builder path refuses an unconfigured chain subscription
+    /// at boot, before any task spawns.
     #[tokio::test]
     async fn launch_bails_on_an_unconfigured_chain_subscription() {
         let dir = tempfile::tempdir().expect("tempdir");

@@ -468,9 +468,7 @@ fn registered_kinds<T: RuntimeTypes>(kinds: &ProviderKinds<T>) -> String {
     kinds.keys().copied().collect::<Vec<_>>().join(", ")
 }
 
-/// The operator's configured chain set, derived from `[chains]` in
-/// `engine.toml`. Carries the config's provenance so a refusal on the
-/// no-engine.toml dev path can say so instead of listing zero chains.
+/// The operator's configured chain set from `[chains]` in `engine.toml`.
 #[derive(Debug, Clone)]
 pub struct ConfiguredChains {
     /// Numeric EIP-155 ids; named and numeric `[chains.*]` keys normalise
@@ -481,7 +479,6 @@ pub struct ConfiguredChains {
 }
 
 impl ConfiguredChains {
-    /// Derive from `cfg.chains`, keeping the config's provenance marker.
     pub fn from_config(cfg: &EngineConfig) -> Self {
         Self {
             ids: cfg.chains.keys().copied().map(Chain::id).collect(),
@@ -494,11 +491,8 @@ impl ConfiguredChains {
     }
 }
 
-/// Refuse a manifest whose chain-naming subscriptions target a chain the
-/// operator never configured. Pure manifest + config, so it runs in the
-/// manifest pre-pass beside the namespace claim: a later module's typo
-/// must not land after an earlier module has committed durable
-/// local-store writes, because a failed boot rolls nothing back.
+/// Refuse any subscription naming a chain absent from `[chains]`; runs in
+/// the manifest pre-pass, before any guest code.
 fn enforce_configured_chains(
     module: &str,
     loaded: &LoadedManifest,
@@ -516,9 +510,8 @@ fn enforce_configured_chains(
     Ok(())
 }
 
-/// Boot error for a subscription naming a chain the operator never
-/// configured; worded against the missing engine.toml when the config is
-/// the built-in default.
+/// Boot error for an unconfigured chain subscription; worded against the
+/// missing engine.toml when the config is the built-in default.
 fn unconfigured_chain(module: &str, chain_id: u64, chains: &ConfiguredChains) -> Error {
     if chains.defaulted {
         return anyhow!(
@@ -667,9 +660,8 @@ impl<T: RuntimeTypes> Supervisor<T> {
     }
 
     /// Construct from a single `(component, manifest)` pair, for `just run`
-    /// without an `engine.toml`. `configured_chains` still keys the
-    /// chain-subscription boot check; derive it from the loaded (possibly
-    /// defaulted) [`EngineConfig`].
+    /// without an `engine.toml`. The chain gate still applies via
+    /// `configured_chains`.
     // One flat argument per shared backend and resource knob, plus the
     // optional clock override; bundling would obscure the call site.
     #[allow(clippy::too_many_arguments)]

@@ -64,10 +64,8 @@ pub(crate) fn in_memory_logs() -> LogPipeline {
 }
 
 /// `[chains]` entries for every chain id the in-tree test manifests and
-/// fixtures name (mainnet, Gnosis, Sepolia). This synthesises an operator
-/// contract no real engine.toml backs; tests assert against this
-/// fabricated chain set by design. The `http://` URL keeps a real
-/// provider pool lazy: it is never dialled at boot.
+/// fixtures name (mainnet, Gnosis, Sepolia). The `http://` URL is never
+/// dialled at boot.
 pub fn test_chain_configs() -> HashMap<Chain, ChainConfig> {
     [1, 100, 11_155_111]
         .into_iter()

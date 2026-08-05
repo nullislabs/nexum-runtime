@@ -156,8 +156,7 @@ impl<E: Clone + Send + Sync + 'static> TestRuntimeBuilder<E> {
         let mut config = EngineConfig::default();
         config.engine.state_dir = tmp.path().to_path_buf();
         config.limits = self.limits;
-        // The chain-subscription boot check keys on `[chains]` even over
-        // mock backends; grant the shared test chain set.
+        // The chain gate applies even over mock backends.
         config.chains = super::test_chain_configs();
 
         let pool = self.chain.pool(&self.chains, HARNESS_POLL_INTERVAL);

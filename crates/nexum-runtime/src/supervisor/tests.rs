@@ -363,9 +363,7 @@ fn test_components(store: crate::host::local_store_redb::LocalStore) -> Componen
     }
 }
 
-/// The shared configured-chain set for `boot_single` call sites; see
-/// [`crate::test_utils::test_chain_configs`] for the honesty note on the
-/// fabricated operator contract.
+/// [`ConfiguredChains`] over the shared test chain set.
 fn test_chains() -> ConfiguredChains {
     ConfiguredChains::from_config(&EngineConfig {
         chains: crate::test_utils::test_chain_configs(),
@@ -2682,10 +2680,9 @@ kind = "acme-status"
     );
 }
 
-// ── Unconfigured chain subscriptions refuse the boot (issue #65) ──────
+// ── Unconfigured chain subscriptions refuse the boot (#65) ────────────
 
-/// Write a manifest subscribing to chain 424242 with the given
-/// subscription kind line(s) appended.
+/// Manifest subscribing to chain 424242 with the given kind line(s).
 fn unconfigured_chain_manifest(dir: &Path, subscription: &str) -> PathBuf {
     let manifest = dir.join("module.toml");
     std::fs::write(
@@ -2699,9 +2696,8 @@ fn unconfigured_chain_manifest(dir: &Path, subscription: &str) -> PathBuf {
     manifest
 }
 
-/// A block subscription naming a chain absent from `[chains]` refuses the
-/// boot at the pre-compile gate: the wasm path does not exist, so any
-/// compile attempt would surface a compile error instead of this refusal.
+/// A block subscription on an unconfigured chain refuses the boot before
+/// compile: the wasm path does not exist.
 #[tokio::test]
 async fn boot_refuses_a_block_subscription_on_an_unconfigured_chain() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -2782,8 +2778,8 @@ async fn boot_refuses_a_chain_log_subscription_on_an_unconfigured_chain() {
     );
 }
 
-/// The positive twin: a configured chain clears the gate, and boot then
-/// reaches the compile step and fails only because the wasm is absent.
+/// A configured chain clears the gate; boot then fails only at the
+/// compile step (absent wasm).
 #[tokio::test]
 async fn boot_admits_a_block_subscription_on_a_configured_chain_past_the_chain_gate() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -2827,58 +2823,9 @@ async fn boot_admits_a_block_subscription_on_a_configured_chain_past_the_chain_g
     );
 }
 
-/// The `Supervisor::boot` path enforces the same gate from an
-/// `EngineConfig` whose `[chains]` omit the subscribed id, wrapped in the
-/// per-module load context.
-#[tokio::test]
-async fn boot_refuses_an_unconfigured_chain_via_engine_config() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let wasm = dir.path().join("missing.wasm");
-    let manifest = unconfigured_chain_manifest(dir.path(), "kind = \"block\"");
-
-    let engine = make_wasmtime_engine();
-    let linker = make_linker(&engine);
-    let (_store_dir, local_store) = temp_local_store();
-    let components = test_components(local_store);
-
-    let engine_cfg = EngineConfig {
-        chains: crate::test_utils::test_chain_configs(),
-        modules: vec![crate::engine_config::ModuleEntry {
-            path: wasm,
-            manifest: Some(manifest),
-        }],
-        ..Default::default()
-    };
-
-    let err = match Supervisor::boot(
-        &engine,
-        &linker,
-        &engine_cfg,
-        &components,
-        &core_extensions(),
-        None,
-    )
-    .await
-    {
-        Ok(_) => panic!("an unconfigured chain subscription must refuse the boot"),
-        Err(err) => err,
-    };
-    let msg = format!("{err:#}");
-    assert!(
-        msg.contains("load module") && msg.contains("missing.wasm"),
-        "the refusal carries the load-module context: {msg}",
-    );
-    assert!(
-        msg.contains("module example subscribes to chain 424242")
-            && msg.contains("[chains.424242]"),
-        "the refusal names the module, the chain id, and the missing stanza: {msg}",
-    );
-}
-
-/// The gate runs in the manifest pre-pass, so a later module's
-/// unconfigured chain refuses the boot before an earlier module compiles
-/// or runs `init`. Both wasm paths are absent: with the check at load
-/// time the first module's compile error would surface instead.
+/// `Supervisor::boot` runs the gate in the manifest pre-pass: a later
+/// module's unconfigured chain refuses the boot before an earlier module
+/// compiles or runs `init` (both wasm paths are absent).
 #[tokio::test]
 async fn an_unconfigured_chain_refuses_boot_before_an_earlier_module_loads() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -2927,7 +2874,12 @@ async fn an_unconfigured_chain_refuses_boot_before_an_earlier_module_loads() {
     };
     let msg = format!("{err:#}");
     assert!(
-        msg.contains("module example subscribes to chain 424242"),
+        msg.contains("load module") && msg.contains("second.wasm"),
+        "the refusal carries the load-module context: {msg}",
+    );
+    assert!(
+        msg.contains("module example subscribes to chain 424242")
+            && msg.contains("[chains.424242]"),
         "the refusal is the chain gate: {msg}",
     );
     assert!(
@@ -2995,9 +2947,8 @@ fn configured_chains_normalise_named_and_numeric_spellings() {
     assert!(!chains.contains(1));
 }
 
-/// An engine.toml that parsed but declares no `[chains]` gets the
-/// configured-list wording with an explicit "none", not the defaulted
-/// missing-file wording.
+/// A parsed engine.toml with no `[chains]` gets "configured chains:
+/// none", not the missing-file wording.
 #[test]
 fn unconfigured_chain_message_says_none_when_engine_toml_declares_no_chains() {
     let chains = ConfiguredChains::from_config(&EngineConfig::default());
