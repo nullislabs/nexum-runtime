@@ -163,11 +163,18 @@ async fn boot_rejects_duplicate_names_across_and_within_roles() {
         .names("missing-module.wasm")
         .lacks("compile");
 
-    BootScenario::new()
-        .module(TestManifest::new("dup").cap("logging"))
-        .module(TestManifest::new("dup").cap("logging"))
+    let scenario = BootScenario::new();
+    let (first, second) = (
+        scenario.dir().join("missing-a.wasm"),
+        scenario.dir().join("missing-b.wasm"),
+    );
+    scenario
+        .module(Entry::new(TestManifest::new("dup").cap("logging")).wasm(first))
+        .module(Entry::new(TestManifest::new("dup").cap("logging")).wasm(second))
         .expect_refusal()
         .await
         .names("name dup is claimed twice")
+        .names("missing-a.wasm")
+        .names("missing-b.wasm")
         .lacks("compile");
 }

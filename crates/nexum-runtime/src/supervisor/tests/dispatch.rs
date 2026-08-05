@@ -195,6 +195,7 @@ async fn multi_chain_dispatch_isolates_modules_by_chain() {
         1,
         "only module-a subscribed to chain 1",
     );
+    assert_eq!(booted.supervisor.alive_count(), 2);
     assert_eq!(
         booted.dispatch_block_on(100).await,
         1,

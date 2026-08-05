@@ -97,18 +97,30 @@ async fn boot_refuses_a_nonexistent_explicit_manifest_path() {
         .names("not found");
 }
 
-/// Operator `http_allow` must not stand in for the provider's own
-/// `[capabilities]` declaration, and the refusal fires before the section,
-/// subscription-kind, and compile gates the decoy entries would trip.
+/// Operator `http_allow` must not stand in for a component's own
+/// `[capabilities]` declaration. Only the module path runs the
+/// subscription-kind gate, so the module leg carries that decoy.
 #[tokio::test]
-async fn boot_refuses_a_capsless_provider_manifest_before_any_other_gate() {
+async fn boot_refuses_a_capsless_manifest_before_any_other_gate() {
     // Raw TOML: the textual absence of [capabilities] is the fixture.
-    let manifest = "[module]\nname = \"acme\"\nkind = \"acme-adapter\"\n\n\
+    let provider = "[module]\nname = \"acme\"\nkind = \"acme-adapter\"\n\n\
                     [venue]\nbody_version = 2\n\n\
                     [[subscription]]\nkind = \"acme-status\"\n";
     BootScenario::over(mock_components())
         .extensions(acme_extensions())
-        .adapter(Entry::new(manifest.to_owned()).http_allow(["api.acme.example"]))
+        .adapter(Entry::new(provider.to_owned()).http_allow(["api.acme.example"]))
+        .expect_refusal()
+        .await
+        .names("no [capabilities] section")
+        .names("required = []")
+        .lacks("no wired extension claims")
+        .lacks("compile");
+
+    let module = "[module]\nname = \"example\"\n\n\
+                  [venue]\nbody_version = 2\n\n\
+                  [[subscription]]\nkind = \"acme-status\"\n";
+    BootScenario::new()
+        .module(module.to_owned())
         .expect_refusal()
         .await
         .names("no [capabilities] section")
