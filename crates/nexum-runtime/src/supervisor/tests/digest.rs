@@ -20,7 +20,7 @@ fn read_verified_component_rejects_a_mismatched_digest() {
     let path = dir.path().join("tampered.wasm");
     std::fs::write(&path, b"not the pinned bytes").expect("write artifact");
 
-    let engine = make_wasmtime_engine();
+    let engine = test_wasmtime_engine();
     let declared = wrong_digest();
     let err = read_verified_component(&engine, &path, Some(&declared), false)
         .err()
@@ -33,12 +33,9 @@ fn read_verified_component_rejects_a_mismatched_digest() {
         mismatch.actual,
         ContentDigest::of_bytes(b"not the pinned bytes"),
     );
-    let msg = format!("{err:#}");
-    assert!(msg.contains("component digest mismatch"), "{msg}");
-    assert!(
-        !msg.contains("compile"),
-        "the mismatch must land before any compile: {msg}",
-    );
+    Refusal::from(err)
+        .names("component digest mismatch")
+        .lacks("compile");
 }
 
 #[test]
@@ -47,13 +44,13 @@ fn read_verified_component_requires_a_digest_when_the_flag_is_set() {
     let path = dir.path().join("unpinned.wasm");
     std::fs::write(&path, b"any bytes at all").expect("write artifact");
 
-    let engine = make_wasmtime_engine();
+    let engine = test_wasmtime_engine();
     let err = read_verified_component(&engine, &path, None, true)
         .err()
         .expect("an unpinned artifact must refuse under the flag");
-    let msg = format!("{err:#}");
-    assert!(msg.contains("require_component_digest"), "{msg}");
-    assert!(!msg.contains("compile"), "refusal precedes compile: {msg}");
+    Refusal::from(err)
+        .names("require_component_digest")
+        .lacks("compile");
 }
 
 #[test]
@@ -65,7 +62,7 @@ fn read_verified_component_verifies_the_committed_pinned_fixture() {
         .component_digest
         .expect("the fixture manifest carries a pin");
 
-    let engine = make_wasmtime_engine();
+    let engine = test_wasmtime_engine();
     let (_component, actual) = read_verified_component(&engine, &wat, Some(&declared), true)
         .expect("the pinned fixture verifies and compiles");
     assert_eq!(actual, declared);
@@ -74,7 +71,7 @@ fn read_verified_component_verifies_the_committed_pinned_fixture() {
 #[test]
 fn read_verified_component_computes_a_digest_for_unpinned_loads() {
     let (wat, _manifest) = pinned_fixture();
-    let engine = make_wasmtime_engine();
+    let engine = test_wasmtime_engine();
     let (_component, actual) =
         read_verified_component(&engine, &wat, None, false).expect("unpinned load compiles");
     let bytes = std::fs::read(&wat).expect("read fixture");
@@ -135,44 +132,14 @@ async fn boot_single_refuses_a_mismatched_component_digest() {
     let dir = tempfile::tempdir().expect("tempdir");
     let wasm = dir.path().join("module.wasm");
     std::fs::write(&wasm, b"drifted artifact bytes").expect("write artifact");
-    let manifest = dir.path().join("module.toml");
-    std::fs::write(
-        &manifest,
-        format!(
-            "[module]\nname = \"pinned\"\ncomponent = \"{}\"\n\n\
-             [capabilities]\nrequired = []\n",
-            wrong_digest(),
-        ),
-    )
-    .expect("write manifest");
+    let manifest = TestManifest::new("pinned")
+        .component_digest(wrong_digest().to_string())
+        .write_to(dir.path());
 
-    let engine = make_wasmtime_engine();
-    let linker = make_linker(&engine);
-    let (_store_dir, local_store) = temp_local_store();
-    let components = test_components(local_store);
-    let limits = ModuleLimits::default();
-
-    let err = Supervisor::boot_single(
-        &engine,
-        &linker,
-        &wasm,
-        Some(&manifest),
-        &components,
-        &limits,
-        &test_chains(),
-        false,
-        &core_extensions(),
-        None,
-    )
-    .await
-    .err()
-    .expect("a stale pin must refuse the boot");
-    let msg = format!("{err:#}");
-    assert!(msg.contains("component digest mismatch"), "{msg}");
-    assert!(
-        !msg.contains("compile"),
-        "the mismatch must precede any compile: {msg}",
-    );
+    let (_store, result) = try_boot_single(&wasm, Some(&manifest), false, None).await;
+    Refusal::from(result.err().expect("a stale pin must refuse the boot"))
+        .names("component digest mismatch")
+        .lacks("compile");
 }
 
 #[tokio::test]
@@ -180,37 +147,16 @@ async fn boot_single_requires_a_digest_when_the_engine_flag_is_set() {
     let dir = tempfile::tempdir().expect("tempdir");
     let wasm = dir.path().join("module.wasm");
     std::fs::write(&wasm, b"unpinned artifact bytes").expect("write artifact");
-    let manifest = dir.path().join("module.toml");
-    std::fs::write(
-        &manifest,
-        "[module]\nname = \"unpinned\"\n\n[capabilities]\nrequired = []\n",
-    )
-    .expect("write manifest");
+    let manifest = TestManifest::new("unpinned").write_to(dir.path());
 
-    let engine = make_wasmtime_engine();
-    let linker = make_linker(&engine);
-    let (_store_dir, local_store) = temp_local_store();
-    let components = test_components(local_store);
-    let limits = ModuleLimits::default();
-
-    let err = Supervisor::boot_single(
-        &engine,
-        &linker,
-        &wasm,
-        Some(&manifest),
-        &components,
-        &limits,
-        &test_chains(),
-        true,
-        &core_extensions(),
-        None,
+    let (_store, result) = try_boot_single(&wasm, Some(&manifest), true, None).await;
+    Refusal::from(
+        result
+            .err()
+            .expect("an unpinned manifest must refuse under the flag"),
     )
-    .await
-    .err()
-    .expect("an unpinned manifest must refuse under the flag");
-    let msg = format!("{err:#}");
-    assert!(msg.contains("require_component_digest"), "{msg}");
-    assert!(!msg.contains("compile"), "refusal precedes compile: {msg}");
+    .names("require_component_digest")
+    .lacks("compile");
 }
 
 #[tokio::test]
@@ -220,168 +166,60 @@ async fn e2e_boot_single_accepts_a_matching_pinned_digest() {
     };
     let digest = ContentDigest::of_bytes(&std::fs::read(&wasm).expect("read example wasm"));
     let dir = tempfile::tempdir().expect("tempdir");
-    let manifest = dir.path().join("module.toml");
-    std::fs::write(
-        &manifest,
-        format!(
-            "[module]\nname = \"example\"\ncomponent = \"{digest}\"\n\n\
-             [capabilities]\nrequired = [\"logging\"]\n",
-        ),
-    )
-    .expect("write manifest");
+    let manifest = TestManifest::new("example")
+        .cap("logging")
+        .component_digest(digest.to_string())
+        .write_to(dir.path());
 
-    let engine = make_wasmtime_engine();
-    let linker = make_linker(&engine);
-    let (_store_dir, local_store) = temp_local_store();
-    let components = test_components(local_store);
-    let limits = ModuleLimits::default();
-
-    let supervisor = Supervisor::boot_single(
-        &engine,
-        &linker,
-        &wasm,
-        Some(&manifest),
-        &components,
-        &limits,
-        &test_chains(),
-        true,
-        &core_extensions(),
-        None,
-    )
-    .await
-    .expect("a matching pin must boot under the strict flag");
+    let (_store, result) = try_boot_single(&wasm, Some(&manifest), true, None).await;
+    let supervisor = result.expect("a matching pin must boot under the strict flag");
     assert_eq!(supervisor.alive_count(), 1);
 }
 
 #[tokio::test]
 async fn boot_refuses_a_provider_with_a_mismatched_digest() {
-    let engine = make_wasmtime_engine();
-    let components = crate::test_utils::mock_components();
-    let extensions = acme_extensions();
-    let linker =
-        crate::supervisor::build_linker::<crate::test_utils::MockTypes>(&engine, &extensions)
-            .expect("build_linker");
-
-    let dir = tempfile::tempdir().expect("tempdir");
-    let wasm = dir.path().join("acme.wasm");
+    let scenario = BootScenario::over(mock_components()).extensions(acme_extensions());
+    let wasm = scenario.dir().join("acme.wasm");
     std::fs::write(&wasm, b"drifted provider bytes").expect("write artifact");
-    let manifest = dir.path().join("module.toml");
-    std::fs::write(
-        &manifest,
-        format!(
-            "[module]\nname = \"acme\"\nkind = \"acme-adapter\"\n\
-             component = \"{}\"\n\n[capabilities]\nrequired = [\"chain\"]\n",
-            wrong_digest(),
-        ),
-    )
-    .expect("write manifest");
-
-    let config = EngineConfig {
-        adapters: vec![crate::engine_config::AdapterEntry {
-            path: wasm,
-            manifest: Some(manifest),
-            http_allow: Vec::new(),
-            messaging_topics: Vec::new(),
-        }],
-        ..Default::default()
-    };
-
-    let err =
-        match Supervisor::boot(&engine, &linker, &config, &components, &extensions, None).await {
-            Ok(_) => panic!("a stale provider pin must refuse the boot"),
-            Err(err) => err,
-        };
-    let msg = format!("{err:#}");
-    assert!(msg.contains("component digest mismatch"), "{msg}");
-    assert!(!msg.contains("compile"), "refusal precedes compile: {msg}");
+    scenario
+        .adapter(
+            Entry::new(
+                TestManifest::new("acme")
+                    .kind("acme-adapter")
+                    .cap("chain")
+                    .component_digest(wrong_digest().to_string()),
+            )
+            .wasm(wasm),
+        )
+        .expect_refusal()
+        .await
+        .names("component digest mismatch")
+        .lacks("compile");
 }
 
 #[tokio::test]
 async fn boot_requires_a_provider_digest_when_the_engine_flag_is_set() {
-    let engine = make_wasmtime_engine();
-    let components = crate::test_utils::mock_components();
-    let extensions = acme_extensions();
-    let linker =
-        crate::supervisor::build_linker::<crate::test_utils::MockTypes>(&engine, &extensions)
-            .expect("build_linker");
-
-    let dir = tempfile::tempdir().expect("tempdir");
-    let wasm = dir.path().join("acme.wasm");
+    let scenario = BootScenario::over(mock_components())
+        .extensions(acme_extensions())
+        .require_digest();
+    let wasm = scenario.dir().join("acme.wasm");
     std::fs::write(&wasm, b"unpinned provider bytes").expect("write artifact");
-    let manifest = dir.path().join("module.toml");
-    std::fs::write(
-        &manifest,
-        "[module]\nname = \"acme\"\nkind = \"acme-adapter\"\n\n\
-         [capabilities]\nrequired = [\"chain\"]\n",
-    )
-    .expect("write manifest");
-
-    let config = EngineConfig {
-        engine: crate::engine_config::EngineSection {
-            require_component_digest: true,
-            ..Default::default()
-        },
-        adapters: vec![crate::engine_config::AdapterEntry {
-            path: wasm,
-            manifest: Some(manifest),
-            http_allow: Vec::new(),
-            messaging_topics: Vec::new(),
-        }],
-        ..Default::default()
-    };
-
-    let err =
-        match Supervisor::boot(&engine, &linker, &config, &components, &extensions, None).await {
-            Ok(_) => panic!("an unpinned adapter must refuse under the flag"),
-            Err(err) => err,
-        };
-    let msg = format!("{err:#}");
-    assert!(msg.contains("require_component_digest"), "{msg}");
+    scenario
+        .adapter(Entry::new(TestManifest::new("acme").kind("acme-adapter").cap("chain")).wasm(wasm))
+        .expect_refusal()
+        .await
+        .names("require_component_digest");
 }
 
 #[tokio::test]
 async fn boot_requires_a_module_digest_when_the_engine_flag_is_set() {
-    let engine = make_wasmtime_engine();
-    let linker = make_linker(&engine);
-    let (_store_dir, local_store) = temp_local_store();
-    let components = test_components(local_store);
-
-    let dir = tempfile::tempdir().expect("tempdir");
-    let wasm = dir.path().join("module.wasm");
+    let scenario = BootScenario::new().require_digest();
+    let wasm = scenario.dir().join("module.wasm");
     std::fs::write(&wasm, b"unpinned artifact bytes").expect("write artifact");
-    let manifest = dir.path().join("module.toml");
-    std::fs::write(
-        &manifest,
-        "[module]\nname = \"unpinned\"\n\n[capabilities]\nrequired = []\n",
-    )
-    .expect("write manifest");
-
-    let config = EngineConfig {
-        engine: crate::engine_config::EngineSection {
-            require_component_digest: true,
-            ..Default::default()
-        },
-        modules: vec![crate::engine_config::ModuleEntry {
-            path: wasm,
-            manifest: Some(manifest),
-        }],
-        ..Default::default()
-    };
-
-    let err = match Supervisor::boot(
-        &engine,
-        &linker,
-        &config,
-        &components,
-        &core_extensions(),
-        None,
-    )
-    .await
-    {
-        Ok(_) => panic!("an unpinned module must refuse under the flag"),
-        Err(err) => err,
-    };
-    let msg = format!("{err:#}");
-    assert!(msg.contains("require_component_digest"), "{msg}");
-    assert!(!msg.contains("compile"), "refusal precedes compile: {msg}");
+    scenario
+        .module(Entry::new(TestManifest::new("unpinned")).wasm(wasm))
+        .expect_refusal()
+        .await
+        .names("require_component_digest")
+        .lacks("compile");
 }

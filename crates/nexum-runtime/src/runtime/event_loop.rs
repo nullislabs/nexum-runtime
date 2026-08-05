@@ -647,13 +647,22 @@ mod tests {
     use alloy_transport::mock::MockResponse;
     use nexum_tasks::TaskManager;
 
-    use crate::supervisor::tests::{boot_mock_supervisor, make_wasmtime_engine};
     use crate::test_utils::rpc::{
         MockRpc, linked_block, mocked_pool, rpc_err, rpc_head, rpc_ok, test_hash,
     };
+    use crate::test_utils::{BootScenario, Booted, MockTypes, mock_components};
 
     /// Virtual poll cadence; `start_paused` advances through it instantly.
     const POLL: Duration = Duration::from_millis(50);
+
+    /// A zero-module supervisor over the in-process mock backends via the
+    /// real boot path.
+    async fn boot_mock_supervisor() -> Booted<MockTypes> {
+        BootScenario::over(mock_components())
+            .boot()
+            .await
+            .expect("boot mock supervisor")
+    }
 
     fn pool_for(rpc: &MockRpc) -> ProviderPool {
         mocked_pool([(alloy_chains::Chain::mainnet(), rpc)], POLL)
@@ -1274,13 +1283,12 @@ mod tests {
     async fn run_does_not_bail_when_both_stream_kinds_are_empty() {
         use std::time::{Duration, Instant};
 
-        let engine = make_wasmtime_engine();
-        let mut supervisor = boot_mock_supervisor(&engine).await;
+        let mut booted = boot_mock_supervisor().await;
         let started = Instant::now();
         let shutdown = tokio::time::sleep(Duration::from_millis(50));
 
         crate::runtime::event_loop::run(
-            &mut supervisor,
+            &mut booted.supervisor,
             Vec::new(),
             Vec::new(),
             Vec::new(),
@@ -1318,8 +1326,7 @@ mod tests {
         use crate::test_utils::rpc::FakeNode;
         use nexum_tasks::{TaskManager, TaskSet};
 
-        let engine = make_wasmtime_engine();
-        let mut supervisor = boot_mock_supervisor(&engine).await;
+        let mut booted = boot_mock_supervisor().await;
         let block_node = FakeNode::new();
         let log_node = FakeNode::new();
         let pool = ProviderPool::for_tests(
@@ -1357,7 +1364,7 @@ mod tests {
         let (blocks, chain_logs) = tokio::time::timeout(
             Duration::from_secs(10),
             run(
-                &mut supervisor,
+                &mut booted.supervisor,
                 block_streams,
                 chain_log_streams,
                 Vec::new(),
@@ -1386,8 +1393,7 @@ mod tests {
         use crate::test_utils::rpc::FakeNode;
         use nexum_tasks::{TaskManager, TaskSet};
 
-        let engine = make_wasmtime_engine();
-        let mut supervisor = boot_mock_supervisor(&engine).await;
+        let mut booted = boot_mock_supervisor().await;
         let pool = FakeNode::new().pool(
             &[Chain::mainnet(), Chain::from_id(100)],
             Duration::from_millis(20),
@@ -1411,7 +1417,7 @@ mod tests {
         tokio::time::timeout(
             Duration::from_secs(10),
             run(
-                &mut supervisor,
+                &mut booted.supervisor,
                 block_streams,
                 vec![],
                 Vec::new(),

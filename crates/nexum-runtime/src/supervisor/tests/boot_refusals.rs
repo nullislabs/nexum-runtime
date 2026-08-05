@@ -8,129 +8,45 @@ use super::*;
 /// kinds.
 #[tokio::test]
 async fn boot_rejects_provider_whose_manifest_is_an_event_module() {
-    let engine = make_wasmtime_engine();
-    let components = crate::test_utils::mock_components();
-    let extensions = acme_extensions();
-    let linker =
-        crate::supervisor::build_linker::<crate::test_utils::MockTypes>(&engine, &extensions)
-            .expect("build_linker");
-
-    let dir = tempfile::tempdir().expect("tempdir");
-    let manifest = dir.path().join("module.toml");
-    std::fs::write(
-        &manifest,
-        "[module]\nname = \"acme\"\nkind = \"event-module\"\n\n\
-         [capabilities]\nrequired = []\n",
-    )
-    .expect("write manifest");
-
-    let config = EngineConfig {
-        adapters: vec![crate::engine_config::AdapterEntry {
-            path: dir.path().join("acme.wasm"),
-            manifest: Some(manifest),
-            http_allow: Vec::new(),
-            messaging_topics: Vec::new(),
-        }],
-        ..Default::default()
-    };
-
-    let err =
-        match Supervisor::boot(&engine, &linker, &config, &components, &extensions, None).await {
-            Ok(_) => panic!("event-module manifest in an [[adapters]] slot must be rejected"),
-            Err(err) => err,
-        };
-    let msg = format!("{err:#}");
-    assert!(
-        msg.contains("acme-adapter"),
-        "the kind gate names the registered kinds: {msg}",
-    );
+    BootScenario::over(mock_components())
+        .extensions(acme_extensions())
+        .adapter(TestManifest::new("acme").kind("event-module"))
+        .expect_refusal()
+        .await
+        .names("acme-adapter");
 }
 
 /// A kind spelling no extension registered is refused at boot with a
 /// message naming the registered kinds.
 #[tokio::test]
 async fn boot_rejects_an_unregistered_provider_kind() {
-    let engine = make_wasmtime_engine();
-    let components = crate::test_utils::mock_components();
-    let extensions = acme_extensions();
-    let linker =
-        crate::supervisor::build_linker::<crate::test_utils::MockTypes>(&engine, &extensions)
-            .expect("build_linker");
-
-    let dir = tempfile::tempdir().expect("tempdir");
-    let manifest = dir.path().join("module.toml");
-    std::fs::write(
-        &manifest,
-        "[module]\nname = \"bad\"\nkind = \"gadget\"\n\n[capabilities]\nrequired = []\n",
-    )
-    .expect("write manifest");
-
-    let config = EngineConfig {
-        adapters: vec![crate::engine_config::AdapterEntry {
-            path: dir.path().join("gadget.wasm"),
-            manifest: Some(manifest),
-            http_allow: Vec::new(),
-            messaging_topics: Vec::new(),
-        }],
-        ..Default::default()
-    };
-
-    let err =
-        match Supervisor::boot(&engine, &linker, &config, &components, &extensions, None).await {
-            Ok(_) => panic!("an unregistered provider kind must be refused"),
-            Err(err) => err,
-        };
-    let msg = format!("{err:#}");
-    assert!(
-        msg.contains("unregistered provider kind gadget") && msg.contains("acme-adapter"),
-        "the refusal names the unknown spelling and the registered kinds: {msg}",
-    );
+    BootScenario::over(mock_components())
+        .extensions(acme_extensions())
+        .adapter(TestManifest::new("bad").kind("gadget"))
+        .expect_refusal()
+        .await
+        .names("unregistered provider kind gadget")
+        .names("acme-adapter");
 }
 
 /// A registered kind clears the discriminator; boot then reaches the
 /// component read step.
 #[tokio::test]
 async fn boot_admits_a_registered_provider_kind_past_the_kind_gate() {
-    let engine = make_wasmtime_engine();
-    let components = crate::test_utils::mock_components();
-    let extensions = acme_extensions();
-    let linker =
-        crate::supervisor::build_linker::<crate::test_utils::MockTypes>(&engine, &extensions)
-            .expect("build_linker");
-
-    let dir = tempfile::tempdir().expect("tempdir");
-    let manifest = dir.path().join("module.toml");
-    std::fs::write(
-        &manifest,
-        "[module]\nname = \"acme\"\nkind = \"acme-adapter\"\n\n\
-         [capabilities]\nrequired = [\"chain\"]\n",
-    )
-    .expect("write manifest");
-
-    let config = EngineConfig {
-        adapters: vec![crate::engine_config::AdapterEntry {
-            path: dir.path().join("missing-acme.wasm"),
-            manifest: Some(manifest),
-            http_allow: vec!["api.acme.example".into()],
-            messaging_topics: vec!["/nexum/1/acme-orders/proto".into()],
-        }],
-        ..Default::default()
-    };
-
-    let err =
-        match Supervisor::boot(&engine, &linker, &config, &components, &extensions, None).await {
-            Ok(_) => panic!("absent provider wasm must fail the compile step"),
-            Err(err) => err,
-        };
-    let msg = format!("{err:#}");
-    assert!(
-        msg.contains("read component") && msg.contains("missing-acme"),
-        "boot reached the component read step past the kind gate: {msg}",
-    );
-    assert!(
-        !msg.contains("requires a module.toml"),
-        "the kind gate passed rather than rejecting: {msg}",
-    );
+    let scenario = BootScenario::over(mock_components()).extensions(acme_extensions());
+    let missing = scenario.dir().join("missing-acme.wasm");
+    scenario
+        .adapter(
+            Entry::new(TestManifest::new("acme").kind("acme-adapter").cap("chain"))
+                .wasm(missing)
+                .http_allow(["api.acme.example"])
+                .messaging_topics(["/nexum/1/acme-orders/proto"]),
+        )
+        .expect_refusal()
+        .await
+        .names("read component")
+        .names("missing-acme")
+        .lacks("requires a module.toml");
 }
 
 /// A module subscribing to an extension kind no wired extension declares
@@ -141,222 +57,76 @@ async fn boot_refuses_an_undeclared_extension_subscription_kind() {
     let Some(wasm) = example_wasm_or_skip() else {
         return;
     };
-    let dir = tempfile::tempdir().expect("tempdir");
-    let manifest = dir.path().join("module.toml");
-    std::fs::write(
-        &manifest,
-        r#"
-[module]
-name = "example"
-
-[capabilities]
-required = ["logging"]
-
-[[subscription]]
-kind = "acme-status"
-"#,
-    )
-    .expect("write manifest");
-
-    let engine = make_wasmtime_engine();
-    let linker = make_linker(&engine);
-    let (_dir, local_store) = temp_local_store();
-    let components = test_components(local_store);
-    let limits = ModuleLimits::default();
-
-    let result = Supervisor::boot_single(
-        &engine,
-        &linker,
-        &wasm,
-        Some(&manifest),
-        &components,
-        &limits,
-        &test_chains(),
-        false,
-        &core_extensions(),
-        None,
-    )
-    .await;
-    let err = result
-        .err()
-        .expect("an undeclared extension subscription kind must refuse boot");
-    let msg = format!("{err:#}");
-    assert!(
-        msg.contains("unknown event kind acme-status"),
-        "the refusal names the kind: {msg}",
-    );
+    BootScenario::new()
+        .wasm(wasm)
+        .module(
+            TestManifest::new("example")
+                .cap("logging")
+                .extension_sub("acme-status", &[]),
+        )
+        .expect_refusal()
+        .await
+        .names("unknown event kind acme-status");
 }
 
-/// No module.toml anywhere refuses boot before compile; no wasm needs to
-/// exist.
+/// No module.toml anywhere refuses boot before compile with the migration
+/// hint; no wasm needs to exist.
 #[tokio::test]
 async fn boot_refuses_a_component_without_module_toml() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let wasm = dir.path().join("orphan.wasm");
-
-    let engine = make_wasmtime_engine();
-    let linker = make_linker(&engine);
-    let (_store_dir, local_store) = temp_local_store();
-    let components = test_components(local_store);
-    let limits = ModuleLimits::default();
-
-    let err = Supervisor::boot_single(
-        &engine,
-        &linker,
-        &wasm,
-        None,
-        &components,
-        &limits,
-        &test_chains(),
-        false,
-        &core_extensions(),
-        None,
-    )
-    .await
-    .err()
-    .expect("a component without any module.toml must refuse boot");
-    let msg = format!("{err:#}");
-    assert!(
-        msg.contains("no module.toml") && msg.contains("orphan.wasm"),
-        "the refusal names the component: {msg}",
-    );
-    assert!(
-        msg.contains("required = []"),
-        "the refusal carries the migration hint: {msg}",
-    );
+    let scenario = BootScenario::new();
+    let orphan = scenario.dir().join("orphan.wasm");
+    scenario
+        .module(Entry::new(ManifestSource::Beside).wasm(orphan))
+        .expect_refusal()
+        .await
+        .names("no module.toml")
+        .names("orphan.wasm")
+        .names("required = []")
+        .lacks("compile");
 }
 
 #[tokio::test]
 async fn boot_refuses_a_nonexistent_explicit_manifest_path() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let wasm = dir.path().join("mod.wasm");
-    let manifest = dir.path().join("modle.toml");
-
-    let engine = make_wasmtime_engine();
-    let linker = make_linker(&engine);
-    let (_store_dir, local_store) = temp_local_store();
-    let components = test_components(local_store);
-    let limits = ModuleLimits::default();
-
-    let err = Supervisor::boot_single(
-        &engine,
-        &linker,
-        &wasm,
-        Some(&manifest),
-        &components,
-        &limits,
-        &test_chains(),
-        false,
-        &core_extensions(),
-        None,
-    )
-    .await
-    .err()
-    .expect("a nonexistent explicit manifest path must refuse boot");
-    let msg = format!("{err:#}");
-    assert!(
-        msg.contains("modle.toml") && msg.contains("not found"),
-        "the refusal names the missing manifest path: {msg}",
-    );
+    let scenario = BootScenario::new();
+    let missing = scenario.dir().join("modle.toml");
+    scenario
+        .module(missing)
+        .expect_refusal()
+        .await
+        .names("modle.toml")
+        .names("not found");
 }
 
 /// Operator `http_allow` must not stand in for the provider's own
 /// `[capabilities]` declaration.
 #[tokio::test]
 async fn boot_refuses_a_capsless_provider_manifest_despite_operator_http_allow() {
-    let engine = make_wasmtime_engine();
-    let components = crate::test_utils::mock_components();
-    let extensions = acme_extensions();
-    let linker =
-        crate::supervisor::build_linker::<crate::test_utils::MockTypes>(&engine, &extensions)
-            .expect("build_linker");
-
-    let dir = tempfile::tempdir().expect("tempdir");
-    let manifest = dir.path().join("module.toml");
-    std::fs::write(
-        &manifest,
-        "[module]\nname = \"acme\"\nkind = \"acme-adapter\"\n",
-    )
-    .expect("write manifest");
-
-    let config = EngineConfig {
-        adapters: vec![crate::engine_config::AdapterEntry {
-            path: dir.path().join("acme.wasm"),
-            manifest: Some(manifest),
-            http_allow: vec!["api.acme.example".into()],
-            messaging_topics: Vec::new(),
-        }],
-        ..Default::default()
-    };
-
-    let err =
-        match Supervisor::boot(&engine, &linker, &config, &components, &extensions, None).await {
-            Ok(_) => panic!("a caps-less provider manifest must be refused"),
-            Err(err) => err,
-        };
-    let msg = format!("{err:#}");
-    assert!(
-        msg.contains("no [capabilities] section"),
-        "the refusal is the manifest load error, not a later gate: {msg}",
-    );
+    // Raw TOML: the textual absence of [capabilities] is the fixture.
+    let manifest = "[module]\nname = \"acme\"\nkind = \"acme-adapter\"\n";
+    BootScenario::over(mock_components())
+        .extensions(acme_extensions())
+        .adapter(Entry::new(manifest.to_owned()).http_allow(["api.acme.example"]))
+        .expect_refusal()
+        .await
+        .names("no [capabilities] section");
 }
 
 /// The missing-capabilities refusal precedes the kind and section gates
 /// and the compile.
 #[tokio::test]
 async fn capsless_manifest_reports_missing_capabilities_before_other_gates() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let wasm = dir.path().join("mod.wasm");
-    let manifest = dir.path().join("module.toml");
-    std::fs::write(
-        &manifest,
-        r#"
-[module]
-name = "example"
-
-[venue]
-body_version = 2
-
-[[subscription]]
-kind = "acme-status"
-"#,
-    )
-    .expect("write manifest");
-
-    let engine = make_wasmtime_engine();
-    let linker = make_linker(&engine);
-    let (_store_dir, local_store) = temp_local_store();
-    let components = test_components(local_store);
-    let limits = ModuleLimits::default();
-
-    let err = Supervisor::boot_single(
-        &engine,
-        &linker,
-        &wasm,
-        Some(&manifest),
-        &components,
-        &limits,
-        &test_chains(),
-        false,
-        &core_extensions(),
-        None,
-    )
-    .await
-    .err()
-    .expect("a caps-less manifest must refuse boot");
-    let msg = format!("{err:#}");
-    assert!(
-        msg.contains("no [capabilities] section"),
-        "the manifest refusal fires first: {msg}",
-    );
-    assert!(
-        msg.contains("required = []"),
-        "the refusal states the two-line fix: {msg}",
-    );
-    assert!(
-        !msg.contains("unknown event kind") && !msg.contains("no wired extension claims"),
-        "the later gates must not be reached: {msg}",
-    );
+    // Raw TOML: the textual absence of [capabilities] is the fixture.
+    let manifest = "[module]\nname = \"example\"\n\n\
+                    [venue]\nbody_version = 2\n\n\
+                    [[subscription]]\nkind = \"acme-status\"\n";
+    BootScenario::new()
+        .module(manifest.to_owned())
+        .expect_refusal()
+        .await
+        .names("no [capabilities] section")
+        .names("required = []")
+        .lacks("unknown event kind")
+        .lacks("no wired extension claims");
 }
 
 /// Only `chain` is undeclared, so the refusal is deterministic regardless
@@ -366,51 +136,16 @@ async fn boot_denies_an_undeclared_chain_import_for_balance_tracker() {
     let Some(wasm) = module_wasm_or_skip("balance-tracker") else {
         return;
     };
-    let engine = make_wasmtime_engine();
-    let linker = make_linker(&engine);
-    let (_store_dir, local_store) = temp_local_store();
-    let components = test_components(local_store);
-    let limits = ModuleLimits::default();
-
-    let dir = tempfile::tempdir().expect("tempdir");
-    let manifest = dir.path().join("module.toml");
-    std::fs::write(
-        &manifest,
-        r#"
-[module]
-name = "balance-tracker"
-
-[capabilities]
-required = ["logging", "local-store"]
-
-[[subscription]]
-kind = "block"
-chain_id = 1
-"#,
-    )
-    .expect("write manifest");
-    let err = Supervisor::boot_single(
-        &engine,
-        &linker,
-        &wasm,
-        Some(&manifest),
-        &components,
-        &limits,
-        &test_chains(),
-        false,
-        &core_extensions(),
-        None,
-    )
-    .await
-    .err()
-    .expect("undeclared imports must refuse boot");
-    let msg = format!("{err:#}");
-    assert!(
-        msg.contains("capability violation"),
-        "the boot error is a capability violation: {msg}",
-    );
-    assert!(
-        msg.contains("nexum:host/chain"),
-        "the violation names the withheld chain import: {msg}",
-    );
+    BootScenario::new()
+        .wasm(wasm)
+        .module(
+            TestManifest::new("balance-tracker")
+                .cap("logging")
+                .cap("local-store")
+                .block_sub(1),
+        )
+        .expect_refusal()
+        .await
+        .names("capability violation")
+        .names("nexum:host/chain");
 }

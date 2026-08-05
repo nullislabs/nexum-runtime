@@ -140,119 +140,42 @@ fn claim_namespace_is_byte_exact() {
 
 #[tokio::test]
 async fn boot_rejects_duplicate_module_names_before_any_compile() {
-    let engine = make_wasmtime_engine();
-    let linker = make_linker(&engine);
-    let (_dir, local_store) = temp_local_store();
-    let components = test_components(local_store);
-
-    let tmp = tempfile::tempdir().unwrap();
-    let manifest_a = tmp.path().join("a.toml");
-    let manifest_b = tmp.path().join("b.toml");
-    let manifest_toml = "[module]\nname = \"dup\"\n\n[capabilities]\nrequired = [\"logging\"]\n";
-    std::fs::write(&manifest_a, manifest_toml).unwrap();
-    std::fs::write(&manifest_b, manifest_toml).unwrap();
-
-    let engine_cfg = EngineConfig {
-        modules: vec![
-            crate::engine_config::ModuleEntry {
-                path: tmp.path().join("missing-a.wasm"),
-                manifest: Some(manifest_a),
-            },
-            crate::engine_config::ModuleEntry {
-                path: tmp.path().join("missing-b.wasm"),
-                manifest: Some(manifest_b),
-            },
-        ],
-        ..Default::default()
-    };
-
-    let err = match Supervisor::boot(
-        &engine,
-        &linker,
-        &engine_cfg,
-        &components,
-        &core_extensions(),
-        None,
-    )
-    .await
-    {
-        Ok(_) => panic!("duplicate module names must refuse the boot"),
-        Err(err) => err,
-    };
-    let msg = format!("{err:#}");
-    assert!(
-        msg.contains("name dup is claimed twice"),
-        "the refusal is the claim collision: {msg}",
+    let scenario = BootScenario::new();
+    let (first, second) = (
+        scenario.dir().join("missing-a.wasm"),
+        scenario.dir().join("missing-b.wasm"),
     );
-    assert!(
-        msg.contains("missing-a.wasm") && msg.contains("missing-b.wasm"),
-        "the refusal names both claimant paths: {msg}",
-    );
-    assert!(
-        !msg.contains("compile"),
-        "rejection precedes any compile of the missing wasm: {msg}",
-    );
+    scenario
+        .module(Entry::new(TestManifest::new("dup").cap("logging")).wasm(first))
+        .module(Entry::new(TestManifest::new("dup").cap("logging")).wasm(second))
+        .expect_refusal()
+        .await
+        .names("name dup is claimed twice")
+        .names("missing-a.wasm")
+        .names("missing-b.wasm")
+        .lacks("compile");
 }
 
 /// One ledger spans both roles.
 #[tokio::test]
 async fn boot_rejects_a_module_colliding_with_an_adapter_name() {
-    let engine = make_wasmtime_engine();
-    let components = crate::test_utils::mock_components();
-    let extensions = acme_extensions();
-    let linker =
-        crate::supervisor::build_linker::<crate::test_utils::MockTypes>(&engine, &extensions)
-            .expect("build_linker");
-
-    let dir = tempfile::tempdir().expect("tempdir");
-    let adapter_manifest = dir.path().join("adapter.toml");
-    std::fs::write(
-        &adapter_manifest,
-        "[module]\nname = \"dup\"\nkind = \"acme-adapter\"\n\n\
-         [capabilities]\nrequired = [\"chain\"]\n",
-    )
-    .expect("write adapter manifest");
-    let module_manifest = dir.path().join("module.toml");
-    std::fs::write(
-        &module_manifest,
-        "[module]\nname = \"dup\"\n\n[capabilities]\nrequired = [\"logging\"]\n",
-    )
-    .expect("write module manifest");
-
-    let config = EngineConfig {
-        adapters: vec![crate::engine_config::AdapterEntry {
-            path: dir.path().join("missing-adapter.wasm"),
-            manifest: Some(adapter_manifest),
-            http_allow: Vec::new(),
-            messaging_topics: Vec::new(),
-        }],
-        modules: vec![crate::engine_config::ModuleEntry {
-            path: dir.path().join("missing-module.wasm"),
-            manifest: Some(module_manifest),
-        }],
-        ..Default::default()
-    };
-
-    let err =
-        match Supervisor::boot(&engine, &linker, &config, &components, &extensions, None).await {
-            Ok(_) => panic!("a module colliding with an adapter name must refuse the boot"),
-            Err(err) => err,
-        };
-    let msg = format!("{err:#}");
-    assert!(
-        msg.contains("name dup is claimed twice"),
-        "the refusal is the claim collision: {msg}",
+    let scenario = BootScenario::over(mock_components()).extensions(acme_extensions());
+    let (adapter_wasm, module_wasm) = (
+        scenario.dir().join("missing-adapter.wasm"),
+        scenario.dir().join("missing-module.wasm"),
     );
-    assert!(
-        msg.contains("adapter") && msg.contains("module"),
-        "the refusal names both roles: {msg}",
-    );
-    assert!(
-        msg.contains("missing-adapter.wasm") && msg.contains("missing-module.wasm"),
-        "the refusal names both claimant paths: {msg}",
-    );
-    assert!(
-        !msg.contains("compile"),
-        "one ledger spans both roles, so no compile precedes the refusal: {msg}",
-    );
+    scenario
+        .adapter(
+            Entry::new(TestManifest::new("dup").kind("acme-adapter").cap("chain"))
+                .wasm(adapter_wasm),
+        )
+        .module(Entry::new(TestManifest::new("dup").cap("logging")).wasm(module_wasm))
+        .expect_refusal()
+        .await
+        .names("name dup is claimed twice")
+        .names("adapter")
+        .names("module")
+        .names("missing-adapter.wasm")
+        .names("missing-module.wasm")
+        .lacks("compile");
 }
