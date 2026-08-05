@@ -6,7 +6,7 @@ use alloy_chains::Chain;
 
 use crate::bindings::nexum;
 use crate::bindings::nexum::host::chain::ChainError;
-use crate::host::component::{ChainMethod, ChainProvider, RuntimeTypes};
+use crate::host::component::{ChainMethod, RuntimeTypes};
 use crate::host::error::chain_denied;
 use crate::host::state::HostState;
 

@@ -13,7 +13,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use alloy_chains::Chain;
-use alloy_primitives::Bytes;
+use alloy_primitives::{B256, Bytes};
 use alloy_provider::{CanonicalEvent, DynProvider, Provider, ProviderBuilder, WsConnect};
 use alloy_rpc_client::ClientBuilder;
 use alloy_rpc_types_eth::{Filter, Header, Log};
@@ -54,12 +54,15 @@ struct ChainEndpoint {
     supports_pubsub: bool,
 }
 
-/// Providers keyed by chain.
+/// Providers keyed by chain: the `Chain -> DynProvider` registry every chain
+/// access resolves through; a missing entry is [`ProviderError::UnknownChain`].
 #[derive(Debug, Clone)]
 pub struct ProviderPool {
     providers: Arc<HashMap<Chain, ChainEndpoint>>,
     /// In-flight `eth_getLogs` groups during gap backfill; `0` clamps to `1`.
     log_backfill_concurrency: usize,
+    /// Test-only poll cadence override; `None` derives from the chain hint.
+    poll_interval_override: Option<Duration>,
 }
 
 impl ProviderPool {
@@ -118,16 +121,55 @@ impl ProviderPool {
         Ok(Self {
             providers: Arc::new(providers),
             log_backfill_concurrency: cfg.engine.log_backfill_concurrency,
+            poll_interval_override: None,
         })
     }
 
     /// Empty pool; every `request` returns `UnknownChain`.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-utils"))]
     pub fn empty() -> Self {
         Self {
             providers: Arc::new(HashMap::new()),
             log_backfill_concurrency: 16,
+            poll_interval_override: None,
         }
+    }
+
+    /// Pool over pre-built providers (in-process mock transports), polling at
+    /// `poll_interval` with serial log fetches for deterministic RPC order.
+    #[cfg(any(test, feature = "test-utils"))]
+    pub fn for_tests(
+        providers: impl IntoIterator<Item = (Chain, DynProvider)>,
+        poll_interval: Duration,
+    ) -> Self {
+        let providers = providers
+            .into_iter()
+            .map(|(chain, provider)| {
+                (
+                    chain,
+                    ChainEndpoint {
+                        provider,
+                        timeout: Duration::from_secs(30),
+                        supports_pubsub: false,
+                    },
+                )
+            })
+            .collect();
+        Self {
+            providers: Arc::new(providers),
+            log_backfill_concurrency: 1,
+            poll_interval_override: Some(poll_interval),
+        }
+    }
+
+    /// Poll cadence for `chain`: the test override, else the chain's block
+    /// time hint, else the default.
+    fn poll_interval(&self, chain: Chain) -> Duration {
+        self.poll_interval_override.unwrap_or_else(|| {
+            chain
+                .average_blocktime_hint()
+                .unwrap_or(DEFAULT_POLL_INTERVAL)
+        })
     }
 
     /// Follow canonical block headers on `chain`: WS via
@@ -151,8 +193,9 @@ impl ProviderPool {
             let stream = sub.into_stream().map(Ok::<_, ProviderError>);
             return Ok(Box::pin(stream));
         }
-        // HTTP fallback: poll the head, then follow canonical blocks by
-        // number at roughly the chain's block time.
+        // HTTP fallback: poll the head, then follow blocks by number at
+        // roughly the chain's block time. Same-height replacements are not
+        // re-emitted; the newHeads push path never signalled reorgs either.
         let head = ep
             .provider
             .get_block_number()
@@ -163,27 +206,20 @@ impl ProviderPool {
                 data: None,
                 source,
             })?;
-        let poll_interval = chain
-            .average_blocktime_hint()
-            .unwrap_or(DEFAULT_POLL_INTERVAL);
         let stream = ep
             .provider
-            .watch_canonical_blocks_from(head)
-            .poll_interval(poll_interval)
+            .watch_blocks_from(head)
+            .poll_interval(self.poll_interval(chain))
             .into_stream()
-            // Reorg `Removed` events are dropped for now; the newHeads push
-            // path never signalled reorgs either.
-            .filter_map(|item| async move {
-                match item {
-                    Ok(CanonicalEvent::Added(block)) => Some(Ok(block.header.clone())),
-                    Ok(CanonicalEvent::Removed(_)) => None,
-                    Err(source) => Some(Err(ProviderError::Rpc {
+            .buffered(self.log_backfill_concurrency.max(1))
+            .map(|item| {
+                item.map(|block| block.header)
+                    .map_err(|source| ProviderError::Rpc {
                         method: "eth_getBlockByNumber".into(),
                         code: None,
                         data: None,
                         source,
-                    })),
-                }
+                    })
             });
         Ok(Box::pin(stream))
     }
@@ -205,8 +241,31 @@ impl ProviderPool {
             })
     }
 
+    /// Canonical block hash at `number`; `None` for an unknown height.
+    pub async fn block_hash(
+        &self,
+        chain: Chain,
+        number: u64,
+    ) -> Result<Option<B256>, ProviderError> {
+        let ep = self
+            .providers
+            .get(&chain)
+            .ok_or(ProviderError::UnknownChain(chain))?;
+        // Default request kind: transaction hashes only, header-sized body.
+        ep.provider
+            .get_block_by_number(number.into())
+            .await
+            .map(|block| block.map(|b| b.header.hash))
+            .map_err(|source| ProviderError::Rpc {
+                method: "eth_getBlockByNumber".into(),
+                code: None,
+                data: None,
+                source,
+            })
+    }
+
     /// Canonical (reorg-aware) log stream on `chain` from `start_block`. Each
-    /// item is one block's matching logs (possibly empty); reorg rollbacks
+    /// item is one block's batch (possibly with no logs); reorg rollbacks
     /// carry `removed == true`.
     pub fn watch_chain_logs(
         &self,
@@ -218,16 +277,11 @@ impl ProviderPool {
             .providers
             .get(&chain)
             .ok_or(ProviderError::UnknownChain(chain))?;
-        // Poll at roughly the chain's block time: known chains carry a
-        // hint, unknown (custom / dev) chains fall back to the default.
-        let poll_interval = chain
-            .average_blocktime_hint()
-            .unwrap_or(DEFAULT_POLL_INTERVAL);
         let stream = ep
             .provider
             .watch_canonical_logs_from(start_block, &filter)
             .rpc_concurrency(self.log_backfill_concurrency)
-            .poll_interval(poll_interval)
+            .poll_interval(self.poll_interval(chain))
             .into_stream()
             .map(|item| {
                 item.map(|event| {
@@ -238,14 +292,22 @@ impl ProviderPool {
                         CanonicalEvent::Added(block_logs) => (false, block_logs),
                         CanonicalEvent::Removed(block_logs) => (true, block_logs),
                     };
-                    block_logs
+                    let number = block_logs.block.header.number;
+                    let hash = block_logs.block.header.hash;
+                    let logs = block_logs
                         .logs
                         .into_iter()
                         .map(|mut log| {
                             log.removed = removed;
                             log
                         })
-                        .collect::<Vec<Log>>()
+                        .collect::<Vec<Log>>();
+                    CanonicalLogBatch {
+                        number,
+                        hash,
+                        removed,
+                        logs,
+                    }
                 })
                 .map_err(|source| ProviderError::Rpc {
                     method: "eth_getLogs".into(),
@@ -322,9 +384,25 @@ impl ProviderPool {
 
 /// Boxed stream of `newHeads`-style block headers.
 pub type BlockStream = Pin<Box<dyn Stream<Item = Result<Header, ProviderError>> + Send>>;
+/// One canonical poller item: a single block's filter-matching logs. A block
+/// with no matching logs still yields a batch, so progress tracks height,
+/// not log count.
+#[derive(Debug, Clone)]
+pub struct CanonicalLogBatch {
+    /// Block height.
+    pub number: u64,
+    /// Canonical block hash the batch was fetched against.
+    pub hash: B256,
+    /// Reorg rollback: the block left the canonical chain.
+    pub removed: bool,
+    /// Matching logs with `removed` stamped; empty for a non-matching block.
+    pub logs: Vec<Log>,
+}
+
 /// Boxed canonical per-block log stream; reorg rollbacks carry
 /// `removed == true`.
-pub type CanonicalLogStream = Pin<Box<dyn Stream<Item = Result<Vec<Log>, ProviderError>> + Send>>;
+pub type CanonicalLogStream =
+    Pin<Box<dyn Stream<Item = Result<CanonicalLogBatch, ProviderError>> + Send>>;
 
 /// Errors surfaced by [`ProviderPool`]. Variant names serialize snake_case as
 /// `&'static str` for metric labels.

@@ -73,6 +73,88 @@ pub struct Supervisor<T: RuntimeTypes> {
     /// Optional WASI clock override applied to every module store. `None`
     /// leaves the ambient host clocks.
     clocks: Option<WasiClockOverride>,
+    /// In-memory mirror of the persisted chain-log cursors.
+    chain_log_cursors: ChainLogCursors,
+}
+
+/// In-memory chain-log cursor mirror, `module -> cursor key -> block`.
+/// An addition only moves the cursor forward (a replayed height is a
+/// no-op); a retraction pulls it back to the retracted height.
+#[derive(Default)]
+struct ChainLogCursors(BTreeMap<String, BTreeMap<String, u64>>);
+
+impl ChainLogCursors {
+    /// Cursor value to persist after dispatching `block`, or `None` when the
+    /// persisted cursor already holds it. `seed` reads the persisted cursor
+    /// and runs only the first time the pair is seen.
+    fn record(
+        &mut self,
+        module: &str,
+        key: &str,
+        block: u64,
+        removed: bool,
+        seed: impl FnOnce() -> Option<u64>,
+    ) -> Option<u64> {
+        let tracked = self.0.get(module).and_then(|keys| keys.get(key)).copied();
+        let current = match tracked {
+            Some(c) => Some(c),
+            None => seed(),
+        };
+        let next = match current {
+            Some(c) if removed => c.min(block),
+            Some(c) => c.max(block),
+            None => block,
+        };
+        if tracked != Some(next) {
+            self.0
+                .entry(module.to_owned())
+                .or_default()
+                .insert(key.to_owned(), next);
+        }
+        (current != Some(next)).then_some(next)
+    }
+}
+
+/// Persisted chain-log resume cursor for `(module, key)`, or `None` when
+/// absent or unreadable (both start at head).
+fn read_chain_log_cursor<S: StateStore>(store: &S, module: &str, key: &str) -> Option<u64> {
+    let handle = store.module(module).ok()?;
+    let bytes = handle.get(key).ok()??;
+    let arr: [u8; 8] = bytes.try_into().ok()?;
+    Some(u64::from_le_bytes(arr))
+}
+
+/// Persist the chain-log cursor for a dispatched block; writes only when
+/// [`ChainLogCursors::record`] reports movement.
+fn commit_chain_log_cursor<S: StateStore>(
+    store: &S,
+    cursors: &mut ChainLogCursors,
+    module: &str,
+    key: &str,
+    block: u64,
+    removed: bool,
+) {
+    let Some(cursor) = cursors.record(module, key, block, removed, || {
+        read_chain_log_cursor(store, module, key)
+    }) else {
+        return;
+    };
+    match store.module(module) {
+        Ok(ms) => {
+            if let Err(e) = ms.set(key, &cursor.to_le_bytes()) {
+                warn!(
+                    module = %module,
+                    error = %e,
+                    "failed to persist chain-log cursor",
+                );
+            }
+        }
+        Err(e) => warn!(
+            module = %module,
+            error = %e,
+            "failed to open module store for chain-log cursor",
+        ),
+    }
 }
 
 /// Core-only lattice for the runtime's own tests (`Ext = ()`).
@@ -85,7 +167,6 @@ impl crate::sealed::SealedRuntimeTypes for TestTypes {}
 
 #[cfg(test)]
 impl RuntimeTypes for TestTypes {
-    type Chain = ProviderPool;
     type Store = LocalStore;
     type Ext = ();
 }
@@ -440,6 +521,7 @@ impl<T: RuntimeTypes> Supervisor<T> {
             services,
             poison_policy: engine_cfg.limits.poison(),
             clocks,
+            chain_log_cursors: ChainLogCursors::default(),
         })
     }
 
@@ -492,6 +574,7 @@ impl<T: RuntimeTypes> Supervisor<T> {
             services,
             poison_policy: limits.poison(),
             clocks,
+            chain_log_cursors: ChainLogCursors::default(),
         })
     }
 
@@ -975,7 +1058,11 @@ impl<T: RuntimeTypes> Supervisor<T> {
                                     address.as_deref(),
                                     event_signature.as_deref(),
                                 );
-                                let seed = self.read_chain_log_cursor(&module.name, &key);
+                                let seed = read_chain_log_cursor(
+                                    &self.components.store,
+                                    &module.name,
+                                    &key,
+                                );
                                 (Some(key), seed)
                             } else {
                                 (None, None)
@@ -1000,15 +1087,6 @@ impl<T: RuntimeTypes> Supervisor<T> {
             }
         }
         out
-    }
-
-    /// Read the persisted resume cursor, or `None` when absent or
-    /// unreadable (both start at head).
-    fn read_chain_log_cursor(&self, module: &str, key: &str) -> Option<u64> {
-        let handle = self.components.store.module(module).ok()?;
-        let bytes = handle.get(key).ok()??;
-        let arr: [u8; 8] = bytes.try_into().ok()?;
-        Some(u64::from_le_bytes(arr))
     }
 
     /// Rebuild a trapped module from its cached `Component` and
@@ -1195,6 +1273,7 @@ impl<T: RuntimeTypes> Supervisor<T> {
         }
 
         let block_number = log.block_number;
+        let removed = log.removed;
         let event = nexum::host::types::Event::ChainLogs(nexum::host::types::ChainLogs {
             chain_id: chain.id(),
             logs: vec![nexum::host::types::ChainLog::from(&log)],
@@ -1212,26 +1291,15 @@ impl<T: RuntimeTypes> Supervisor<T> {
         );
         // Persist the resume cursor only after a successful dispatch, so a
         // block is never recorded as done before the module processed it.
-        // Advancing to the highest dispatched block is enough; a re-dispatch
-        // of the same block after a restart is idempotent (at-least-once).
         if ok && let (Some(key), Some(block)) = (cursor_key, block_number) {
-            let store = self.components.store.clone();
-            match store.module(module_name) {
-                Ok(ms) => {
-                    if let Err(e) = ms.set(key, &block.to_le_bytes()) {
-                        warn!(
-                            module = %module_name,
-                            error = %e,
-                            "failed to persist chain-log cursor",
-                        );
-                    }
-                }
-                Err(e) => warn!(
-                    module = %module_name,
-                    error = %e,
-                    "failed to open module store for chain-log cursor",
-                ),
-            }
+            commit_chain_log_cursor(
+                &self.components.store,
+                &mut self.chain_log_cursors,
+                module_name,
+                key,
+                block,
+                removed,
+            );
         }
         ok
     }

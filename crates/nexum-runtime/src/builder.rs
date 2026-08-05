@@ -25,6 +25,7 @@ use crate::host::component::{
 };
 use crate::host::extension::{EventSources, Extension};
 use crate::host::logs::LogPipeline;
+use crate::host::provider_pool::ProviderPool;
 use crate::preset::Runtime;
 use crate::runtime::event_loop;
 pub use crate::supervisor::WasiClockOverride;
@@ -497,7 +498,7 @@ pub struct PresetComponentsBuilder<'a, T: RuntimeTypes, C, S, E, L> {
 impl<T, C, S, E, L> PresetComponentsBuilder<'_, T, C, S, E, L>
 where
     T: RuntimeTypes,
-    C: ComponentBuilder<Output = T::Chain>,
+    C: ComponentBuilder<Output = ProviderPool>,
     S: ComponentBuilder<Output = T::Store>,
     E: ComponentBuilder<Output = T::Ext>,
     L: ComponentBuilder<Output = LogPipeline>,
@@ -631,7 +632,7 @@ pub struct ReadyBuilder<'a, T: RuntimeTypes, C, S, E, L> {
 impl<T, C, S, E, L> ReadyBuilder<'_, T, C, S, E, L>
 where
     T: RuntimeTypes,
-    C: ComponentBuilder<Output = T::Chain>,
+    C: ComponentBuilder<Output = ProviderPool>,
     S: ComponentBuilder<Output = T::Store>,
     E: ComponentBuilder<Output = T::Ext>,
     L: ComponentBuilder<Output = LogPipeline>,

@@ -46,7 +46,9 @@ pub enum Subscription {
         chain_id: u64,
     },
     /// Chain-log events matching `address` + topic-0; one subscription per
-    /// entry, tagged with the owning module.
+    /// entry, tagged with the owning module. Delivery across a re-open is
+    /// at-least-once, and only the last delivered log-bearing height is
+    /// retracted if it reorged while disconnected.
     ChainLog {
         /// EVM chain id.
         chain_id: u64,
@@ -55,13 +57,12 @@ pub enum Subscription {
         /// Topic-0 filter as `0x`-prefixed 32-byte hex; absent matches
         /// every event from the address(es).
         event_signature: Option<String>,
-        /// Persist a durable per-subscription cursor and re-open from just
-        /// after the last dispatched block instead of head. Delivery is
-        /// then at-least-once; the module must tolerate redelivery.
+        /// Persist a durable per-subscription cursor; after a restart the
+        /// stream re-opens AT the cursor block and replays it, so the
+        /// module must tolerate redelivery.
         resume: bool,
-        /// Backfill cap for a `resume` subscription, in blocks. `None`
-        /// backfills the whole gap; set it only for a consumer that
-        /// tolerates dropping the oldest missed blocks.
+        /// Backfill cap in blocks for a `resume` subscription; `None`
+        /// backfills the whole gap, a cap drops the oldest missed blocks.
         max_lookback: Option<u64>,
     },
     /// Cron-scheduled tick; parsed but not dispatched (the supervisor

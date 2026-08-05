@@ -1,7 +1,7 @@
 //! Open live chain event sources and dispatch their events to the supervisor
 //! until shutdown. Blocks come from `eth_subscribe(newHeads)` (WS); chain-logs
-//! from an `eth_getLogs` block-range poller (HTTP or WS) that recovers events
-//! across a reconnect by re-querying the gap rather than dropping them.
+//! from an `eth_getLogs` block-range poller (HTTP or WS) that re-queries the
+//! reconnect gap and retracts the last delivered block's logs if it reorged.
 //!
 //! `open_block_streams` and `open_chain_log_streams` each spawn one
 //! reconnect-aware task per subscription: it opens the stream, pumps items to
@@ -15,6 +15,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use alloy_chains::Chain;
+use alloy_primitives::B256;
 use futures::StreamExt;
 use futures::stream::{BoxStream, select_all};
 use thiserror::Error;
@@ -22,9 +23,9 @@ use tokio::sync::mpsc;
 use tracing::{info, warn};
 
 use crate::bindings::nexum;
-use crate::host::component::{ChainProvider, RuntimeTypes};
+use crate::host::component::RuntimeTypes;
 use crate::host::extension::{ExtensionEvent, ExtensionEventStream};
-use crate::host::provider_pool::ProviderError;
+use crate::host::provider_pool::{ProviderError, ProviderPool};
 use crate::runtime::restart_policy::backoff_for;
 use crate::supervisor::{ChainLogSub, Supervisor};
 use nexum_tasks::{TaskExecutor, TaskExit, TaskSet};
@@ -54,15 +55,12 @@ const LARGE_GAP_LOG_THRESHOLD: u64 = 1_000;
 
 /// Open one reconnect-aware block-subscription task per chain, spawned via
 /// `executor` with handles pushed into `tasks` for graceful shutdown.
-pub fn open_block_streams<C>(
-    pool: &C,
+pub fn open_block_streams(
+    pool: &ProviderPool,
     chains: &[Chain],
     executor: &TaskExecutor,
     tasks: &mut TaskSet,
-) -> Vec<TaggedBlockStream>
-where
-    C: ChainProvider + Clone + Send + Sync + 'static,
-{
+) -> Vec<TaggedBlockStream> {
     let mut streams = Vec::new();
     for &chain in chains {
         let (tx, rx) = mpsc::channel::<Result<(Chain, alloy_rpc_types_eth::Header), StreamError>>(
@@ -78,15 +76,12 @@ where
 
 /// Open one reconnect-aware chain-log task per subscription; see
 /// [`open_block_streams`].
-pub fn open_chain_log_streams<C>(
-    pool: &C,
+pub fn open_chain_log_streams(
+    pool: &ProviderPool,
     subs: Vec<ChainLogSub>,
     executor: &TaskExecutor,
     tasks: &mut TaskSet,
-) -> Vec<TaggedChainLogStream>
-where
-    C: ChainProvider + Clone + Send + Sync + 'static,
-{
+) -> Vec<TaggedChainLogStream> {
     let mut streams = Vec::new();
     for sub in subs {
         let (tx, rx) = mpsc::channel::<TaggedChainLog>(RECONNECT_CHANNEL_BUF);
@@ -117,15 +112,12 @@ fn receiver_stream<T: Send + 'static>(
 }
 
 /// Reconnect-aware loop for one chain's block subscription: re-opens the
-/// `eth_subscribe` stream with exponential backoff after every drop or error.
-async fn reconnecting_block_task<C>(
-    pool: C,
+/// stream with exponential backoff after every drop or error.
+async fn reconnecting_block_task(
+    pool: ProviderPool,
     chain: Chain,
     tx: mpsc::Sender<Result<(Chain, alloy_rpc_types_eth::Header), StreamError>>,
-) -> TaskExit
-where
-    C: ChainProvider + Send + Sync + 'static,
-{
+) -> TaskExit {
     let chain_id = chain.id();
     let mut attempt: u32 = 0;
     let mut last_event: Option<Instant> = None;
@@ -204,28 +196,35 @@ where
 struct ChainLogResume {
     /// Durable cursor key; `Some` for a `resume` subscription.
     cursor_key: Option<Arc<str>>,
-    /// Persisted resume block read at boot; the first open starts here.
+    /// Persisted resume block read at boot; the first successful open
+    /// starts here.
     initial_cursor: Option<u64>,
     /// Opt-in cap in blocks on backfill depth; `None` backfills the whole gap.
     max_lookback: Option<u64>,
 }
 
-/// Poller-backed loop for one (module, chain) chain-log subscription. Drives
-/// the `eth_getLogs` block-range poller, which reconciles reorgs and re-queries
-/// gaps internally. On a terminal poller error it re-opens from the block after
-/// the last delivered one and backfills the whole missed range, bounded only by
-/// `max_lookback` if set.
-async fn reconnecting_chain_log_task<C>(
-    pool: C,
+/// Last delivered log-bearing height, retained so a re-open can confirm it
+/// is still canonical and retract it when it is not.
+struct DeliveredTail {
+    /// Block height.
+    number: u64,
+    /// Canonical block hash observed at delivery time.
+    hash: B256,
+    /// Logs delivered at that height, retained verbatim for retraction.
+    logs: Vec<alloy_rpc_types_eth::Log>,
+}
+
+/// Poller-backed loop for one (module, chain) chain-log subscription. A
+/// re-open resumes one past the highest scanned height; a non-canonical
+/// delivered tail is retracted (`removed = true`) and replayed in full.
+async fn reconnecting_chain_log_task(
+    pool: ProviderPool,
     module: String,
     chain: Chain,
     filter: alloy_rpc_types_eth::Filter,
     resume: ChainLogResume,
     tx: mpsc::Sender<TaggedChainLog>,
-) -> TaskExit
-where
-    C: ChainProvider + Send + Sync + 'static,
-{
+) -> TaskExit {
     let ChainLogResume {
         cursor_key,
         initial_cursor,
@@ -234,12 +233,13 @@ where
     let chain_id = chain.id();
     let mut attempt: u32 = 0;
     let mut last_event: Option<Instant> = None;
-    // Highest block whose logs we have delivered; the resume point after a
-    // poller re-open, so the missed range is synced back rather than skipped.
-    let mut last_seen_block: Option<u64> = None;
-    // Persisted resume cursor, consumed on the first open: for a `resume`
-    // subscription the poller starts here (replaying the block in full)
-    // rather than at head. `None` for a fresh or non-resume subscription.
+    // One past the highest scanned height (log-bearing or empty), rolled
+    // back to a removed batch's own height. `None` until the first open.
+    let mut resume_from: Option<u64> = None;
+    // Last delivered log-bearing height, kept for tail re-validation.
+    let mut tail: Option<DeliveredTail> = None;
+    // Persisted resume cursor; cleared only once an open succeeds, so a
+    // failed first open never abandons the backfill.
     let mut boot_resume: Option<u64> = initial_cursor;
     loop {
         let head = match pool.block_number(chain).await {
@@ -259,20 +259,31 @@ where
                 continue;
             }
         };
-        // Choosing the poller start block:
-        // - `boot_resume` (persisted cursor, first open only): resume AT the
-        //   cursor block, replaying it in full so a mid-block crash before
-        //   the restart loses nothing. Never past head: a reorg that left
-        //   the cursor ahead of head starts at head and lets the poller
-        //   catch up.
-        // - otherwise a re-open resumes just after the last delivered block
-        //   (within-process gap-free), or at head on the very first open.
-        // Either way the whole gap is backfilled with no lower floor, so
-        // nothing is skipped unless the subscription set `max_lookback`.
-        let mut start_block = match boot_resume.take() {
-            Some(resume) => resume.min(head),
-            None => poller_resume_block(last_seen_block, head),
-        };
+        // Tail re-validation: an unconfirmed hash (error or unknown height)
+        // is a failed open, never a retraction; retract only on a verified
+        // mismatch.
+        let mut invalidated_tail: Option<u64> = None;
+        if let Some(t) = &tail {
+            match pool.block_hash(chain, t.number).await {
+                Ok(Some(hash)) if hash == t.hash => {}
+                Ok(Some(_)) => invalidated_tail = Some(t.number),
+                Ok(None) | Err(_) => {
+                    attempt = attempt.saturating_add(1);
+                    let backoff = backoff_for(attempt);
+                    warn!(
+                        module = %module,
+                        chain_id,
+                        tail_block = t.number,
+                        attempt,
+                        backoff_ms = backoff.as_millis() as u64,
+                        "chain-log tail hash unconfirmed - retrying after backoff",
+                    );
+                    tokio::time::sleep(backoff).await;
+                    continue;
+                }
+            }
+        }
+        let mut start_block = poller_start_block(boot_resume, resume_from, invalidated_tail, head);
         // Opt-in bound: `max_lookback` caps how far back a resume
         // subscription backfills. The default (`None`) backfills fully; a
         // set cap clamps the start up to `head - cap` and surfaces the
@@ -322,6 +333,29 @@ where
                     )
                     .increment(1);
                 }
+                // Consume the cursor and anchor the basis on the start, so
+                // an itemless open re-opens at the same block.
+                boot_resume = None;
+                resume_from = Some(start_block);
+                // Retract the invalidated tail before pumping the stream;
+                // the stream then restates the height (retract-then-restate).
+                if invalidated_tail.is_some()
+                    && let Some(t) = tail.take()
+                {
+                    warn!(
+                        module = %module,
+                        chain_id,
+                        tail_block = t.number,
+                        "chain-log tail reorged while disconnected - retracting its logs",
+                    );
+                    for mut log in t.logs {
+                        log.removed = true;
+                        let tagged = Ok((module.clone(), chain, log, cursor_key.clone()));
+                        if tx.send(tagged).await.is_err() {
+                            return TaskExit::ReceiverGone;
+                        }
+                    }
+                }
                 while let Some(item) = inner.next().await {
                     let now = Instant::now();
                     if attempt > 0
@@ -336,19 +370,36 @@ where
                     }
                     last_event = Some(now);
                     match item {
-                        // One canonical block's matching logs; fan the
-                        // batch out into the existing per-log dispatch
-                        // path. Each log already carries its `removed`
-                        // flag from the poller.
-                        Ok(logs) => {
-                            for log in logs {
-                                if let Some(block) = log.block_number {
-                                    last_seen_block =
-                                        Some(last_seen_block.map_or(block, |seen| seen.max(block)));
-                                }
-                                let tagged = Ok((module.clone(), chain, log, cursor_key.clone()));
+                        // Each log already carries its `removed` flag from
+                        // the poller.
+                        Ok(batch) => {
+                            for log in &batch.logs {
+                                let tagged =
+                                    Ok((module.clone(), chain, log.clone(), cursor_key.clone()));
                                 if tx.send(tagged).await.is_err() {
                                     return TaskExit::ReceiverGone;
+                                }
+                            }
+                            if batch.removed {
+                                // A rollback un-scans the height and drops a
+                                // tail at or above it (already retracted by
+                                // the poller).
+                                resume_from =
+                                    Some(resume_from.map_or(batch.number, |r| r.min(batch.number)));
+                                if tail.as_ref().is_some_and(|t| t.number >= batch.number) {
+                                    tail = None;
+                                }
+                            } else {
+                                // Empty batches advance the basis too,
+                                // keeping the resume point gap-free.
+                                let next = batch.number.saturating_add(1);
+                                resume_from = Some(resume_from.map_or(next, |r| r.max(next)));
+                                if !batch.logs.is_empty() {
+                                    tail = Some(DeliveredTail {
+                                        number: batch.number,
+                                        hash: batch.hash,
+                                        logs: batch.logs,
+                                    });
                                 }
                             }
                         }
@@ -398,8 +449,7 @@ pub type TaggedBlockStream = std::pin::Pin<
     >,
 >;
 /// One tagged chain-log item: `(module, chain, log, cursor_key)` or a stream
-/// error. `cursor_key` is `Some` for a `resume` subscription and threads the
-/// durable cursor key to the dispatch site.
+/// error; `cursor_key` is `Some` for a `resume` subscription.
 pub type TaggedChainLog =
     Result<(String, Chain, alloy_rpc_types_eth::Log, Option<Arc<str>>), StreamError>;
 pub type TaggedChainLogStream =
@@ -551,13 +601,23 @@ pub async fn run<T: RuntimeTypes, G>(
     }
 }
 
-/// Start block for a re-opened log poller: `None` (first open) starts at head;
-/// otherwise just after the last delivered block, backfilling the whole gap.
-fn poller_resume_block(last_seen_block: Option<u64>, head: u64) -> u64 {
-    match last_seen_block {
-        None => head,
-        Some(last) => last.saturating_add(1),
+/// Start block for a chain-log poller open: the boot cursor (clamped to
+/// head), else an invalidated tail, else `resume_from`, else head. The
+/// reconnect arms carry no head clamp: an under-reported head must not
+/// force re-delivery of the scanned range.
+fn poller_start_block(
+    boot_cursor: Option<u64>,
+    resume_from: Option<u64>,
+    invalidated_tail: Option<u64>,
+    head: u64,
+) -> u64 {
+    if let Some(cursor) = boot_cursor {
+        return cursor.min(head);
     }
+    if let Some(tail) = invalidated_tail {
+        return tail;
+    }
+    resume_from.unwrap_or(head)
 }
 
 /// `Some(gap)` when `now` is at least `threshold` past the last event; `None`
@@ -595,15 +655,455 @@ pub async fn wait_for_shutdown_signal() -> anyhow::Result<&'static str> {
 mod tests {
     use super::*;
 
-    // ── Structural tests: per-stream task allocation (#56) ──────────────────
+    use alloy_rpc_types_eth::Log;
+    use alloy_transport::mock::MockResponse;
+    use nexum_tasks::TaskManager;
+
+    use crate::test_utils::rpc::{
+        MockRpc, linked_block, mocked_pool, rpc_err, rpc_head, rpc_ok, test_hash,
+    };
+
+    /// Virtual poll cadence; `start_paused` advances through it instantly.
+    const POLL: Duration = Duration::from_millis(50);
+
+    fn pool_for(rpc: &MockRpc) -> ProviderPool {
+        mocked_pool([(alloy_chains::Chain::mainnet(), rpc)], POLL)
+    }
+
+    /// A filter-matching log at `number` carrying [`linked_block`]'s hash, so
+    /// the poller's ranged fast path accepts it.
+    fn log_at(number: u64) -> Log {
+        Log {
+            block_number: Some(number),
+            block_hash: Some(test_hash(number)),
+            ..Default::default()
+        }
+    }
+
+    /// One canonical poller cycle: the head answer plus per-height block and
+    /// log fetches; an empty height also feeds the hash-pinned fallback.
+    fn cycle(head: u64, heights: &[(u64, Vec<Log>)]) -> Vec<MockResponse> {
+        let mut script = vec![rpc_head(head)];
+        for (number, logs) in heights {
+            script.push(rpc_ok(&linked_block(*number)));
+            script.push(rpc_ok(logs));
+            if logs.is_empty() {
+                script.push(rpc_ok(&Vec::<Log>::new()));
+            }
+        }
+        script
+    }
+
+    /// A full chain-log attempt script: the task's head probe, an optional
+    /// tail-probe answer, then the stream cycles.
+    fn attempt(
+        probe_head: u64,
+        tail_probe: Option<MockResponse>,
+        cycles: Vec<Vec<MockResponse>>,
+    ) -> Vec<MockResponse> {
+        let mut script = vec![rpc_head(probe_head)];
+        script.extend(tail_probe);
+        script.extend(cycles.into_iter().flatten());
+        script
+    }
+
+    /// Spawn one chain-log task over `pool` and hand back its tagged stream.
+    fn spawn_chain_log_task(
+        pool: &ProviderPool,
+        executor: &TaskExecutor,
+        tasks: &mut TaskSet,
+        initial_cursor: Option<u64>,
+    ) -> TaggedChainLogStream {
+        let subs = vec![ChainLogSub {
+            module: "mod".to_string(),
+            chain: alloy_chains::Chain::mainnet(),
+            filter: alloy_rpc_types_eth::Filter::default(),
+            cursor_key: None,
+            initial_cursor,
+            max_lookback: None,
+        }];
+        open_chain_log_streams(pool, subs, executor, tasks)
+            .pop()
+            .expect("one stream per subscription")
+    }
+
+    /// Next delivered log, unwrapped.
+    async fn recv(stream: &mut TaggedChainLogStream) -> Log {
+        let item = tokio::time::timeout(Duration::from_secs(600), stream.next())
+            .await
+            .expect("delivery within the virtual window")
+            .expect("stream alive");
+        let (_, _, log, _) = item.expect("no stream error");
+        log
+    }
+
+    /// Wait until the scripted transport has captured `n` ranged
+    /// `eth_getLogs` fetches, then return their `fromBlock`s.
+    async fn wait_for_ranged_fetches(rpc: &MockRpc, n: usize) -> Vec<u64> {
+        tokio::time::timeout(Duration::from_secs(600), async {
+            loop {
+                let froms = rpc.log_range_froms();
+                if froms.len() >= n {
+                    return froms;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap_or_else(|_| panic!("timed out waiting for {n} ranged log fetches"))
+    }
+
+    /// Wait until the previous script is fully consumed. Scripts end in a
+    /// terminal error (scripted or alloy's own), so an empty queue means the
+    /// dead stream can no longer misread the next phase's responses.
+    async fn drained(rpc: &MockRpc) {
+        tokio::time::timeout(Duration::from_secs(600), async {
+            while rpc.pending() > 0 {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("script must drain");
+    }
+
+    /// A confirmed tail resumes just after the scanned height with no
+    /// synthesized retraction; the ranged fetches prove the open positions.
+    #[tokio::test(start_paused = true)]
+    async fn reconnect_with_confirmed_tail_resumes_after_it() {
+        let rpc = MockRpc::new();
+        // First attempt: probe head 90, no tail, deliver the log at 90,
+        // then tear the stream down.
+        rpc.push_script(attempt(
+            90,
+            None,
+            vec![
+                cycle(90, &[(90, vec![log_at(90)])]),
+                vec![rpc_err("stream torn down")],
+            ],
+        ));
+        let pool = pool_for(&rpc);
+        let manager = TaskManager::new();
+        let executor = manager.executor();
+        let mut tasks = TaskSet::new();
+        let mut stream = spawn_chain_log_task(&pool, &executor, &mut tasks, None);
+
+        let log = recv(&mut stream).await;
+        assert_eq!(log.block_number, Some(90));
+        drained(&rpc).await;
+
+        // The reconnect confirms the tail hash and resumes after the
+        // scanned height.
+        rpc.push_script(attempt(
+            91,
+            Some(rpc_ok(&linked_block(90))),
+            vec![cycle(91, &[(91, vec![log_at(91)])])],
+        ));
+        let log = recv(&mut stream).await;
+        assert!(!log.removed, "no retraction was synthesized");
+        assert_eq!(log.block_number, Some(91));
+        assert_eq!(
+            wait_for_ranged_fetches(&rpc, 2).await,
+            vec![90, 91],
+            "first open at head, reconnect after the confirmed tail",
+        );
+        tasks.shutdown().await;
+    }
+
+    /// A reorged tail is retracted (`removed = true`, before any stream
+    /// item) and the poller re-opens AT the tail height.
+    #[tokio::test(start_paused = true)]
+    async fn reconnect_with_reorged_tail_retracts_and_replays_it() {
+        let rpc = MockRpc::new();
+        rpc.push_script(attempt(
+            90,
+            None,
+            vec![
+                cycle(90, &[(90, vec![log_at(90)])]),
+                vec![rpc_err("stream torn down")],
+            ],
+        ));
+        let pool = pool_for(&rpc);
+        let manager = TaskManager::new();
+        let executor = manager.executor();
+        let mut tasks = TaskSet::new();
+        let mut stream = spawn_chain_log_task(&pool, &executor, &mut tasks, None);
+        recv(&mut stream).await;
+        drained(&rpc).await;
+
+        // The fork: height 90 now carries a different canonical hash.
+        let fork_hash = B256::repeat_byte(0xcc);
+        let mut fork_block = linked_block(90);
+        fork_block.header.hash = fork_hash;
+        let fork_log: Log = Log {
+            block_number: Some(90),
+            block_hash: Some(fork_hash),
+            ..Default::default()
+        };
+        rpc.push_script(attempt(
+            91,
+            Some(rpc_ok(&fork_block)),
+            vec![vec![
+                rpc_head(90),
+                rpc_ok(&fork_block),
+                rpc_ok(&vec![fork_log]),
+            ]],
+        ));
+
+        let retraction = recv(&mut stream).await;
+        assert!(
+            retraction.removed,
+            "the stale delivery is retracted before any stream item",
+        );
+        assert_eq!(retraction.block_number, Some(90));
+        assert_eq!(
+            retraction.block_hash,
+            Some(test_hash(90)),
+            "retained logs verbatim",
+        );
+
+        let replacement = recv(&mut stream).await;
+        assert!(
+            !replacement.removed,
+            "the canonical logs restate the height"
+        );
+        assert_eq!(replacement.block_number, Some(90));
+
+        assert_eq!(
+            wait_for_ranged_fetches(&rpc, 2).await,
+            vec![90, 90],
+            "the invalidated tail replays AT 90",
+        );
+        tasks.shutdown().await;
+    }
+
+    /// Empty batches advance the scanned basis, so a re-open resumes after
+    /// the last scanned height, not at head.
+    #[tokio::test(start_paused = true)]
+    async fn reconnect_resumes_after_empty_scanned_heights() {
+        let rpc = MockRpc::new();
+        // The boot cursor opens AT 42; heights 42..=70 scan empty.
+        let empty: Vec<(u64, Vec<Log>)> = (42..=70).map(|n| (n, Vec::new())).collect();
+        rpc.push_script(attempt(
+            100,
+            None,
+            vec![cycle(70, &empty), vec![rpc_err("stream torn down")]],
+        ));
+        let pool = pool_for(&rpc);
+        let manager = TaskManager::new();
+        let executor = manager.executor();
+        let mut tasks = TaskSet::new();
+        let mut stream = spawn_chain_log_task(&pool, &executor, &mut tasks, Some(42));
+
+        drained(&rpc).await;
+        // No log-bearing height was delivered, so the reconnect has no tail
+        // to probe and resumes at 71, not head.
+        rpc.push_script(attempt(
+            100,
+            None,
+            vec![cycle(71, &[(71, vec![log_at(71)])])],
+        ));
+        let log = recv(&mut stream).await;
+        assert!(!log.removed, "nothing was retracted");
+        assert_eq!(log.block_number, Some(71));
+
+        let froms = wait_for_ranged_fetches(&rpc, 30).await;
+        assert_eq!(
+            froms,
+            (42..=71).collect::<Vec<u64>>(),
+            "the boot cursor opens AT 42; empty heights advance the resume basis to 71",
+        );
+        tasks.shutdown().await;
+    }
+
+    /// A stream that dies before scanning any height re-opens at the same
+    /// block; a genesis basis is history, never a fall-back to head.
+    #[tokio::test(start_paused = true)]
+    async fn itemless_open_reopens_at_the_same_block() {
+        let rpc = MockRpc::new();
+        // The first open at cursor 0 dies before yielding a height.
+        rpc.push_script(attempt(100, None, vec![vec![rpc_err("stream torn down")]]));
+        let pool = pool_for(&rpc);
+        let manager = TaskManager::new();
+        let executor = manager.executor();
+        let mut tasks = TaskSet::new();
+        let _stream = spawn_chain_log_task(&pool, &executor, &mut tasks, Some(0));
+
+        drained(&rpc).await;
+        // The re-open scans height 0: the basis stayed at the itemless
+        // open's start block even though head is 100.
+        rpc.push_script(attempt(100, None, vec![cycle(0, &[(0, Vec::new())])]));
+        assert_eq!(
+            wait_for_ranged_fetches(&rpc, 1).await,
+            vec![0],
+            "an itemless open at block 0 re-opens at block 0, not at head",
+        );
+        tasks.shutdown().await;
+    }
+
+    /// The boot cursor is consumed only once an open succeeds.
+    #[tokio::test(start_paused = true)]
+    async fn boot_cursor_survives_a_failed_open() {
+        let rpc = MockRpc::new();
+        // The first head probe fails outright; the cursor must survive.
+        rpc.push_script(vec![rpc_err("boot head fetch failed")]);
+        let pool = pool_for(&rpc);
+        let manager = TaskManager::new();
+        let executor = manager.executor();
+        let mut tasks = TaskSet::new();
+        let _stream = spawn_chain_log_task(&pool, &executor, &mut tasks, Some(42));
+
+        drained(&rpc).await;
+        rpc.push_script(attempt(100, None, vec![cycle(42, &[(42, Vec::new())])]));
+        assert_eq!(
+            wait_for_ranged_fetches(&rpc, 1).await,
+            vec![42],
+            "the first successful open still starts AT the persisted cursor",
+        );
+        tasks.shutdown().await;
+    }
+
+    /// A cursor a reorg left past head clamps to head on the boot arm.
+    #[tokio::test(start_paused = true)]
+    async fn boot_cursor_past_head_clamps_to_head() {
+        let rpc = MockRpc::new();
+        rpc.push_script(attempt(100, None, vec![cycle(100, &[(100, Vec::new())])]));
+        let pool = pool_for(&rpc);
+        let manager = TaskManager::new();
+        let executor = manager.executor();
+        let mut tasks = TaskSet::new();
+        let _stream = spawn_chain_log_task(&pool, &executor, &mut tasks, Some(150));
+
+        assert_eq!(
+            wait_for_ranged_fetches(&rpc, 1).await,
+            vec![100],
+            "a boot cursor past head starts at head and catches up",
+        );
+        tasks.shutdown().await;
+    }
+
+    /// A removed batch rolls the scanned basis back and drops the tail, so
+    /// the alloy deep-reorg unwind (a removed batch then the terminal error)
+    /// re-opens at the rolled-back height with no duplicate retraction.
+    #[tokio::test(start_paused = true)]
+    async fn removed_batch_rolls_back_the_resume_basis() {
+        let rpc = MockRpc::new();
+        // One stream session: deliver 90, then a next block whose parent
+        // mismatches; the poller retracts 90 from its buffer and dies with
+        // the deep-reorg error.
+        let mut orphaned = linked_block(91);
+        orphaned.header.inner.parent_hash = B256::repeat_byte(0xdd);
+        rpc.push_script(attempt(
+            90,
+            None,
+            vec![
+                cycle(90, &[(90, vec![log_at(90)])]),
+                vec![rpc_head(91), rpc_ok(&orphaned), rpc_ok(&vec![log_at(91)])],
+            ],
+        ));
+        let pool = pool_for(&rpc);
+        let manager = TaskManager::new();
+        let executor = manager.executor();
+        let mut tasks = TaskSet::new();
+        let mut stream = spawn_chain_log_task(&pool, &executor, &mut tasks, None);
+
+        let delivered = recv(&mut stream).await;
+        assert!(!delivered.removed);
+        let rollback = recv(&mut stream).await;
+        assert!(rollback.removed, "the poller's rollback is forwarded");
+        assert_eq!(rollback.block_number, Some(90));
+        drained(&rpc).await;
+
+        // The reconnect has no tail left (the removed batch dropped it), so
+        // no probe runs and no second retraction is synthesized; the basis
+        // rolled back to the removed height.
+        let fork_hash = B256::repeat_byte(0xcc);
+        let mut fork_block = linked_block(90);
+        fork_block.header.hash = fork_hash;
+        let fork_log: Log = Log {
+            block_number: Some(90),
+            block_hash: Some(fork_hash),
+            ..Default::default()
+        };
+        rpc.push_script(attempt(
+            91,
+            None,
+            vec![vec![
+                rpc_head(90),
+                rpc_ok(&fork_block),
+                rpc_ok(&vec![fork_log]),
+            ]],
+        ));
+        let restated = recv(&mut stream).await;
+        assert!(!restated.removed, "no duplicate synthesized retraction");
+        assert_eq!(restated.block_number, Some(90));
+        assert_eq!(
+            wait_for_ranged_fetches(&rpc, 3).await,
+            vec![90, 91, 90],
+            "the rollback rolls the resume basis back to the removed height",
+        );
+        tasks.shutdown().await;
+    }
+
+    /// An unconfirmed tail hash (unknown height) is a failed open: the task
+    /// backs off without retracting, then recovers once the hash confirms.
+    #[tokio::test(start_paused = true)]
+    async fn unconfirmed_tail_hash_backs_off_without_retracting() {
+        let rpc = MockRpc::new();
+        rpc.push_script(attempt(
+            90,
+            None,
+            vec![
+                cycle(90, &[(90, vec![log_at(90)])]),
+                vec![rpc_err("stream torn down")],
+            ],
+        ));
+        let pool = pool_for(&rpc);
+        let manager = TaskManager::new();
+        let executor = manager.executor();
+        let mut tasks = TaskSet::new();
+        let mut stream = spawn_chain_log_task(&pool, &executor, &mut tasks, None);
+        recv(&mut stream).await;
+        drained(&rpc).await;
+
+        // The provider answers the tail probe with an unknown height.
+        rpc.push_script(vec![
+            rpc_head(91),
+            rpc_ok(&Option::<alloy_rpc_types_eth::Block>::None),
+        ]);
+        // The attempt must park in backoff: no retraction, no re-open.
+        let idle = tokio::time::timeout(Duration::from_secs(30), stream.next()).await;
+        assert!(idle.is_err(), "an unconfirmed tail never delivers anything");
+        assert_eq!(
+            rpc.log_range_froms(),
+            vec![90],
+            "an unconfirmed tail never re-opens the poller",
+        );
+
+        // The provider catches up and confirms the delivered hash.
+        rpc.push_script(attempt(
+            91,
+            Some(rpc_ok(&linked_block(90))),
+            vec![cycle(91, &[(91, vec![log_at(91)])])],
+        ));
+        let log = recv(&mut stream).await;
+        assert!(!log.removed, "a confirmed tail resumes without retracting");
+        assert_eq!(log.block_number, Some(91));
+        assert_eq!(wait_for_ranged_fetches(&rpc, 2).await, vec![90, 91]);
+        tasks.shutdown().await;
+    }
 
     /// `open_block_streams` spawns one independent reconnect task per chain.
     #[tokio::test]
     async fn open_block_streams_opens_one_task_per_chain() {
-        use crate::test_utils::MockChainProvider;
-        use nexum_tasks::TaskManager;
-
-        let pool = MockChainProvider::new();
+        let a = MockRpc::new();
+        let b = MockRpc::new();
+        let pool = mocked_pool(
+            [
+                (alloy_chains::Chain::mainnet(), &a),
+                (alloy_chains::Chain::from_id(100), &b),
+            ],
+            POLL,
+        );
         let manager = TaskManager::new();
         let executor = manager.executor();
         let mut tasks = TaskSet::new();
@@ -619,10 +1119,8 @@ mod tests {
     /// `open_chain_log_streams` spawns one reconnect task per subscription.
     #[tokio::test]
     async fn open_chain_log_streams_opens_one_task_per_subscription() {
-        use crate::test_utils::MockChainProvider;
-        use nexum_tasks::TaskManager;
-
-        let pool = MockChainProvider::new();
+        let rpc = MockRpc::new();
+        let pool = pool_for(&rpc);
         let manager = TaskManager::new();
         let executor = manager.executor();
         let mut tasks = TaskSet::new();
@@ -651,28 +1149,26 @@ mod tests {
 
     /// A reconnect task whose receiver drops exits on its own with
     /// [`TaskExit::ReceiverGone`], not via abort.
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn reconnect_task_exits_receiver_gone_when_receiver_drops() {
-        use crate::test_utils::MockChainProvider;
-        use nexum_tasks::TaskManager;
-
-        let pool = MockChainProvider::new();
-        // Buffer one header so the task has an item to forward - the
+        let rpc = MockRpc::new();
+        // The open's head fetch, then one poll cycle serving block 1 - the
         // failing `tx.send` against the dropped receiver is the exit path
         // under test.
-        pool.push_block(alloy_rpc_types_eth::Header::default());
+        rpc.push_script(vec![rpc_head(1), rpc_head(1), rpc_ok(&linked_block(1))]);
+        let pool = pool_for(&rpc);
 
         let manager = TaskManager::new();
         let executor = manager.executor();
         let (tx, rx) = mpsc::channel(1);
         let handle = executor.spawn(reconnecting_block_task(
-            pool.clone(),
+            pool,
             alloy_chains::Chain::mainnet(),
             tx,
         ));
         drop(rx);
 
-        let exit = tokio::time::timeout(Duration::from_secs(5), handle.join())
+        let exit = tokio::time::timeout(Duration::from_secs(60), handle.join())
             .await
             .expect("task must exit promptly once the receiver is gone");
         assert_eq!(
@@ -682,7 +1178,39 @@ mod tests {
         );
     }
 
-    // ── block_stream_gap_to_log unit tests ──────────────────────────────────
+    /// A failed block-subscription open retries after backoff and the
+    /// re-opened poller delivers.
+    #[tokio::test(start_paused = true)]
+    async fn block_subscription_reopens_after_a_failed_open() {
+        let rpc = MockRpc::new();
+        rpc.push_script(vec![rpc_err("node down at boot")]);
+        let pool = pool_for(&rpc);
+        let manager = TaskManager::new();
+        let executor = manager.executor();
+        let mut tasks = TaskSet::new();
+        let mut stream = open_block_streams(
+            &pool,
+            &[alloy_chains::Chain::mainnet()],
+            &executor,
+            &mut tasks,
+        )
+        .pop()
+        .expect("one stream");
+
+        rpc.push_script(vec![rpc_head(5), rpc_head(5), rpc_ok(&linked_block(5))]);
+        let header = tokio::time::timeout(Duration::from_secs(600), async {
+            loop {
+                match stream.next().await.expect("stream alive") {
+                    Ok((_, header)) => return header,
+                    Err(_) => continue,
+                }
+            }
+        })
+        .await
+        .expect("the reopened subscription delivers");
+        assert_eq!(header.number, 5);
+        tasks.shutdown().await;
+    }
 
     /// No prior event yields `None`.
     #[test]
@@ -730,29 +1258,68 @@ mod tests {
     }
 
     #[test]
-    fn poller_resume_block_first_open_starts_at_head() {
+    fn poller_start_block_first_open_starts_at_head() {
         assert_eq!(
-            poller_resume_block(None, 100),
+            poller_start_block(None, None, None, 100),
             100,
             "first open starts at head, no history replay",
         );
     }
 
     #[test]
-    fn poller_resume_block_resumes_after_last_delivered() {
+    fn poller_start_block_resumes_from_the_scanned_basis() {
+        // `resume_from` covers empty heights too, so it is gap-free.
         assert_eq!(
-            poller_resume_block(Some(90), 100),
+            poller_start_block(None, Some(91), None, 100),
             91,
-            "a re-open resumes just after the last delivered block",
+            "a re-open with a confirmed tail resumes from the scanned basis",
         );
     }
 
     #[test]
-    fn poller_resume_block_backfills_the_full_gap() {
+    fn poller_start_block_restarts_at_an_invalidated_tail() {
         assert_eq!(
-            poller_resume_block(Some(10), 1_000_000),
-            11,
-            "no lookback cap; resume just after the last delivered block and backfill the whole gap",
+            poller_start_block(None, Some(96), Some(88), 100),
+            88,
+            "an invalidated tail replays AT its height, below the scanned basis",
+        );
+    }
+
+    #[test]
+    fn poller_start_block_does_not_clamp_the_reconnect_arm_to_head() {
+        // Alloy parks safely when the start is past head.
+        assert_eq!(
+            poller_start_block(None, Some(151), None, 100),
+            151,
+            "no head clamp on the reconnect arm",
+        );
+    }
+
+    #[test]
+    fn poller_start_block_boot_cursor_resumes_at_the_cursor() {
+        assert_eq!(
+            poller_start_block(Some(42), None, None, 100),
+            42,
+            "the persisted cursor replays AT its block, not after it",
+        );
+    }
+
+    #[test]
+    fn poller_start_block_boot_cursor_clamps_to_head() {
+        assert_eq!(
+            poller_start_block(Some(150), None, None, 100),
+            100,
+            "a cursor a reorg left past head starts at head and catches up",
+        );
+    }
+
+    /// A basis of 0 is a real resume point, not "no history".
+    #[test]
+    fn poller_start_block_treats_a_genesis_basis_as_history() {
+        assert_eq!(
+            poller_start_block(None, Some(0), None, 5_000),
+            0,
+            "an open at block 0 re-opens at block 0, not at head",
         );
     }
 }

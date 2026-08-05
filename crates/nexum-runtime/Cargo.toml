@@ -89,23 +89,27 @@ redb.workspace = true
 url.workspace = true
 
 # Enabled by `test-utils`: the `TestRuntime` harness temp-files inline
-# manifests before boot.
+# manifests before boot, and the in-process mock RPC transports implement
+# the tower service seam over alloy's JSON-RPC packet types.
 tempfile = { workspace = true, optional = true }
+tower = { workspace = true, optional = true }
+alloy-json-rpc = { workspace = true, optional = true }
 
 [features]
-# Test-only helpers under `test_utils`: the engine-side mock backends and the
-# `MockTypes` lattice for launching an in-process runtime entirely on fakes,
-# the manually-driven `ManualClock`, and the `TestRuntime` harness. Off by
-# default; a downstream test crate opts in. The harness temp-files inline
-# manifests, so the feature pulls `tempfile`. The self dev-dependency below
-# turns it on for this crate's own tests.
-test-utils = ["dep:tempfile"]
+# Test-only helpers under `test_utils`: the in-process mock RPC transports
+# (scripted and routed) behind the real `ProviderPool`, the `MockStateStore`
+# and `MockTypes` lattice, the manually-driven `ManualClock`, and the
+# `TestRuntime` harness. Off by default; a downstream test crate opts in.
+# The self dev-dependency below turns it on for this crate's own tests.
+test-utils = ["dep:tempfile", "dep:tower", "dep:alloy-json-rpc"]
 
 [dev-dependencies]
 # Self dev-dependency enabling `test-utils` for this crate's own test, doc,
 # and example targets, so `cargo test -p nexum-runtime` sees the mocks
 # without every invocation passing `--features test-utils`.
 nexum-runtime = { path = ".", features = ["test-utils"] }
+# `start_paused` reconnect tests advance the backoff clock virtually.
+tokio = { workspace = true, features = ["test-util"] }
 tempfile.workspace = true
 wiremock.workspace = true
 tracing-subscriber.workspace = true

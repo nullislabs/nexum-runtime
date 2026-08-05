@@ -2,8 +2,11 @@
 //! drive it from a test.
 //!
 //! [`TestRuntime`] wraps the public builder path over [`MockTypes`] with a
-//! manually-driven [`ManualClock`]. Program the mocks and read effects
-//! through [`chain`](TestRuntime::chain), [`clock`](TestRuntime::clock),
+//! manually-driven [`ManualClock`]. The chain leg is the real
+//! [`ProviderPool`](crate::host::provider_pool::ProviderPool) over a routed
+//! [`FakeNode`] transport, so pushes flow through alloy's actual pollers.
+//! Program the mocks and read effects through
+//! [`chain`](TestRuntime::chain), [`clock`](TestRuntime::clock),
 //! [`store`](TestRuntime::store) and [`logs`](TestRuntime::logs). Events
 //! dispatch on the spawned event-loop task, so
 //! [`wait_for_log`](TestRuntime::wait_for_log) polls for an observable
@@ -14,10 +17,12 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
+use alloy_chains::Chain;
 use alloy_rpc_types_eth::{Header, Log};
 
 use super::clock::ManualClock;
-use super::{MockChainProvider, MockStateStore, MockTypes, Prebuilt};
+use super::rpc::FakeNode;
+use super::{HARNESS_POLL_INTERVAL, MockStateStore, MockTypes, Prebuilt};
 use crate::builder::{RuntimeBuilder, RuntimeHandle};
 use crate::engine_config::{EngineConfig, ModuleLimits};
 use crate::host::component::ComponentsBuilder;
@@ -45,7 +50,8 @@ where
     extensions: Vec<Arc<dyn Extension<MockTypes<E>>>>,
     ext: E,
     limits: ModuleLimits,
-    chain: MockChainProvider,
+    chain: FakeNode,
+    chains: Vec<Chain>,
     store: MockStateStore,
     clock: ManualClock,
 }
@@ -68,7 +74,8 @@ impl<E: Clone + Send + Sync + 'static> TestRuntime<E> {
             extensions: Vec::new(),
             ext,
             limits: ModuleLimits::default(),
-            chain: MockChainProvider::new(),
+            chain: FakeNode::new(),
+            chains: vec![Chain::from_id(1)],
             store: MockStateStore::new(),
             clock: ManualClock::new(),
         }
@@ -110,9 +117,16 @@ impl<E: Clone + Send + Sync + 'static> TestRuntimeBuilder<E> {
         self
     }
 
-    /// The mock chain backend; the launched handle shares this instance.
-    pub fn chain(&self) -> &MockChainProvider {
+    /// The fake chain node; the launched handle shares this instance.
+    pub fn chain(&self) -> &FakeNode {
         &self.chain
+    }
+
+    /// Register an extra chain id the pool serves; chain 1 is always
+    /// registered.
+    pub fn with_chain(mut self, chain_id: u64) -> Self {
+        self.chains.push(Chain::from_id(chain_id));
+        self
     }
 
     /// The mock state store; the launched handle shares this instance.
@@ -145,13 +159,14 @@ impl<E: Clone + Send + Sync + 'static> TestRuntimeBuilder<E> {
         config.engine.state_dir = tmp.path().to_path_buf();
         config.limits = self.limits;
 
+        let pool = self.chain.pool(&self.chains, HARNESS_POLL_INTERVAL);
         let handle = RuntimeBuilder::new(&config)
             .with_types::<MockTypes<E>>()
             .with_extensions(self.extensions)
             .with_module_source(Some(self.wasm), manifest)
             .with_wasi_clocks(self.clock.as_override())
             .with_components(ComponentsBuilder::new(
-                Prebuilt(self.chain.clone()),
+                Prebuilt(pool),
                 Prebuilt(self.store.clone()),
                 Prebuilt(self.ext.clone()),
             ))
@@ -174,7 +189,7 @@ impl<E: Clone + Send + Sync + 'static> TestRuntimeBuilder<E> {
 /// the shutdown trigger.
 pub struct TestRuntime<E = ()> {
     handle: RuntimeHandle,
-    chain: MockChainProvider,
+    chain: FakeNode,
     store: MockStateStore,
     clock: ManualClock,
     ext: E,
@@ -184,8 +199,8 @@ pub struct TestRuntime<E = ()> {
 }
 
 impl<E> TestRuntime<E> {
-    /// The mock chain backend.
-    pub fn chain(&self) -> &MockChainProvider {
+    /// The fake chain node.
+    pub fn chain(&self) -> &FakeNode {
         &self.chain
     }
 
@@ -551,11 +566,12 @@ direction = "above"
         let requests = rt.chain().recorded_requests();
         assert!(
             requests.iter().any(|r| {
-                matches!(r.method, ChainMethod::EthCall)
-                    && r.params_json
+                r.method == "eth_call"
+                    && r.params
+                        .to_string()
                         .contains("0x694aa1769357215de4fac081bf1f309adc325306")
             }),
-            "the module's eth_call reached the mock, got: {requests:?}",
+            "the module's eth_call reached the fake node, got: {requests:?}",
         );
 
         rt.shutdown();
@@ -595,8 +611,12 @@ chain_id = 1
         // Both events are queued before either is awaited, so the biased
         // select genuinely arbitrates between two ready streams — a
         // sequential push→wait→push→wait would never create contention.
+        // The log shares height 42 so neither poller starts past the block.
         rt.push_block(header_numbered(42));
-        rt.push_chain_log(Log::default());
+        rt.push_chain_log(Log {
+            block_number: Some(42),
+            ..Default::default()
+        });
 
         rt.wait_for_log("example", "block 42 on chain")
             .await
@@ -624,11 +644,17 @@ chain_id = 1
             .await
             .expect("launch example over the harness");
 
+        // Await each delivery before pushing the next height, so the poller
+        // opens at 7 rather than at whatever head the burst raced to.
         rt.push_block(header_numbered(7));
+        rt.wait_for_log("example", "block 7 on chain")
+            .await
+            .expect("first block dispatched");
         rt.push_block(header_numbered(8));
+        rt.wait_for_log("example", "block 8 on chain")
+            .await
+            .expect("second block dispatched");
         rt.push_block(header_numbered(9));
-
-        // The last block's log line proves all three dispatches completed.
         rt.wait_for_log("example", "block 9 on chain")
             .await
             .expect("final block dispatched");
@@ -776,11 +802,11 @@ direction = "above"
         rt.wait().await.expect("clean shutdown");
     }
 
-    /// A dropped block stream is not the end of dispatch: the reconnect task
-    /// reopens the subscription after backoff and the re-armed mock resumes
-    /// delivery.
+    /// A transport error mid-stream is not the end of dispatch: the failed
+    /// head poll surfaces as a stream error the loop skips, and the next
+    /// poll cycle resumes delivery.
     #[tokio::test]
-    async fn harness_resumes_dispatch_after_a_dropped_block_stream() {
+    async fn harness_resumes_dispatch_after_a_transport_error() {
         let Some(wasm) = example_wasm_or_skip() else {
             return;
         };
@@ -794,13 +820,13 @@ direction = "above"
         rt.push_block(header_numbered(41));
         rt.wait_for_log("example", "block 41 on chain")
             .await
-            .expect("the pre-drop block dispatches");
+            .expect("the pre-error block dispatches");
 
-        rt.chain().close_block_stream();
+        rt.chain().fail_head_fetches(1);
         rt.push_block(header_numbered(42));
         rt.wait_for_log("example", "block 42 on chain")
             .await
-            .expect("dispatch resumes once the reconnect task reopens the stream");
+            .expect("dispatch resumes once the head poll recovers");
 
         rt.shutdown();
         rt.wait().await.expect("clean shutdown");

@@ -34,7 +34,8 @@ pub trait ComponentBuilder {
     ) -> impl Future<Output = anyhow::Result<Self::Output>> + Send;
 }
 
-/// Builds the chain [`ProviderPool`] from `[chains]`.
+/// Builds the [`ProviderPool`] from `[chains]`; every assembly's chain slot
+/// yields this concrete pool.
 pub struct ProviderPoolBuilder;
 
 impl ComponentBuilder for ProviderPoolBuilder {
@@ -154,7 +155,7 @@ impl<C, S, E, L> ComponentsBuilder<C, S, E, L> {
     pub async fn build<T>(self, ctx: &BuilderContext<'_>) -> Result<Components<T>, BuildError>
     where
         T: RuntimeTypes,
-        C: ComponentBuilder<Output = T::Chain>,
+        C: ComponentBuilder<Output = ProviderPool>,
         S: ComponentBuilder<Output = T::Store>,
         E: ComponentBuilder<Output = T::Ext>,
         L: ComponentBuilder<Output = LogPipeline>,

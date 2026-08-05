@@ -26,8 +26,8 @@ use crate::host::provider_pool::ProviderPool;
 pub trait Runtime: crate::sealed::SealedRuntime {
     /// The lattice the preset assembles.
     type Types: RuntimeTypes;
-    /// Builds the chain backend ([`RuntimeTypes::Chain`]).
-    type ChainBuilder: ComponentBuilder<Output = <Self::Types as RuntimeTypes>::Chain>;
+    /// Builds the concrete chain [`ProviderPool`].
+    type ChainBuilder: ComponentBuilder<Output = ProviderPool>;
     /// Builds the store backend ([`RuntimeTypes::Store`]).
     type StoreBuilder: ComponentBuilder<Output = <Self::Types as RuntimeTypes>::Store>;
     /// Builds the extension payload ([`RuntimeTypes::Ext`]).
@@ -69,7 +69,6 @@ impl crate::sealed::SealedRuntimeTypes for CoreRuntime {}
 impl crate::sealed::SealedRuntime for CoreRuntime {}
 
 impl RuntimeTypes for CoreRuntime {
-    type Chain = ProviderPool;
     type Store = LocalStore;
     type Ext = ();
 }
