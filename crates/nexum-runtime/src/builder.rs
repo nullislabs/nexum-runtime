@@ -191,6 +191,7 @@ impl<T: RuntimeTypes> LaunchRuntime for AssembledRuntime<'_, T> {
                 manifest,
                 &components,
                 &engine_cfg.limits,
+                &supervisor::ConfiguredChains::from_config(engine_cfg),
                 &extensions,
                 clocks,
             )
@@ -966,6 +967,8 @@ mod tests {
 
         let mut config = EngineConfig::default();
         config.engine.state_dir = dir.path().join("state");
+        // The chain gate must admit the module; init failure is the asserted path.
+        config.chains = crate::test_utils::test_chain_configs();
 
         let err = match RuntimeBuilder::new(&config)
             .with_types::<CoreRuntime>()
@@ -983,6 +986,45 @@ mod tests {
             Err(err) => err,
         };
         assert!(err.to_string().contains("failed initialisation"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn launch_bails_on_an_unconfigured_chain_subscription() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let wasm = dir.path().join("missing.wasm");
+        let manifest = dir.path().join("module.toml");
+        std::fs::write(
+            &manifest,
+            "[module]\nname = \"example\"\n\n[capabilities]\nrequired = [\"logging\"]\n\n\
+             [[subscription]]\nkind = \"block\"\nchain_id = 424242\n",
+        )
+        .expect("write manifest");
+
+        let mut config = EngineConfig::default();
+        config.engine.state_dir = dir.path().join("state");
+        config.chains = crate::test_utils::test_chain_configs();
+
+        let err = match RuntimeBuilder::new(&config)
+            .with_types::<CoreRuntime>()
+            .with_module_source(Some(wasm), Some(manifest))
+            .with_components(ComponentsBuilder::new(
+                ProviderPoolBuilder,
+                LocalStoreBuilder,
+                (),
+            ))
+            .with_add_ons(&[])
+            .launch()
+            .await
+        {
+            Ok(_) => panic!("an unconfigured chain subscription must abort launch"),
+            Err(err) => err,
+        };
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("module example subscribes to chain 424242")
+                && msg.contains("[chains.424242]"),
+            "the launch error is the boot-time chain refusal: {msg}",
+        );
     }
 
     /// Add-ons install before the supervisor boots, exactly once.

@@ -49,9 +49,12 @@ pub use store::{MockStateHandle, MockStateStore};
 pub use types::MockTypes;
 pub use wasm::{example_wasm_or_skip, module_wasm, module_wasm_or_skip, test_wasmtime_engine};
 
+use std::collections::HashMap;
 use std::time::Duration;
 
-use crate::engine_config::ModuleLimits;
+use alloy_chains::Chain;
+
+use crate::engine_config::{ChainConfig, ModuleLimits};
 use crate::host::component::Components;
 use crate::host::logs::LogPipeline;
 use rpc::FakeNode;
@@ -62,6 +65,22 @@ pub(crate) const HARNESS_POLL_INTERVAL: Duration = Duration::from_millis(20);
 /// A fresh in-memory [`LogPipeline`] at default retention limits.
 pub(crate) fn in_memory_logs() -> LogPipeline {
     LogPipeline::in_memory(ModuleLimits::default().logs())
+}
+
+/// `[chains]` entries for every chain id the test fixtures name; never dialled at boot.
+pub fn test_chain_configs() -> HashMap<Chain, ChainConfig> {
+    [1, 100, 11_155_111]
+        .into_iter()
+        .map(|id| {
+            (
+                Chain::from_id(id),
+                ChainConfig {
+                    rpc_url: "http://localhost:8545".to_owned(),
+                    request_timeout_secs: 30,
+                },
+            )
+        })
+        .collect()
 }
 
 /// A [`Components`] bundle over fresh mock backends, ready for

@@ -47,6 +47,17 @@ Every manifest must declare a `[capabilities]` block; an empty `required = []` g
 cargo run -p nexum-cli -- target/wasm32-wasip2/release/example.wasm modules/example/module.toml
 ```
 
+A module that subscribes to `block` or `chain-log` events needs its chain declared in `engine.toml`, or the engine refuses to boot.
+The smallest working stanza is:
+
+```toml
+[chains.11155111]
+rpc_url = "http://localhost:8545"
+```
+
+`http(s)://` URLs are not dialled at boot; `ws(s)://` URLs are.
+The example module declares no subscriptions, so `just run` needs no `engine.toml`; the modules under `modules/examples/` and `modules/fixtures/` do.
+
 ## Licence
 
 AGPL-3.0. See [LICENSE](LICENSE).

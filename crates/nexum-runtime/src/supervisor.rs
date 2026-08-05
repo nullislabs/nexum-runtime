@@ -468,6 +468,71 @@ fn registered_kinds<T: RuntimeTypes>(kinds: &ProviderKinds<T>) -> String {
     kinds.keys().copied().collect::<Vec<_>>().join(", ")
 }
 
+/// The operator's configured chain set from `[chains]` in `engine.toml`.
+#[derive(Debug, Clone)]
+pub struct ConfiguredChains {
+    /// Numeric EIP-155 ids; named `[chains.*]` keys normalise to the same id.
+    ids: BTreeSet<u64>,
+    /// True when the config is the built-in default (no engine.toml found).
+    defaulted: bool,
+}
+
+impl ConfiguredChains {
+    pub fn from_config(cfg: &EngineConfig) -> Self {
+        Self {
+            ids: cfg.chains.keys().copied().map(Chain::id).collect(),
+            defaulted: cfg.defaulted,
+        }
+    }
+
+    fn contains(&self, chain_id: u64) -> bool {
+        self.ids.contains(&chain_id)
+    }
+}
+
+/// Refuse any subscription naming a chain absent from `[chains]`, before any guest code runs.
+fn enforce_configured_chains(
+    module: &str,
+    loaded: &LoadedManifest,
+    chains: &ConfiguredChains,
+) -> Result<()> {
+    for sub in &loaded.manifest.subscriptions {
+        let (Subscription::Block { chain_id } | Subscription::ChainLog { chain_id, .. }) = sub
+        else {
+            continue;
+        };
+        if !chains.contains(*chain_id) {
+            return Err(unconfigured_chain(module, *chain_id, chains));
+        }
+    }
+    Ok(())
+}
+
+/// Boot error for an unconfigured chain subscription.
+fn unconfigured_chain(module: &str, chain_id: u64, chains: &ConfiguredChains) -> Error {
+    if chains.defaulted {
+        return anyhow!(
+            "module {module} subscribes to chain {chain_id} but no engine.toml was found \
+             (running on defaults, no chains configured); create engine.toml with a \
+             [chains.{chain_id}] entry"
+        );
+    }
+    let configured = if chains.ids.is_empty() {
+        "none".to_owned()
+    } else {
+        chains
+            .ids
+            .iter()
+            .map(u64::to_string)
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    anyhow!(
+        "module {module} subscribes to chain {chain_id} but engine.toml declares no \
+         [chains.{chain_id}] entry; configured chains: {configured}"
+    )
+}
+
 impl<T: RuntimeTypes> Supervisor<T> {
     /// Compile and instantiate every module and provider in `engine_cfg`.
     /// The `Engine` and `Linker` are passed in.
@@ -488,8 +553,10 @@ impl<T: RuntimeTypes> Supervisor<T> {
         // every module store built below already routes to the installed
         // instances. Providers link only their kind's scoped imports.
         let provider_registry = CapabilityRegistry::provider();
-        // Every name is claimed before any component compiles or runs guest code.
+        // Every name is claimed and every subscribed chain gated against
+        // `[chains]` before any component compiles or runs guest code.
         let mut ledger = NamespaceLedger::new();
+        let configured_chains = ConfiguredChains::from_config(engine_cfg);
         let mut adapter_manifests = Vec::with_capacity(engine_cfg.adapters.len());
         for entry in &engine_cfg.adapters {
             let loaded = load_required_manifest(
@@ -512,12 +579,10 @@ impl<T: RuntimeTypes> Supervisor<T> {
             let loaded =
                 load_required_manifest(&entry.path, entry.manifest.as_deref(), &registry, "module")
                     .with_context(|| format!("load module {}", entry.path.display()))?;
-            claim_namespace(
-                &mut ledger,
-                &manifest_namespace(&loaded, MODULE_FALLBACK_NAME),
-                "module",
-                &entry.path,
-            )?;
+            let namespace = manifest_namespace(&loaded, MODULE_FALLBACK_NAME);
+            claim_namespace(&mut ledger, &namespace, "module", &entry.path)?;
+            enforce_configured_chains(&namespace, &loaded, &configured_chains)
+                .with_context(|| format!("load module {}", entry.path.display()))?;
             module_manifests.push(loaded);
         }
         let mut providers = Vec::with_capacity(engine_cfg.adapters.len());
@@ -604,6 +669,7 @@ impl<T: RuntimeTypes> Supervisor<T> {
         manifest: Option<&Path>,
         components: &Components<T>,
         limits: &ModuleLimits,
+        configured_chains: &ConfiguredChains,
         extensions: &[Arc<dyn Extension<T>>],
         clocks: Option<WasiClockOverride>,
     ) -> Result<Self> {
@@ -618,6 +684,11 @@ impl<T: RuntimeTypes> Supervisor<T> {
         // are configured through `engine.toml`, so none boot here.
         let loaded_manifest =
             load_required_manifest(&entry.path, entry.manifest.as_deref(), &registry, "module")?;
+        enforce_configured_chains(
+            &manifest_namespace(&loaded_manifest, MODULE_FALLBACK_NAME),
+            &loaded_manifest,
+            configured_chains,
+        )?;
         let extension_kinds = extension_subscription_vocabulary(extensions);
         let loaded = Self::load_one(
             engine,

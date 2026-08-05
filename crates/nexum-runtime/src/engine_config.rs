@@ -150,6 +150,9 @@ pub struct EngineConfig {
     /// module, but the operator, not the author, scopes its transport here.
     #[serde(default)]
     pub adapters: Vec<AdapterEntry>,
+    /// True when [`load_or_default`] found no engine.toml.
+    #[serde(skip)]
+    pub defaulted: bool,
 }
 
 /// One `[[modules]]` table. `manifest` defaults to a sibling
@@ -651,7 +654,10 @@ pub fn load_or_default(path: Option<&Path>) -> Result<EngineConfig, EngineConfig
             "engine.toml not found - running with defaults (no chain RPC endpoints; \
              chain-backed host calls will return Unsupported)"
         );
-        return Ok(EngineConfig::default());
+        return Ok(EngineConfig {
+            defaulted: true,
+            ..EngineConfig::default()
+        });
     }
 
     let raw = std::fs::read_to_string(&path)?;
@@ -848,6 +854,29 @@ rpc_url = "wss://example.test/x"
         )
         .expect_err("bogus chain key must not parse");
         assert!(!err.to_string().is_empty());
+    }
+
+    #[test]
+    fn load_or_default_marks_a_missing_file_as_defaulted() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let missing = dir.path().join("engine.toml");
+        let cfg = load_or_default(Some(&missing)).expect("a missing file falls back to defaults");
+        assert!(
+            cfg.defaulted,
+            "the missing-file fallback carries provenance"
+        );
+        assert!(cfg.chains.is_empty());
+    }
+
+    #[test]
+    fn load_or_default_marks_a_loaded_file_as_configured() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("engine.toml");
+        std::fs::write(&path, "[chains.1]\nrpc_url = \"http://localhost:8545\"\n")
+            .expect("write engine.toml");
+        let cfg = load_or_default(Some(&path)).expect("the file parses");
+        assert!(!cfg.defaulted, "a loaded engine.toml is not defaulted");
+        assert_eq!(cfg.chains.len(), 1);
     }
 
     #[test]
