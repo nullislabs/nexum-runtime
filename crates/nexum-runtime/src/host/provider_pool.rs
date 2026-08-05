@@ -55,8 +55,8 @@ struct ChainEndpoint {
     supports_pubsub: bool,
 }
 
-/// Providers keyed by chain: the `Chain -> DynProvider` registry every chain
-/// access resolves through; a missing entry is [`ProviderError::UnknownChain`].
+/// Providers keyed by chain; a missing entry is
+/// [`ProviderError::UnknownChain`].
 #[derive(Debug, Clone)]
 pub struct ProviderPool {
     providers: Arc<HashMap<Chain, ChainEndpoint>>,
@@ -93,8 +93,7 @@ impl ProviderPool {
             let timeout = Duration::from_secs(chain_cfg.request_timeout_secs);
             let supports_pubsub = url.starts_with("ws://") || url.starts_with("wss://");
             let provider = if supports_pubsub {
-                // WS has no client-level timeout knob; only `request` bounds
-                // its calls there.
+                // WS has no client-level timeout; only `request` bounds its calls.
                 let client = ClientBuilder::default()
                     .layer(retry_layer())
                     .ws(WsConnect::new(url))
@@ -109,8 +108,6 @@ impl ProviderPool {
                     chain: *chain,
                     source,
                 })?;
-                // Client-level timeout: every call on this transport is
-                // bounded, not just `request`.
                 let http = reqwest::Client::builder()
                     .timeout(timeout)
                     .build()
@@ -149,8 +146,8 @@ impl ProviderPool {
         }
     }
 
-    /// Pool over pre-built providers (in-process mock transports), polling at
-    /// `poll_interval` with serial log fetches for deterministic RPC order.
+    /// Pool over pre-built providers polling at `poll_interval`; log fetches
+    /// are serial for deterministic RPC order.
     #[cfg(any(test, feature = "test-utils"))]
     pub fn for_tests(
         providers: impl IntoIterator<Item = (Chain, DynProvider)>,
@@ -176,8 +173,6 @@ impl ProviderPool {
         }
     }
 
-    /// Poll cadence for `chain`: the test override, else the chain's block
-    /// time hint, else the default.
     fn poll_interval(&self, chain: Chain) -> Duration {
         self.poll_interval_override.unwrap_or_else(|| {
             chain
@@ -207,9 +202,7 @@ impl ProviderPool {
             let stream = sub.into_stream().map(Ok::<_, ProviderError>);
             return Ok(Box::pin(stream));
         }
-        // HTTP fallback: poll the head, then follow blocks by number at
-        // roughly the chain's block time. Same-height replacements are not
-        // re-emitted; the newHeads push path never signalled reorgs either.
+        // Same-height replacements are not re-emitted.
         let head = ep
             .provider
             .get_block_number()
@@ -268,9 +261,7 @@ impl ProviderPool {
             .into_stream()
             .map(|item| {
                 item.map(|event| {
-                    // The poller already stamps `removed` on each log to
-                    // match the event, so a reorged-away log reaches the
-                    // module flagged without a second pass here.
+                    // The poller stamps `removed` on each log already.
                     let (removed, block_logs) = match event {
                         CanonicalEvent::Added(block_logs) => (false, block_logs),
                         CanonicalEvent::Removed(block_logs) => (true, block_logs),
@@ -357,9 +348,8 @@ impl ProviderPool {
 
 /// Boxed stream of `newHeads`-style block headers.
 pub type BlockStream = Pin<Box<dyn Stream<Item = Result<Header, ProviderError>> + Send>>;
-/// One canonical poller item: a single block's filter-matching logs. A block
-/// with no matching logs still yields a batch, so progress tracks height,
-/// not log count.
+/// One block's filter-matching logs; a block with no matching logs still
+/// yields a batch.
 #[derive(Debug, Clone)]
 pub struct CanonicalLogBatch {
     /// Block height.
@@ -659,8 +649,7 @@ mod tests {
             .request(Chain::from_id(1), ChainMethod::EthBlockNumber, "[]".into())
             .await
             .unwrap_err();
-        // The client-level reqwest timeout and the explicit tokio timeout
-        // race at the same deadline; either shape is a bounded failure.
+        // The reqwest and tokio timeouts race; either shape is a bounded failure.
         assert!(
             matches!(
                 err,
@@ -678,10 +667,7 @@ mod tests {
     async fn hung_transport_fails_native_probe_within_timeout() {
         use wiremock::{Mock, MockServer, ResponseTemplate, matchers::any};
 
-        // The head probe goes through the provider directly, with no tokio
-        // timeout around it; the client-level timeout must bound it. The
-        // node hangs for 60 s against a 1 s timeout, and the reqwest timeout
-        // error is not retryable, so the probe fails fast.
+        // No tokio timeout wraps the probe; the client-level timeout must bound it.
         let server = MockServer::start().await;
         Mock::given(any())
             .respond_with(

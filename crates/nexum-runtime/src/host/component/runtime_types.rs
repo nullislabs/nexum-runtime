@@ -5,9 +5,7 @@
 use crate::host::component::StateStore;
 
 /// Core backend seams a runtime assembly provides, plus the extension slot
-/// ([`Ext`](RuntimeTypes::Ext)). Sealed. The chain backend is not a seam: the
-/// runtime binds the concrete multi-chain
-/// [`ProviderPool`](crate::host::provider_pool::ProviderPool) directly.
+/// ([`Ext`](RuntimeTypes::Ext)). Sealed. The chain backend is not a seam.
 pub trait RuntimeTypes: crate::sealed::SealedRuntimeTypes + 'static {
     /// Process-wide store vending per-module handles.
     type Store: StateStore<Handle: Send + Sync + 'static> + Clone + Send + Sync + 'static;

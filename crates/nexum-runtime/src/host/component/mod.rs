@@ -1,7 +1,6 @@
 //! Backend component traits: the seam between the WIT host impls and the
 //! concrete capability backends, tied together by the [`RuntimeTypes`]
-//! lattice. The chain backend is concrete: every assembly carries the
-//! multi-chain [`ProviderPool`].
+//! lattice. The chain backend is the concrete [`ProviderPool`].
 
 mod builder;
 mod runtime_types;

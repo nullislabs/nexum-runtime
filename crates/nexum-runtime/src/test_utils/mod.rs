@@ -2,9 +2,8 @@
 //!
 //! The chain leg is the real [`ProviderPool`](crate::host::provider_pool::ProviderPool)
 //! over in-process mock transports ([`rpc::MockRpc`] scripted,
-//! [`rpc::FakeNode`] routed), so tests exercise alloy's actual pollers.
-//! [`MockStateStore`] implements the store seam with no disk; [`Prebuilt`]
-//! wraps a pre-built instance as a
+//! [`rpc::FakeNode`] routed). [`MockStateStore`] is the diskless store seam;
+//! [`Prebuilt`] wraps a pre-built instance as a
 //! [`ComponentBuilder`](crate::host::component::ComponentBuilder);
 //! [`MockTypes`] is the lattice tying them together. Compose through the
 //! public builder path:
@@ -53,7 +52,7 @@ use crate::host::component::Components;
 use crate::host::logs::LogPipeline;
 use rpc::FakeNode;
 
-/// Poll cadence for harness-driven pollers; fast enough for wall-clock tests.
+/// Poll cadence for harness-driven pollers.
 pub(crate) const HARNESS_POLL_INTERVAL: Duration = Duration::from_millis(20);
 
 /// A fresh in-memory [`LogPipeline`] at default retention limits.
@@ -125,8 +124,6 @@ mod tests {
         assert_eq!(node.recorded_requests().len(), 1);
     }
 
-    /// An unconfigured chain is rejected at the registry before any
-    /// transport dispatch.
     #[tokio::test]
     async fn pool_rejects_an_unconfigured_chain_before_the_node() {
         use crate::host::provider_pool::ProviderError;
@@ -144,8 +141,6 @@ mod tests {
         );
     }
 
-    /// A pushed header reaches an open block subscription through the real
-    /// polling path.
     #[tokio::test]
     async fn subscribe_blocks_yields_pushed_headers() {
         let node = FakeNode::new();
@@ -165,8 +160,6 @@ mod tests {
         assert_eq!(item.number, 7);
     }
 
-    /// A pushed log arrives as a one-log canonical batch with its height
-    /// and hash normalized.
     #[tokio::test]
     async fn watch_chain_logs_yields_pushed_logs() {
         let node = FakeNode::new();

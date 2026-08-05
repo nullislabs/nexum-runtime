@@ -34,8 +34,7 @@ pub trait ComponentBuilder {
     ) -> impl Future<Output = anyhow::Result<Self::Output>> + Send;
 }
 
-/// Builds the [`ProviderPool`] from `[chains]`; every assembly's chain slot
-/// yields this concrete pool.
+/// Builds the [`ProviderPool`] from `[chains]`.
 pub struct ProviderPoolBuilder;
 
 impl ComponentBuilder for ProviderPoolBuilder {
@@ -117,7 +116,7 @@ impl ComponentBuilder for () {
 /// Assembles the core, `Ext`, and log-pipeline builders into a [`Components`]
 /// bundle; the logs slot defaults to [`LogPipelineBuilder`].
 pub struct ComponentsBuilder<C, S, E, L = LogPipelineBuilder> {
-    /// Builds the chain backend (the concrete [`ProviderPool`]).
+    /// Builds the chain backend.
     pub chain: C,
     /// Builds the store backend ([`RuntimeTypes::Store`]).
     pub store: S,

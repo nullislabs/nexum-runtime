@@ -1,10 +1,6 @@
-//! In-process mock RPC transports behind the real [`ProviderPool`], so tests
-//! drive alloy's actual pollers instead of a parallel chain fake.
-//!
-//! [`MockRpc`] replays a FIFO response script through
-//! [`alloy_transport::mock::Asserter`] and records every dispatched request,
-//! for deterministic reconnect scenarios. [`FakeNode`] routes requests by
-//! method over settable head/block/log state, for the interactive harness.
+//! In-process mock RPC transports behind the real [`ProviderPool`]:
+//! [`MockRpc`] replays a FIFO response script and records every request;
+//! [`FakeNode`] routes requests by method over settable head/block/log state.
 
 use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
@@ -59,7 +55,6 @@ fn record_packet(sink: &Sink, packet: &RequestPacket) {
     }
 }
 
-/// Layers request capture over a transport.
 struct CaptureLayer(Sink);
 
 impl<S> tower::Layer<S> for CaptureLayer {
@@ -97,8 +92,8 @@ where
     }
 }
 
-/// FIFO-scripted transport: responses replay in push order regardless of
-/// method, so a test scripts exactly one poller attempt at a time.
+/// FIFO-scripted transport; responses replay in push order regardless of
+/// method.
 #[derive(Clone, Default)]
 pub struct MockRpc {
     asserter: Asserter,
@@ -118,8 +113,7 @@ impl MockRpc {
         ProviderBuilder::new().connect_client(client).erased()
     }
 
-    /// Append a response script atomically, so a concurrent poller never
-    /// observes a partial phase.
+    /// Append a response script atomically.
     pub fn push_script(&self, items: impl IntoIterator<Item = MockResponse>) {
         self.asserter.write_q().extend(items);
     }
@@ -132,14 +126,12 @@ impl MockRpc {
             .clone()
     }
 
-    /// Responses still queued; `0` marks a safe phase boundary for the next
-    /// script push.
+    /// Responses still queued; `0` marks a phase boundary.
     pub fn pending(&self) -> usize {
         self.asserter.read_q().len()
     }
 
-    /// `fromBlock` of every captured ranged `eth_getLogs`, in call order; the
-    /// first entry after each poller open is the open position.
+    /// `fromBlock` of every captured ranged `eth_getLogs`, in call order.
     pub fn log_range_froms(&self) -> Vec<u64> {
         self.captured()
             .iter()
@@ -170,14 +162,12 @@ pub fn rpc_err(msg: &str) -> MockResponse {
     ))
 }
 
-/// Deterministic block hash for `number`, shared by [`linked_block`] and the
-/// [`FakeNode`] synthesized chain.
+/// Deterministic block hash for `number`.
 pub fn test_hash(number: u64) -> B256 {
     B256::from(U256::from(number).wrapping_add(U256::from(1u64) << 128))
 }
 
-/// A hash-chained block at `number`, parent-linked for the canonical
-/// poller's reconciliation.
+/// A hash-chained block at `number`, parent-linked via [`test_hash`].
 pub fn linked_block(number: u64) -> Block {
     let mut block: Block = Block::default();
     block.header.inner.number = number;
@@ -199,9 +189,8 @@ pub fn mocked_pool<'a>(
     )
 }
 
-/// Method-routed fake RPC node: pushed blocks and logs are served to alloy's
-/// pollers on demand, and `eth_blockNumber` parks until a head exists so an
-/// idle poller waits instead of erroring.
+/// Method-routed fake RPC node serving pushed blocks and logs;
+/// `eth_blockNumber` parks until a head exists.
 #[derive(Clone, Default)]
 pub struct FakeNode(Arc<FakeNodeInner>);
 
@@ -232,8 +221,7 @@ impl FakeNode {
         self.0.state.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    /// A pool serving every chain in `chains` from this node, polling at
-    /// `poll_interval`.
+    /// A pool serving every chain in `chains` from this node.
     pub fn pool(&self, chains: &[Chain], poll_interval: Duration) -> ProviderPool {
         ProviderPool::for_tests(
             chains.iter().map(|&chain| (chain, self.provider())),
@@ -247,8 +235,8 @@ impl FakeNode {
         ProviderBuilder::new().connect_client(client).erased()
     }
 
-    /// Serve `header`'s block and advance the head to it. A zero hash gets
-    /// the deterministic [`test_hash`] chain so canonical linkage holds.
+    /// Serve `header`'s block and advance the head to it; a zero hash gets
+    /// the deterministic [`test_hash`] chain.
     pub fn push_block(&self, header: Header) {
         let number = header.inner.number;
         let block = Block {
@@ -303,7 +291,7 @@ impl FakeNode {
     }
 
     /// Canned raw JSON result for `method`, served ahead of the built-in
-    /// routing; the guest `chain.request` passthrough lands here.
+    /// routing.
     pub fn on_method(&self, method: ChainMethod, result: impl Into<String>) -> &Self {
         self.state().canned.insert(method.as_str(), result.into());
         self

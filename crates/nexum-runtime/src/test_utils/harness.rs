@@ -2,10 +2,9 @@
 //! drive it from a test.
 //!
 //! [`TestRuntime`] wraps the public builder path over [`MockTypes`] with a
-//! manually-driven [`ManualClock`]. The chain leg is the real
+//! manually-driven [`ManualClock`]; the chain leg is the real
 //! [`ProviderPool`](crate::host::provider_pool::ProviderPool) over a routed
-//! [`FakeNode`] transport, so pushes flow through alloy's actual pollers.
-//! Program the mocks and read effects through
+//! [`FakeNode`] transport. Program the mocks and read effects through
 //! [`chain`](TestRuntime::chain), [`clock`](TestRuntime::clock),
 //! [`store`](TestRuntime::store) and [`logs`](TestRuntime::logs). Events
 //! dispatch on the spawned event-loop task, so
@@ -122,8 +121,7 @@ impl<E: Clone + Send + Sync + 'static> TestRuntimeBuilder<E> {
         &self.chain
     }
 
-    /// Register an extra chain id the pool serves; chain 1 is always
-    /// registered.
+    /// Register an extra chain id; chain 1 is always registered.
     pub fn with_chain(mut self, chain_id: u64) -> Self {
         self.chains.push(Chain::from_id(chain_id));
         self
@@ -644,8 +642,7 @@ chain_id = 1
             .await
             .expect("launch example over the harness");
 
-        // Await each delivery before pushing the next height, so the poller
-        // opens at 7 rather than at whatever head the burst raced to.
+        // Await each delivery before pushing the next height.
         rt.push_block(header_numbered(7));
         rt.wait_for_log("example", "block 7 on chain")
             .await
@@ -802,9 +799,6 @@ direction = "above"
         rt.wait().await.expect("clean shutdown");
     }
 
-    /// A transport error mid-stream is not the end of dispatch: the failed
-    /// head poll surfaces as a stream error the loop skips, and the next
-    /// poll cycle resumes delivery.
     #[tokio::test]
     async fn harness_resumes_dispatch_after_a_transport_error() {
         let Some(wasm) = example_wasm_or_skip() else {

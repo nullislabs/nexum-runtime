@@ -47,9 +47,8 @@ pub enum Subscription {
     },
     /// Chain-log events matching `address` + topic-0; one subscription per
     /// entry, tagged with the owning module. A re-open replays its start
-    /// height once per attempt, and `removed` retraction is guaranteed only
-    /// for the last delivered log-bearing height: heights `max_lookback`
-    /// skips, or that arrive while the module is down, are lost.
+    /// height; `removed` retraction covers only the last delivered
+    /// log-bearing height.
     ChainLog {
         /// EVM chain id.
         chain_id: u64,
@@ -58,9 +57,8 @@ pub enum Subscription {
         /// Topic-0 filter as `0x`-prefixed 32-byte hex; absent matches
         /// every event from the address(es).
         event_signature: Option<String>,
-        /// Persist a durable per-subscription cursor; after a restart the
-        /// stream re-opens AT the cursor block and replays it, so the
-        /// module must tolerate redelivery.
+        /// Persist a durable cursor; a restart re-opens AT the cursor block
+        /// and replays it.
         resume: bool,
         /// Backfill cap in blocks for a `resume` subscription; `None`
         /// backfills the whole gap, a cap drops the oldest missed blocks.

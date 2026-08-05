@@ -197,8 +197,6 @@ async fn run_delivers_block_and_chain_log_events_without_starvation() {
 
     let engine = make_wasmtime_engine();
     let mut supervisor = boot_mock_supervisor(&engine).await;
-    // Separate nodes per chain so the block and chain-log pollers track
-    // independent heads.
     let block_node = FakeNode::new();
     let log_node = FakeNode::new();
     let pool = ProviderPool::for_tests(
@@ -2300,7 +2298,6 @@ fn chainlog_cursor_key_differs_by_each_input() {
     );
 }
 
-/// An addition only moves the cursor forward.
 #[test]
 fn cursor_record_only_moves_an_addition_forward() {
     let mut cursors = ChainLogCursors::default();
@@ -2318,8 +2315,6 @@ fn cursor_record_only_moves_an_addition_forward() {
     assert_eq!(cursors.record("mod", "key", 101, false, || None), Some(101));
 }
 
-/// A retraction rewinds the cursor to the retracted height and never
-/// pushes it up.
 #[test]
 fn cursor_record_rewinds_on_a_retraction() {
     let mut cursors = ChainLogCursors::default();
@@ -2336,7 +2331,6 @@ fn cursor_record_rewinds_on_a_retraction() {
     );
 }
 
-/// The persisted cursor seeds the mirror on first sight only.
 #[test]
 fn cursor_record_seeds_from_the_persisted_cursor_once() {
     let mut cursors = ChainLogCursors::default();
@@ -2352,8 +2346,6 @@ fn cursor_record_seeds_from_the_persisted_cursor_once() {
     );
 }
 
-/// A fresh subscription with no persisted cursor persists its very first
-/// block, including block 0.
 #[test]
 fn cursor_record_unseeded_writes_the_first_block() {
     let mut cursors = ChainLogCursors::default();
@@ -2361,7 +2353,6 @@ fn cursor_record_unseeded_writes_the_first_block() {
     assert_eq!(cursors.record("mod", "key", 0, false, || None), None);
 }
 
-/// Cursors are keyed per (module, cursor key); one pair never gates another.
 #[test]
 fn cursor_record_is_per_subscription() {
     let mut cursors = ChainLogCursors::default();
@@ -2381,8 +2372,6 @@ fn cursor_record_is_per_subscription() {
     );
 }
 
-/// Against a real store the cursor survives a replay, rewinds on a
-/// retraction, and re-seeds itself after a restart drops the mirror.
 #[test]
 fn commit_chain_log_cursor_persists_the_monotonic_max() {
     let (_dir, store) = temp_local_store();
@@ -2400,7 +2389,7 @@ fn commit_chain_log_cursor_persists_the_monotonic_max() {
         "a replayed height never rewinds the persisted cursor",
     );
 
-    // A fresh mirror models an engine restart: the seed comes from the store.
+    // A fresh mirror models an engine restart.
     let mut restarted = ChainLogCursors::default();
     commit(&mut restarted, 50, false);
     assert_eq!(

@@ -77,16 +77,14 @@ pub struct Supervisor<T: RuntimeTypes> {
     chain_log_cursors: ChainLogCursors,
 }
 
-/// In-memory chain-log cursor mirror, `module -> cursor key -> block`.
-/// An addition only moves the cursor forward (a replayed height is a
-/// no-op); a retraction pulls it back to the retracted height.
+/// In-memory cursor mirror, `module -> cursor key -> block`; additions only
+/// move forward, retractions pull back to the retracted height.
 #[derive(Default)]
 struct ChainLogCursors(BTreeMap<String, BTreeMap<String, u64>>);
 
 impl ChainLogCursors {
-    /// Cursor value to persist after dispatching `block`, or `None` when the
-    /// persisted cursor already holds it. `seed` reads the persisted cursor
-    /// and runs only the first time the pair is seen.
+    /// Cursor value to persist, or `None` when unchanged; `seed` runs only
+    /// the first time the pair is seen.
     fn record(
         &mut self,
         module: &str,
@@ -115,8 +113,7 @@ impl ChainLogCursors {
     }
 }
 
-/// Persisted chain-log resume cursor for `(module, key)`, or `None` when
-/// absent or unreadable (both start at head).
+/// Persisted cursor for `(module, key)`; `None` when absent or unreadable.
 fn read_chain_log_cursor<S: StateStore>(store: &S, module: &str, key: &str) -> Option<u64> {
     let handle = store.module(module).ok()?;
     let bytes = handle.get(key).ok()??;
@@ -124,8 +121,7 @@ fn read_chain_log_cursor<S: StateStore>(store: &S, module: &str, key: &str) -> O
     Some(u64::from_le_bytes(arr))
 }
 
-/// Persist the chain-log cursor for a dispatched block; writes only when
-/// [`ChainLogCursors::record`] reports movement.
+/// Persist the cursor; writes only when [`ChainLogCursors::record`] moves.
 fn commit_chain_log_cursor<S: StateStore>(
     store: &S,
     cursors: &mut ChainLogCursors,
