@@ -99,6 +99,8 @@ pub struct BootScenario<T: RuntimeTypes = CoreRuntime> {
     modules: Vec<Entry>,
     adapters: Vec<Entry>,
     clocks: Option<WasiClockOverride>,
+    require_digest: bool,
+    defaulted: bool,
 }
 
 impl BootScenario<CoreRuntime> {
@@ -135,6 +137,8 @@ impl<T: RuntimeTypes> BootScenario<T> {
             modules: Vec::new(),
             adapters: Vec::new(),
             clocks: None,
+            require_digest: false,
+            defaulted: false,
         }
     }
 
@@ -170,6 +174,19 @@ impl<T: RuntimeTypes> BootScenario<T> {
     /// Replace the `[chains]` set; defaults to [`test_chain_configs`].
     pub fn chains(mut self, chains: HashMap<Chain, ChainConfig>) -> Self {
         self.chains = chains;
+        self
+    }
+
+    /// Model a run without any engine.toml: no chains, defaulted config.
+    pub fn defaulted_chains(mut self) -> Self {
+        self.chains = HashMap::new();
+        self.defaulted = true;
+        self
+    }
+
+    /// Refuse any entry whose manifest lacks a component digest pin.
+    pub fn require_digest(mut self) -> Self {
+        self.require_digest = true;
         self
     }
 
@@ -237,6 +254,8 @@ impl<T: RuntimeTypes> BootScenario<T> {
             ..Default::default()
         };
         config.engine.state_dir = dir.clone();
+        config.engine.require_component_digest = self.require_digest;
+        config.defaulted = self.defaulted;
         for (i, entry) in self.modules.into_iter().enumerate() {
             let (path, manifest, ..) = resolve("module", i, entry);
             config.modules.push(ModuleEntry { path, manifest });
@@ -289,6 +308,18 @@ impl<T: RuntimeTypes> Booted<T> {
         &self.logs
     }
 
+    /// Dispatch a synthetic block on `chain_id`; returns the modules reached.
+    pub async fn dispatch_block_on(&mut self, chain_id: u64) -> usize {
+        self.supervisor
+            .dispatch_block(crate::bindings::nexum::host::types::Block {
+                chain_id,
+                number: 19_000_000,
+                hash: vec![0xab; 32],
+                timestamp: 1_700_000_000_000,
+            })
+            .await
+    }
+
     /// Every record `module` logged, across all of its runs.
     pub fn records(&self, module: &str) -> Vec<LogRecord> {
         self.logs
@@ -302,6 +333,12 @@ impl<T: RuntimeTypes> Booted<T> {
 /// A boot refusal; assertions read the rendered context chain.
 #[derive(Debug)]
 pub struct Refusal(anyhow::Error);
+
+impl From<anyhow::Error> for Refusal {
+    fn from(err: anyhow::Error) -> Self {
+        Self(err)
+    }
+}
 
 impl Refusal {
     /// Assert the refusal names `needle` somewhere in its context chain.
@@ -368,15 +405,6 @@ mod tests {
             .to_owned()
     }
 
-    fn block_on_chain(chain_id: u64) -> crate::bindings::nexum::host::types::Block {
-        crate::bindings::nexum::host::types::Block {
-            chain_id,
-            number: 19_000_000,
-            hash: vec![0xab; 32],
-            timestamp: 1_700_000_000_000,
-        }
-    }
-
     #[tokio::test]
     async fn a_scenario_module_boots_alive_and_takes_dispatch() {
         let Some(wasm) = example_wasm_or_skip() else {
@@ -391,7 +419,7 @@ mod tests {
 
         assert_eq!(booted.supervisor.module_count(), 1);
         assert_eq!(booted.supervisor.alive_count(), 1);
-        assert_eq!(booted.supervisor.dispatch_block(block_on_chain(1)).await, 1);
+        assert_eq!(booted.dispatch_block_on(1).await, 1);
         assert_eq!(booted.supervisor.alive_count(), 1);
     }
 
@@ -420,7 +448,7 @@ mod tests {
 
         assert_eq!(booted.supervisor.module_count(), 2);
         assert_eq!(booted.supervisor.alive_count(), 2);
-        assert_eq!(booted.supervisor.dispatch_block(block_on_chain(1)).await, 2);
+        assert_eq!(booted.dispatch_block_on(1).await, 2);
         assert!(
             booted
                 .records("clock-reader")
@@ -456,7 +484,7 @@ mod tests {
             .await
             .expect("scenario boot with a clock override");
 
-        assert_eq!(booted.supervisor.dispatch_block(block_on_chain(1)).await, 1);
+        assert_eq!(booted.dispatch_block_on(1).await, 1);
         let logged: Vec<String> = booted
             .records("clock-reader")
             .into_iter()
@@ -606,6 +634,17 @@ mod tests {
                 "manifest written: {manifest:?}",
             );
         }
+    }
+
+    #[test]
+    fn digest_and_defaulted_flags_reach_the_engine_config() {
+        let (config, _launch) = BootScenario::new()
+            .require_digest()
+            .defaulted_chains()
+            .split();
+        assert!(config.engine.require_component_digest);
+        assert!(config.defaulted);
+        assert!(config.chains.is_empty());
     }
 
     #[test]
