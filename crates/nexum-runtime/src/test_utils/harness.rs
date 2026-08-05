@@ -282,7 +282,6 @@ mod tests {
     use crate::manifest::NamespaceCaps;
     use crate::test_utils::{TestManifest, example_wasm_or_skip, module_wasm_or_skip};
 
-    /// A block-only manifest for the example module.
     fn example_block_manifest() -> String {
         TestManifest::new("example")
             .cap("logging")
@@ -290,8 +289,6 @@ mod tests {
             .to_toml()
     }
 
-    /// A block-driven price-alert manifest whose oracle read triggers above
-    /// the 2500.00 threshold.
     fn price_alert_manifest() -> String {
         TestManifest::new("price-alert")
             .cap("logging")

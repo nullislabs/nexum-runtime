@@ -113,8 +113,7 @@ fn finish_wait(joined: Option<TaskExit>) -> anyhow::Result<()> {
     }
 }
 
-/// The wasmtime config every launch builds its engine from; the test engine
-/// reads it too, so the host and the suite never diverge on a flag.
+/// The wasmtime config every engine, launch and test alike, is built from.
 pub(crate) fn wasmtime_config() -> wasmtime::Config {
     let mut config = wasmtime::Config::new();
     config.wasm_component_model(true);

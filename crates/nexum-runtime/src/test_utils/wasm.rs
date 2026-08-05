@@ -13,27 +13,22 @@ pub fn workspace_root() -> PathBuf {
         .to_path_buf()
 }
 
-/// The built artifact path for the guest package `module`; hyphens in the
-/// package name map to underscores in the artifact.
+/// Built artifact path for the guest package `module`.
 pub fn module_wasm(module: &str) -> PathBuf {
     let artifact = module.replace('-', "_");
     workspace_root().join(format!("target/wasm32-wasip2/release/{artifact}.wasm"))
 }
 
-/// The built wasm for the guest package `module`, or `None` with a skip
-/// note; a missing artifact under CI panics so a regressed wasm build
-/// cannot hollow the suite into a silent green.
+/// Built wasm for the guest package `module`; missing means skip locally,
+/// panic under CI.
 pub fn module_wasm_or_skip(module: &str) -> Option<PathBuf> {
     locate(module_wasm(module), std::env::var_os("CI").is_some())
 }
 
-/// The pre-built example module, or `None` with a skip note.
 pub fn example_wasm_or_skip() -> Option<PathBuf> {
     module_wasm_or_skip("example")
 }
 
-/// The locator policy with the CI decision injected, so tests can pin it
-/// without mutating the process environment.
 fn locate(wasm: PathBuf, ci: bool) -> Option<PathBuf> {
     if wasm.exists() {
         return Some(wasm);
@@ -50,8 +45,7 @@ fn locate(wasm: PathBuf, ci: bool) -> Option<PathBuf> {
     None
 }
 
-/// The wasmtime engine tests run guests on; built from the production launch
-/// config so the suite cannot drift from the host on an engine flag.
+/// Test engine built from the production launch config.
 pub fn test_wasmtime_engine() -> wasmtime::Engine {
     wasmtime::Engine::new(&crate::builder::wasmtime_config()).expect("wasmtime engine")
 }

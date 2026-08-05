@@ -1,10 +1,8 @@
-//! `module.toml` builder for tests; the emitted text feeds the real
-//! write-file-then-load path.
+//! `module.toml` builder for tests.
 
 use std::path::{Path, PathBuf};
 
-/// Builds positive-path manifest TOML. Negative-grammar fixtures stay raw
-/// TOML at their test sites, where the textual malformation is the test.
+/// Builder for positive-path manifest TOML.
 #[derive(Debug, Clone)]
 pub struct TestManifest {
     name: String,
@@ -17,8 +15,6 @@ pub struct TestManifest {
 }
 
 impl TestManifest {
-    /// A manifest for the module `name` with no capabilities, config, or
-    /// subscriptions.
     pub fn new(name: impl Into<String>) -> Self {
         Self {
             name: name.into(),
@@ -31,7 +27,7 @@ impl TestManifest {
         }
     }
 
-    /// Set `[module].kind`; unset defaults to the worker at load.
+    /// Set `[module].kind`; unset defaults to worker at load.
     pub fn kind(mut self, kind: impl Into<String>) -> Self {
         self.kind = Some(kind.into());
         self
@@ -43,36 +39,31 @@ impl TestManifest {
         self
     }
 
-    /// Append one entry to `[capabilities].required`; the section is always
-    /// emitted, so an entry-less build still passes the capsless gate.
+    /// Append to `[capabilities].required`; the section is emitted even when empty.
     pub fn cap(mut self, cap: impl Into<String>) -> Self {
         self.caps.push(cap.into());
         self
     }
 
-    /// Append one host to `[capabilities.http].allow`; the section is
-    /// emitted only once a host is added, so the default stays allowlist-free.
+    /// Append to `[capabilities.http].allow`; the section is emitted only when non-empty.
     pub fn http_allow(mut self, host: impl Into<String>) -> Self {
         self.http_allow.push(host.into());
         self
     }
 
-    /// Append a `block` subscription on `chain_id`.
     pub fn block_sub(mut self, chain_id: u64) -> Self {
         self.subscriptions.push(subscription("block", chain_id));
         self
     }
 
-    /// Append a `chain-log` subscription on `chain_id` with no address or
-    /// topic filter, so any pushed log matches.
+    /// Append an unfiltered `chain-log` subscription on `chain_id`.
     pub fn chain_log_sub(mut self, chain_id: u64) -> Self {
         self.subscriptions.push(subscription("chain-log", chain_id));
         self
     }
 
-    /// Append a `chain-log` subscription narrowed by address, topic-0, or
-    /// both; an omitted filter key is absent from the emitted table rather
-    /// than empty, which is what the loader reads as unfiltered.
+    /// Append a filtered `chain-log` subscription; an omitted filter key is absent
+    /// from the emitted table, never empty.
     pub fn chain_log_sub_filtered(
         mut self,
         chain_id: u64,
@@ -90,8 +81,7 @@ impl TestManifest {
         self
     }
 
-    /// Append an extension-owned subscription `kind` with attribute
-    /// `filters`; no filter admits every event of the kind.
+    /// Append an extension subscription; no filters admits every event of the kind.
     pub fn extension_sub(mut self, kind: &str, filters: &[(&str, &str)]) -> Self {
         let mut sub = toml::Table::new();
         sub.insert("kind".into(), kind.into());
@@ -102,14 +92,12 @@ impl TestManifest {
         self
     }
 
-    /// Append one `[config]` key; values are TOML strings, matching what a
-    /// module's `init` receives.
+    /// Append a `[config]` key; values are TOML strings.
     pub fn config(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
         self.config.push((key.into(), value.into()));
         self
     }
 
-    /// Render the manifest as TOML text.
     pub fn to_toml(&self) -> String {
         let mut module = toml::Table::new();
         module.insert("name".into(), self.name.clone().into());
@@ -158,15 +146,12 @@ impl TestManifest {
         self.write_as(&dir.join("module.toml"))
     }
 
-    /// Write the manifest to `path` and return it; a multi-module test needs
-    /// distinct names in one directory, which `module.toml` cannot give.
     pub fn write_as(&self, path: &Path) -> PathBuf {
         std::fs::write(path, self.to_toml()).expect("write the test manifest");
         path.to_path_buf()
     }
 }
 
-/// One `[[subscription]]` table of the core `kind` on `chain_id`.
 fn subscription(kind: &str, chain_id: u64) -> toml::Table {
     let mut sub = toml::Table::new();
     sub.insert("kind".into(), kind.into());
@@ -180,15 +165,13 @@ mod tests {
     use super::*;
     use crate::manifest::{CapabilityRegistry, ComponentKind, Subscription, load};
 
-    /// Load `manifest` through the real file-then-parse path with the core
-    /// capability registry.
+    /// Load through the real write-then-parse path with the core registry.
     fn load_core(manifest: &TestManifest) -> crate::manifest::LoadedManifest {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = manifest.write_to(dir.path());
         load(&path, &CapabilityRegistry::core()).expect("emitted manifest loads")
     }
 
-    /// Load `path` with the core capability registry.
     fn load_path(path: &Path) -> crate::manifest::LoadedManifest {
         load(path, &CapabilityRegistry::core()).expect("emitted manifest loads")
     }
