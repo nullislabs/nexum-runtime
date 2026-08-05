@@ -1,23 +1,28 @@
 //! Engine-side mock backends for an in-process runtime on fakes.
 //!
-//! [`MockChainProvider`] and [`MockStateStore`] implement the component seam
-//! traits with no network or disk; [`Prebuilt`] wraps a pre-built instance
-//! as a [`ComponentBuilder`](crate::host::component::ComponentBuilder);
+//! The chain leg is the real [`ProviderPool`](crate::host::provider_pool::ProviderPool)
+//! over in-process mock transports ([`rpc::MockRpc`] scripted,
+//! [`rpc::FakeNode`] routed). [`MockStateStore`] is the diskless store seam;
+//! [`Prebuilt`] wraps a pre-built instance as a
+//! [`ComponentBuilder`](crate::host::component::ComponentBuilder);
 //! [`MockTypes`] is the lattice tying them together. Compose through the
 //! public builder path:
 //!
 //! ```no_run
+//! # use std::time::Duration;
 //! # use nexum_runtime::builder::RuntimeBuilder;
 //! # use nexum_runtime::engine_config::EngineConfig;
 //! # use nexum_runtime::host::component::ComponentsBuilder;
-//! # use nexum_runtime::test_utils::{MockChainProvider, MockStateStore, MockTypes, Prebuilt};
+//! # use nexum_runtime::test_utils::{MockStateStore, MockTypes, Prebuilt};
+//! # use nexum_runtime::test_utils::rpc::FakeNode;
 //! # async fn demo(config: &EngineConfig) -> anyhow::Result<()> {
-//! let chain = MockChainProvider::new();
+//! let node = FakeNode::new();
+//! let pool = node.pool(&[alloy_chains::Chain::mainnet()], Duration::from_millis(20));
 //! let store = MockStateStore::new();
 //! let _handle = RuntimeBuilder::new(config)
 //!     .with_types::<MockTypes>()
 //!     .with_components(ComponentsBuilder::new(
-//!         Prebuilt(chain.clone()),
+//!         Prebuilt(pool),
 //!         Prebuilt(store.clone()),
 //!         (),
 //!     ))
@@ -29,21 +34,26 @@
 //! ```
 
 mod builders;
-mod chain;
 pub mod clock;
 pub mod harness;
+pub mod rpc;
 mod store;
 mod types;
 
 pub use builders::Prebuilt;
-pub use chain::{MockChainProvider, RecordedRequest};
 pub use harness::{TestRuntime, TestRuntimeBuilder};
 pub use store::{MockStateHandle, MockStateStore};
 pub use types::MockTypes;
 
+use std::time::Duration;
+
 use crate::engine_config::ModuleLimits;
 use crate::host::component::Components;
 use crate::host::logs::LogPipeline;
+use rpc::FakeNode;
+
+/// Poll cadence for harness-driven pollers.
+pub(crate) const HARNESS_POLL_INTERVAL: Duration = Duration::from_millis(20);
 
 /// A fresh in-memory [`LogPipeline`] at default retention limits.
 pub(crate) fn in_memory_logs() -> LogPipeline {
@@ -53,17 +63,14 @@ pub(crate) fn in_memory_logs() -> LogPipeline {
 /// A [`Components`] bundle over fresh mock backends, ready for
 /// [`Supervisor::boot`](crate::supervisor::Supervisor::boot).
 pub fn mock_components() -> Components<MockTypes> {
-    mock_components_from(MockChainProvider::new(), MockStateStore::new())
+    mock_components_from(&FakeNode::new(), MockStateStore::new())
 }
 
-/// A [`Components`] bundle over the given mock backends, with an empty
+/// A [`Components`] bundle serving chain id 1 from `node`, with an empty
 /// extension slot and an in-memory log pipeline.
-pub fn mock_components_from(
-    chain: MockChainProvider,
-    store: MockStateStore,
-) -> Components<MockTypes> {
+pub fn mock_components_from(node: &FakeNode, store: MockStateStore) -> Components<MockTypes> {
     Components {
-        chain,
+        chain: node.pool(&[alloy_chains::Chain::from_id(1)], HARNESS_POLL_INTERVAL),
         store,
         ext: (),
         logs: in_memory_logs(),
@@ -72,31 +79,30 @@ pub fn mock_components_from(
 
 #[cfg(test)]
 mod tests {
+    use super::rpc::FakeNode;
     use super::*;
     use alloy_chains::Chain;
     use futures::StreamExt as _;
 
     use crate::builder::RuntimeBuilder;
     use crate::engine_config::EngineConfig;
-    use crate::host::component::{
-        ChainMethod, ChainProvider, ComponentsBuilder, StateHandle, StateStore,
-    };
-    use crate::host::provider_pool::ProviderError;
+    use crate::host::component::{ChainMethod, ComponentsBuilder, StateHandle, StateStore};
 
     /// A custom component set launches through the public builder on fakes;
     /// it bails at boot only because the default config declares no modules,
     /// proving the mock backends composed and the build path ran.
     #[tokio::test]
     async fn m0_custom_component_set_launches_through_the_public_builder() {
-        let chain = MockChainProvider::new();
-        chain.on_method(ChainMethod::EthBlockNumber, "\"0x10\"");
+        let node = FakeNode::new();
+        node.on_method(ChainMethod::EthBlockNumber, "\"0x10\"");
+        let pool = node.pool(&[Chain::from_id(1)], HARNESS_POLL_INTERVAL);
         let store = MockStateStore::new();
 
         let config = EngineConfig::default();
         let err = match RuntimeBuilder::new(&config)
             .with_types::<MockTypes>()
             .with_components(ComponentsBuilder::new(
-                Prebuilt(chain.clone()),
+                Prebuilt(pool.clone()),
                 Prebuilt(store),
                 (),
             ))
@@ -110,149 +116,66 @@ mod tests {
         assert!(err.to_string().contains("no modules to run"), "{err}");
 
         // The fake actually serves and records, independent of the launch.
-        let body = ChainProvider::request(
-            &chain,
-            Chain::from_id(1),
-            ChainMethod::EthBlockNumber,
-            "[]".into(),
-        )
-        .await
-        .expect("programmed response");
+        let body = pool
+            .request(Chain::from_id(1), ChainMethod::EthBlockNumber, "[]".into())
+            .await
+            .expect("canned response");
         assert_eq!(body, "\"0x10\"");
-        assert_eq!(chain.recorded_requests().len(), 1);
+        assert_eq!(node.recorded_requests().len(), 1);
     }
 
-    /// The exact `(method, params)` programming wins over a method wildcard,
-    /// and an unprogrammed method surfaces a provider error.
     #[tokio::test]
-    async fn request_routing_prefers_exact_then_wildcard() {
-        let chain = MockChainProvider::new();
-        chain
-            .on_method(ChainMethod::EthCall, "\"wild\"")
-            .on_request(ChainMethod::EthCall, "[\"0x1\"]", "\"exact\"");
+    async fn pool_rejects_an_unconfigured_chain_before_the_node() {
+        use crate::host::provider_pool::PoolError;
 
-        let exact = ChainProvider::request(
-            &chain,
-            Chain::from_id(1),
-            ChainMethod::EthCall,
-            "[\"0x1\"]".into(),
-        )
-        .await
-        .expect("exact");
-        assert_eq!(exact, "\"exact\"");
-
-        let wild =
-            ChainProvider::request(&chain, Chain::from_id(1), ChainMethod::EthCall, "[]".into())
-                .await
-                .expect("wildcard");
-        assert_eq!(wild, "\"wild\"");
-
-        let err = ChainProvider::request(
-            &chain,
-            Chain::from_id(1),
-            ChainMethod::EthChainId,
-            "[]".into(),
-        )
-        .await
-        .expect_err("unprogrammed method has no response");
+        let node = FakeNode::new();
+        let pool = node.pool(&[Chain::from_id(1)], HARNESS_POLL_INTERVAL);
+        let err = pool
+            .request(Chain::from_id(2), ChainMethod::EthBlockNumber, "[]".into())
+            .await
+            .expect_err("chain 2 is not registered");
+        assert!(matches!(err, PoolError::UnknownChain(c) if c == Chain::from_id(2)));
         assert!(
-            matches!(err, ProviderError::UnknownChain(c) if c == Chain::from_id(1)),
-            "unprogrammed method surfaces UnknownChain, got: {err:?}",
+            node.recorded_requests().is_empty(),
+            "the lookup failure never reaches the transport",
         );
     }
 
-    /// A pushed header reaches the open block subscription.
     #[tokio::test]
     async fn subscribe_blocks_yields_pushed_headers() {
-        let chain = MockChainProvider::new();
-        let mut stream = ChainProvider::subscribe_blocks(&chain, Chain::from_id(1))
+        let node = FakeNode::new();
+        let pool = node.pool(&[Chain::from_id(1)], HARNESS_POLL_INTERVAL);
+        let mut header: alloy_rpc_types_eth::Header = alloy_rpc_types_eth::Header::default();
+        header.inner.number = 7;
+        node.push_block(header);
+        let mut stream = pool
+            .subscribe_blocks(Chain::from_id(1))
             .await
             .expect("block stream");
-        chain.push_block(alloy_rpc_types_eth::Header::default());
-        let item = stream.next().await.expect("one item");
-        assert!(item.is_ok(), "pushed header arrives as Ok");
-    }
-
-    /// A scripted error surfaces as `Err`, and closing terminates the stream.
-    #[tokio::test]
-    async fn block_stream_scripts_errors_and_end() {
-        let chain = MockChainProvider::new();
-        let mut stream = ChainProvider::subscribe_blocks(&chain, Chain::from_id(1))
-            .await
-            .expect("block stream");
-
-        chain.push_block_err(ProviderError::UnknownChain(Chain::from_id(1)));
-        let err = stream.next().await.expect("one item");
-        assert!(
-            matches!(err, Err(ProviderError::UnknownChain(_))),
-            "scripted error arrives as Err, got: {err:?}",
-        );
-
-        chain.push_block(alloy_rpc_types_eth::Header::default());
-        chain.close_block_stream();
-        assert!(stream.next().await.is_some(), "buffered item drains first");
-        assert!(
-            stream.next().await.is_none(),
-            "closed stream terminates after draining",
-        );
-    }
-
-    /// After a close, a fresh `subscribe_blocks` (the reconnect path) yields
-    /// the items pushed since, keeping the drop-then-reconnect contract.
-    #[tokio::test]
-    async fn closed_block_stream_rearms_for_the_reconnect_subscribe() {
-        let chain = MockChainProvider::new();
-        let mut stream = ChainProvider::subscribe_blocks(&chain, Chain::from_id(1))
-            .await
-            .expect("block stream");
-        chain.close_block_stream();
-        assert!(stream.next().await.is_none(), "closed stream terminates");
-
-        chain.push_block(alloy_rpc_types_eth::Header::default());
-        let mut reopened = ChainProvider::subscribe_blocks(&chain, Chain::from_id(1))
-            .await
-            .expect("reopened block stream");
-        let item = reopened.next().await.expect("post-close push arrives");
-        assert!(item.is_ok(), "pushed header arrives on the reopened stream");
-    }
-
-    /// The chain-log poller carries scripted errors and terminates on close;
-    /// each pushed log arrives as a one-log canonical batch.
-    #[tokio::test]
-    async fn chain_log_stream_scripts_errors_and_end() {
-        let chain = MockChainProvider::new();
-        let mut stream =
-            ChainProvider::watch_chain_logs(&chain, Chain::from_id(1), Default::default(), 0)
-                .expect("chain-log poller stream");
-
-        chain.push_chain_log_err(ProviderError::UnknownChain(Chain::from_id(1)));
-        let err = stream.next().await.expect("one item");
-        assert!(
-            matches!(err, Err(ProviderError::UnknownChain(_))),
-            "{err:?}"
-        );
-
-        chain.close_chain_log_stream();
-        assert!(
-            stream.next().await.is_none(),
-            "closed chain-log stream terminates",
-        );
-
-        // The slot re-arms: a post-close push arrives on the reopened stream.
-        chain.push_chain_log(alloy_rpc_types_eth::Log::default());
-        let mut reopened =
-            ChainProvider::watch_chain_logs(&chain, Chain::from_id(1), Default::default(), 0)
-                .expect("reopened chain-log poller stream");
-        let batch = reopened
+        let item = stream
             .next()
             .await
-            .expect("post-close push arrives")
+            .expect("one item")
+            .expect("pushed header arrives as Ok");
+        assert_eq!(item.number, 7);
+    }
+
+    #[tokio::test]
+    async fn watch_chain_logs_yields_pushed_logs() {
+        let node = FakeNode::new();
+        let pool = node.pool(&[Chain::from_id(1)], HARNESS_POLL_INTERVAL);
+        node.push_chain_log(alloy_rpc_types_eth::Log::default());
+        let mut stream = pool
+            .watch_chain_logs(Chain::from_id(1), Default::default(), 1)
+            .expect("chain-log poller stream");
+        let batch = stream
+            .next()
+            .await
+            .expect("one item")
             .expect("pushed log arrives as an Ok batch");
-        assert_eq!(
-            batch.len(),
-            1,
-            "single pushed log arrives as a one-log batch"
-        );
+        assert_eq!(batch.number, 1, "a default log lands one past the head");
+        assert_eq!(batch.logs.len(), 1);
+        assert!(!batch.removed);
     }
 
     /// The store round-trips values, isolates namespaces, lists by prefix,

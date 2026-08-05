@@ -2,13 +2,11 @@
 //! pluggable [`RuntimeTypes::Ext`] slot, so every generic signature takes one
 //! parameter.
 
-use crate::host::component::{ChainProvider, StateStore};
+use crate::host::component::StateStore;
 
 /// Core backend seams a runtime assembly provides, plus the extension slot
-/// ([`Ext`](RuntimeTypes::Ext)). Sealed.
+/// ([`Ext`](RuntimeTypes::Ext)). Sealed. The chain backend is not a seam.
 pub trait RuntimeTypes: crate::sealed::SealedRuntimeTypes + 'static {
-    /// JSON-RPC dispatch and subscriptions.
-    type Chain: ChainProvider + Clone + Send + Sync + 'static;
     /// Process-wide store vending per-module handles.
     type Store: StateStore<Handle: Send + Sync + 'static> + Clone + Send + Sync + 'static;
     /// Extension state slot; `()` for an assembly with no extensions.

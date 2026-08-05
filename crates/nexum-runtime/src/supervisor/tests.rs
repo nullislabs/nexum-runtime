@@ -190,26 +190,35 @@ async fn run_delivers_block_and_chain_log_events_without_starvation() {
     use alloy_chains::Chain;
     use alloy_rpc_types_eth::Filter;
 
+    use crate::host::provider_pool::ProviderPool;
     use crate::runtime::event_loop::{open_block_streams, open_chain_log_streams, run};
-    use crate::test_utils::MockChainProvider;
+    use crate::test_utils::rpc::FakeNode;
     use nexum_tasks::{TaskManager, TaskSet};
 
     let engine = make_wasmtime_engine();
     let mut supervisor = boot_mock_supervisor(&engine).await;
-    let pool = MockChainProvider::new();
+    let block_node = FakeNode::new();
+    let log_node = FakeNode::new();
+    let pool = ProviderPool::for_tests(
+        [
+            (Chain::mainnet(), block_node.provider()),
+            (Chain::from_id(100), log_node.provider()),
+        ],
+        Duration::from_millis(20),
+    );
     let manager = TaskManager::new();
     let executor = manager.executor();
     let mut tasks = TaskSet::new();
 
     // Pre-push one event of each kind before the loop starts so both mpsc
     // channels have an item for `run()` to drain on its first pass.
-    pool.push_block(alloy_rpc_types_eth::Header::default());
-    pool.push_chain_log(alloy_rpc_types_eth::Log::default());
+    block_node.push_block(alloy_rpc_types_eth::Header::default());
+    log_node.push_chain_log(alloy_rpc_types_eth::Log::default());
 
     let block_streams = open_block_streams(&pool, &[Chain::mainnet()], &executor, &mut tasks);
     let log_subs = vec![crate::supervisor::ChainLogSub {
         module: "test-module".to_string(),
-        chain: Chain::mainnet(),
+        chain: Chain::from_id(100),
         filter: Filter::default(),
         cursor_key: None,
         initial_cursor: None,
@@ -251,12 +260,15 @@ async fn run_drains_reconnect_tasks_cleanly_on_shutdown() {
     use alloy_chains::Chain;
 
     use crate::runtime::event_loop::{open_block_streams, run};
-    use crate::test_utils::MockChainProvider;
+    use crate::test_utils::rpc::FakeNode;
     use nexum_tasks::{TaskManager, TaskSet};
 
     let engine = make_wasmtime_engine();
     let mut supervisor = boot_mock_supervisor(&engine).await;
-    let pool = MockChainProvider::new();
+    let pool = FakeNode::new().pool(
+        &[Chain::mainnet(), Chain::from_id(100)],
+        Duration::from_millis(20),
+    );
     let manager = TaskManager::new();
     let executor = manager.executor();
     let mut tasks = TaskSet::new();
@@ -1063,14 +1075,14 @@ async fn dispatch_deadline_cuts_off_a_blocked_host_call_and_recovers() {
     // hung node), every request answers `eth_blockNumber` once it runs.
     // The park is consumed when the first request begins, so the request
     // dropped at the deadline leaves the next one prompt.
-    let chain = crate::test_utils::MockChainProvider::new();
-    chain.on_method(
+    let node = crate::test_utils::rpc::FakeNode::new();
+    node.on_method(
         crate::host::component::ChainMethod::EthBlockNumber,
         "\"0x1\"",
     );
-    chain.delay_next_request(Duration::from_secs(3600));
+    node.delay_next_request(Duration::from_secs(3600));
     let components =
-        crate::test_utils::mock_components_from(chain, crate::test_utils::MockStateStore::new());
+        crate::test_utils::mock_components_from(&node, crate::test_utils::MockStateStore::new());
 
     let manifest = fixture_module_toml("modules/fixtures/slow-host/module.toml");
     // 1s is the floor the resolver saturates up to; short enough to keep
@@ -2283,6 +2295,116 @@ fn chainlog_cursor_key_differs_by_each_input() {
         base,
         chainlog_cursor_key(Chain::from_id(1), None, Some("0xdef")),
         "address presence changes the key",
+    );
+}
+
+#[test]
+fn cursor_record_only_moves_an_addition_forward() {
+    let mut cursors = ChainLogCursors::default();
+    assert_eq!(cursors.record("mod", "key", 100, false, || None), Some(100));
+    assert_eq!(
+        cursors.record("mod", "key", 90, false, || None),
+        None,
+        "a replayed height is a no-op"
+    );
+    assert_eq!(
+        cursors.record("mod", "key", 100, false, || None),
+        None,
+        "an equal height is a no-op"
+    );
+    assert_eq!(cursors.record("mod", "key", 101, false, || None), Some(101));
+}
+
+#[test]
+fn cursor_record_rewinds_on_a_retraction() {
+    let mut cursors = ChainLogCursors::default();
+    assert_eq!(cursors.record("mod", "key", 100, false, || None), Some(100));
+    assert_eq!(
+        cursors.record("mod", "key", 90, true, || None),
+        Some(90),
+        "a retraction rewinds to the retracted height"
+    );
+    assert_eq!(
+        cursors.record("mod", "key", 150, true, || None),
+        None,
+        "a retraction above the cursor never advances it"
+    );
+}
+
+#[test]
+fn cursor_record_seeds_from_the_persisted_cursor_once() {
+    let mut cursors = ChainLogCursors::default();
+    assert_eq!(
+        cursors.record("mod", "key", 100, false, || Some(100)),
+        None,
+        "the boot replay of the persisted cursor block is a no-op",
+    );
+    assert_eq!(
+        cursors.record("mod", "key", 101, false, || Some(500)),
+        Some(101),
+        "the seed is consulted only on first sight, never re-applied",
+    );
+}
+
+#[test]
+fn cursor_record_unseeded_writes_the_first_block() {
+    let mut cursors = ChainLogCursors::default();
+    assert_eq!(cursors.record("mod", "key", 0, false, || None), Some(0));
+    assert_eq!(cursors.record("mod", "key", 0, false, || None), None);
+}
+
+#[test]
+fn cursor_record_is_per_subscription() {
+    let mut cursors = ChainLogCursors::default();
+    assert_eq!(
+        cursors.record("mod-a", "key", 100, false, || None),
+        Some(100)
+    );
+    assert_eq!(
+        cursors.record("mod-b", "key", 50, false, || None),
+        Some(50),
+        "other module unaffected"
+    );
+    assert_eq!(
+        cursors.record("mod-a", "key2", 50, false, || None),
+        Some(50),
+        "other key unaffected"
+    );
+}
+
+#[test]
+fn commit_chain_log_cursor_persists_the_monotonic_max() {
+    let (_dir, store) = temp_local_store();
+    let mut cursors = ChainLogCursors::default();
+    let commit = |cursors: &mut ChainLogCursors, block, removed| {
+        commit_chain_log_cursor(&store, cursors, "mod", "key", block, removed);
+    };
+
+    commit(&mut cursors, 100, false);
+    assert_eq!(read_chain_log_cursor(&store, "mod", "key"), Some(100));
+    commit(&mut cursors, 90, false);
+    assert_eq!(
+        read_chain_log_cursor(&store, "mod", "key"),
+        Some(100),
+        "a replayed height never rewinds the persisted cursor",
+    );
+
+    // A fresh mirror models an engine restart.
+    let mut restarted = ChainLogCursors::default();
+    commit(&mut restarted, 50, false);
+    assert_eq!(
+        read_chain_log_cursor(&store, "mod", "key"),
+        Some(100),
+        "the persisted cursor seeds the mirror, so a replay after a restart holds",
+    );
+    commit(&mut restarted, 101, false);
+    assert_eq!(read_chain_log_cursor(&store, "mod", "key"), Some(101));
+
+    commit(&mut restarted, 95, true);
+    assert_eq!(
+        read_chain_log_cursor(&store, "mod", "key"),
+        Some(95),
+        "a retraction rewinds the persisted cursor to the retracted height",
     );
 }
 

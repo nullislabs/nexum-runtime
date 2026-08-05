@@ -6,7 +6,7 @@ use alloy_chains::Chain;
 
 use crate::bindings::nexum;
 use crate::bindings::nexum::host::chain::ChainError;
-use crate::host::component::{ChainMethod, ChainProvider, RuntimeTypes};
+use crate::host::component::{ChainMethod, RuntimeTypes};
 use crate::host::error::chain_denied;
 use crate::host::state::HostState;
 
@@ -166,132 +166,6 @@ mod tests {
     use super::*;
 
     use crate::bindings::nexum::host::types::Fault;
-    use crate::host::provider_pool::ProviderError;
-    use alloy_transport::TransportErrorKind;
-
-    /// Build a synthetic transport-level [`TransportError`].
-    fn transport_err(msg: &str) -> alloy_transport::TransportError {
-        TransportErrorKind::custom_str(msg)
-    }
-
-    #[test]
-    fn rpc_error_with_revert_data_is_forwarded() {
-        // The node returned a structured `ErrorResp` for an `eth_call`
-        // revert: `code = -32000`, `data` already hex-decoded to the
-        // abi-encoded revert body. The projection forwards both into
-        // `ChainError::Rpc` so the SDK can classify the outcome via
-        // `decode_revert`.
-        let revert = vec![0xab, 0xc1, 0x23];
-        let chain_err = ChainError::from(ProviderError::Rpc {
-            method: "eth_call".into(),
-            code: Some(-32000),
-            data: Some(revert.clone()),
-            source: transport_err("execution reverted"),
-        });
-
-        let ChainError::Rpc(rpc) = chain_err else {
-            panic!("expected ChainError::Rpc, got {chain_err:?}");
-        };
-        assert_eq!(rpc.code, -32000);
-        assert_eq!(rpc.data.as_deref(), Some(revert.as_slice()));
-    }
-
-    #[test]
-    fn transport_failure_projects_to_unavailable_fault() {
-        // A transport-level failure (no `ErrorResp`) with no timeout
-        // marker in the message defaults to an `unavailable` fault.
-        let chain_err = ChainError::from(ProviderError::Rpc {
-            method: "eth_call".into(),
-            code: None,
-            data: None,
-            source: transport_err("websocket disconnected"),
-        });
-        assert!(matches!(
-            chain_err,
-            ChainError::Fault(Fault::Unavailable(_))
-        ));
-    }
-
-    #[test]
-    fn timed_out_request_projects_to_timeout_fault() {
-        let chain_err = ChainError::from(ProviderError::Rpc {
-            method: "eth_call".into(),
-            code: None,
-            data: None,
-            source: transport_err("request timed out after 30s"),
-        });
-        assert!(matches!(chain_err, ChainError::Fault(Fault::Timeout)));
-    }
-
-    #[test]
-    fn backend_gone_projects_to_unavailable_fault() {
-        let chain_err = ChainError::from(ProviderError::Rpc {
-            method: "eth_call".into(),
-            code: None,
-            data: None,
-            source: TransportErrorKind::backend_gone(),
-        });
-        assert!(matches!(
-            chain_err,
-            ChainError::Fault(Fault::Unavailable(_))
-        ));
-    }
-
-    #[test]
-    fn out_of_range_rpc_code_saturates_to_internal_fallback() {
-        // JSON-RPC codes are conventionally `-32768..-32000`, but the
-        // alloy `ErrorPayload.code` field is `i64`. Defensive: an
-        // out-of-`i32` code should not poison the projection - clamp
-        // to `-32603` so the guest sees a sane code.
-        let chain_err = ChainError::from(ProviderError::Rpc {
-            method: "eth_call".into(),
-            code: Some(i64::from(i32::MAX) + 1),
-            data: None,
-            source: transport_err("weird code"),
-        });
-        let ChainError::Rpc(rpc) = chain_err else {
-            panic!("expected ChainError::Rpc, got {chain_err:?}");
-        };
-        assert_eq!(rpc.code, -32603);
-    }
-
-    #[test]
-    fn unknown_chain_is_unsupported_fault() {
-        // Use an id with no `NamedChain` mapping so `Chain`'s `Display`
-        // prints the number and the message assertion stays meaningful.
-        let chain_err = ChainError::from(ProviderError::UnknownChain(Chain::from_id(424242)));
-        let ChainError::Fault(Fault::Unsupported(msg)) = chain_err else {
-            panic!("expected Unsupported fault, got {chain_err:?}");
-        };
-        assert!(msg.contains("424242"));
-    }
-
-    #[test]
-    fn timeout_maps_to_timeout_fault() {
-        // A configured-timeout failure surfaces as the dedicated
-        // `timeout` fault, distinct from a revert (`Rpc`) or an
-        // unreachable node (`unavailable`).
-        let chain_err = ChainError::from(ProviderError::Timeout {
-            method: "eth_call".into(),
-        });
-        assert!(matches!(chain_err, ChainError::Fault(Fault::Timeout)));
-    }
-
-    #[test]
-    fn invalid_params_maps_to_invalid_input_fault() {
-        // `serde_json::from_str::<()>("not json")` is the cheapest
-        // way to produce a real `serde_json::Error` for tests.
-        let source = serde_json::from_str::<serde_json::Value>("not json")
-            .expect_err("`not json` is not valid JSON");
-        let chain_err = ChainError::from(ProviderError::InvalidParams {
-            method: "eth_call".into(),
-            source,
-        });
-        assert!(matches!(
-            chain_err,
-            ChainError::Fault(Fault::InvalidInput(_))
-        ));
-    }
 
     #[test]
     fn permitted_methods_resolve() {

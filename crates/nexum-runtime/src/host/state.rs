@@ -11,6 +11,7 @@ use super::component::{Handle, RuntimeTypes};
 use super::extension::HostServices;
 use super::http::HttpGate;
 use super::logs::{LogRouter, RunId};
+use super::provider_pool::ProviderPool;
 
 /// Per-module host state, generic over the [`RuntimeTypes`] lattice.
 pub struct HostState<T: RuntimeTypes> {
@@ -34,7 +35,7 @@ pub struct HostState<T: RuntimeTypes> {
     /// [`ExtState`].
     pub ext: T::Ext,
     /// `chain` backend: per-chain provider pool.
-    pub chain: T::Chain,
+    pub chain: ProviderPool,
     /// Cap on a chain JSON-RPC response body; larger responses are rejected.
     pub chain_response_max_bytes: usize,
     /// `local-store` backend: per-module handle with keccak256 prefix.

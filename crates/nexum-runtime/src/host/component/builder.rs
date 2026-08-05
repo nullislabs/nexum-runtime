@@ -34,16 +34,14 @@ pub trait ComponentBuilder {
     ) -> impl Future<Output = anyhow::Result<Self::Output>> + Send;
 }
 
-/// Builds the chain [`ProviderPool`] from `[chains]`.
+/// Builds the [`ProviderPool`] from `[chains]`.
 pub struct ProviderPoolBuilder;
 
 impl ComponentBuilder for ProviderPoolBuilder {
     type Output = ProviderPool;
 
     async fn build(self, ctx: &BuilderContext<'_>) -> anyhow::Result<ProviderPool> {
-        ProviderPool::from_config(ctx.config)
-            .await
-            .map_err(Into::into)
+        ProviderPool::from_config(ctx.config).await
     }
 }
 
@@ -116,7 +114,7 @@ impl ComponentBuilder for () {
 /// Assembles the core, `Ext`, and log-pipeline builders into a [`Components`]
 /// bundle; the logs slot defaults to [`LogPipelineBuilder`].
 pub struct ComponentsBuilder<C, S, E, L = LogPipelineBuilder> {
-    /// Builds the chain backend ([`RuntimeTypes::Chain`]).
+    /// Builds the chain backend.
     pub chain: C,
     /// Builds the store backend ([`RuntimeTypes::Store`]).
     pub store: S,
@@ -154,7 +152,7 @@ impl<C, S, E, L> ComponentsBuilder<C, S, E, L> {
     pub async fn build<T>(self, ctx: &BuilderContext<'_>) -> Result<Components<T>, BuildError>
     where
         T: RuntimeTypes,
-        C: ComponentBuilder<Output = T::Chain>,
+        C: ComponentBuilder<Output = ProviderPool>,
         S: ComponentBuilder<Output = T::Store>,
         E: ComponentBuilder<Output = T::Ext>,
         L: ComponentBuilder<Output = LogPipeline>,
