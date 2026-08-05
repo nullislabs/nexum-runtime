@@ -415,7 +415,7 @@ pub(super) async fn sweep<T: RuntimeTypes, S: Sweepable<T>>(
             }
             metrics::counter!(
                 S::ROLE.errors_total(),
-                S::ROLE.label() => item.name().to_string(),
+                S::ROLE.label() => item.name().clone(),
                 "error_kind" => "trap",
             )
             .increment(1);
@@ -436,7 +436,7 @@ pub(super) async fn sweep<T: RuntimeTypes, S: Sweepable<T>>(
                 }
                 metrics::gauge!(
                     S::ROLE.poisoned_gauge(),
-                    S::ROLE.label() => item.name().to_string(),
+                    S::ROLE.label() => item.name().clone(),
                 )
                 .set(1.0);
             }
@@ -472,7 +472,7 @@ pub(super) async fn revive_one<T: RuntimeTypes, S: Sweepable<T>>(
     }
     metrics::counter!(
         S::ROLE.restarts_total(),
-        S::ROLE.label() => item.name().to_string(),
+        S::ROLE.label() => item.name().clone(),
     )
     .increment(1);
     match item.revive(shared).await {

@@ -278,7 +278,7 @@ impl<T: RuntimeTypes> Supervisor<T> {
                 );
                 metrics::counter!(
                     "nexum_runtime_module_errors_total",
-                    "module" => module.name.to_string(),
+                    "module" => module.name.clone(),
                     "error_kind" => kind,
                 )
                 .increment(1);
@@ -301,7 +301,7 @@ impl<T: RuntimeTypes> Supervisor<T> {
                 );
                 metrics::counter!(
                     "nexum_runtime_module_errors_total",
-                    "module" => module.name.to_string(),
+                    "module" => module.name.clone(),
                     "error_kind" => "trap",
                 )
                 .increment(1);
@@ -327,7 +327,7 @@ impl<T: RuntimeTypes> Supervisor<T> {
                     );
                     metrics::gauge!(
                         "nexum_runtime_module_poisoned",
-                        "module" => module.name.to_string(),
+                        "module" => module.name.clone(),
                     )
                     .set(1.0);
                 }

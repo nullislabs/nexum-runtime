@@ -329,7 +329,7 @@ async fn reconnecting_chain_log_task(
                         "nexum_runtime_stream_reconnects_total",
                         "kind" => "chain-log",
                         "chain_id" => chain_id.to_string(),
-                        "module" => module.to_string(),
+                        "module" => module.clone(),
                     )
                     .increment(1);
                 }

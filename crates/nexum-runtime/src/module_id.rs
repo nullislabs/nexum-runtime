@@ -28,6 +28,14 @@ impl Borrow<str> for ModuleId {
     }
 }
 
+/// Hands a metric label the backing `Arc` instead of a copy, so a
+/// per-dispatch label value is a refcount bump over the same bytes.
+impl From<ModuleId> for metrics::SharedString {
+    fn from(id: ModuleId) -> Self {
+        Self::from_shared(id.0)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -45,5 +53,13 @@ mod tests {
         map.insert(ModuleId::from(String::from("keeper")), 1);
         assert_eq!(map.get("keeper"), Some(&1));
         assert_eq!(map.get("other"), None);
+    }
+
+    #[test]
+    fn metric_label_value_is_the_bare_namespace() {
+        let id = ModuleId::from("twap-monitor");
+        let label = metrics::SharedString::from(id.clone());
+        assert_eq!(&*label, "twap-monitor");
+        assert_eq!(&*label, id.as_str());
     }
 }
