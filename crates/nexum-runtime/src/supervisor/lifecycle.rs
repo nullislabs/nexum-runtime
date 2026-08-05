@@ -493,13 +493,18 @@ pub(super) async fn revive_one<T: RuntimeTypes, S: Sweepable<T>>(
                     error = %e,
                     "restart failed - will retry after backoff",
                 ),
-                Role::Adapter => error!(
-                    adapter = %item.name(),
-                    failure_count = deferral.failure_count,
-                    backoff_ms = deferral.backoff.as_millis() as u64,
-                    error = %format!("{e:#}"),
-                    "adapter restart failed - will retry after backoff",
-                ),
+                Role::Adapter => {
+                    // A string field, not a `Display` one: the two record
+                    // through different visitor methods and print differently.
+                    let error = format!("{e:#}");
+                    error!(
+                        adapter = %item.name(),
+                        failure_count = deferral.failure_count,
+                        backoff_ms = deferral.backoff.as_millis() as u64,
+                        error,
+                        "adapter restart failed - will retry after backoff",
+                    );
+                }
             }
         }
     }
