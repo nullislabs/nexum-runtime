@@ -113,6 +113,14 @@ fn finish_wait(joined: Option<TaskExit>) -> anyhow::Result<()> {
     }
 }
 
+/// The wasmtime config every engine, launch and test alike, is built from.
+pub(crate) fn wasmtime_config() -> wasmtime::Config {
+    let mut config = wasmtime::Config::new();
+    config.wasm_component_model(true);
+    config.consume_fuel(true);
+    config
+}
+
 /// A fully-assembled runtime: concrete backends, extensions, add-ons, and the
 /// optional module-source override. Implements [`LaunchRuntime`].
 pub struct AssembledRuntime<'a, T: RuntimeTypes> {
@@ -164,10 +172,7 @@ impl<T: RuntimeTypes> LaunchRuntime for AssembledRuntime<'_, T> {
             .collect::<anyhow::Result<Vec<_>>>()?;
 
         // wasmtime engine + linker - one of each, shared across modules.
-        let mut config = wasmtime::Config::new();
-        config.wasm_component_model(true);
-        config.consume_fuel(true);
-        let engine = Engine::new(&config)?;
+        let engine = Engine::new(&wasmtime_config())?;
         let linker = supervisor::build_linker::<T>(&engine, &extensions)?;
 
         // Boot supervisor - a module-source override wins over
@@ -678,19 +683,9 @@ mod tests {
     use crate::host::state::HostState;
     use crate::manifest::NamespaceCaps;
     use crate::preset::{CoreRuntime, Runtime as RuntimePreset};
-    use crate::test_utils::Prebuilt;
+    use crate::test_utils::wasm::workspace_root;
+    use crate::test_utils::{Prebuilt, TestManifest, example_wasm_or_skip, module_wasm_or_skip};
     use wasmtime::component::Linker;
-
-    /// Workspace root: the topmost ancestor with a `Cargo.toml`.
-    fn workspace_root() -> std::path::PathBuf {
-        let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-        manifest
-            .ancestors()
-            .filter(|d| d.join("Cargo.toml").is_file())
-            .last()
-            .unwrap_or(manifest)
-            .to_path_buf()
-    }
 
     /// The preset shortcut reaches the supervisor boot, which bails on the
     /// default config's empty module set.
@@ -919,16 +914,10 @@ mod tests {
     /// module fixture is not built (`just build-module`).
     #[tokio::test]
     async fn e2e_preset_with_components_launches_through_overridden_logs() {
-        let repo_root = workspace_root();
-        let wasm = repo_root.join("target/wasm32-wasip2/release/example.wasm");
-        if !wasm.exists() {
-            eprintln!(
-                "SKIP: {} not found - run `just build-module` to enable E2E tests",
-                wasm.display()
-            );
+        let Some(wasm) = example_wasm_or_skip() else {
             return;
-        }
-        let manifest = repo_root.join("modules/example/module.toml");
+        };
+        let manifest = workspace_root().join("modules/example/module.toml");
 
         let dir = tempfile::tempdir().expect("tempdir");
         let mut config = EngineConfig::default();
@@ -955,40 +944,25 @@ mod tests {
     /// Every module failing `init` aborts launch instead of idling.
     #[tokio::test]
     async fn launch_bails_when_all_modules_fail_init() {
-        let wasm = workspace_root().join("target/wasm32-wasip2/release/price_alert.wasm");
-        if !wasm.exists() {
-            eprintln!(
-                "SKIP: {} not found - build with `cargo build -p price-alert --target wasm32-wasip2 --release`",
-                wasm.display()
-            );
+        let Some(wasm) = module_wasm_or_skip("price-alert") else {
             return;
-        }
+        };
 
         let dir = tempfile::tempdir().expect("tempdir");
         // Unparseable threshold: the module loads, then `init` fails.
-        let manifest = dir.path().join("module.toml");
-        std::fs::write(
-            &manifest,
-            r#"
-[module]
-name = "price-alert"
-
-[capabilities]
-required = ["logging", "chain"]
-
-[[subscription]]
-kind     = "block"
-chain_id = 11155111
-
-[config]
-oracle_address = "0x694AA1769357215DE4FAC081bf1f309aDC325306"
-decimals       = "8"
-threshold      = "not-a-number"
-direction      = "below"
-every_n_blocks = "1"
-"#,
-        )
-        .expect("write manifest");
+        let manifest = TestManifest::new("price-alert")
+            .cap("logging")
+            .cap("chain")
+            .block_sub(11_155_111)
+            .config(
+                "oracle_address",
+                "0x694AA1769357215DE4FAC081bf1f309aDC325306",
+            )
+            .config("decimals", "8")
+            .config("threshold", "not-a-number")
+            .config("direction", "below")
+            .config("every_n_blocks", "1")
+            .write_to(dir.path());
 
         let mut config = EngineConfig::default();
         config.engine.state_dir = dir.path().join("state");
@@ -1071,14 +1045,9 @@ every_n_blocks = "1"
     /// fixture is not built (`just build-module`).
     #[tokio::test]
     async fn e2e_builder_launch_exposes_logs_and_stops_on_shutdown() {
-        let wasm = workspace_root().join("target/wasm32-wasip2/release/example.wasm");
-        if !wasm.exists() {
-            eprintln!(
-                "SKIP: {} not found - run `just build-module` to enable E2E tests",
-                wasm.display()
-            );
+        let Some(wasm) = example_wasm_or_skip() else {
             return;
-        }
+        };
         let manifest = workspace_root().join("modules/example/module.toml");
 
         let dir = tempfile::tempdir().expect("tempdir");

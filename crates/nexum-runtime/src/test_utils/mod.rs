@@ -36,14 +36,18 @@
 mod builders;
 pub mod clock;
 pub mod harness;
+pub mod manifest;
 pub mod rpc;
 mod store;
 mod types;
+pub mod wasm;
 
 pub use builders::Prebuilt;
 pub use harness::{TestRuntime, TestRuntimeBuilder};
+pub use manifest::TestManifest;
 pub use store::{MockStateHandle, MockStateStore};
 pub use types::MockTypes;
+pub use wasm::{example_wasm_or_skip, module_wasm, module_wasm_or_skip, test_wasmtime_engine};
 
 use std::time::Duration;
 
