@@ -33,6 +33,12 @@ pub enum ParseError {
          grants nothing)"
     )]
     MissingCapabilities,
+    #[error("manifest: [module].component {value:?} is not a valid digest: {source}")]
+    InvalidComponentDigest {
+        value: String,
+        #[source]
+        source: crate::digest::DigestParseError,
+    },
 }
 
 /// A capability-bearing WIT import the manifest did not declare.

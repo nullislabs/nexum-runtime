@@ -168,6 +168,9 @@ rand = "0.10"
 # Hex codec for test fixtures and receipt rendering.
 hex = "0.4"
 
+# Content digests for loaded component bytes.
+sha2 = "0.10"
+
 # Dev/test helpers.
 tempfile = "3"
 wiremock = "0.6"

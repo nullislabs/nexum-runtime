@@ -19,14 +19,15 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use alloy_chains::Chain;
-use anyhow::{Context, Error, Result, anyhow};
+use anyhow::{Context, Error, Result, anyhow, bail};
 use tracing::{debug, error, info, warn};
 use tracing_core::Level;
 use wasmtime::component::{Component, HasSelf, Linker, ResourceTable};
-use wasmtime::{Engine, Store};
+use wasmtime::{CodeBuilder, Engine, Store};
 use wasmtime_wasi::{HostMonotonicClock, HostWallClock, WasiCtxBuilder};
 
 use crate::bindings::{Config, EventModule, nexum};
+use crate::digest::{ContentDigest, DigestMismatch};
 use crate::engine_config::{
     AdapterEntry, EngineConfig, ModuleEntry, ModuleLimits, OutboundHttpLimits,
 };
@@ -261,6 +262,8 @@ struct LoadedModule<T: RuntimeTypes> {
     local_store_bytes: u64,
     /// Cached for restart; `Component` is internally `Arc`-backed.
     component: Component,
+    /// sha256 of the loaded artifact bytes, computed even when unpinned.
+    component_digest: ContentDigest,
     /// Cached for restart: the manifest `[config]` passed to `init`.
     init_config: Config,
     /// Cached for restart: HTTP allowlist baked into the rebuilt `HostState`.
@@ -302,6 +305,8 @@ struct LoadedProvider {
     sections: manifest::ExtensionSections,
     /// Cached for restart, like a module's.
     component: Component,
+    /// sha256 of the loaded artifact bytes, computed even when unpinned.
+    component_digest: ContentDigest,
     /// Cached for restart: the manifest `[config]` handed to `init`.
     init_config: Config,
     /// Cached for restart: the operator's transport grants.
@@ -533,6 +538,47 @@ fn unconfigured_chain(module: &str, chain_id: u64, chains: &ConfiguredChains) ->
     )
 }
 
+/// The only production compile path; the verified bytes are the compiled bytes.
+fn read_verified_component(
+    engine: &Engine,
+    path: &Path,
+    declared: Option<&ContentDigest>,
+    require_digest: bool,
+) -> Result<(Component, ContentDigest)> {
+    let bytes =
+        std::fs::read(path).with_context(|| format!("read component {}", path.display()))?;
+    let actual = ContentDigest::of_bytes(&bytes);
+    match declared {
+        Some(declared) => {
+            if actual != *declared {
+                return Err(DigestMismatch {
+                    path: path.to_owned(),
+                    declared: *declared,
+                    actual,
+                }
+                .into());
+            }
+            debug!(component = %path.display(), digest = %actual, "component digest verified");
+        }
+        None if require_digest => bail!(
+            "no [module].component digest for {} and [engine] require_component_digest is set; \
+             pin the artifact's sha256 in its module.toml",
+            path.display(),
+        ),
+        None => warn!(
+            component = %path.display(),
+            digest = %actual,
+            "no [module].component digest - loading unverified",
+        ),
+    }
+    let component = CodeBuilder::new(engine)
+        .wasm_binary_or_text(&bytes, Some(path))
+        .and_then(|builder| builder.compile_component())
+        .map_err(Error::from)
+        .with_context(|| format!("compile {}", path.display()))?;
+    Ok((component, actual))
+}
+
 impl<T: RuntimeTypes> Supervisor<T> {
     /// Compile and instantiate every module and provider in `engine_cfg`.
     /// The `Engine` and `Linker` are passed in.
@@ -594,6 +640,7 @@ impl<T: RuntimeTypes> Supervisor<T> {
                 components,
                 &engine_cfg.limits,
                 &provider_registry,
+                engine_cfg.engine.require_component_digest,
                 clocks.as_ref(),
                 &kinds,
                 extensions,
@@ -610,6 +657,7 @@ impl<T: RuntimeTypes> Supervisor<T> {
                 name: p.name.clone(),
                 kind: p.kind,
                 sections: p.sections.clone(),
+                component_digest: p.component_digest,
             })
             .collect();
 
@@ -624,6 +672,7 @@ impl<T: RuntimeTypes> Supervisor<T> {
                 components,
                 &engine_cfg.limits,
                 &registry,
+                engine_cfg.engine.require_component_digest,
                 clocks.as_ref(),
                 services.clone(),
                 &extension_kinds,
@@ -670,6 +719,7 @@ impl<T: RuntimeTypes> Supervisor<T> {
         components: &Components<T>,
         limits: &ModuleLimits,
         configured_chains: &ConfiguredChains,
+        require_component_digest: bool,
         extensions: &[Arc<dyn Extension<T>>],
         clocks: Option<WasiClockOverride>,
     ) -> Result<Self> {
@@ -698,6 +748,7 @@ impl<T: RuntimeTypes> Supervisor<T> {
             components,
             limits,
             &registry,
+            require_component_digest,
             clocks.as_ref(),
             services.clone(),
             &extension_kinds,
@@ -815,6 +866,7 @@ impl<T: RuntimeTypes> Supervisor<T> {
         components: &Components<T>,
         limits_cfg: &ModuleLimits,
         registry: &CapabilityRegistry,
+        require_component_digest: bool,
         clocks: Option<&WasiClockOverride>,
         services: HostServices,
         extension_kinds: &BTreeSet<&'static str>,
@@ -833,11 +885,14 @@ impl<T: RuntimeTypes> Supervisor<T> {
                 .with_context(|| format!("install refused for {}", entry.path.display()))?;
         }
 
-        // Compile + instantiate.
+        // Verify + compile + instantiate.
         info!(component = %entry.path.display(), "compiling component");
-        let component = Component::from_file(engine, &entry.path)
-            .map_err(Error::from)
-            .with_context(|| format!("compile {}", entry.path.display()))?;
+        let (component, component_digest) = read_verified_component(
+            engine,
+            &entry.path,
+            loaded_manifest.component_digest.as_ref(),
+            require_component_digest,
+        )?;
 
         // Enforce capability declarations before spending time on instantiation.
         manifest::enforce_capabilities(
@@ -964,6 +1019,7 @@ impl<T: RuntimeTypes> Supervisor<T> {
             failure_count: 0,
             next_attempt: None,
             component,
+            component_digest,
             init_config: config,
             http_allowlist: loaded_manifest.http_allowlist.clone(),
             http_limits: limits_cfg.http(),
@@ -989,6 +1045,7 @@ impl<T: RuntimeTypes> Supervisor<T> {
         components: &Components<T>,
         limits_cfg: &ModuleLimits,
         registry: &CapabilityRegistry,
+        require_component_digest: bool,
         clocks: Option<&WasiClockOverride>,
         kinds: &ProviderKinds<T>,
         extensions: &[Arc<dyn Extension<T>>],
@@ -1032,9 +1089,12 @@ impl<T: RuntimeTypes> Supervisor<T> {
             kind = kind.kind(),
             "compiling provider component",
         );
-        let component = Component::from_file(engine, &entry.path)
-            .map_err(Error::from)
-            .with_context(|| format!("compile {}", entry.path.display()))?;
+        let (component, component_digest) = read_verified_component(
+            engine,
+            &entry.path,
+            loaded_manifest.component_digest.as_ref(),
+            require_component_digest,
+        )?;
 
         // Enforce the scoped-transport capability set: `registry` is the
         // provider registry, so a declaration of any core-only interface
@@ -1107,6 +1167,7 @@ impl<T: RuntimeTypes> Supervisor<T> {
             kind: kind.kind(),
             sections,
             component,
+            component_digest,
             init_config: config,
             http_allow: entry.http_allow.clone(),
             messaging_topics: entry.messaging_topics.clone(),
@@ -1658,7 +1719,13 @@ impl<T: RuntimeTypes> Supervisor<T> {
     async fn try_restart(&mut self, idx: usize) {
         let name = self.modules[idx].name.clone();
         let failure_count = self.modules[idx].failure_count;
-        info!(module = %name, failure_count, "restart attempt");
+        // Restarts reuse the cached component, so the boot-time digest holds.
+        info!(
+            module = %name,
+            failure_count,
+            digest = %self.modules[idx].component_digest,
+            "restart attempt",
+        );
         metrics::counter!(
             "shepherd_module_restarts_total",
             "module" => name.clone(),
@@ -1749,7 +1816,12 @@ impl<T: RuntimeTypes> Supervisor<T> {
     async fn try_restart_provider(&mut self, idx: usize) {
         let name = self.providers[idx].name.clone();
         let failure_count = self.providers[idx].failure_count;
-        info!(adapter = %name, failure_count, "adapter restart attempt");
+        info!(
+            adapter = %name,
+            failure_count,
+            digest = %self.providers[idx].component_digest,
+            "adapter restart attempt",
+        );
         metrics::counter!(
             "shepherd_adapter_restarts_total",
             "adapter" => name.clone(),

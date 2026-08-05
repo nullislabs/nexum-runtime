@@ -192,6 +192,7 @@ impl<T: RuntimeTypes> LaunchRuntime for AssembledRuntime<'_, T> {
                 &components,
                 &engine_cfg.limits,
                 &supervisor::ConfiguredChains::from_config(engine_cfg),
+                engine_cfg.engine.require_component_digest,
                 &extensions,
                 clocks,
             )

@@ -7,7 +7,6 @@
 [module]
 name = "clock-reader"
 version = "0.1.0"
-component = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
 
 [capabilities]
 required = ["logging"]

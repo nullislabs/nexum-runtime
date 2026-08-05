@@ -58,6 +58,14 @@ rpc_url = "http://localhost:8545"
 `http(s)://` URLs are not dialled at boot; `ws(s)://` URLs are.
 The example module declares no subscriptions, so `just run` needs no `engine.toml`; the modules under `modules/examples/` and `modules/fixtures/` do.
 
+## Component integrity
+
+A manifest may pin its artifact with `component = "sha256:<64 hex chars>"` in `[module]` (one `sha256sum` of the `.wasm`).
+A present pin is strictly verified against the loaded bytes before compilation; a mismatch or a malformed pin refuses the boot.
+An absent pin loads with a warning that logs the computed digest; set `require_component_digest = true` under `[engine]` in `engine.toml` to make an absent pin a boot error.
+The default sibling `module.toml` lives in the same trust domain as the artifact, so an author-side pin closes accidental drift only.
+Against a compromised artifact store, supply an operator-owned manifest from outside the artifact directory via the `manifest` key on `[[modules]]`/`[[adapters]]`, combined with `require_component_digest = true`.
+
 ## Licence
 
 AGPL-3.0. See [LICENSE](LICENSE).

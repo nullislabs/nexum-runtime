@@ -1,13 +1,15 @@
 //! One-expression supervisor boot through the real [`Supervisor::boot`] path.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use alloy_chains::Chain;
 use tempfile::TempDir;
 
-use super::in_memory_logs;
 use super::manifest::{ManifestSource, TestManifest};
-use crate::engine_config::{AdapterEntry, EngineConfig, ModuleEntry, ModuleLimits};
+use super::{in_memory_logs, test_chain_configs};
+use crate::engine_config::{AdapterEntry, ChainConfig, EngineConfig, ModuleEntry, ModuleLimits};
 use crate::host::component::{Components, RuntimeTypes};
 use crate::host::extension::Extension;
 use crate::host::local_store_redb::LocalStore;
@@ -92,6 +94,7 @@ pub struct BootScenario<T: RuntimeTypes = CoreRuntime> {
     components: Components<T>,
     extensions: Vec<Arc<dyn Extension<T>>>,
     limits: ModuleLimits,
+    chains: HashMap<Chain, ChainConfig>,
     wasm: Option<PathBuf>,
     modules: Vec<Entry>,
     adapters: Vec<Entry>,
@@ -127,6 +130,7 @@ impl<T: RuntimeTypes> BootScenario<T> {
             components,
             extensions: Vec::new(),
             limits: ModuleLimits::default(),
+            chains: test_chain_configs(),
             wasm: None,
             modules: Vec::new(),
             adapters: Vec::new(),
@@ -160,6 +164,12 @@ impl<T: RuntimeTypes> BootScenario<T> {
     /// Replace the engine `[limits]` every entry resolves against.
     pub fn limits(mut self, limits: ModuleLimits) -> Self {
         self.limits = limits;
+        self
+    }
+
+    /// Replace the `[chains]` set; defaults to [`test_chain_configs`].
+    pub fn chains(mut self, chains: HashMap<Chain, ChainConfig>) -> Self {
+        self.chains = chains;
         self
     }
 
@@ -223,6 +233,7 @@ impl<T: RuntimeTypes> BootScenario<T> {
 
         let mut config = EngineConfig {
             limits: self.limits,
+            chains: self.chains,
             ..Default::default()
         };
         config.engine.state_dir = dir.clone();
@@ -512,14 +523,14 @@ mod tests {
             .expect_refusal()
             .await
             .names("no wired extension claims it")
-            .lacks("compile");
+            .lacks("read component");
 
         BootScenario::new()
             .extensions([Arc::new(AcmeExtension) as Arc<dyn Extension<CoreRuntime>>])
             .module(acme_section_manifest())
             .expect_refusal()
             .await
-            .names("compile")
+            .names("read component")
             .lacks("no wired extension claims it");
     }
 
@@ -560,6 +571,17 @@ mod tests {
         let (config, _launch) = scenario.split();
 
         assert_eq!(config.limits.poison().max_failures, 3);
+        let ids = |chains: &HashMap<Chain, ChainConfig>| {
+            chains
+                .keys()
+                .map(|chain| chain.id())
+                .collect::<std::collections::BTreeSet<_>>()
+        };
+        assert_eq!(
+            ids(&config.chains),
+            ids(&test_chain_configs()),
+            "the [chains] set defaults to the shared test configs",
+        );
         assert_eq!(config.modules.len(), 2);
         assert_eq!(config.modules[0].path, Path::new("guest.wasm"));
         assert_eq!(

@@ -6,9 +6,6 @@
 [module]
 name = "http-probe"
 version = "0.1.0"
-# Placeholder content hash. 0.2 parses but does not verify this; 0.3
-# will compare against the sha256 of the loaded component bytes.
-component = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
 
 [capabilities]
 required = ["logging", "http"]

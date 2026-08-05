@@ -1,0 +1,2 @@
+# The pinned-digest fixture is hashed byte-for-byte; never rewrite its line endings.
+crates/nexum-runtime/testdata/pinned/component.wat -text

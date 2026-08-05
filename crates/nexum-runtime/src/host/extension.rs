@@ -185,6 +185,8 @@ pub struct ProviderManifest {
     pub kind: &'static str,
     /// The provider's extension-owned manifest sections.
     pub sections: ExtensionSections,
+    /// sha256 of the loaded provider artifact.
+    pub component_digest: crate::digest::ContentDigest,
 }
 
 /// Outcome of one provider install.

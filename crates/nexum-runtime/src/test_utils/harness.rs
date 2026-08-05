@@ -274,6 +274,18 @@ mod tests {
             .to_toml()
     }
 
+    /// A block manifest plus a `[module].component` pin of the wasm's bytes.
+    fn pinned_block_manifest(name: &str, chain_id: u64, wasm: &std::path::Path) -> String {
+        let digest = crate::digest::ContentDigest::of_bytes(
+            &std::fs::read(wasm).expect("read module wasm for pinning"),
+        );
+        TestManifest::new(name)
+            .cap("logging")
+            .component_digest(digest.to_string())
+            .block_sub(chain_id)
+            .to_toml()
+    }
+
     fn price_alert_manifest() -> String {
         TestManifest::new("price-alert")
             .cap("logging")
@@ -320,6 +332,28 @@ mod tests {
             crate::host::logs::LogSource::HostInterface,
             "the example module logs through the host interface",
         );
+
+        rt.shutdown();
+        rt.wait().await.expect("clean shutdown");
+    }
+
+    #[tokio::test]
+    async fn harness_launches_with_a_pinned_component_digest() {
+        let Some(wasm) = example_wasm_or_skip() else {
+            return;
+        };
+
+        let manifest = pinned_block_manifest("example", 1, &wasm);
+        let mut rt = TestRuntime::builder(wasm)
+            .manifest_inline(manifest)
+            .launch()
+            .await
+            .expect("launch the pinned example over the harness");
+
+        rt.push_block(header_numbered(19_000_001));
+        rt.wait_for_log("example", "block 19000001")
+            .await
+            .expect("the pinned module dispatches after strict verification");
 
         rt.shutdown();
         rt.wait().await.expect("clean shutdown");
