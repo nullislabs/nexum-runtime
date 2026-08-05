@@ -1,116 +1,210 @@
-//! One-expression supervisor boot: manifests in a tempdir, an engine
-//! config over them, and the real [`Supervisor::boot`] admission path.
+//! One-expression supervisor boot: manifests in a scenario directory, an
+//! engine config over them, and the real [`Supervisor::boot`] admission path.
 
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
-use alloy_chains::Chain;
 use tempfile::TempDir;
 
-use super::manifest::TestManifest;
-use super::{in_memory_logs, test_chain_configs};
-use crate::engine_config::{AdapterEntry, ChainConfig, EngineConfig, ModuleEntry};
+use super::in_memory_logs;
+use super::manifest::{ManifestSource, TestManifest};
+use crate::engine_config::{AdapterEntry, EngineConfig, ModuleEntry, ModuleLimits};
 use crate::host::component::{Components, RuntimeTypes};
+use crate::host::extension::Extension;
 use crate::host::local_store_redb::LocalStore;
+use crate::host::logs::{LogPipeline, LogRecord};
 use crate::host::provider_pool::ProviderPool;
+use crate::preset::CoreRuntime;
 use crate::supervisor::{Supervisor, WasiClockOverride, build_linker};
 use crate::test_utils::wasm::test_wasmtime_engine;
 
-/// Core-only lattice over the on-disk redb store, the scenario default;
-/// the chain leg stays an empty [`ProviderPool`], so no transport exists.
-pub struct RedbTypes;
+/// One `[[modules]]` or `[[adapters]]` entry: which component to load, where
+/// its manifest comes from, and the operator grants an adapter carries.
+pub struct Entry {
+    wasm: Option<PathBuf>,
+    manifest: ManifestSource,
+    http_allow: Vec<String>,
+    messaging_topics: Vec<String>,
+}
 
-impl crate::sealed::SealedRuntimeTypes for RedbTypes {}
+impl Entry {
+    /// An entry loading `manifest` on the scenario-wide component.
+    pub fn new(manifest: impl Into<ManifestSource>) -> Self {
+        Self {
+            wasm: None,
+            manifest: manifest.into(),
+            http_allow: Vec::new(),
+            messaging_topics: Vec::new(),
+        }
+    }
 
-impl RuntimeTypes for RedbTypes {
-    type Store = LocalStore;
-    type Ext = ();
+    /// Load this entry from `wasm` rather than the scenario-wide component,
+    /// which is what a multi-component boot needs.
+    pub fn wasm(mut self, wasm: impl Into<PathBuf>) -> Self {
+        self.wasm = Some(wasm.into());
+        self
+    }
+
+    /// Operator HTTP grant; only an `[[adapters]]` entry carries one.
+    pub fn http_allow(mut self, hosts: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        self.http_allow.extend(hosts.into_iter().map(Into::into));
+        self
+    }
+
+    /// Operator messaging grant; only an `[[adapters]]` entry carries one.
+    pub fn messaging_topics(mut self, topics: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        self.messaging_topics
+            .extend(topics.into_iter().map(Into::into));
+        self
+    }
+}
+
+impl From<ManifestSource> for Entry {
+    fn from(manifest: ManifestSource) -> Self {
+        Self::new(manifest)
+    }
+}
+
+impl From<TestManifest> for Entry {
+    fn from(manifest: TestManifest) -> Self {
+        Self::new(manifest)
+    }
+}
+
+impl From<String> for Entry {
+    fn from(toml: String) -> Self {
+        Self::new(toml)
+    }
+}
+
+impl From<PathBuf> for Entry {
+    fn from(manifest: PathBuf) -> Self {
+        Self::new(manifest)
+    }
+}
+
+impl From<&Path> for Entry {
+    fn from(manifest: &Path) -> Self {
+        Self::new(manifest)
+    }
 }
 
 /// Builder collapsing the tempdir + write-manifests + engine-config + boot
 /// ritual; every terminal goes through the real [`Supervisor::boot`] path.
-pub struct BootScenario {
+pub struct BootScenario<T: RuntimeTypes = CoreRuntime> {
+    dir: TempDir,
+    components: Components<T>,
+    extensions: Vec<Arc<dyn Extension<T>>>,
+    limits: ModuleLimits,
     wasm: Option<PathBuf>,
-    modules: Vec<TestManifest>,
-    adapters: Vec<TestManifest>,
-    chains: HashMap<Chain, ChainConfig>,
-    state_dir: Option<PathBuf>,
+    modules: Vec<Entry>,
+    adapters: Vec<Entry>,
     clocks: Option<WasiClockOverride>,
 }
 
-impl BootScenario {
-    /// An empty scenario; `[chains]` defaults to [`test_chain_configs`].
+impl BootScenario<CoreRuntime> {
+    /// A scenario on the core lattice production runs: a fresh redb store
+    /// under the scenario directory and an empty provider pool.
     pub fn new() -> Self {
+        let dir = tempfile::tempdir().expect("scenario tempdir");
+        let store = LocalStore::open(dir.path().join("scenario.redb")).expect("scenario store");
+        Self::rooted(
+            dir,
+            Components {
+                chain: ProviderPool::empty(),
+                store,
+                ext: (),
+                logs: in_memory_logs(),
+            },
+        )
+    }
+}
+
+impl<T: RuntimeTypes> BootScenario<T> {
+    /// A scenario over caller-supplied backends, for a lattice or a chain
+    /// leg the core preset does not give.
+    pub fn over(components: Components<T>) -> Self {
+        Self::rooted(tempfile::tempdir().expect("scenario tempdir"), components)
+    }
+
+    fn rooted(dir: TempDir, components: Components<T>) -> Self {
         Self {
+            dir,
+            components,
+            extensions: Vec::new(),
+            limits: ModuleLimits::default(),
             wasm: None,
             modules: Vec::new(),
             adapters: Vec::new(),
-            chains: test_chain_configs(),
-            state_dir: None,
             clocks: None,
         }
     }
 
-    /// The component every module and adapter entry loads; unset, entries
+    /// The directory inline manifests are written under.
+    pub fn dir(&self) -> &Path {
+        self.dir.path()
+    }
+
+    /// The component entries load unless they name their own; unset, entries
     /// point at a nonexistent path, which only pre-compile refusals survive.
     pub fn wasm(mut self, wasm: impl Into<PathBuf>) -> Self {
         self.wasm = Some(wasm.into());
         self
     }
 
-    /// Append a `[[modules]]` entry booting `manifest`.
-    pub fn module(mut self, manifest: TestManifest) -> Self {
-        self.modules.push(manifest);
+    /// Append a `[[modules]]` entry.
+    pub fn module(mut self, entry: impl Into<Entry>) -> Self {
+        self.modules.push(entry.into());
         self
     }
 
-    /// Append an `[[adapters]]` entry booting `manifest` with an empty
-    /// operator transport grant.
-    pub fn adapter(mut self, manifest: TestManifest) -> Self {
-        self.adapters.push(manifest);
+    /// Append an `[[adapters]]` entry.
+    pub fn adapter(mut self, entry: impl Into<Entry>) -> Self {
+        self.adapters.push(entry.into());
         self
     }
 
-    /// Replace the `[chains]` table the boot-time gates read.
-    pub fn chains(mut self, chains: HashMap<Chain, ChainConfig>) -> Self {
-        self.chains = chains;
+    /// Replace the engine `[limits]` every entry resolves against.
+    pub fn limits(mut self, limits: ModuleLimits) -> Self {
+        self.limits = limits;
         self
     }
 
-    /// Root the engine state (and the scenario's redb store) at `dir`
-    /// instead of the scenario tempdir.
-    pub fn state_dir(mut self, dir: impl Into<PathBuf>) -> Self {
-        self.state_dir = Some(dir.into());
+    /// Wire extensions; they reach the linker and the boot gates together,
+    /// which is the same-slice invariant the supervisor requires.
+    pub fn extensions(
+        mut self,
+        extensions: impl IntoIterator<Item = Arc<dyn Extension<T>>>,
+    ) -> Self {
+        self.extensions.extend(extensions);
         self
     }
 
-    /// Per-store WASI clock override threaded to boot, mirroring
-    /// [`Supervisor::boot_single`]; `None` keeps the ambient host clocks.
-    pub fn clock(mut self, clocks: Option<WasiClockOverride>) -> Self {
-        self.clocks = Some(clocks).flatten();
+    /// Per-store WASI clock override threaded to boot; unset keeps the
+    /// ambient host clocks.
+    pub fn clock(mut self, clocks: WasiClockOverride) -> Self {
+        self.clocks = Some(clocks);
         self
     }
 
-    /// Boot through [`Supervisor::boot`] over an empty provider pool and a
-    /// fresh redb store under the state dir.
-    pub async fn boot(self) -> anyhow::Result<Booted> {
-        let tmp = tempfile::tempdir()?;
-        let (config, clocks) = self.prepare(tmp.path())?;
-        std::fs::create_dir_all(&config.engine.state_dir)?;
-        let store = LocalStore::open(config.engine.state_dir.join("scenario.redb"))?;
-        let components = Components::<RedbTypes> {
-            chain: ProviderPool::empty(),
-            store,
-            ext: (),
-            logs: in_memory_logs(),
-        };
+    /// Boot through [`Supervisor::boot`] over the scenario's backends.
+    pub async fn boot(self) -> anyhow::Result<Booted<T>> {
+        let (config, launch) = self.split();
         let engine = test_wasmtime_engine();
-        let linker = build_linker::<RedbTypes>(&engine, &[])?;
-        let supervisor =
-            Supervisor::boot(&engine, &linker, &config, &components, &[], clocks).await?;
+        let linker = build_linker::<T>(&engine, &launch.extensions)?;
+        let supervisor = Supervisor::boot(
+            &engine,
+            &linker,
+            &config,
+            &launch.components,
+            &launch.extensions,
+            launch.clocks,
+        )
+        .await?;
         Ok(Booted {
             supervisor,
-            _tmp: tmp,
+            logs: launch.components.logs,
+            _dir: launch.dir,
         })
     }
 
@@ -122,45 +216,88 @@ impl BootScenario {
         }
     }
 
-    /// Write every manifest under `dir` and assemble the engine config;
-    /// the returned clocks ride separately, `Supervisor::boot` takes them
-    /// beside the config.
-    fn prepare(self, dir: &Path) -> anyhow::Result<(EngineConfig, Option<WasiClockOverride>)> {
-        let wasm = self.wasm.unwrap_or_else(|| dir.join("component.wasm"));
-        let mut config = EngineConfig::default();
-        config.engine.state_dir = self.state_dir.unwrap_or_else(|| dir.join("state"));
-        config.chains = self.chains;
-        for (i, manifest) in self.modules.iter().enumerate() {
-            let path = manifest.write_as(&dir.join(format!("module-{i}.toml")));
-            config.modules.push(ModuleEntry {
-                path: wasm.clone(),
-                manifest: Some(path),
-            });
+    /// Write every inline manifest and split the scenario into the config
+    /// `boot` reads and the backends it boots over.
+    fn split(self) -> (EngineConfig, Launch<T>) {
+        let dir = self.dir.path().to_path_buf();
+        let default_wasm = self.wasm.unwrap_or_else(|| dir.join("component.wasm"));
+        let resolve = |role: &str, i: usize, entry: Entry| {
+            let at = dir.join(format!("{role}-{i}.toml"));
+            (
+                entry.wasm.unwrap_or_else(|| default_wasm.clone()),
+                entry.manifest.resolve(&at),
+                entry.http_allow,
+                entry.messaging_topics,
+            )
+        };
+
+        let mut config = EngineConfig {
+            limits: self.limits,
+            ..Default::default()
+        };
+        config.engine.state_dir = dir.clone();
+        for (i, entry) in self.modules.into_iter().enumerate() {
+            let (path, manifest, ..) = resolve("module", i, entry);
+            config.modules.push(ModuleEntry { path, manifest });
         }
-        for (i, manifest) in self.adapters.iter().enumerate() {
-            let path = manifest.write_as(&dir.join(format!("adapter-{i}.toml")));
+        for (i, entry) in self.adapters.into_iter().enumerate() {
+            let (path, manifest, http_allow, messaging_topics) = resolve("adapter", i, entry);
             config.adapters.push(AdapterEntry {
-                path: wasm.clone(),
-                manifest: Some(path),
-                http_allow: Vec::new(),
-                messaging_topics: Vec::new(),
+                path,
+                manifest,
+                http_allow,
+                messaging_topics,
             });
         }
-        Ok((config, self.clocks))
+        (
+            config,
+            Launch {
+                dir: self.dir,
+                components: self.components,
+                extensions: self.extensions,
+                clocks: self.clocks,
+            },
+        )
     }
 }
 
-impl Default for BootScenario {
+/// The scenario's backends, held apart from the config so the config can be
+/// inspected without booting.
+struct Launch<T: RuntimeTypes> {
+    dir: TempDir,
+    components: Components<T>,
+    extensions: Vec<Arc<dyn Extension<T>>>,
+    clocks: Option<WasiClockOverride>,
+}
+
+impl Default for BootScenario<CoreRuntime> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-/// A booted supervisor plus the tempdir rooting its manifests and store;
-/// drop order keeps the store's backing file alive with the supervisor.
-pub struct Booted {
-    pub supervisor: Supervisor<RedbTypes>,
-    _tmp: TempDir,
+/// A booted supervisor plus the directory rooting its manifests and store;
+/// drop order keeps those files alive for the supervisor's lifetime.
+pub struct Booted<T: RuntimeTypes = CoreRuntime> {
+    pub supervisor: Supervisor<T>,
+    logs: LogPipeline,
+    _dir: TempDir,
+}
+
+impl<T: RuntimeTypes> Booted<T> {
+    /// The pipeline every booted module logs through.
+    pub fn logs(&self) -> &LogPipeline {
+        &self.logs
+    }
+
+    /// Every record `module` logged, across all of its runs.
+    pub fn records(&self, module: &str) -> Vec<LogRecord> {
+        self.logs
+            .list_runs(module)
+            .into_iter()
+            .flat_map(|meta| self.logs.read(&meta.run, 0).records)
+            .collect()
+    }
 }
 
 /// A boot refusal; assertions read the rendered context chain, so one
@@ -197,7 +334,51 @@ impl Refusal {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_utils::example_wasm_or_skip;
+    use crate::manifest::NamespaceCaps;
+    use crate::test_utils::{example_wasm_or_skip, module_wasm_or_skip};
+
+    /// Claims the `[acme]` manifest section and nothing else, so wiring it
+    /// is observable at the pre-compile section gate alone.
+    struct AcmeExtension;
+
+    impl Extension<CoreRuntime> for AcmeExtension {
+        fn namespace(&self) -> &'static str {
+            "acme"
+        }
+
+        fn capabilities(&self) -> NamespaceCaps {
+            NamespaceCaps {
+                prefix: "test:acme/",
+                ifaces: &[],
+            }
+        }
+
+        fn link(
+            &self,
+            _linker: &mut wasmtime::component::Linker<crate::host::state::HostState<CoreRuntime>>,
+        ) -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        fn manifest_sections(&self) -> &'static [&'static str] {
+            &["acme"]
+        }
+    }
+
+    /// A manifest declaring the `[acme]` section, which no builder emits.
+    fn acme_section_manifest() -> String {
+        "[module]\nname = \"acme-user\"\n\n[capabilities]\nrequired = []\n\n[acme]\nventure = 1\n"
+            .to_owned()
+    }
+
+    fn block_on_chain(chain_id: u64) -> crate::bindings::nexum::host::types::Block {
+        crate::bindings::nexum::host::types::Block {
+            chain_id,
+            number: 19_000_000,
+            hash: vec![0xab; 32],
+            timestamp: 1_700_000_000_000,
+        }
+    }
 
     #[tokio::test]
     async fn a_scenario_module_boots_alive_and_takes_dispatch() {
@@ -213,35 +394,89 @@ mod tests {
 
         assert_eq!(booted.supervisor.module_count(), 1);
         assert_eq!(booted.supervisor.alive_count(), 1);
-        let block = crate::bindings::nexum::host::types::Block {
-            chain_id: 1,
-            number: 19_000_000,
-            hash: vec![0xab; 32],
-            timestamp: 1_700_000_000_000,
-        };
-        assert_eq!(booted.supervisor.dispatch_block(block).await, 1);
+        assert_eq!(booted.supervisor.dispatch_block(block_on_chain(1)).await, 1);
         assert_eq!(booted.supervisor.alive_count(), 1);
     }
 
+    /// Two entries naming different components boot side by side, which a
+    /// single scenario-wide component cannot express.
     #[tokio::test]
-    async fn a_manual_clock_override_rides_the_scenario_boot() {
+    async fn per_entry_components_boot_alongside_the_scenario_default() {
+        let Some(example) = example_wasm_or_skip() else {
+            return;
+        };
+        let Some(reader) = module_wasm_or_skip("clock-reader") else {
+            return;
+        };
+        let mut booted = BootScenario::new()
+            .wasm(&example)
+            .module(TestManifest::new("example").cap("logging").block_sub(1))
+            .module(
+                Entry::new(
+                    TestManifest::new("clock-reader")
+                        .cap("logging")
+                        .block_sub(1),
+                )
+                .wasm(&reader),
+            )
+            .boot()
+            .await
+            .expect("scenario boot over two components");
+
+        assert_eq!(booted.supervisor.module_count(), 2);
+        assert_eq!(booted.supervisor.alive_count(), 2);
+        assert_eq!(booted.supervisor.dispatch_block(block_on_chain(1)).await, 2);
+        // Only the clock-reader component logs a wall-clock reading, so the
+        // line proves the second entry ran its own wasm.
+        assert!(
+            booted
+                .records("clock-reader")
+                .iter()
+                .any(|record| record.message.starts_with("clock wall")),
+            "the per-entry component dispatched, not the scenario default",
+        );
+    }
+
+    /// The clock override reaches the module store, not just the builder:
+    /// the guest reads back the pinned wall time it was booted under.
+    #[tokio::test]
+    async fn a_clock_override_reaches_the_booted_guest() {
         use std::time::{Duration, UNIX_EPOCH};
 
         use crate::test_utils::clock::ManualClock;
 
-        let Some(wasm) = example_wasm_or_skip() else {
+        let Some(wasm) = module_wasm_or_skip("clock-reader") else {
             return;
         };
+        // Far from the ambient clock, so an exact match can only come from
+        // the override.
+        const PINNED_SECS: u64 = 1_700_000_000;
+
         let clock = ManualClock::new();
-        clock.set(UNIX_EPOCH + Duration::from_secs(1_700_000_000));
-        let booted = BootScenario::new()
+        clock.set(UNIX_EPOCH + Duration::from_secs(PINNED_SECS));
+        let mut booted = BootScenario::new()
             .wasm(&wasm)
-            .module(TestManifest::new("example").cap("logging"))
-            .clock(Some(clock.as_override()))
+            .module(
+                TestManifest::new("clock-reader")
+                    .cap("logging")
+                    .block_sub(1),
+            )
+            .clock(clock.as_override())
             .boot()
             .await
             .expect("scenario boot with a clock override");
-        assert_eq!(booted.supervisor.alive_count(), 1);
+
+        assert_eq!(booted.supervisor.dispatch_block(block_on_chain(1)).await, 1);
+        let logged: Vec<String> = booted
+            .records("clock-reader")
+            .into_iter()
+            .map(|record| record.message)
+            .collect();
+        let pinned = format!("clock wall {PINNED_SECS}");
+        assert!(
+            logged.contains(&pinned),
+            "the guest read the overridden wall clock: {logged:?}",
+        );
     }
 
     #[tokio::test]
@@ -265,6 +500,55 @@ mod tests {
             .lacks("compile");
     }
 
+    /// No manifest anywhere refuses on the discovery path, which an entry
+    /// that always writes one cannot reach.
+    #[tokio::test]
+    async fn a_component_without_any_manifest_refuses_on_discovery() {
+        let scenario = BootScenario::new();
+        let orphan = scenario.dir().join("orphan.wasm");
+        scenario
+            .module(Entry::new(ManifestSource::Beside).wasm(orphan))
+            .expect_refusal()
+            .await
+            .names("no module.toml")
+            .names("orphan.wasm")
+            .lacks("compile");
+    }
+
+    /// An explicit path that does not exist refuses naming the path.
+    #[tokio::test]
+    async fn a_nonexistent_explicit_manifest_path_refuses() {
+        let scenario = BootScenario::new();
+        let missing = scenario.dir().join("modle.toml");
+        scenario
+            .module(missing)
+            .expect_refusal()
+            .await
+            .names("modle.toml")
+            .names("not found")
+            .lacks("compile");
+    }
+
+    /// A wired extension claims the manifest section an unwired one refuses,
+    /// so boot gets past the section gate to the absent component.
+    #[tokio::test]
+    async fn a_wired_extension_claims_the_section_an_unwired_one_refuses() {
+        BootScenario::new()
+            .module(acme_section_manifest())
+            .expect_refusal()
+            .await
+            .names("no wired extension claims it")
+            .lacks("compile");
+
+        BootScenario::new()
+            .extensions([Arc::new(AcmeExtension) as Arc<dyn Extension<CoreRuntime>>])
+            .module(acme_section_manifest())
+            .expect_refusal()
+            .await
+            .names("compile")
+            .lacks("no wired extension claims it");
+    }
+
     #[tokio::test]
     #[should_panic(expected = "refusal was expected")]
     async fn expect_refusal_panics_when_boot_succeeds() {
@@ -272,60 +556,59 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn state_dir_hosts_the_scenario_store() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let state = dir.path().join("state-here");
-        let booted = BootScenario::new()
-            .state_dir(&state)
-            .boot()
-            .await
-            .expect("an empty scenario boots");
+    async fn the_scenario_store_lives_under_the_scenario_directory() {
+        let scenario = BootScenario::new();
+        let redb = scenario.dir().join("scenario.redb");
+        let booted = scenario.boot().await.expect("an empty scenario boots");
         assert_eq!(booted.supervisor.module_count(), 0);
-        assert!(state.join("scenario.redb").is_file());
+        assert!(redb.is_file());
     }
 
     #[test]
-    fn prepare_pairs_every_manifest_with_the_scenario_wasm() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let (config, clocks) = BootScenario::new()
+    fn entries_carry_their_component_manifest_and_operator_grants() {
+        let scenario = BootScenario::new()
             .wasm("guest.wasm")
+            .limits(ModuleLimits {
+                poison: crate::engine_config::PoisonLimitsSection {
+                    max_failures: Some(3),
+                    window_secs: Some(60),
+                },
+                ..Default::default()
+            })
             .module(TestManifest::new("a").cap("logging"))
-            .module(TestManifest::new("b").cap("logging"))
-            .adapter(TestManifest::new("feed").kind("acme-feed"))
-            .chains(HashMap::new())
-            .prepare(dir.path())
-            .expect("prepare");
+            .module(Entry::new(TestManifest::new("b").cap("logging")).wasm("other.wasm"))
+            .adapter(
+                Entry::new(TestManifest::new("feed").kind("acme-feed"))
+                    .http_allow(["api.acme.example"])
+                    .messaging_topics(["/nexum/1/acme-orders/proto"]),
+            );
+        // The launch half holds the scenario directory the manifests were
+        // written into.
+        let (config, _launch) = scenario.split();
 
-        assert!(clocks.is_none());
-        assert!(
-            config.chains.is_empty(),
-            "the chains knob replaces the default"
-        );
-        assert_eq!(config.engine.state_dir, dir.path().join("state"));
+        assert_eq!(config.limits.poison().max_failures, 3);
         assert_eq!(config.modules.len(), 2);
+        assert_eq!(config.modules[0].path, Path::new("guest.wasm"));
+        assert_eq!(
+            config.modules[1].path,
+            Path::new("other.wasm"),
+            "a per-entry component overrides the scenario default",
+        );
         assert_eq!(config.adapters.len(), 1);
-        for (entry_path, manifest) in config
+        assert_eq!(config.adapters[0].http_allow, ["api.acme.example"]);
+        assert_eq!(
+            config.adapters[0].messaging_topics,
+            ["/nexum/1/acme-orders/proto"],
+        );
+        for manifest in config
             .modules
             .iter()
-            .map(|m| (&m.path, &m.manifest))
-            .chain(config.adapters.iter().map(|a| (&a.path, &a.manifest)))
+            .map(|m| &m.manifest)
+            .chain(config.adapters.iter().map(|a| &a.manifest))
         {
-            assert_eq!(entry_path, Path::new("guest.wasm"));
             assert!(
                 manifest.as_deref().is_some_and(Path::is_file),
                 "manifest written: {manifest:?}",
-            );
-        }
-    }
-
-    #[test]
-    fn default_chains_cover_the_fixture_chain_ids() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let (config, _) = BootScenario::new().prepare(dir.path()).expect("prepare");
-        for id in [1, 100, 11_155_111] {
-            assert!(
-                config.chains.contains_key(&Chain::from_id(id)),
-                "chain {id} configured",
             );
         }
     }
