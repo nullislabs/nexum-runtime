@@ -471,8 +471,7 @@ fn registered_kinds<T: RuntimeTypes>(kinds: &ProviderKinds<T>) -> String {
 /// The operator's configured chain set from `[chains]` in `engine.toml`.
 #[derive(Debug, Clone)]
 pub struct ConfiguredChains {
-    /// Numeric EIP-155 ids; named and numeric `[chains.*]` keys normalise
-    /// to the same id through `Chain`.
+    /// Numeric EIP-155 ids; named `[chains.*]` keys normalise to the same id.
     ids: BTreeSet<u64>,
     /// True when the config is the built-in default (no engine.toml found).
     defaulted: bool,
@@ -491,8 +490,7 @@ impl ConfiguredChains {
     }
 }
 
-/// Refuse any subscription naming a chain absent from `[chains]`; runs in
-/// the manifest pre-pass, before any guest code.
+/// Refuse any subscription naming a chain absent from `[chains]`, before any guest code runs.
 fn enforce_configured_chains(
     module: &str,
     loaded: &LoadedManifest,
@@ -510,8 +508,7 @@ fn enforce_configured_chains(
     Ok(())
 }
 
-/// Boot error for an unconfigured chain subscription; worded against the
-/// missing engine.toml when the config is the built-in default.
+/// Boot error for an unconfigured chain subscription.
 fn unconfigured_chain(module: &str, chain_id: u64, chains: &ConfiguredChains) -> Error {
     if chains.defaulted {
         return anyhow!(
@@ -556,7 +553,8 @@ impl<T: RuntimeTypes> Supervisor<T> {
         // every module store built below already routes to the installed
         // instances. Providers link only their kind's scoped imports.
         let provider_registry = CapabilityRegistry::provider();
-        // Every name is claimed and every subscribed chain gated against `[chains]` before any component compiles or runs guest code.
+        // Every name is claimed and every subscribed chain gated against
+        // `[chains]` before any component compiles or runs guest code.
         let mut ledger = NamespaceLedger::new();
         let configured_chains = ConfiguredChains::from_config(engine_cfg);
         let mut adapter_manifests = Vec::with_capacity(engine_cfg.adapters.len());
@@ -660,8 +658,7 @@ impl<T: RuntimeTypes> Supervisor<T> {
     }
 
     /// Construct from a single `(component, manifest)` pair, for `just run`
-    /// without an `engine.toml`. The chain gate still applies via
-    /// `configured_chains`.
+    /// without an `engine.toml`.
     // One flat argument per shared backend and resource knob, plus the
     // optional clock override; bundling would obscure the call site.
     #[allow(clippy::too_many_arguments)]

@@ -2694,8 +2694,7 @@ fn unconfigured_chain_manifest(dir: &Path, subscription: &str) -> PathBuf {
     manifest
 }
 
-/// A block subscription on an unconfigured chain refuses the boot before
-/// compile: the wasm path does not exist.
+/// The refusal precedes compile; no wasm exists.
 #[tokio::test]
 async fn boot_refuses_a_block_subscription_on_an_unconfigured_chain() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -2741,7 +2740,6 @@ async fn boot_refuses_a_block_subscription_on_an_unconfigured_chain() {
     );
 }
 
-/// The chain-log arm of the same gate.
 #[tokio::test]
 async fn boot_refuses_a_chain_log_subscription_on_an_unconfigured_chain() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -2776,8 +2774,6 @@ async fn boot_refuses_a_chain_log_subscription_on_an_unconfigured_chain() {
     );
 }
 
-/// A configured chain clears the gate; boot then fails only at the
-/// compile step (absent wasm).
 #[tokio::test]
 async fn boot_admits_a_block_subscription_on_a_configured_chain_past_the_chain_gate() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -2821,8 +2817,6 @@ async fn boot_admits_a_block_subscription_on_a_configured_chain_past_the_chain_g
     );
 }
 
-/// A later module's unconfigured chain refuses the boot before an earlier
-/// module compiles or runs `init` (both wasm paths are absent).
 #[tokio::test]
 async fn an_unconfigured_chain_refuses_boot_before_an_earlier_module_loads() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -2885,8 +2879,6 @@ async fn an_unconfigured_chain_refuses_boot_before_an_earlier_module_loads() {
     );
 }
 
-/// On the defaulted dev path (no engine.toml found) the refusal says so
-/// instead of listing zero configured chains.
 #[tokio::test]
 async fn boot_refusal_names_the_missing_engine_toml_on_the_defaulted_path() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -2932,8 +2924,6 @@ async fn boot_refusal_names_the_missing_engine_toml_on_the_defaulted_path() {
     );
 }
 
-/// Named and numeric `[chains.*]` spellings normalise to the same id, so
-/// `[chains.sepolia]` satisfies a `chain_id = 11155111` subscription.
 #[test]
 fn configured_chains_normalise_named_and_numeric_spellings() {
     let cfg: EngineConfig =
@@ -2944,8 +2934,6 @@ fn configured_chains_normalise_named_and_numeric_spellings() {
     assert!(!chains.contains(1));
 }
 
-/// A parsed engine.toml with no `[chains]` gets "configured chains:
-/// none", not the missing-file wording.
 #[test]
 fn unconfigured_chain_message_says_none_when_engine_toml_declares_no_chains() {
     let chains = ConfiguredChains::from_config(&EngineConfig::default());
