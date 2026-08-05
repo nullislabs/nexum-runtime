@@ -46,9 +46,10 @@ pub enum Subscription {
         chain_id: u64,
     },
     /// Chain-log events matching `address` + topic-0; one subscription per
-    /// entry, tagged with the owning module. Delivery across a re-open is
-    /// at-least-once, and only the last delivered log-bearing height is
-    /// retracted if it reorged while disconnected.
+    /// entry, tagged with the owning module. A re-open replays its start
+    /// height once per attempt, and `removed` retraction is guaranteed only
+    /// for the last delivered log-bearing height: heights `max_lookback`
+    /// skips, or that arrive while the module is down, are lost.
     ChainLog {
         /// EVM chain id.
         chain_id: u64,

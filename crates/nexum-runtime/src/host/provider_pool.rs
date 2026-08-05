@@ -285,28 +285,18 @@ impl ProviderPool {
             .into_stream()
             .map(|item| {
                 item.map(|event| {
-                    // Stamp `removed` from the canonical event so a
-                    // reorged-away log reaches the module flagged, letting
-                    // it unwind state it built from the earlier delivery.
+                    // The poller already stamps `removed` on each log to
+                    // match the event, so a reorged-away log reaches the
+                    // module flagged without a second pass here.
                     let (removed, block_logs) = match event {
                         CanonicalEvent::Added(block_logs) => (false, block_logs),
                         CanonicalEvent::Removed(block_logs) => (true, block_logs),
                     };
-                    let number = block_logs.block.header.number;
-                    let hash = block_logs.block.header.hash;
-                    let logs = block_logs
-                        .logs
-                        .into_iter()
-                        .map(|mut log| {
-                            log.removed = removed;
-                            log
-                        })
-                        .collect::<Vec<Log>>();
                     CanonicalLogBatch {
-                        number,
-                        hash,
+                        number: block_logs.block.header.number,
+                        hash: block_logs.block.header.hash,
                         removed,
-                        logs,
+                        logs: block_logs.logs,
                     }
                 })
                 .map_err(|source| ProviderError::Rpc {
