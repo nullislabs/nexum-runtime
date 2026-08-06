@@ -11,7 +11,7 @@ async fn empty_supervisor_returns_no_subscriptions() {
     let plan = booted.supervisor.subscription_plan();
     assert!(plan.block_chains.is_empty());
     assert!(plan.chain_log_subs.is_empty());
-    assert_eq!(plan.viable, Viability::Nothing);
+    assert_eq!(plan.viability(0), Viability::Nothing);
     assert_eq!(booted.supervisor.module_count(), 0);
 }
 

@@ -19,10 +19,10 @@ impl<T: RuntimeTypes> Supervisor<T> {
         let mut block_chains: Vec<Chain> = Vec::new();
         let mut chain_log_subs = Vec::new();
         let mut extension_kinds = BTreeSet::new();
-        let mut dead_hold_subs = false;
+        let mut dead_subscribers = false;
         for module in &self.modules {
             if !module.health.dispatchable() {
-                dead_hold_subs |= !module.subscriptions.is_empty();
+                dead_subscribers |= !module.subscriptions.is_empty();
                 continue;
             }
             for sub in &module.subscriptions {
@@ -76,21 +76,11 @@ impl<T: RuntimeTypes> Supervisor<T> {
         }
         block_chains.sort_by_key(|c| c.id());
         block_chains.dedup();
-        let viable =
-            if block_chains.is_empty() && chain_log_subs.is_empty() && extension_kinds.is_empty() {
-                if dead_hold_subs {
-                    Viability::DeadHoldSubs
-                } else {
-                    Viability::Nothing
-                }
-            } else {
-                Viability::Live
-            };
         SubscriptionPlan {
             block_chains,
             chain_log_subs,
             extension_kinds,
-            viable,
+            dead_subscribers,
         }
     }
 }
@@ -103,7 +93,25 @@ pub struct SubscriptionPlan {
     pub chain_log_subs: Vec<ChainLogSub>,
     /// An extension opens an event source only for kinds appearing here.
     pub extension_kinds: BTreeSet<String>,
-    pub viable: Viability,
+    /// A dead module declares at least one subscription.
+    pub dead_subscribers: bool,
+}
+
+impl SubscriptionPlan {
+    /// A declared extension kind is not yet a source: the extension gates on
+    /// its own service state, so the caller passes how many really opened.
+    pub fn viability(&self, open_extension_sources: usize) -> Viability {
+        if !self.block_chains.is_empty()
+            || !self.chain_log_subs.is_empty()
+            || open_extension_sources > 0
+        {
+            Viability::Live
+        } else if self.dead_subscribers {
+            Viability::DeadHoldSubs
+        } else {
+            Viability::Nothing
+        }
+    }
 }
 
 /// The launch verdict; boot-dead is permanent, so it is final at launch.
@@ -113,6 +121,7 @@ pub enum Viability {
     Nothing,
     /// Every declared subscription belongs to a dead module.
     DeadHoldSubs,
+    /// At least one event source drives the engine.
     Live,
 }
 

@@ -73,7 +73,7 @@ async fn init_failure_marks_module_dead_excluding_dispatch_and_subscriptions() {
         "dead module must not contribute chain-log subscriptions",
     );
     assert_eq!(
-        plan.viable,
+        plan.viability(0),
         Viability::DeadHoldSubs,
         "the filtered-out subscriptions must be attributed to the dead module",
     );
@@ -110,10 +110,32 @@ async fn alive_module_subscriptions_survive_alongside_dead_module() {
         "the alive module's chain survives; the dead module's does not",
     );
     assert_eq!(
-        plan.viable,
+        plan.viability(0),
         Viability::Live,
         "one live subscription keeps the plan viable despite the dead module",
     );
+}
+
+/// Declares two subscription kinds and opens no event source for either, as
+/// an extension whose service is unconfigured does.
+struct Ticker;
+
+impl Extension<CoreRuntime> for Ticker {
+    fn namespace(&self) -> &'static str {
+        "ticker"
+    }
+    fn capabilities(&self) -> manifest::NamespaceCaps {
+        manifest::NamespaceCaps {
+            prefix: "test:ticker/",
+            ifaces: &[],
+        }
+    }
+    fn link(&self, _linker: &mut Linker<HostState<CoreRuntime>>) -> anyhow::Result<()> {
+        Ok(())
+    }
+    fn subscriptions(&self) -> &'static [&'static str] {
+        &["alarms", "ticks"]
+    }
 }
 
 /// One health filter covers extension kinds too: a dead module's kind opens
@@ -126,24 +148,6 @@ async fn dead_module_extension_kind_is_excluded_from_the_plan() {
     let Some(example_wasm) = example_wasm_or_skip() else {
         return;
     };
-    struct Ticker;
-    impl Extension<CoreRuntime> for Ticker {
-        fn namespace(&self) -> &'static str {
-            "ticker"
-        }
-        fn capabilities(&self) -> manifest::NamespaceCaps {
-            manifest::NamespaceCaps {
-                prefix: "test:ticker/",
-                ifaces: &[],
-            }
-        }
-        fn link(&self, _linker: &mut Linker<HostState<CoreRuntime>>) -> anyhow::Result<()> {
-            Ok(())
-        }
-        fn subscriptions(&self) -> &'static [&'static str] {
-            &["alarms", "ticks"]
-        }
-    }
     let booted = BootScenario::new()
         .extensions([Arc::new(Ticker) as Arc<dyn Extension<CoreRuntime>>])
         .module(
@@ -171,7 +175,46 @@ async fn dead_module_extension_kind_is_excluded_from_the_plan() {
         vec!["ticks"],
         "the dead module's kind is excluded; the alive module's survives",
     );
-    assert_eq!(plan.viable, Viability::Live);
+    assert_eq!(
+        plan.viability(1),
+        Viability::Live,
+        "an opened extension source drives the engine",
+    );
+    assert_eq!(
+        plan.viability(0),
+        Viability::DeadHoldSubs,
+        "with no source opened, the dead module's subscriptions are the only ones left",
+    );
+}
+
+/// A declared kind is not a source: an extension that opens none leaves the
+/// engine with nothing to drive, and no dead module to blame for it.
+#[tokio::test]
+async fn a_declared_extension_kind_alone_is_not_viable() {
+    let Some(example_wasm) = example_wasm_or_skip() else {
+        return;
+    };
+    let booted = BootScenario::new()
+        .extensions([Arc::new(Ticker) as Arc<dyn Extension<CoreRuntime>>])
+        .module(
+            Entry::new(
+                TestManifest::new("example")
+                    .cap("logging")
+                    .extension_sub("ticks", &[]),
+            )
+            .wasm(example_wasm),
+        )
+        .boot()
+        .await
+        .expect("the example boots alive");
+
+    let plan = booted.supervisor.subscription_plan();
+    assert_eq!(plan.extension_kinds.len(), 1, "the live kind is declared");
+    assert_eq!(
+        plan.viability(0),
+        Viability::Nothing,
+        "a declared but unopened kind must not park the engine on an empty select",
+    );
 }
 
 /// Boot and restart share one instantiate-and-init helper, so the verdict on

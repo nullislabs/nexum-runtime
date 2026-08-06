@@ -262,8 +262,26 @@ impl<T: RuntimeTypes> AssembledRuntime<'_, T> {
         // The handle keeps the log read side reachable after launch consumes
         // the components.
         let logs = components.logs.clone();
-        // A non-viable plan is decided here, before any stream opens.
-        match plan.viable {
+        // Extension event sources open only for subscription kinds some
+        // live module declares; each extension gates further on its own
+        // service state and returns no stream when it has nothing to
+        // observe.
+        let mut reconnect_tasks = TaskSet::new();
+        let mut extension_streams = Vec::new();
+        {
+            let mut sources = EventSources::new(
+                engine_cfg,
+                supervisor.services(),
+                &plan.extension_kinds,
+                &executor,
+                &mut reconnect_tasks,
+            );
+            for ext in &extensions {
+                extension_streams.extend(ext.events(&mut sources)?);
+            }
+        }
+
+        match plan.viability(extension_streams.len()) {
             Viability::DeadHoldSubs => anyhow::bail!(
                 "every declared [[subscription]] belongs to an init-failed module - \
                  the engine would idle with nothing to run; fix or remove the \
@@ -282,25 +300,6 @@ impl<T: RuntimeTypes> AssembledRuntime<'_, T> {
                 });
             }
             Viability::Live => {}
-        }
-
-        // Extension event sources open only for subscription kinds some
-        // live module declares; each extension gates further on its own
-        // service state and returns no stream when it has nothing to
-        // observe.
-        let mut reconnect_tasks = TaskSet::new();
-        let mut extension_streams = Vec::new();
-        {
-            let mut sources = EventSources::new(
-                engine_cfg,
-                supervisor.services(),
-                &plan.extension_kinds,
-                &executor,
-                &mut reconnect_tasks,
-            );
-            for ext in &extensions {
-                extension_streams.extend(ext.events(&mut sources)?);
-            }
         }
 
         // Open per-chain block subscriptions + per-module chain-log
