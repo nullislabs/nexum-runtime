@@ -275,8 +275,8 @@ pub(super) async fn provider<T: RuntimeTypes>(
     require_component_digest: bool,
 ) -> Result<LoadedProvider> {
     let namespace: ModuleId = manifest_namespace(&loaded_manifest, PROVIDER_FALLBACK_NAME).into();
-    // A core-only declaration fails at manifest load; an undeclared transport
-    // import fails after compile; the linker withholds the same interfaces.
+    // A core-only declaration fails at manifest load; an undeclared gated
+    // import fails after compile; the linker withholds the core interfaces.
     let registry = CapabilityRegistry::provider();
     let sections = loaded_manifest.manifest.extensions.clone();
     let ((kind, service), component, digest) = admit_and_verify(
