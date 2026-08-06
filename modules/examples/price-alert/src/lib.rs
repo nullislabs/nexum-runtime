@@ -44,6 +44,7 @@ impl PriceAlert {
         let Some(cfg) = SETTINGS.get() else {
             return Ok(());
         };
-        logic::on_block(&WitBindgenHost, block.chain_id, cfg, block.number).map_err(Into::into)
+        logic::on_block(&WitBindgenHost, block.chain_id, cfg, block.number)?;
+        Ok(())
     }
 }

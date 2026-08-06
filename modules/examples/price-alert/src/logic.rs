@@ -6,7 +6,7 @@
 
 use alloy_primitives::I256;
 use nexum_sdk::chain::chainlink::read_latest_answer;
-use nexum_sdk::config::{self, ConfigError};
+use nexum_sdk::config;
 use nexum_sdk::host::{ChainHost, Fault, LoggingHost};
 use nexum_sdk::prelude::Address;
 
@@ -79,12 +79,10 @@ pub fn classify(answer: I256, threshold: I256, direction: Direction) -> bool {
 
 /// Parse `[config]` into a typed [`Settings`].
 pub fn parse_config(entries: &[(String, String)]) -> Result<Settings, Fault> {
-    let oracle_address = config::get_required(entries, "oracle_address")
-        .map_err(config_err)?
+    let oracle_address = config::get_required(entries, "oracle_address")?
         .parse::<Address>()
         .map_err(|e| invalid(format!("oracle_address: {e}")))?;
-    let decimals = config::get_required(entries, "decimals")
-        .map_err(config_err)?
+    let decimals = config::get_required(entries, "decimals")?
         .parse::<u32>()
         .map_err(|e| invalid(format!("decimals: {e}")))?;
     if decimals > 38 {
@@ -92,11 +90,9 @@ pub fn parse_config(entries: &[(String, String)]) -> Result<Settings, Fault> {
             "decimals={decimals} exceeds the I256 power-of-ten budget"
         )));
     }
-    let threshold_decimal = config::get_required(entries, "threshold").map_err(config_err)?;
-    let threshold_scaled =
-        config::scale_decimal(threshold_decimal, decimals, "threshold").map_err(config_err)?;
-    let direction = match config::get_required(entries, "direction")
-        .map_err(config_err)?
+    let threshold_decimal = config::get_required(entries, "threshold")?;
+    let threshold_scaled = config::scale_decimal(threshold_decimal, decimals, "threshold")?;
+    let direction = match config::get_required(entries, "direction")?
         .to_ascii_lowercase()
         .as_str()
     {
@@ -127,11 +123,6 @@ pub fn parse_config(entries: &[(String, String)]) -> Result<Settings, Fault> {
 /// Lift a free-text detail into a [`Fault::InvalidInput`].
 fn invalid(message: impl Into<String>) -> Fault {
     Fault::InvalidInput(message.into())
-}
-
-/// Project a [`ConfigError`] into a [`Fault::InvalidInput`].
-fn config_err(e: ConfigError) -> Fault {
-    invalid(e.to_string())
 }
 
 #[cfg(test)]
