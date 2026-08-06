@@ -146,7 +146,7 @@ fn default_init_config(config: &Config, namespace: &str) -> Config {
 
 /// Runs under the dispatch deadline so a hung host call cannot park boot or a
 /// restart; a deadline hit or trap is `Err`, a guest fault `Ok(Err(fault))`.
-pub(super) async fn run_init<T: RuntimeTypes>(
+async fn run_init<T: RuntimeTypes>(
     bindings: &EventModule,
     store: &mut HostStore<T>,
     config: &Config,
