@@ -3,12 +3,12 @@
 //! [`RuntimeBuilder`] accumulates the assembly (config, lattice, extensions,
 //! component builders, add-ons) through a type-state chain;
 //! [`ReadyBuilder::launch`] opens the backends and hands off to
-//! [`LaunchRuntime::launch`], which installs add-ons, builds the engine and
+//! [`AssembledRuntime::launch`], which installs add-ons, builds the engine and
 //! linker, boots the supervisor, opens subscriptions, spawns the event loop,
 //! and returns a [`RuntimeHandle`]. [`RuntimeBuilder::runtime`] binds a
 //! [`Runtime`] preset for the common case.
 
-use std::future::{Future, IntoFuture};
+use std::future::IntoFuture;
 use std::marker::PhantomData;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -122,7 +122,7 @@ pub(crate) fn wasmtime_config() -> wasmtime::Config {
 }
 
 /// A fully-assembled runtime: concrete backends, extensions, add-ons, and the
-/// optional module-source override. Implements [`LaunchRuntime`].
+/// optional module-source override. [`launch`](Self::launch) runs it.
 pub struct AssembledRuntime<'a, T: RuntimeTypes> {
     /// Shared backends threaded into every module store.
     pub components: Components<T>,
@@ -139,14 +139,9 @@ pub struct AssembledRuntime<'a, T: RuntimeTypes> {
     pub clocks: Option<WasiClockOverride>,
 }
 
-/// An assembled runtime launchable from a [`LaunchContext`].
-pub trait LaunchRuntime {
+impl<T: RuntimeTypes> AssembledRuntime<'_, T> {
     /// Run the imperative launch sequence and return the running handle.
-    fn launch(self, ctx: LaunchContext<'_>) -> impl Future<Output = anyhow::Result<RuntimeHandle>>;
-}
-
-impl<T: RuntimeTypes> LaunchRuntime for AssembledRuntime<'_, T> {
-    async fn launch(self, ctx: LaunchContext<'_>) -> anyhow::Result<RuntimeHandle> {
+    pub async fn launch(self, ctx: LaunchContext<'_>) -> anyhow::Result<RuntimeHandle> {
         let AssembledRuntime {
             components,
             extensions,
@@ -346,6 +341,45 @@ impl<T: RuntimeTypes> LaunchRuntime for AssembledRuntime<'_, T> {
     }
 }
 
+/// Opens the backends with a fresh [`TaskManager`], then drives
+/// [`AssembledRuntime::launch`]; the shared tail of every terminal stage.
+async fn open_and_launch<T, C, S, E, L>(
+    config: &EngineConfig,
+    extensions: Vec<Arc<dyn Extension<T>>>,
+    add_ons: &[&dyn RuntimeAddOn],
+    wasm: Option<&Path>,
+    manifest: Option<&Path>,
+    clocks: Option<WasiClockOverride>,
+    components: ComponentsBuilder<C, S, E, L>,
+) -> anyhow::Result<RuntimeHandle>
+where
+    T: RuntimeTypes,
+    C: ComponentBuilder<Output = ProviderPool>,
+    S: ComponentBuilder<Output = T::Store>,
+    E: ComponentBuilder<Output = T::Ext>,
+    L: ComponentBuilder<Output = LogPipeline>,
+{
+    let tasks = TaskManager::new();
+    let executor = tasks.executor();
+    let data_dir = config.engine.state_dir.clone();
+    let build_ctx = BuilderContext {
+        config,
+        data_dir: &data_dir,
+        executor: &executor,
+    };
+    let components = components.build::<T>(&build_ctx).await?;
+
+    let runtime = AssembledRuntime {
+        components,
+        extensions,
+        add_ons,
+        wasm,
+        manifest,
+        clocks,
+    };
+    runtime.launch(LaunchContext { tasks, config }).await
+}
+
 /// Entry stage of the type-state runtime builder: only the config is bound.
 pub struct RuntimeBuilder<'a> {
     config: &'a EngineConfig,
@@ -451,42 +485,33 @@ impl<'a, R: Runtime> PresetBuilder<'a, R> {
         }
     }
 
-    /// Open the preset's backends and launch, driving [`LaunchRuntime::launch`]
-    /// with a fresh [`TaskManager`].
+    /// Open the preset's backends and launch, driving
+    /// [`AssembledRuntime::launch`] with a fresh [`TaskManager`].
     pub async fn launch(self) -> anyhow::Result<RuntimeHandle> {
-        let tasks = TaskManager::new();
-        let executor = tasks.executor();
-        let data_dir = self.config.engine.state_dir.clone();
-        let build_ctx = BuilderContext {
-            config: self.config,
-            data_dir: &data_dir,
-            executor: &executor,
-        };
-        let mut extensions = self.preset.extensions(self.config);
-        extensions.extend(self.extensions);
+        let Self {
+            config,
+            preset,
+            extensions: appended,
+            wasm,
+            manifest,
+            clocks,
+        } = self;
+        let mut extensions = preset.extensions(config);
+        extensions.extend(appended);
         // `add_ons` owns the boxed add-ons; `add_on_refs` borrows into it and is
         // consumed by the launch call, so both must stay in scope for that call.
-        let add_ons = self.preset.add_ons();
+        let add_ons = preset.add_ons();
         let add_on_refs: Vec<&dyn RuntimeAddOn> = add_ons.iter().map(|a| &**a).collect();
-        let components = self
-            .preset
-            .components()
-            .build::<R::Types>(&build_ctx)
-            .await?;
-
-        let runtime = AssembledRuntime {
-            components,
+        open_and_launch(
+            config,
             extensions,
-            add_ons: &add_on_refs,
-            wasm: self.wasm.as_deref(),
-            manifest: self.manifest.as_deref(),
-            clocks: self.clocks,
-        };
-        let ctx = LaunchContext {
-            tasks,
-            config: self.config,
-        };
-        runtime.launch(ctx).await
+            &add_on_refs,
+            wasm.as_deref(),
+            manifest.as_deref(),
+            clocks,
+            preset.components(),
+        )
+        .await
     }
 }
 
@@ -513,32 +538,19 @@ where
     /// Open the overridden backends and launch, otherwise as
     /// [`PresetBuilder::launch`].
     pub async fn launch(self) -> anyhow::Result<RuntimeHandle> {
-        let tasks = TaskManager::new();
-        let executor = tasks.executor();
-        let data_dir = self.config.engine.state_dir.clone();
-        let build_ctx = BuilderContext {
-            config: self.config,
-            data_dir: &data_dir,
-            executor: &executor,
-        };
         // `add_ons` owns the boxed add-ons; `add_on_refs` borrows into it and is
         // consumed by the launch call, so both must stay in scope for that call.
         let add_on_refs: Vec<&dyn RuntimeAddOn> = self.add_ons.iter().map(|a| &**a).collect();
-        let components = self.components.build::<T>(&build_ctx).await?;
-
-        let runtime = AssembledRuntime {
-            components,
-            extensions: self.extensions,
-            add_ons: &add_on_refs,
-            wasm: self.wasm.as_deref(),
-            manifest: self.manifest.as_deref(),
-            clocks: self.clocks,
-        };
-        let ctx = LaunchContext {
-            tasks,
-            config: self.config,
-        };
-        runtime.launch(ctx).await
+        open_and_launch(
+            self.config,
+            self.extensions,
+            &add_on_refs,
+            self.wasm.as_deref(),
+            self.manifest.as_deref(),
+            self.clocks,
+            self.components,
+        )
+        .await
     }
 }
 
@@ -582,35 +594,6 @@ impl<'a, T: RuntimeTypes> TypedBuilder<'a, T> {
     pub fn with_components<C, S, E, L>(
         self,
         components: ComponentsBuilder<C, S, E, L>,
-    ) -> ComponentsStage<'a, T, C, S, E, L> {
-        ComponentsStage {
-            config: self.config,
-            extensions: self.extensions,
-            wasm: self.wasm,
-            manifest: self.manifest,
-            clocks: self.clocks,
-            components,
-            _t: PhantomData,
-        }
-    }
-}
-
-/// The component builders are bound; the add-on set remains.
-pub struct ComponentsStage<'a, T: RuntimeTypes, C, S, E, L> {
-    config: &'a EngineConfig,
-    extensions: Vec<Arc<dyn Extension<T>>>,
-    wasm: Option<PathBuf>,
-    manifest: Option<PathBuf>,
-    clocks: Option<WasiClockOverride>,
-    components: ComponentsBuilder<C, S, E, L>,
-    _t: PhantomData<fn() -> T>,
-}
-
-impl<'a, T: RuntimeTypes, C, S, E, L> ComponentsStage<'a, T, C, S, E, L> {
-    /// Bind the cross-cutting add-on set installed before the engine boots.
-    pub fn with_add_ons(
-        self,
-        add_ons: &'a [&'a dyn RuntimeAddOn],
     ) -> ReadyBuilder<'a, T, C, S, E, L> {
         ReadyBuilder {
             config: self.config,
@@ -618,8 +601,8 @@ impl<'a, T: RuntimeTypes, C, S, E, L> ComponentsStage<'a, T, C, S, E, L> {
             wasm: self.wasm,
             manifest: self.manifest,
             clocks: self.clocks,
-            components: self.components,
-            add_ons,
+            components,
+            add_ons: &[],
         }
     }
 }
@@ -636,6 +619,15 @@ pub struct ReadyBuilder<'a, T: RuntimeTypes, C, S, E, L> {
     add_ons: &'a [&'a dyn RuntimeAddOn],
 }
 
+impl<'a, T: RuntimeTypes, C, S, E, L> ReadyBuilder<'a, T, C, S, E, L> {
+    /// Bind the cross-cutting add-on set installed before the engine boots;
+    /// defaults to none.
+    pub fn with_add_ons(mut self, add_ons: &'a [&'a dyn RuntimeAddOn]) -> Self {
+        self.add_ons = add_ons;
+        self
+    }
+}
+
 impl<T, C, S, E, L> ReadyBuilder<'_, T, C, S, E, L>
 where
     T: RuntimeTypes,
@@ -644,32 +636,19 @@ where
     E: ComponentBuilder<Output = T::Ext>,
     L: ComponentBuilder<Output = LogPipeline>,
 {
-    /// Open the backends and launch, driving [`LaunchRuntime::launch`] with a
-    /// fresh [`TaskManager`].
+    /// Open the backends and launch, driving [`AssembledRuntime::launch`]
+    /// with a fresh [`TaskManager`].
     pub async fn launch(self) -> anyhow::Result<RuntimeHandle> {
-        let tasks = TaskManager::new();
-        let executor = tasks.executor();
-        let data_dir = self.config.engine.state_dir.clone();
-        let build_ctx = BuilderContext {
-            config: self.config,
-            data_dir: &data_dir,
-            executor: &executor,
-        };
-        let components = self.components.build::<T>(&build_ctx).await?;
-
-        let runtime = AssembledRuntime {
-            components,
-            extensions: self.extensions,
-            add_ons: self.add_ons,
-            wasm: self.wasm.as_deref(),
-            manifest: self.manifest.as_deref(),
-            clocks: self.clocks,
-        };
-        let ctx = LaunchContext {
-            tasks,
-            config: self.config,
-        };
-        runtime.launch(ctx).await
+        open_and_launch(
+            self.config,
+            self.extensions,
+            self.add_ons,
+            self.wasm.as_deref(),
+            self.manifest.as_deref(),
+            self.clocks,
+            self.components,
+        )
+        .await
     }
 }
 
@@ -979,7 +958,6 @@ mod tests {
                 LocalStoreBuilder,
                 (),
             ))
-            .with_add_ons(&[])
             .launch()
             .await
         {
@@ -1013,7 +991,6 @@ mod tests {
                 LocalStoreBuilder,
                 (),
             ))
-            .with_add_ons(&[])
             .launch()
             .await
         {
@@ -1105,7 +1082,6 @@ mod tests {
                 LocalStoreBuilder,
                 (),
             ))
-            .with_add_ons(&[])
             .launch()
             .await
             .expect("launch the example module");

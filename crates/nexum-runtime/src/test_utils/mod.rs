@@ -26,7 +26,6 @@
 //!         Prebuilt(store.clone()),
 //!         (),
 //!     ))
-//!     .with_add_ons(&[])
 //!     .launch()
 //!     .await?;
 //! # Ok(())
@@ -130,7 +129,6 @@ mod tests {
                 Prebuilt(store),
                 (),
             ))
-            .with_add_ons(&[])
             .launch()
             .await
         {
