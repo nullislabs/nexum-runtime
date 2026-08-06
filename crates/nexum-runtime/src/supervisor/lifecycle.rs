@@ -8,6 +8,7 @@ use tracing::{error, info, warn};
 
 use super::Shared;
 use super::load::{LoadedModule, LoadedProvider, run_init};
+use super::role::Role;
 use super::store::{self, build_linker, build_provider_linker};
 use crate::bindings::EventModule;
 use crate::digest::ContentDigest;
@@ -143,49 +144,6 @@ impl Health {
 
     pub(super) fn dispatch_succeeded(&mut self) {
         self.failure_count = 0;
-    }
-}
-
-/// Keys the per-role metric names and the compile-time tracing field keys.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, strum::IntoStaticStr)]
-pub(super) enum Role {
-    Module,
-    Adapter,
-}
-
-impl Role {
-    const fn label(self) -> &'static str {
-        match self {
-            Self::Module => "module",
-            Self::Adapter => "adapter",
-        }
-    }
-
-    const fn errors_total(self) -> &'static str {
-        match self {
-            Self::Module => "nexum_runtime_module_errors_total",
-            Self::Adapter => "nexum_runtime_adapter_errors_total",
-        }
-    }
-
-    const fn restarts_total(self) -> &'static str {
-        match self {
-            Self::Module => "nexum_runtime_module_restarts_total",
-            Self::Adapter => "nexum_runtime_adapter_restarts_total",
-        }
-    }
-
-    const fn poisoned_gauge(self) -> &'static str {
-        match self {
-            Self::Module => "nexum_runtime_module_poisoned",
-            Self::Adapter => "nexum_runtime_adapter_poisoned",
-        }
-    }
-
-    /// A provider reinstall is a fresh instance, so its curve resets; a
-    /// module recovers in place and keeps climbing.
-    const fn resets_failure_count(self) -> bool {
-        matches!(self, Self::Adapter)
     }
 }
 

@@ -8,6 +8,7 @@ mod dispatch;
 mod lifecycle;
 mod load;
 mod prepass;
+mod role;
 mod store;
 mod subscriptions;
 
@@ -30,9 +31,7 @@ use crate::runtime::poison_policy::PoisonPolicy;
 use admission::{ProviderKinds, capability_registry, enforce_extension_uniqueness, provider_kinds};
 use cursors::ChainLogCursors;
 use load::{LoadedModule, LoadedProvider};
-use prepass::{
-    MODULE_FALLBACK_NAME, enforce_configured_chains, load_required_manifest, manifest_namespace,
-};
+use prepass::{enforce_configured_chains, load_required_manifest, manifest_namespace};
 
 /// Owns every loaded module and provider and exposes the dispatch surface.
 pub struct Supervisor<T: RuntimeTypes> {
@@ -123,7 +122,7 @@ impl<T: RuntimeTypes> Supervisor<T> {
         let loaded_manifest =
             load_required_manifest(&entry.path, entry.manifest.as_deref(), &registry, "module")?;
         enforce_configured_chains(
-            &manifest_namespace(&loaded_manifest, MODULE_FALLBACK_NAME),
+            &manifest_namespace(&loaded_manifest),
             &loaded_manifest,
             &env.configured_chains,
         )?;

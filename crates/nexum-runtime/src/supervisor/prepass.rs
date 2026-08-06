@@ -8,6 +8,7 @@ use alloy_chains::Chain;
 use anyhow::{Context, Error, Result, anyhow};
 use tracing::{info, warn};
 
+use super::role::Role;
 use crate::engine_config::EngineConfig;
 use crate::manifest::{self, CapabilityRegistry, LoadedManifest, Subscription};
 
@@ -33,17 +34,9 @@ pub(super) fn claim_namespace(
     Ok(())
 }
 
-pub(super) const MODULE_FALLBACK_NAME: &str = "module";
-
-pub(super) const PROVIDER_FALLBACK_NAME: &str = "provider";
-
-/// `[module].name`, or `fallback` when it is empty.
-pub(super) fn manifest_namespace(loaded: &LoadedManifest, fallback: &str) -> String {
-    if loaded.manifest.module.name.is_empty() {
-        fallback.to_owned()
-    } else {
-        loaded.manifest.module.name.clone()
-    }
+/// `[module].name`; manifest parse already refused a blank one.
+pub(super) fn manifest_namespace(loaded: &LoadedManifest) -> String {
+    loaded.manifest.module.name.clone()
 }
 
 /// Missing or unresolved refuses the boot.
@@ -180,10 +173,7 @@ pub(super) fn run(engine_cfg: &EngineConfig, registry: &CapabilityRegistry) -> R
             .map(|e| (&e.path, e.manifest.as_deref())),
         &provider_registry,
         RolePass {
-            manifest_role: "provider",
-            claim_role: "adapter",
-            context: "load provider",
-            fallback: PROVIDER_FALLBACK_NAME,
+            role: Role::Adapter,
             chains: None,
         },
         &mut ledger,
@@ -195,10 +185,7 @@ pub(super) fn run(engine_cfg: &EngineConfig, registry: &CapabilityRegistry) -> R
             .map(|e| (&e.path, e.manifest.as_deref())),
         registry,
         RolePass {
-            manifest_role: "module",
-            claim_role: "module",
-            context: "load module",
-            fallback: MODULE_FALLBACK_NAME,
+            role: Role::Module,
             chains: Some(&configured_chains),
         },
         &mut ledger,
@@ -210,10 +197,7 @@ pub(super) fn run(engine_cfg: &EngineConfig, registry: &CapabilityRegistry) -> R
 }
 
 struct RolePass<'a> {
-    manifest_role: &'static str,
-    claim_role: &'static str,
-    context: &'static str,
-    fallback: &'static str,
+    role: Role,
     chains: Option<&'a ConfiguredChains>,
 }
 
@@ -226,13 +210,13 @@ fn load_role_manifests<'a>(
 ) -> Result<Vec<LoadedManifest>> {
     let mut manifests = Vec::new();
     for (path, explicit) in entries {
-        let loaded = load_required_manifest(path, explicit, registry, pass.manifest_role)
-            .with_context(|| format!("{} {}", pass.context, path.display()))?;
-        let namespace = manifest_namespace(&loaded, pass.fallback);
-        claim_namespace(ledger, &namespace, pass.claim_role, path)?;
+        let loaded = load_required_manifest(path, explicit, registry, pass.role.manifest_role())
+            .with_context(|| format!("{} {}", pass.role.load_context(), path.display()))?;
+        let namespace = manifest_namespace(&loaded);
+        claim_namespace(ledger, &namespace, pass.role.claim_role(), path)?;
         if let Some(chains) = pass.chains {
             enforce_configured_chains(&namespace, &loaded, chains)
-                .with_context(|| format!("{} {}", pass.context, path.display()))?;
+                .with_context(|| format!("{} {}", pass.role.load_context(), path.display()))?;
         }
         manifests.push(loaded);
     }
