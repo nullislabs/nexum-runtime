@@ -32,7 +32,7 @@ test:
 
 # Build module + engine, then run E2E integration tests.
 test-e2e: build-module build-engine
-    cargo nextest run -p nexum-runtime supervisor::tests::e2e
+    cargo nextest run -p nexum-runtime supervisor::tests::e2e supervisor::tests::digest::e2e_
 
 # Format the workspace.
 fmt:

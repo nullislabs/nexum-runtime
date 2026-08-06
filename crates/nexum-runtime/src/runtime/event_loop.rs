@@ -647,6 +647,7 @@ mod tests {
     use alloy_transport::mock::MockResponse;
     use nexum_tasks::TaskManager;
 
+    use crate::supervisor::tests::{boot_mock_supervisor, make_wasmtime_engine};
     use crate::test_utils::rpc::{
         MockRpc, linked_block, mocked_pool, rpc_err, rpc_head, rpc_ok, test_hash,
     };
@@ -1264,5 +1265,161 @@ mod tests {
             0,
             "an open at block 0 re-opens at block 0, not at head",
         );
+    }
+
+    /// An engine whose modules declare only `kind = "block"` (or only
+    /// `kind = "chain-log"`) must not bail at boot when the other stream set
+    /// is empty.
+    #[tokio::test]
+    async fn run_does_not_bail_when_both_stream_kinds_are_empty() {
+        use std::time::{Duration, Instant};
+
+        let engine = make_wasmtime_engine();
+        let mut supervisor = boot_mock_supervisor(&engine).await;
+        let started = Instant::now();
+        let shutdown = tokio::time::sleep(Duration::from_millis(50));
+
+        crate::runtime::event_loop::run(
+            &mut supervisor,
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            nexum_tasks::TaskSet::new(),
+            shutdown,
+        )
+        .await;
+
+        // If the bug were present, `run` returns ~0 ms (the empty `logs`
+        // stream's first `.next()` yields `None` and the loop bails on
+        // the bail-on-None arm). With the fix, `run` blocks on `shutdown`
+        // for the full 50 ms.
+        let elapsed = started.elapsed();
+        assert!(
+            elapsed >= Duration::from_millis(40),
+            "run returned in {elapsed:?}, expected >= ~50ms (shutdown timer)",
+        );
+    }
+
+    // Verify the stream-open + run() + shutdown lifecycle end to end at the
+    // supervisor boundary, without loading a real wasm module.
+
+    /// The `biased` select drains both block and chain-log streams within one
+    /// `run()` session without starving either; the returned tally shows both
+    /// were consumed.
+    #[tokio::test]
+    async fn run_delivers_block_and_chain_log_events_without_starvation() {
+        use std::time::Duration;
+
+        use alloy_chains::Chain;
+        use alloy_rpc_types_eth::Filter;
+
+        use crate::host::provider_pool::ProviderPool;
+        use crate::runtime::event_loop::{open_block_streams, open_chain_log_streams, run};
+        use crate::test_utils::rpc::FakeNode;
+        use nexum_tasks::{TaskManager, TaskSet};
+
+        let engine = make_wasmtime_engine();
+        let mut supervisor = boot_mock_supervisor(&engine).await;
+        let block_node = FakeNode::new();
+        let log_node = FakeNode::new();
+        let pool = ProviderPool::for_tests(
+            [
+                (Chain::mainnet(), block_node.provider()),
+                (Chain::from_id(100), log_node.provider()),
+            ],
+            Duration::from_millis(20),
+        );
+        let manager = TaskManager::new();
+        let executor = manager.executor();
+        let mut tasks = TaskSet::new();
+
+        // Pre-push one event of each kind before the loop starts so both mpsc
+        // channels have an item for `run()` to drain on its first pass.
+        block_node.push_block(alloy_rpc_types_eth::Header::default());
+        log_node.push_chain_log(alloy_rpc_types_eth::Log::default());
+
+        let block_streams = open_block_streams(&pool, &[Chain::mainnet()], &executor, &mut tasks);
+        let log_subs = vec![crate::supervisor::ChainLogSub {
+            module: "test-module".to_string(),
+            chain: Chain::from_id(100),
+            filter: Filter::default(),
+            cursor_key: None,
+            initial_cursor: None,
+            max_lookback: None,
+        }];
+        let chain_log_streams = open_chain_log_streams(&pool, log_subs, &executor, &mut tasks);
+
+        // The shutdown window only bounds wall time; the assertion is on the
+        // tally, not on timing. 500 ms is orders of magnitude more than the
+        // two channel hops need, so a miss means a broken select arm, not a
+        // slow scheduler.
+        let shutdown = tokio::time::sleep(Duration::from_millis(500));
+        let (blocks, chain_logs) = tokio::time::timeout(
+            Duration::from_secs(10),
+            run(
+                &mut supervisor,
+                block_streams,
+                chain_log_streams,
+                Vec::new(),
+                tasks,
+                shutdown,
+            ),
+        )
+        .await
+        .expect("run() must return once shutdown fires");
+        assert_eq!(blocks, 1, "the queued block must be drained and dispatched");
+        assert_eq!(
+            chain_logs, 1,
+            "the queued chain-log must be drained and dispatched",
+        );
+    }
+
+    /// On the shutdown path `run()` aborts and joins every reconnect task, so
+    /// none detaches and outlives the engine.
+    #[tokio::test]
+    async fn run_drains_reconnect_tasks_cleanly_on_shutdown() {
+        use std::time::Duration;
+
+        use alloy_chains::Chain;
+
+        use crate::runtime::event_loop::{open_block_streams, run};
+        use crate::test_utils::rpc::FakeNode;
+        use nexum_tasks::{TaskManager, TaskSet};
+
+        let engine = make_wasmtime_engine();
+        let mut supervisor = boot_mock_supervisor(&engine).await;
+        let pool = FakeNode::new().pool(
+            &[Chain::mainnet(), Chain::from_id(100)],
+            Duration::from_millis(20),
+        );
+        let manager = TaskManager::new();
+        let executor = manager.executor();
+        let mut tasks = TaskSet::new();
+
+        // Two subscription tasks: both must drain before `run()` returns.
+        let block_streams = open_block_streams(
+            &pool,
+            &[Chain::mainnet(), Chain::from_id(100)],
+            &executor,
+            &mut tasks,
+        );
+
+        let shutdown = tokio::time::sleep(Duration::from_millis(10));
+        // If the drain were absent, the spawned reconnect tasks would detach
+        // and outlive the supervisor; if the drain hung, the timeout fails
+        // fast instead of stalling the suite until the CI job limit.
+        tokio::time::timeout(
+            Duration::from_secs(10),
+            run(
+                &mut supervisor,
+                block_streams,
+                vec![],
+                Vec::new(),
+                tasks,
+                shutdown,
+            ),
+        )
+        .await
+        .expect("run() + task drain must complete promptly after shutdown");
     }
 }

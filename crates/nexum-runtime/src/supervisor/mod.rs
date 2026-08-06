@@ -370,4 +370,4 @@ use std::time::Duration;
 use tracing_core::Level;
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
