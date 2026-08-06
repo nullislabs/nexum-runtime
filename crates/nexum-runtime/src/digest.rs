@@ -1,6 +1,5 @@
 //! Content digests for loaded component artifacts.
 
-use std::fmt;
 use std::path::PathBuf;
 use std::str::FromStr;
 
@@ -9,8 +8,10 @@ use thiserror::Error;
 
 const SCHEME: &str = "sha256";
 
-/// sha256 digest of an artifact's bytes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+/// sha256 digest of an artifact's bytes; `Display` is the canonical
+/// lowercase `sha256:<hex>` the manifest grammar parses back.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, derive_more::Display)]
+#[display("{SCHEME}:{}", alloy_primitives::hex::encode(_0))]
 pub struct ContentDigest([u8; 32]);
 
 impl ContentDigest {
@@ -53,13 +54,6 @@ impl FromStr for ContentDigest {
             return Err(DigestParseError::Uncommitted);
         }
         Ok(Self(digest))
-    }
-}
-
-impl fmt::Display for ContentDigest {
-    /// Canonical lowercase `sha256:<hex>`.
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{SCHEME}:{}", alloy_primitives::hex::encode(self.0))
     }
 }
 
