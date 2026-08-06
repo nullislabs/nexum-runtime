@@ -11,7 +11,6 @@ use std::time::Duration;
 
 use alloy_chains::Chain;
 use serde::Deserialize;
-use strum::IntoStaticStr;
 use thiserror::Error;
 use tracing::{info, warn};
 
@@ -110,8 +109,7 @@ impl Default for WatchLimit {
 }
 
 /// Errors surfaced by [`load_or_default`].
-#[derive(Debug, Error, IntoStaticStr)]
-#[strum(serialize_all = "snake_case")]
+#[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum EngineConfigError {
     /// Failed to read the config file from disk.
@@ -737,8 +735,7 @@ fn is_valid_env_name(s: &str) -> bool {
 }
 
 /// Errors from `${VAR}` substitution in `engine.toml`.
-#[derive(Debug, thiserror::Error, IntoStaticStr)]
-#[strum(serialize_all = "snake_case")]
+#[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum EnvVarError {
     #[error(

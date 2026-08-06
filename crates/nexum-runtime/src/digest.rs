@@ -5,7 +5,6 @@ use std::path::PathBuf;
 use std::str::FromStr;
 
 use sha2::{Digest, Sha256};
-use strum::IntoStaticStr;
 use thiserror::Error;
 
 const SCHEME: &str = "sha256";
@@ -64,8 +63,7 @@ impl fmt::Display for ContentDigest {
     }
 }
 
-#[derive(Debug, Error, IntoStaticStr)]
-#[strum(serialize_all = "snake_case")]
+#[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum DigestParseError {
     /// No `scheme:` prefix; the empty string lands here too.

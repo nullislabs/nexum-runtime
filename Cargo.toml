@@ -64,7 +64,7 @@ tracing = "0.1"
 tracing-core = { version = "0.1", default-features = false, features = ["std"] }
 tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "env-filter", "ansi", "json"] }
 
-# `strum::IntoStaticStr` on every error / event enum gives a free
+# `strum::IntoStaticStr` on error / event enums gives a free
 # snake_case `&'static str` for every variant, which feeds directly
 # into `metrics::counter!(..., "error_kind" => name)` and
 # `tracing::warn!(error_kind = name, ...)` recordings without an
