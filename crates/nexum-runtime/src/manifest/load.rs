@@ -286,6 +286,13 @@ required = ["chain", "not-a-real-cap"]
         assert!(
             matches!(err, ParseError::UnknownCapability { ref name, .. } if name == "not-a-real-cap")
         );
+        // Operator-facing wording and order, pinned verbatim.
+        assert_eq!(
+            err.to_string(),
+            "manifest: unknown capability \"not-a-real-cap\" in [capabilities] (known: chain, \
+             identity, local-store, remote-store, messaging, logging, http, wasi-sockets, \
+             wasi-filesystem)"
+        );
     }
 
     #[test]

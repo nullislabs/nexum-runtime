@@ -37,8 +37,7 @@ pub enum Cap {
 }
 
 impl Cap {
-    /// The declared name; const (via the derived [`VariantNames`], which
-    /// is in declaration order) so const consumers can evaluate it.
+    /// The declared name; the discriminant indexes `VARIANTS`, so this is const.
     pub const fn as_str(self) -> &'static str {
         Self::VARIANTS[self as usize]
     }
@@ -718,9 +717,12 @@ mod tests {
     #[test]
     fn unknown_capability_is_rejected_with_the_known_list() {
         let err = synthesize(&["telepathy".to_string()], &ext()).unwrap_err();
-        assert!(err.contains("unknown capability `telepathy`"));
-        assert!(err.contains("logging"));
-        assert!(err.contains("acme"));
+        // Operator-facing wording and order, pinned verbatim.
+        assert_eq!(
+            err,
+            "unknown capability `telepathy` in module.toml [capabilities]; expected one of: \
+             chain, identity, local-store, remote-store, messaging, logging, http, acme"
+        );
     }
 
     #[test]
@@ -817,7 +819,7 @@ allow = []
     fn world_is_valid_wit_shape() {
         // Not a full WIT parse (that is the module build's job); pin the
         // structural pieces the runtime contract depends on.
-        let world = synthesize(&["logging".to_string()], &[]).unwrap();
+        let world = synthesize(&[Cap::Logging.to_string()], &[]).unwrap();
         assert!(world.wit.starts_with("package nexum:module-world;"));
         assert!(world.wit.contains("world module {"));
         assert!(
