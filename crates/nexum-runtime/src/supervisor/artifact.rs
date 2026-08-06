@@ -5,11 +5,12 @@
 
 use std::path::Path;
 
-use anyhow::{Context, Error, Result, bail};
+use anyhow::{Context, Error, Result};
 use tracing::{debug, warn};
 use wasmtime::component::Component;
 use wasmtime::{CodeBuilder, Engine};
 
+use super::load::LoadRefusal;
 use crate::digest::{ContentDigest, DigestMismatch};
 
 /// The only production compile path; the verified bytes are the compiled bytes.
@@ -34,11 +35,13 @@ pub(super) fn read_verified_component(
             }
             debug!(component = %path.display(), digest = %actual, "component digest verified");
         }
-        None if require_digest => bail!(
-            "no [module].component digest for {} and [engine] require_component_digest is set; \
-             pin the artifact's sha256 in its module.toml",
-            path.display(),
-        ),
+        // The mismatch above stays the anyhow root: callers downcast to `DigestMismatch`.
+        None if require_digest => {
+            return Err(LoadRefusal::DigestUnpinned {
+                path: path.to_owned(),
+            }
+            .into());
+        }
         None => warn!(
             component = %path.display(),
             digest = %actual,
