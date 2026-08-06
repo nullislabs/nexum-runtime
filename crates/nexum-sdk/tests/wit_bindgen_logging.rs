@@ -30,13 +30,22 @@ nexum_sdk::bind_host_logging_via_wit_bindgen!();
 
 use nexum::host::logging::Level as Wire;
 
+/// The recorder is process-wide, so every assertion is a containment
+/// check rather than an equality on the whole log.
+fn recorded(line: &str) -> Option<Wire> {
+    let recorded = nexum::host::logging::RECORDED.lock().unwrap();
+    recorded
+        .iter()
+        .find(|(_, message)| message == line)
+        .map(|(level, _)| *level)
+}
+
 #[test]
 fn sink_forwards_to_the_bound_logging_call() {
     use nexum_sdk::tracing::LogSink as _;
 
     HostLogSink.log(nexum_sdk::Level::INFO, "ready");
-    let recorded = nexum::host::logging::RECORDED.lock().unwrap();
-    assert_eq!(recorded.as_slice(), [(Wire::Info, "ready".to_owned())]);
+    assert_eq!(recorded("ready"), Some(Wire::Info));
 }
 
 #[test]
@@ -53,6 +62,8 @@ fn level_mapping_covers_the_wire_enum() {
 }
 
 #[test]
-fn facade_install_runs_without_the_base_block() {
+fn facade_install_routes_events_to_the_bound_logging_call() {
     install_tracing();
+    tracing::warn!("through the facade");
+    assert_eq!(recorded("through the facade"), Some(Wire::Warn));
 }
