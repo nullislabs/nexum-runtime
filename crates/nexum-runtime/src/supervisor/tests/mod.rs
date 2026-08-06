@@ -79,15 +79,22 @@ async fn try_boot_single(
     let engine = test_wasmtime_engine();
     let linker = make_linker(&engine);
     let (dir, store) = temp_local_store();
+    let entry = ModuleEntry {
+        path: wasm.to_path_buf(),
+        manifest: manifest.map(Path::to_path_buf),
+    };
+    let limits = ModuleLimits::default();
+    let env = BootEnv {
+        limits: &limits,
+        configured_chains: test_chains(),
+        require_component_digest: require_digest,
+    };
     let result = Supervisor::boot_single(
         &engine,
         &linker,
-        wasm,
-        manifest,
+        &entry,
         &test_components(store),
-        &ModuleLimits::default(),
-        &test_chains(),
-        require_digest,
+        &env,
         &core_extensions(),
         clocks,
     )

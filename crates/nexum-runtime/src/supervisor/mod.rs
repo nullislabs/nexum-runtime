@@ -15,7 +15,6 @@ pub use prepass::ConfiguredChains;
 pub use store::{WasiClockOverride, build_linker, build_provider_linker};
 pub use subscriptions::ChainLogSub;
 
-use std::path::Path;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
@@ -46,6 +45,23 @@ pub struct Supervisor<T: RuntimeTypes> {
     chain_log_cursors: ChainLogCursors,
 }
 
+/// Boot inputs derived from [`EngineConfig`], bundled once at the call site.
+pub struct BootEnv<'a> {
+    pub limits: &'a ModuleLimits,
+    pub configured_chains: ConfiguredChains,
+    pub require_component_digest: bool,
+}
+
+impl<'a> BootEnv<'a> {
+    pub fn from_config(cfg: &'a EngineConfig) -> Self {
+        Self {
+            limits: &cfg.limits,
+            configured_chains: ConfiguredChains::from_config(cfg),
+            require_component_digest: cfg.engine.require_component_digest,
+        }
+    }
+}
+
 /// Cached at boot so restarts rebuild an identical store and linker.
 pub(super) struct Shared<T: RuntimeTypes> {
     pub(super) engine: Engine,
@@ -68,7 +84,7 @@ impl<T: RuntimeTypes> Supervisor<T> {
         extensions: &[Arc<dyn Extension<T>>],
         clocks: Option<WasiClockOverride>,
     ) -> Result<Self> {
-        let shared = wire_extensions(engine, components, extensions, clocks)?;
+        let shared = wire_extensions(engine, components, extensions, clocks, true)?;
         let registry = capability_registry(&shared.extensions);
         let prepass = prepass::run(engine_cfg, &registry)?;
         // Providers boot first, so every module store built after already
@@ -92,49 +108,32 @@ impl<T: RuntimeTypes> Supervisor<T> {
     }
 
     /// Single-component boot for `just run` without an `engine.toml`.
-    #[allow(clippy::too_many_arguments)]
     pub async fn boot_single(
         engine: &Engine,
         linker: &Linker<HostState<T>>,
-        wasm: &Path,
-        manifest: Option<&Path>,
+        entry: &ModuleEntry,
         components: &Components<T>,
-        limits: &ModuleLimits,
-        configured_chains: &ConfiguredChains,
-        require_component_digest: bool,
+        env: &BootEnv<'_>,
         extensions: &[Arc<dyn Extension<T>>],
         clocks: Option<WasiClockOverride>,
     ) -> Result<Self> {
-        enforce_extension_uniqueness(extensions)?;
-        let services = HostServices::from_extensions(extensions)?;
-        // Providers come only from `engine.toml`, so no kinds register here.
-        let shared = Shared {
-            engine: engine.clone(),
-            components: components.clone(),
-            extensions: extensions.to_vec(),
-            services,
-            kinds: ProviderKinds::new(),
-            clocks,
-        };
+        // Provider kinds come only from `engine.toml`, so none register here.
+        let shared = wire_extensions(engine, components, extensions, clocks, false)?;
         let registry = capability_registry(&shared.extensions);
-        let entry = ModuleEntry {
-            path: wasm.to_path_buf(),
-            manifest: manifest.map(Path::to_path_buf),
-        };
         let loaded_manifest =
             load_required_manifest(&entry.path, entry.manifest.as_deref(), &registry, "module")?;
         enforce_configured_chains(
             &manifest_namespace(&loaded_manifest, MODULE_FALLBACK_NAME),
             &loaded_manifest,
-            configured_chains,
+            &env.configured_chains,
         )?;
         let loaded = load::module(
             &shared,
             linker,
-            &entry,
+            entry,
             loaded_manifest,
-            limits,
-            require_component_digest,
+            env.limits,
+            env.require_component_digest,
             &[],
         )
         .await?;
@@ -142,7 +141,7 @@ impl<T: RuntimeTypes> Supervisor<T> {
             shared,
             modules: vec![loaded],
             providers: Vec::new(),
-            policy: limits.poison(),
+            policy: env.limits.poison(),
             chain_log_cursors: ChainLogCursors::default(),
         })
     }
@@ -186,15 +185,21 @@ impl<T: RuntimeTypes> Supervisor<T> {
 }
 
 /// The resulting [`Shared`] is the one wiring every later phase reads.
+/// `with_provider_kinds: false` skips [`provider_kinds`], which refuses a serviceless kind.
 fn wire_extensions<T: RuntimeTypes>(
     engine: &Engine,
     components: &Components<T>,
     extensions: &[Arc<dyn Extension<T>>],
     clocks: Option<WasiClockOverride>,
+    with_provider_kinds: bool,
 ) -> Result<Shared<T>> {
     enforce_extension_uniqueness(extensions)?;
     let services = HostServices::from_extensions(extensions)?;
-    let kinds = provider_kinds(extensions, &services)?;
+    let kinds = if with_provider_kinds {
+        provider_kinds(extensions, &services)?
+    } else {
+        ProviderKinds::new()
+    };
     Ok(Shared {
         engine: engine.clone(),
         components: components.clone(),
