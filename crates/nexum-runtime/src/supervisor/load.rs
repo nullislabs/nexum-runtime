@@ -14,7 +14,7 @@ use super::admission::{
 use super::artifact::read_verified_component;
 use super::dispatch::with_dispatch_deadline;
 use super::lifecycle::Health;
-use super::prepass::{MODULE_FALLBACK_NAME, PROVIDER_FALLBACK_NAME, manifest_namespace};
+use super::prepass::manifest_namespace;
 use super::store::{
     self, HostStore, ResolvedLimits, StoreSpec, build_provider_linker, resolve_module_limits,
 };
@@ -151,8 +151,7 @@ pub(super) async fn module<T: RuntimeTypes>(
     require_component_digest: bool,
     provider_manifests: &[ProviderManifest],
 ) -> Result<LoadedModule<T>> {
-    let module_namespace: ModuleId =
-        manifest_namespace(&loaded_manifest, MODULE_FALLBACK_NAME).into();
+    let module_namespace: ModuleId = manifest_namespace(&loaded_manifest).into();
     let registry = capability_registry(&shared.extensions);
     let sections = &loaded_manifest.manifest.extensions;
     let ((), component, digest) = admit_and_verify(
@@ -274,7 +273,7 @@ pub(super) async fn provider<T: RuntimeTypes>(
     limits_cfg: &ModuleLimits,
     require_component_digest: bool,
 ) -> Result<LoadedProvider> {
-    let namespace: ModuleId = manifest_namespace(&loaded_manifest, PROVIDER_FALLBACK_NAME).into();
+    let namespace: ModuleId = manifest_namespace(&loaded_manifest).into();
     // A core-only declaration fails at manifest load; an undeclared gated
     // import fails after compile; the linker withholds the core interfaces.
     let registry = CapabilityRegistry::provider();

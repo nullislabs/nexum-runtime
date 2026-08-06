@@ -8,6 +8,8 @@ use alloy_chains::Chain;
 use anyhow::{Context, Error, Result, anyhow};
 use tracing::{info, warn};
 
+use super::role::Role;
+use super::subscriptions::build_alloy_filter;
 use crate::engine_config::EngineConfig;
 use crate::manifest::{self, CapabilityRegistry, LoadedManifest, Subscription};
 
@@ -33,17 +35,9 @@ pub(super) fn claim_namespace(
     Ok(())
 }
 
-pub(super) const MODULE_FALLBACK_NAME: &str = "module";
-
-pub(super) const PROVIDER_FALLBACK_NAME: &str = "provider";
-
-/// `[module].name`, or `fallback` when it is empty.
-pub(super) fn manifest_namespace(loaded: &LoadedManifest, fallback: &str) -> String {
-    if loaded.manifest.module.name.is_empty() {
-        fallback.to_owned()
-    } else {
-        loaded.manifest.module.name.clone()
-    }
+/// `[module].name`; manifest parse already refused a blank one.
+pub(super) fn manifest_namespace(loaded: &LoadedManifest) -> String {
+    loaded.manifest.module.name.clone()
 }
 
 /// Missing or unresolved refuses the boot.
@@ -119,9 +113,11 @@ impl ConfiguredChains {
     }
 }
 
-/// Refuse any subscription naming a chain absent from `[chains]`, before any guest code runs.
-pub(super) fn enforce_configured_chains(
-    module: &str,
+/// Refuse any subscription naming a chain absent from `[chains]` or carrying
+/// an unparseable chain-log filter, before any guest code runs.
+pub(super) fn enforce_subscriptions(
+    role: Role,
+    name: &str,
     loaded: &LoadedManifest,
     chains: &ConfiguredChains,
 ) -> Result<()> {
@@ -131,16 +127,37 @@ pub(super) fn enforce_configured_chains(
             continue;
         };
         if !chains.contains(*chain_id) {
-            return Err(unconfigured_chain(module, *chain_id, chains));
+            return Err(unconfigured_chain(role, name, *chain_id, chains));
+        }
+        if let Subscription::ChainLog {
+            address,
+            event_signature,
+            ..
+        } = sub
+        {
+            build_alloy_filter(address.as_deref(), event_signature.as_deref()).with_context(
+                || {
+                    format!(
+                        "{} {name} declares an invalid chain-log filter on chain {chain_id}",
+                        role.claim_role(),
+                    )
+                },
+            )?;
         }
     }
     Ok(())
 }
 
-pub(super) fn unconfigured_chain(module: &str, chain_id: u64, chains: &ConfiguredChains) -> Error {
+pub(super) fn unconfigured_chain(
+    role: Role,
+    name: &str,
+    chain_id: u64,
+    chains: &ConfiguredChains,
+) -> Error {
+    let noun = role.claim_role();
     if chains.defaulted {
         return anyhow!(
-            "module {module} subscribes to chain {chain_id} but no engine.toml was found \
+            "{noun} {name} subscribes to chain {chain_id} but no engine.toml was found \
              (running on defaults, no chains configured); create engine.toml with a \
              [chains.{chain_id}] entry"
         );
@@ -156,7 +173,7 @@ pub(super) fn unconfigured_chain(module: &str, chain_id: u64, chains: &Configure
             .join(", ")
     };
     anyhow!(
-        "module {module} subscribes to chain {chain_id} but engine.toml declares no \
+        "{noun} {name} subscribes to chain {chain_id} but engine.toml declares no \
          [chains.{chain_id}] entry; configured chains: {configured}"
     )
 }
@@ -180,11 +197,8 @@ pub(super) fn run(engine_cfg: &EngineConfig, registry: &CapabilityRegistry) -> R
             .map(|e| (&e.path, e.manifest.as_deref())),
         &provider_registry,
         RolePass {
-            manifest_role: "provider",
-            claim_role: "adapter",
-            context: "load provider",
-            fallback: PROVIDER_FALLBACK_NAME,
-            chains: None,
+            role: Role::Adapter,
+            chains: &configured_chains,
         },
         &mut ledger,
     )?;
@@ -195,11 +209,8 @@ pub(super) fn run(engine_cfg: &EngineConfig, registry: &CapabilityRegistry) -> R
             .map(|e| (&e.path, e.manifest.as_deref())),
         registry,
         RolePass {
-            manifest_role: "module",
-            claim_role: "module",
-            context: "load module",
-            fallback: MODULE_FALLBACK_NAME,
-            chains: Some(&configured_chains),
+            role: Role::Module,
+            chains: &configured_chains,
         },
         &mut ledger,
     )?;
@@ -210,11 +221,8 @@ pub(super) fn run(engine_cfg: &EngineConfig, registry: &CapabilityRegistry) -> R
 }
 
 struct RolePass<'a> {
-    manifest_role: &'static str,
-    claim_role: &'static str,
-    context: &'static str,
-    fallback: &'static str,
-    chains: Option<&'a ConfiguredChains>,
+    role: Role,
+    chains: &'a ConfiguredChains,
 }
 
 /// In declaration order.
@@ -226,14 +234,12 @@ fn load_role_manifests<'a>(
 ) -> Result<Vec<LoadedManifest>> {
     let mut manifests = Vec::new();
     for (path, explicit) in entries {
-        let loaded = load_required_manifest(path, explicit, registry, pass.manifest_role)
-            .with_context(|| format!("{} {}", pass.context, path.display()))?;
-        let namespace = manifest_namespace(&loaded, pass.fallback);
-        claim_namespace(ledger, &namespace, pass.claim_role, path)?;
-        if let Some(chains) = pass.chains {
-            enforce_configured_chains(&namespace, &loaded, chains)
-                .with_context(|| format!("{} {}", pass.context, path.display()))?;
-        }
+        let loaded = load_required_manifest(path, explicit, registry, pass.role.manifest_role())
+            .with_context(|| format!("{} {}", pass.role.load_context(), path.display()))?;
+        let namespace = manifest_namespace(&loaded);
+        claim_namespace(ledger, &namespace, pass.role.claim_role(), path)?;
+        enforce_subscriptions(pass.role, &namespace, &loaded, pass.chains)
+            .with_context(|| format!("{} {}", pass.role.load_context(), path.display()))?;
         manifests.push(loaded);
     }
     Ok(manifests)

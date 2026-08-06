@@ -4,10 +4,10 @@ use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Error, Result, anyhow};
-use tracing::{error, info, warn};
 
 use super::Shared;
 use super::load::{LoadedModule, LoadedProvider, run_init};
+use super::role::{Role, report_restart_attempt, report_restart_outcome, report_trap};
 use super::store::{self, build_linker, build_provider_linker};
 use crate::bindings::EventModule;
 use crate::digest::ContentDigest;
@@ -143,49 +143,6 @@ impl Health {
 
     pub(super) fn dispatch_succeeded(&mut self) {
         self.failure_count = 0;
-    }
-}
-
-/// Keys the per-role metric names and the compile-time tracing field keys.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, strum::IntoStaticStr)]
-pub(super) enum Role {
-    Module,
-    Adapter,
-}
-
-impl Role {
-    const fn label(self) -> &'static str {
-        match self {
-            Self::Module => "module",
-            Self::Adapter => "adapter",
-        }
-    }
-
-    const fn errors_total(self) -> &'static str {
-        match self {
-            Self::Module => "nexum_runtime_module_errors_total",
-            Self::Adapter => "nexum_runtime_adapter_errors_total",
-        }
-    }
-
-    const fn restarts_total(self) -> &'static str {
-        match self {
-            Self::Module => "nexum_runtime_module_restarts_total",
-            Self::Adapter => "nexum_runtime_adapter_restarts_total",
-        }
-    }
-
-    const fn poisoned_gauge(self) -> &'static str {
-        match self {
-            Self::Module => "nexum_runtime_module_poisoned",
-            Self::Adapter => "nexum_runtime_adapter_poisoned",
-        }
-    }
-
-    /// A provider reinstall is a fresh instance, so its curve resets; a
-    /// module recovers in place and keeps climbing.
-    const fn resets_failure_count(self) -> bool {
-        matches!(self, Self::Adapter)
     }
 }
 
@@ -358,47 +315,7 @@ pub(super) async fn sweep<T: RuntimeTypes, S: Sweepable<T>>(
         let policy = item.poison_policy(engine_default);
         if let Some(died_at) = item.detect_death() {
             let verdict = item.health_mut().record_trap(died_at, now, policy);
-            match S::ROLE {
-                Role::Module => warn!(
-                    module = %item.name(),
-                    failure_count = verdict.failure_count,
-                    backoff_ms = verdict.backoff.as_millis() as u64,
-                    "module trapped - marked dead; will restart after backoff",
-                ),
-                Role::Adapter => warn!(
-                    adapter = %item.name(),
-                    failure_count = verdict.failure_count,
-                    backoff_ms = verdict.backoff.as_millis() as u64,
-                    "adapter trapped - marked dead; will restart after backoff",
-                ),
-            }
-            metrics::counter!(
-                S::ROLE.errors_total(),
-                S::ROLE.label() => item.name().clone(),
-                "error_kind" => "trap",
-            )
-            .increment(1);
-            if let Some(recent) = verdict.poisoned {
-                match S::ROLE {
-                    Role::Module => warn!(
-                        module = %item.name(),
-                        recent_failures = recent,
-                        window_secs = policy.window.as_secs(),
-                        "module poisoned - quarantined; remove from engine.toml + restart to clear",
-                    ),
-                    Role::Adapter => warn!(
-                        adapter = %item.name(),
-                        recent_failures = recent,
-                        window_secs = policy.window.as_secs(),
-                        "adapter poisoned - quarantined; remove from engine.toml + restart to clear",
-                    ),
-                }
-                metrics::gauge!(
-                    S::ROLE.poisoned_gauge(),
-                    S::ROLE.label() => item.name().clone(),
-                )
-                .set(1.0);
-            }
+            report_trap(S::ROLE, item.name(), &verdict, policy);
         }
         if item.health().due_restart(now) {
             revive_one(shared, item, now).await;
@@ -411,59 +328,22 @@ pub(super) async fn revive_one<T: RuntimeTypes, S: Sweepable<T>>(
     item: &mut S,
     now: Instant,
 ) {
-    let failure_count = item.health().failure_count();
     // Revives reuse the cached component, so the boot-time digest holds.
-    match S::ROLE {
-        Role::Module => info!(
-            module = %item.name(),
-            failure_count,
-            digest = %item.digest(),
-            "restart attempt",
-        ),
-        Role::Adapter => info!(
-            adapter = %item.name(),
-            failure_count,
-            digest = %item.digest(),
-            "adapter restart attempt",
-        ),
-    }
-    metrics::counter!(
-        S::ROLE.restarts_total(),
-        S::ROLE.label() => item.name().clone(),
-    )
-    .increment(1);
+    report_restart_attempt(
+        S::ROLE,
+        item.name(),
+        item.health().failure_count(),
+        item.digest(),
+    );
     match item.revive(shared).await {
         Ok(()) => {
             item.health_mut()
                 .restart_succeeded(S::ROLE.resets_failure_count());
-            match S::ROLE {
-                Role::Module => info!(module = %item.name(), "restart succeeded"),
-                Role::Adapter => info!(adapter = %item.name(), "adapter restart succeeded"),
-            }
+            report_restart_outcome(S::ROLE, item.name(), Ok(()));
         }
         Err(e) => {
             let deferral = item.health_mut().defer_restart(now);
-            match S::ROLE {
-                Role::Module => error!(
-                    module = %item.name(),
-                    failure_count = deferral.failure_count,
-                    backoff_ms = deferral.backoff.as_millis() as u64,
-                    error = %e,
-                    "restart failed - will retry after backoff",
-                ),
-                Role::Adapter => {
-                    // A string field, not a `Display` one: the two record
-                    // through different visitor methods and print differently.
-                    let error = format!("{e:#}");
-                    error!(
-                        adapter = %item.name(),
-                        failure_count = deferral.failure_count,
-                        backoff_ms = deferral.backoff.as_millis() as u64,
-                        error,
-                        "adapter restart failed - will retry after backoff",
-                    );
-                }
-            }
+            report_restart_outcome(S::ROLE, item.name(), Err((deferral, e)));
         }
     }
 }

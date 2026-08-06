@@ -4,7 +4,6 @@
 use std::collections::BTreeSet;
 
 use alloy_chains::Chain;
-use tracing::warn;
 
 use super::Supervisor;
 use super::cursors::{chainlog_cursor_key, read_chain_log_cursor};
@@ -42,42 +41,34 @@ impl<T: RuntimeTypes> Supervisor<T> {
                     max_lookback,
                 } = sub
                 {
-                    match build_alloy_filter(address.as_deref(), event_signature.as_deref()) {
-                        Ok(filter) => {
-                            let chain = Chain::from_id(*chain_id);
-                            // A `resume` subscription reads its durable cursor
-                            // once here at boot; others start at head.
-                            let (cursor_key, initial_cursor) = if *resume {
-                                let key = chainlog_cursor_key(
-                                    chain,
-                                    address.as_deref(),
-                                    event_signature.as_deref(),
-                                );
-                                let seed = read_chain_log_cursor(
-                                    &self.shared.components.store,
-                                    module.name.as_str(),
-                                    &key,
-                                );
-                                (Some(key), seed)
-                            } else {
-                                (None, None)
-                            };
-                            out.push(ChainLogSub {
-                                module: module.name.clone(),
-                                chain,
-                                filter,
-                                cursor_key,
-                                initial_cursor,
-                                max_lookback: *max_lookback,
-                            });
-                        }
-                        Err(err) => warn!(
-                            module = %module.name,
-                            chain_id,
-                            error = %err,
-                            "invalid chain-log subscription - skipping",
-                        ),
-                    }
+                    let filter = build_alloy_filter(address.as_deref(), event_signature.as_deref())
+                        .expect("chain-log filters are validated at load");
+                    let chain = Chain::from_id(*chain_id);
+                    // A `resume` subscription reads its durable cursor
+                    // once here at boot; others start at head.
+                    let (cursor_key, initial_cursor) = if *resume {
+                        let key = chainlog_cursor_key(
+                            chain,
+                            address.as_deref(),
+                            event_signature.as_deref(),
+                        );
+                        let seed = read_chain_log_cursor(
+                            &self.shared.components.store,
+                            module.name.as_str(),
+                            &key,
+                        );
+                        (Some(key), seed)
+                    } else {
+                        (None, None)
+                    };
+                    out.push(ChainLogSub {
+                        module: module.name.clone(),
+                        chain,
+                        filter,
+                        cursor_key,
+                        initial_cursor,
+                        max_lookback: *max_lookback,
+                    });
                 }
             }
         }
