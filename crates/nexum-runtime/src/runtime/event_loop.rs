@@ -104,6 +104,15 @@ fn receiver_stream<T: Send + 'static>(
     })
 }
 
+/// Bumps `attempt`, hands `(attempt, backoff_ms)` to the site's log line, and
+/// sleeps the backoff.
+async fn backoff_pause(attempt: &mut u32, log: impl FnOnce(u32, u64)) {
+    *attempt = attempt.saturating_add(1);
+    let backoff = backoff_for(*attempt);
+    log(*attempt, backoff.as_millis() as u64);
+    tokio::time::sleep(backoff).await;
+}
+
 /// Reconnect-aware loop for one chain's block subscription: re-opens the
 /// stream with exponential backoff after every drop or error.
 async fn reconnecting_block_task(
@@ -167,21 +176,18 @@ async fn reconnecting_block_task(
                     }
                 }
                 warn!(chain_id, "block stream ended (WebSocket dropped?)");
-                attempt = attempt.saturating_add(1);
             }
             Err(err) => {
                 warn!(chain_id, error = %err, "block subscription failed");
-                attempt = attempt.saturating_add(1);
             }
         }
-        let backoff = backoff_for(attempt);
-        warn!(
-            chain_id,
-            attempt,
-            backoff_ms = backoff.as_millis() as u64,
-            "reconnecting block subscription after backoff",
-        );
-        tokio::time::sleep(backoff).await;
+        backoff_pause(&mut attempt, |attempt, backoff_ms| {
+            warn!(
+                chain_id,
+                attempt, backoff_ms, "reconnecting block subscription after backoff",
+            );
+        })
+        .await;
     }
 }
 
@@ -230,34 +236,34 @@ async fn reconnecting_chain_log_task(
         let provider = match pool.provider(chain) {
             Ok(provider) => provider,
             Err(err) => {
-                attempt = attempt.saturating_add(1);
-                let backoff = backoff_for(attempt);
-                warn!(
-                    module = %module,
-                    chain_id,
-                    error = %err,
-                    attempt,
-                    backoff_ms = backoff.as_millis() as u64,
-                    "chain-log provider lookup failed - retrying after backoff",
-                );
-                tokio::time::sleep(backoff).await;
+                backoff_pause(&mut attempt, |attempt, backoff_ms| {
+                    warn!(
+                        module = %module,
+                        chain_id,
+                        error = %err,
+                        attempt,
+                        backoff_ms,
+                        "chain-log provider lookup failed - retrying after backoff",
+                    );
+                })
+                .await;
                 continue;
             }
         };
         let head = match provider.get_block_number().await {
             Ok(head) => head,
             Err(err) => {
-                attempt = attempt.saturating_add(1);
-                let backoff = backoff_for(attempt);
-                warn!(
-                    module = %module,
-                    chain_id,
-                    error = %err,
-                    attempt,
-                    backoff_ms = backoff.as_millis() as u64,
-                    "chain-log head fetch failed - retrying after backoff",
-                );
-                tokio::time::sleep(backoff).await;
+                backoff_pause(&mut attempt, |attempt, backoff_ms| {
+                    warn!(
+                        module = %module,
+                        chain_id,
+                        error = %err,
+                        attempt,
+                        backoff_ms,
+                        "chain-log head fetch failed - retrying after backoff",
+                    );
+                })
+                .await;
                 continue;
             }
         };
@@ -268,17 +274,17 @@ async fn reconnecting_chain_log_task(
                 Ok(Some(block)) if block.header.hash == t.hash => {}
                 Ok(Some(_)) => invalidated_tail = Some(t.number),
                 Ok(None) | Err(_) => {
-                    attempt = attempt.saturating_add(1);
-                    let backoff = backoff_for(attempt);
-                    warn!(
-                        module = %module,
-                        chain_id,
-                        tail_block = t.number,
-                        attempt,
-                        backoff_ms = backoff.as_millis() as u64,
-                        "chain-log tail hash unconfirmed - retrying after backoff",
-                    );
-                    tokio::time::sleep(backoff).await;
+                    backoff_pause(&mut attempt, |attempt, backoff_ms| {
+                        warn!(
+                            module = %module,
+                            chain_id,
+                            tail_block = t.number,
+                            attempt,
+                            backoff_ms,
+                            "chain-log tail hash unconfirmed - retrying after backoff",
+                        );
+                    })
+                    .await;
                     continue;
                 }
             }
@@ -413,7 +419,6 @@ async fn reconnecting_chain_log_task(
                     }
                 }
                 warn!(module = %module, chain_id, "chain-log poller stream ended - reopening");
-                attempt = attempt.saturating_add(1);
             }
             Err(err) => {
                 warn!(
@@ -422,18 +427,18 @@ async fn reconnecting_chain_log_task(
                     error = %err,
                     "chain-log poller open failed"
                 );
-                attempt = attempt.saturating_add(1);
             }
         }
-        let backoff = backoff_for(attempt);
-        warn!(
-            module = %module,
-            chain_id,
-            attempt,
-            backoff_ms = backoff.as_millis() as u64,
-            "reconnecting chain-log poller after backoff",
-        );
-        tokio::time::sleep(backoff).await;
+        backoff_pause(&mut attempt, |attempt, backoff_ms| {
+            warn!(
+                module = %module,
+                chain_id,
+                attempt,
+                backoff_ms,
+                "reconnecting chain-log poller after backoff",
+            );
+        })
+        .await;
     }
 }
 
