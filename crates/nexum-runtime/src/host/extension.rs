@@ -12,6 +12,7 @@ use futures::Stream;
 use nexum_tasks::{TaskExecutor, TaskExit, TaskSet};
 use wasmtime::Store;
 use wasmtime::component::{Component, Linker};
+pub use wasmtime_wasi::HostWallClock;
 
 use crate::bindings::nexum::host::types::Event;
 use crate::engine_config::EngineConfig;
@@ -19,6 +20,7 @@ use crate::host::actor::Liveness;
 use crate::host::component::RuntimeTypes;
 use crate::host::state::HostState;
 use crate::manifest::{ExtensionSections, NamespaceCaps};
+use crate::supervisor::WasiClockOverride;
 
 /// One runtime extension; a module importing its interface boots only if both
 /// the linker entry and the capability namespace are registered.
@@ -32,6 +34,12 @@ pub trait Extension<T: RuntimeTypes>: Send + Sync + 'static {
     /// Add the extension's imports to a worker linker, after core interfaces
     /// and before instantiation.
     fn link(&self, linker: &mut Linker<HostState<T>>) -> anyhow::Result<()>;
+
+    /// The effective host wall clock, handed once per launch before
+    /// [`link`](Self::link): the WASI override's wall clock when set, else real.
+    fn attach_clock(&self, wall: Arc<dyn HostWallClock + Send + Sync>) {
+        let _ = wall;
+    }
 
     /// Host service this extension owns, published under its namespace.
     fn service(&self) -> Option<Arc<dyn HostService>> {
@@ -79,6 +87,18 @@ pub trait Extension<T: RuntimeTypes>: Send + Sync + 'static {
     fn events(&self, sources: &mut EventSources<'_>) -> anyhow::Result<Vec<ExtensionEventStream>> {
         let _ = sources;
         Ok(Vec::new())
+    }
+}
+
+/// Hand every extension the effective wall clock. Every launch path calls
+/// this before it builds the linker.
+pub(crate) fn attach_wall_clock<T: RuntimeTypes>(
+    extensions: &[Arc<dyn Extension<T>>],
+    clocks: Option<&WasiClockOverride>,
+) {
+    let wall = WasiClockOverride::effective_wall(clocks);
+    for ext in extensions {
+        ext.attach_clock(wall.clone());
     }
 }
 

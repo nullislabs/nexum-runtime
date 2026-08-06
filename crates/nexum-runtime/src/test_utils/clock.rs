@@ -11,7 +11,7 @@ use crate::supervisor::WasiClockOverride;
 /// onto the same instant: install one clone as a store's
 /// [`WasiClockOverride`], drive the other from the test. [`set`](Self::set)
 /// pins wall time; [`advance`](Self::advance) moves wall and monotonic
-/// together. Guest-visible only.
+/// together. Drives guest WASI time and the wall clock extensions receive.
 #[derive(Clone)]
 pub struct ManualClock {
     inner: Arc<Mutex<Instant>>,

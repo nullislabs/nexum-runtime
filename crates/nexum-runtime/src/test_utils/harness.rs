@@ -153,7 +153,6 @@ impl<E: Clone + Send + Sync + 'static> TestRuntimeBuilder<E> {
                 Prebuilt(self.store.clone()),
                 Prebuilt(self.ext.clone()),
             ))
-            .with_add_ons(&[])
             .launch()
             .await?;
 

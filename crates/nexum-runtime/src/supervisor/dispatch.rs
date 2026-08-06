@@ -320,7 +320,7 @@ impl<T: RuntimeTypes> Supervisor<T> {
 pub(super) struct DeadlineExceeded(Duration);
 
 /// Cancellation lands at the future's next await point, so pure guest
-/// spinning stays fuel's job (see [`crate::runtime::limits`]).
+/// spinning stays fuel's job (see [`crate::engine_config::ModuleLimits`]).
 pub(super) async fn with_dispatch_deadline<F: std::future::Future>(
     deadline: Duration,
     fut: F,
