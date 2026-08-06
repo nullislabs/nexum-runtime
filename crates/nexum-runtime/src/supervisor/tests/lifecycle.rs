@@ -769,5 +769,8 @@ async fn a_hanging_provider_install_refuses_the_boot_by_deadline() {
         INSTALL_DEADLINE,
         "the install rode the configured deadline, not another timer",
     );
-    refusal.names("did not install in time");
+    refusal
+        .variant::<DeadlineExceeded>(|_| true)
+        // Operator wording pin.
+        .names("did not install in time");
 }

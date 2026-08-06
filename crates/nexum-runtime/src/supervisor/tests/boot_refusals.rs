@@ -57,24 +57,25 @@ async fn boot_rejects_provider_whose_manifest_is_an_event_module() {
         .adapter(TestManifest::new("acme").kind("event-module"))
         .expect_refusal()
         .await
-        .names("acme-adapter");
+        .variant::<LoadRefusal>(|e| {
+            matches!(e, LoadRefusal::WorkerKindAdapter { registered, .. }
+                if registered == &["acme-adapter"])
+        });
 }
 
 /// The refusal names the registered kinds.
 #[tokio::test]
 async fn boot_rejects_an_unregistered_provider_kind() {
-    let refusal = BootScenario::over(mock_components())
+    BootScenario::over(mock_components())
         .extensions(acme_extensions())
         .adapter(TestManifest::new("bad").kind("gadget"))
         .expect_refusal()
-        .await;
-    assert!(matches!(
-        refusal.root::<LoadRefusal>(),
-        Some(LoadRefusal::UnregisteredKind { kind, registered, .. })
-            if kind == "gadget" && registered == &["acme-adapter"]
-    ));
-    // Operator wording pin.
-    refusal
+        .await
+        .variant::<LoadRefusal>(|e| {
+            matches!(e, LoadRefusal::UnregisteredKind { kind, registered, .. }
+                if kind == "gadget" && registered == &["acme-adapter"])
+        })
+        // Operator wording pin.
         .names("unregistered provider kind gadget")
         .names("acme-adapter");
 }
@@ -94,6 +95,8 @@ async fn boot_admits_a_registered_provider_kind_past_the_kind_gate() {
         )
         .expect_refusal()
         .await
+        .variant::<std::io::Error>(|e| e.kind() == std::io::ErrorKind::NotFound)
+        // Operator wording pin.
         .names("read component")
         .names("missing-acme")
         .lacks("requires a module.toml");
@@ -103,19 +106,21 @@ async fn boot_admits_a_registered_provider_kind_past_the_kind_gate() {
 /// the boot before any entry loads.
 #[tokio::test]
 async fn boot_refuses_a_provider_kind_without_a_host_service() {
-    let refusal = BootScenario::over(mock_components())
+    BootScenario::over(mock_components())
         .extensions(serviceless_acme_extensions())
         .expect_refusal()
-        .await;
-    assert!(matches!(
-        refusal.root::<LoadRefusal>(),
-        Some(LoadRefusal::ServicelessKind {
-            namespace: "acme",
-            kind: "acme-adapter"
+        .await
+        .variant::<LoadRefusal>(|e| {
+            matches!(
+                e,
+                LoadRefusal::ServicelessKind {
+                    namespace: "acme",
+                    kind: "acme-adapter"
+                }
+            )
         })
-    ));
-    // Operator wording pin.
-    refusal.names("extension acme registers provider kind acme-adapter without a host service");
+        // Operator wording pin.
+        .names("extension acme registers provider kind acme-adapter without a host service");
 }
 
 /// Provider kinds come only from `engine.toml`, so single boot skips the
@@ -149,7 +154,8 @@ async fn boot_single_skips_the_provider_kind_service_gate() {
     .err()
     .expect("a missing manifest must refuse the boot");
     Refusal::from(err)
-        .names("no module.toml")
+        .variant::<BootRefusal>(|e| matches!(e, BootRefusal::ManifestMissing { .. }))
+        // Operator wording pin.
         .lacks("without a host service");
 }
 
@@ -168,7 +174,9 @@ async fn boot_refuses_an_undeclared_extension_subscription_kind() {
         )
         .expect_refusal()
         .await
-        .names("unknown event kind acme-status");
+        .variant::<LoadRefusal>(
+            |e| matches!(e, LoadRefusal::UnknownEventKind { kind, .. } if kind == "acme-status"),
+        );
 }
 
 /// No wasm needs to exist; the refusal precedes compile and carries the
@@ -181,8 +189,11 @@ async fn boot_refuses_a_component_without_module_toml() {
         .module(Entry::new(ManifestSource::Beside).wasm(orphan))
         .expect_refusal()
         .await
-        .names("no module.toml")
-        .names("orphan.wasm")
+        .variant::<BootRefusal>(|e| {
+            matches!(e, BootRefusal::ManifestMissing { component }
+                if component.ends_with("orphan.wasm"))
+        })
+        // Operator wording pin.
         .names("required = []")
         .lacks("compile");
 }
@@ -195,8 +206,10 @@ async fn boot_refuses_a_nonexistent_explicit_manifest_path() {
         .module(missing)
         .expect_refusal()
         .await
-        .names("modle.toml")
-        .names("not found");
+        .variant::<BootRefusal>(|e| {
+            matches!(e, BootRefusal::ManifestNotFound { manifest, .. }
+                if manifest.ends_with("modle.toml"))
+        });
 }
 
 /// Operator `http_allow` must not stand in for the component's own
@@ -212,7 +225,10 @@ async fn boot_refuses_a_capsless_manifest_before_any_other_gate() {
         .adapter(Entry::new(provider.to_owned()).http_allow(["api.acme.example"]))
         .expect_refusal()
         .await
-        .names("no [capabilities] section")
+        .variant::<BootRefusal>(|e| {
+            matches!(e, BootRefusal::Manifest(ParseError::MissingCapabilities))
+        })
+        // Operator wording pin.
         .names("required = []")
         .lacks("no wired extension claims")
         .lacks("compile");
@@ -224,7 +240,10 @@ async fn boot_refuses_a_capsless_manifest_before_any_other_gate() {
         .module(module.to_owned())
         .expect_refusal()
         .await
-        .names("no [capabilities] section")
+        .variant::<BootRefusal>(|e| {
+            matches!(e, BootRefusal::Manifest(ParseError::MissingCapabilities))
+        })
+        // Operator wording pin.
         .names("required = []")
         .lacks("unknown event kind")
         .lacks("no wired extension claims")
@@ -242,7 +261,8 @@ async fn boot_refuses_a_blank_manifest_name_for_both_roles() {
         .adapter(TestManifest::new("").kind("acme-adapter").cap("chain"))
         .expect_refusal()
         .await
-        .names("[module].name")
+        .variant::<BootRefusal>(|e| matches!(e, BootRefusal::Manifest(ParseError::BlankModuleName)))
+        // Operator wording pin.
         .lacks("claimed twice")
         .lacks("read component")
         .lacks("compile");
@@ -252,7 +272,10 @@ async fn boot_refuses_a_blank_manifest_name_for_both_roles() {
             .module(TestManifest::new(blank).cap("logging"))
             .expect_refusal()
             .await
-            .names("[module].name")
+            .variant::<BootRefusal>(|e| {
+                matches!(e, BootRefusal::Manifest(ParseError::BlankModuleName))
+            })
+            // Operator wording pin.
             .lacks("claimed twice")
             .lacks("read component")
             .lacks("compile");
@@ -276,8 +299,9 @@ async fn boot_denies_an_undeclared_chain_import_for_balance_tracker() {
         )
         .expect_refusal()
         .await
-        .names("capability violation")
-        .names("nexum:host/chain");
+        .variant::<CapabilityError>(
+            |e| matches!(e, CapabilityError::Undeclared(v) if v.capability == "chain"),
+        );
 }
 
 /// The example component's only gated import is `logging`, so the refusal
@@ -293,6 +317,7 @@ async fn boot_denies_an_undeclared_logging_import_for_a_provider() {
         .adapter(Entry::new(TestManifest::new("acme").kind("acme-adapter").cap("chain")).wasm(wasm))
         .expect_refusal()
         .await
-        .names("capability violation")
-        .names("nexum:host/logging");
+        .variant::<CapabilityError>(
+            |e| matches!(e, CapabilityError::Undeclared(v) if v.capability == "logging"),
+        );
 }

@@ -20,7 +20,7 @@ use super::artifact::read_verified_component;
 use super::cursors::{
     chainlog_cursor_key, commit_chain_log_cursor, progress_key, read_chain_log_cursor,
 };
-use super::dispatch::with_dispatch_deadline;
+use super::dispatch::{DeadlineExceeded, with_dispatch_deadline};
 use super::prepass::{NamespaceLedger, claim_namespace, unconfigured_chain};
 use super::store::resolve_module_limits;
 use super::subscriptions::build_alloy_filter;
@@ -31,7 +31,7 @@ use crate::engine_config::ModuleLimits;
 use crate::host::extension::{HostService, Installed, ProviderInstance, ProviderKind};
 use crate::host::logs::LogSource;
 use crate::host::provider_pool::ProviderPool;
-use crate::manifest::{self, CapabilityRegistry, ResourceSection};
+use crate::manifest::{self, CapabilityRegistry, ParseError, ResourceSection};
 use crate::preset::CoreRuntime;
 use crate::test_utils::{
     BootScenario, Entry, ManifestSource, Refusal, TestManifest, example_wasm_or_skip,

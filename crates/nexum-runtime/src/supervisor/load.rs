@@ -38,7 +38,7 @@ use crate::runtime::dispatch_rate::TokenBucket;
 /// Admission refusals ahead of instantiation; the wording is operator-pinned.
 #[derive(Debug, ThisError, IntoStaticStr)]
 #[strum(serialize_all = "snake_case")]
-pub(super) enum LoadRefusal {
+pub(crate) enum LoadRefusal {
     #[error("{owner} declares manifest section [{section}]; no wired extension claims it")]
     SectionUnclaimed { owner: String, section: String },
     #[error("extension namespace {namespace} is claimed twice")]

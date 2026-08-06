@@ -365,6 +365,6 @@ mod tests {
             ext("acme", Arc::new(Clockwork)),
         ])
         .expect_err("duplicate namespace");
-        assert!(err.to_string().contains("acme"), "{err}");
+        assert_eq!(err.namespace, "acme");
     }
 }

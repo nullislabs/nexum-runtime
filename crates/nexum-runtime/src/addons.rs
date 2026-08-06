@@ -103,6 +103,12 @@ mod tests {
             Ok(_) => panic!("invalid bind_addr must not install"),
             Err(err) => err,
         };
-        assert!(err.to_string().contains("bind_addr"), "{err}");
+        assert!(
+            matches!(
+                err.downcast_ref::<PrometheusError>(),
+                Some(PrometheusError::BindAddr { addr, .. }) if addr == "not-a-socket-addr"
+            ),
+            "{err:#}"
+        );
     }
 }

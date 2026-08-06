@@ -676,6 +676,7 @@ mod tests {
     use crate::host::state::HostState;
     use crate::manifest::NamespaceCaps;
     use crate::preset::{CoreRuntime, Runtime as RuntimePreset};
+    use crate::supervisor::prepass::BootRefusal;
     use crate::test_utils::clock::ManualClock;
     use crate::test_utils::wasm::workspace_root;
     use crate::test_utils::{Prebuilt, TestManifest, example_wasm_or_skip, module_wasm_or_skip};
@@ -697,7 +698,13 @@ mod tests {
             Ok(_) => panic!("default config declares no modules; launch must bail"),
             Err(err) => err,
         };
-        assert!(err.to_string().contains("no modules to run"), "{err}");
+        assert!(
+            matches!(
+                err.downcast_ref::<LaunchRefusal>(),
+                Some(LaunchRefusal::NothingToRun)
+            ),
+            "{err:#}"
+        );
     }
 
     /// Counts linker hook runs.
@@ -779,7 +786,13 @@ mod tests {
             Ok(_) => panic!("default config declares no modules; launch must bail"),
             Err(err) => err,
         };
-        assert!(err.to_string().contains("no modules to run"), "{err}");
+        assert!(
+            matches!(
+                err.downcast_ref::<LaunchRefusal>(),
+                Some(LaunchRefusal::NothingToRun)
+            ),
+            "{err:#}"
+        );
         assert_eq!(preset_linked.load(Ordering::SeqCst), 1, "preset extension");
         assert_eq!(
             appended_linked.load(Ordering::SeqCst),
@@ -839,7 +852,13 @@ mod tests {
             Ok(_) => panic!("default config declares no modules; launch must bail"),
             Err(err) => err,
         };
-        assert!(err.to_string().contains("no modules to run"), "{err}");
+        assert!(
+            matches!(
+                err.downcast_ref::<LaunchRefusal>(),
+                Some(LaunchRefusal::NothingToRun)
+            ),
+            "{err:#}"
+        );
         seen.get().expect("clock attached before boot").clone()
     }
 
@@ -979,7 +998,13 @@ mod tests {
             Ok(_) => panic!("default config declares no modules; launch must bail"),
             Err(err) => err,
         };
-        assert!(err.to_string().contains("no modules to run"), "{err}");
+        assert!(
+            matches!(
+                err.downcast_ref::<LaunchRefusal>(),
+                Some(LaunchRefusal::NothingToRun)
+            ),
+            "{err:#}"
+        );
         assert_eq!(
             built.load(Ordering::SeqCst),
             1,
@@ -1059,7 +1084,13 @@ mod tests {
             Ok(_) => panic!("init-failing module must abort launch"),
             Err(err) => err,
         };
-        assert!(err.to_string().contains("failed initialisation"), "{err}");
+        assert!(
+            matches!(
+                err.downcast_ref::<LaunchRefusal>(),
+                Some(LaunchRefusal::AllDeadOverride { modules: 1 })
+            ),
+            "{err:#}"
+        );
     }
 
     #[tokio::test]
@@ -1091,11 +1122,13 @@ mod tests {
             Ok(_) => panic!("an unconfigured chain subscription must abort launch"),
             Err(err) => err,
         };
-        let msg = format!("{err:#}");
         assert!(
-            msg.contains("module example subscribes to chain 424242")
-                && msg.contains("[chains.424242]"),
-            "the launch error is the boot-time chain refusal: {msg}",
+            matches!(
+                err.downcast_ref::<BootRefusal>(),
+                Some(BootRefusal::UnconfiguredChain { name, chain_id: 424_242, .. })
+                    if name == "example"
+            ),
+            "the launch error is the boot-time chain refusal: {err:#}",
         );
     }
 
@@ -1145,7 +1178,13 @@ mod tests {
             Ok(_) => panic!("no modules configured; launch must bail"),
             Err(err) => err,
         };
-        assert!(err.to_string().contains("no modules to run"), "{err}");
+        assert!(
+            matches!(
+                err.downcast_ref::<LaunchRefusal>(),
+                Some(LaunchRefusal::NothingToRun)
+            ),
+            "{err:#}"
+        );
         assert_eq!(
             calls.load(Ordering::SeqCst),
             1,
@@ -1236,7 +1275,13 @@ mod tests {
             .wait()
             .await
             .expect_err("aborted task surfaces an error");
-        assert!(err.to_string().contains("terminated abnormally"), "{err}");
+        assert!(
+            matches!(
+                err.downcast_ref::<LaunchRefusal>(),
+                Some(LaunchRefusal::EventLoopGone)
+            ),
+            "{err:#}"
+        );
     }
 
     /// Dropping the handle without `wait` still drains the event loop.

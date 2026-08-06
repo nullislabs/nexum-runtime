@@ -102,7 +102,7 @@ mod tests {
     use alloy_chains::Chain;
     use futures::StreamExt as _;
 
-    use crate::builder::RuntimeBuilder;
+    use crate::builder::{LaunchRefusal, RuntimeBuilder};
     use crate::engine_config::EngineConfig;
     use crate::host::component::{ChainMethod, ComponentsBuilder, StateHandle, StateStore};
 
@@ -129,7 +129,13 @@ mod tests {
             Ok(_) => panic!("default config declares no modules; launch must bail"),
             Err(err) => err,
         };
-        assert!(err.to_string().contains("no modules to run"), "{err}");
+        assert!(
+            matches!(
+                err.downcast_ref::<LaunchRefusal>(),
+                Some(LaunchRefusal::NothingToRun)
+            ),
+            "{err:#}"
+        );
 
         // The fake actually serves and records, independent of the launch.
         let body = pool

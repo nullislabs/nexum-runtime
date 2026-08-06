@@ -31,6 +31,11 @@ async fn boot_refuses_a_subscription_on_an_unconfigured_chain() {
             .module(manifest)
             .expect_refusal()
             .await
+            .variant::<BootRefusal>(|e| {
+                matches!(e, BootRefusal::UnconfiguredChain { noun: "module", name, chain_id: 424_242, .. }
+                    if name == "example")
+            })
+            // Operator wording pin.
             .names("module example subscribes to chain 424242")
             .names("[chains.424242]")
             .names("configured chains: 1, 100, 11155111")
@@ -54,6 +59,11 @@ async fn boot_single_refuses_a_subscription_on_an_unconfigured_chain() {
             .err()
             .expect("an unconfigured chain must refuse the boot"),
     )
+    .variant::<BootRefusal>(|e| {
+        matches!(e, BootRefusal::UnconfiguredChain { noun: "module", name, chain_id: 424_242, .. }
+            if name == "gated")
+    })
+    // Operator wording pin.
     .names("module gated subscribes to chain 424242")
     .names("configured chains: 1, 100, 11155111")
     .lacks("compile");
@@ -73,6 +83,11 @@ async fn boot_refuses_an_adapter_subscription_on_an_unconfigured_chain() {
         )
         .expect_refusal()
         .await
+        .variant::<BootRefusal>(|e| {
+            matches!(e, BootRefusal::UnconfiguredChain { noun: "adapter", name, chain_id: 424_242, .. }
+                if name == "feed")
+        })
+        // Operator wording pin.
         .names("load provider")
         .names("adapter feed subscribes to chain 424242")
         .names("[chains.424242]")
@@ -104,6 +119,8 @@ async fn boot_refuses_an_invalid_chain_log_filter() {
             .module(manifest)
             .expect_refusal()
             .await
+            .variant::<BootRefusal>(|e| matches!(e, BootRefusal::Manifest(ParseError::Toml(_))))
+            // Operator wording pin.
             .names("load module")
             .names("manifest: parse")
             .names(detail)
@@ -158,6 +175,8 @@ async fn boot_admits_a_block_subscription_on_a_configured_chain_past_the_chain_g
         .module(TestManifest::new("example").cap("logging").block_sub(1))
         .expect_refusal()
         .await
+        .variant::<std::io::Error>(|e| e.kind() == std::io::ErrorKind::NotFound)
+        // Operator wording pin.
         .names("read component")
         .lacks("subscribes to chain");
 }
@@ -178,6 +197,11 @@ async fn an_unconfigured_chain_refuses_boot_before_an_earlier_module_loads() {
         )
         .expect_refusal()
         .await
+        .variant::<BootRefusal>(|e| {
+            matches!(e, BootRefusal::UnconfiguredChain { noun: "module", name, chain_id: 424_242, .. }
+                if name == "example")
+        })
+        // Operator wording pin.
         .names("load module")
         .names("second.wasm")
         .names("module example subscribes to chain 424242")
@@ -196,6 +220,11 @@ async fn boot_refusal_names_the_missing_engine_toml_on_the_defaulted_path() {
         )
         .expect_refusal()
         .await
+        .variant::<BootRefusal>(|e| {
+            matches!(e, BootRefusal::UnconfiguredChainDefaulted { noun: "module", name, chain_id: 424_242 }
+                if name == "example")
+        })
+        // Operator wording pin.
         .names("no engine.toml was found")
         .names("[chains.424242]")
         .lacks("configured chains:");
@@ -215,6 +244,7 @@ fn configured_chains_normalise_named_and_numeric_spellings() {
 fn unconfigured_chain_message_says_none_when_engine_toml_declares_no_chains() {
     let chains = ConfiguredChains::from_config(&EngineConfig::default());
     let msg = unconfigured_chain(Role::Module, "example", 424_242, &chains).to_string();
+    // Operator wording pin.
     assert!(msg.contains("configured chains: none"), "{msg}");
     assert!(!msg.contains("no engine.toml was found"), "{msg}");
 }
