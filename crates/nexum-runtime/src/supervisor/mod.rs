@@ -32,6 +32,7 @@ use admission::{ProviderKinds, capability_registry, enforce_extension_uniqueness
 use cursors::ChainLogCursors;
 use load::{LoadedModule, LoadedProvider};
 use prepass::{enforce_configured_chains, load_required_manifest, manifest_namespace};
+use role::Role;
 
 /// Owns every loaded module and provider and exposes the dispatch surface.
 pub struct Supervisor<T: RuntimeTypes> {
@@ -88,14 +89,41 @@ impl<T: RuntimeTypes> Supervisor<T> {
         let prepass = prepass::run(engine_cfg, &registry)?;
         // Providers boot first, so every module store built after already
         // routes to the installed instances.
-        let providers = load_providers(&shared, engine_cfg, prepass.adapter_manifests).await?;
+        let providers = load_role(
+            &engine_cfg.adapters,
+            prepass.adapter_manifests,
+            Role::Adapter,
+            |e| &e.path,
+            async |entry, manifest| {
+                load::provider(
+                    &shared,
+                    entry,
+                    manifest,
+                    &engine_cfg.limits,
+                    engine_cfg.engine.require_component_digest,
+                )
+                .await
+            },
+        )
+        .await?;
         let provider_manifests = project_manifests(&providers);
-        let modules = load_modules(
-            &shared,
-            linker,
-            engine_cfg,
+        let modules = load_role(
+            &engine_cfg.modules,
             prepass.module_manifests,
-            &provider_manifests,
+            Role::Module,
+            |e| &e.path,
+            async |entry, manifest| {
+                load::module(
+                    &shared,
+                    linker,
+                    entry,
+                    manifest,
+                    &engine_cfg.limits,
+                    engine_cfg.engine.require_component_digest,
+                    &provider_manifests,
+                )
+                .await
+            },
         )
         .await?;
         Ok(assemble(
@@ -209,26 +237,23 @@ fn wire_extensions<T: RuntimeTypes>(
     })
 }
 
-/// Load every `[[adapters]]` entry, in declaration order.
-async fn load_providers<T: RuntimeTypes>(
-    shared: &Shared<T>,
-    engine_cfg: &EngineConfig,
+/// One entry per manifest, in declaration order; every refusal names the
+/// role and the entry path.
+async fn load_role<E, L>(
+    entries: &[E],
     manifests: Vec<crate::manifest::LoadedManifest>,
-) -> Result<Vec<LoadedProvider>> {
-    let mut providers = Vec::with_capacity(engine_cfg.adapters.len());
-    for (entry, loaded_manifest) in engine_cfg.adapters.iter().zip(manifests) {
-        let loaded = load::provider(
-            shared,
-            entry,
-            loaded_manifest,
-            &engine_cfg.limits,
-            engine_cfg.engine.require_component_digest,
-        )
-        .await
-        .with_context(|| format!("load provider {}", entry.path.display()))?;
-        providers.push(loaded);
+    role: Role,
+    path: impl Fn(&E) -> &std::path::Path,
+    load: impl AsyncFn(&E, crate::manifest::LoadedManifest) -> Result<L>,
+) -> Result<Vec<L>> {
+    let mut out = Vec::with_capacity(entries.len());
+    for (entry, manifest) in entries.iter().zip(manifests) {
+        let loaded = load(entry, manifest)
+            .await
+            .with_context(|| format!("{} {}", role.load_context(), path(entry).display()))?;
+        out.push(loaded);
     }
-    Ok(providers)
+    Ok(out)
 }
 
 /// The providers' manifests as the worker install predicates see them.
@@ -242,32 +267,6 @@ fn project_manifests(providers: &[LoadedProvider]) -> Vec<ProviderManifest> {
             component_digest: p.seed.artifact.digest,
         })
         .collect()
-}
-
-/// In declaration order, against the installed providers.
-async fn load_modules<T: RuntimeTypes>(
-    shared: &Shared<T>,
-    linker: &Linker<HostState<T>>,
-    engine_cfg: &EngineConfig,
-    manifests: Vec<crate::manifest::LoadedManifest>,
-    provider_manifests: &[ProviderManifest],
-) -> Result<Vec<LoadedModule<T>>> {
-    let mut modules = Vec::with_capacity(engine_cfg.modules.len());
-    for (entry, loaded_manifest) in engine_cfg.modules.iter().zip(manifests) {
-        let loaded = load::module(
-            shared,
-            linker,
-            entry,
-            loaded_manifest,
-            &engine_cfg.limits,
-            engine_cfg.engine.require_component_digest,
-            provider_manifests,
-        )
-        .await
-        .with_context(|| format!("load module {}", entry.path.display()))?;
-        modules.push(loaded);
-    }
-    Ok(modules)
 }
 
 fn assemble<T: RuntimeTypes>(
