@@ -1,25 +1,35 @@
 //! Lifecycle: init failure, traps, restart backoff, and poison quarantine.
 
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Instant;
 
 use super::*;
 use crate::supervisor::lifecycle::sweep;
 
-/// price-alert loads cleanly, then `init` rejects the unparseable
+/// price-alert's `[config]`; `not-a-number` makes `init` reject the
 /// `threshold` with `fault.invalid-input`.
-fn bad_threshold_price_alert() -> TestManifest {
-    TestManifest::new("price-alert")
+fn price_alert_config(threshold: &str) -> crate::bindings::Config {
+    vec![
+        (
+            "oracle_address".into(),
+            "0x694AA1769357215DE4FAC081bf1f309aDC325306".into(),
+        ),
+        ("decimals".into(), "8".into()),
+        ("threshold".into(), threshold.to_owned()),
+        ("direction".into(), "below".into()),
+        ("every_n_blocks".into(), "1".into()),
+    ]
+}
+
+fn price_alert(threshold: &str) -> TestManifest {
+    let mut manifest = TestManifest::new("price-alert")
         .cap("logging")
         .cap("chain")
-        .block_sub(SEPOLIA)
-        .config(
-            "oracle_address",
-            "0x694AA1769357215DE4FAC081bf1f309aDC325306",
-        )
-        .config("decimals", "8")
-        .config("threshold", "not-a-number")
-        .config("direction", "below")
-        .config("every_n_blocks", "1")
+        .block_sub(SEPOLIA);
+    for (key, value) in price_alert_config(threshold) {
+        manifest = manifest.config(key, value);
+    }
+    manifest
 }
 
 /// Loaded but dead: no dispatch, no chain-facing subscription, and the
@@ -33,7 +43,7 @@ async fn init_failure_marks_module_dead_excluding_dispatch_and_subscriptions() {
     // paths are exercised.
     let mut booted = BootScenario::new()
         .wasm(wasm)
-        .module(bad_threshold_price_alert().chain_log_sub_filtered(
+        .module(price_alert("not-a-number").chain_log_sub_filtered(
             SEPOLIA,
             Some("0xbA3cB449bD2B4ADddBc894D8697F5170800EAdeC"),
             Some("0xcf5f9de2984132265203b5c335b25727702ca77262ff622e136baa7362bf1da9"),
@@ -77,7 +87,7 @@ async fn alive_module_subscriptions_survive_alongside_dead_module() {
         return;
     };
     let booted = BootScenario::new()
-        .module(Entry::new(bad_threshold_price_alert()).wasm(price_alert_wasm))
+        .module(Entry::new(price_alert("not-a-number")).wasm(price_alert_wasm))
         .module(
             Entry::new(TestManifest::new("example").cap("logging").block_sub(1)).wasm(example_wasm),
         )
@@ -100,6 +110,69 @@ async fn alive_module_subscriptions_survive_alongside_dead_module() {
     assert!(
         booted.supervisor.dead_modules_hold_subscriptions(),
         "the dead module's dropped subscription is attributable",
+    );
+}
+
+/// Boot and restart share one instantiate-and-init helper, so the verdict on
+/// the identical fault is the call sites' alone: dead forever, or deferred.
+#[tokio::test]
+async fn the_same_init_fault_kills_at_boot_and_only_defers_on_restart() {
+    let Some(wasm) = module_wasm_or_skip("price-alert") else {
+        return;
+    };
+
+    let booted = BootScenario::new()
+        .wasm(wasm.clone())
+        .module(price_alert("not-a-number"))
+        .boot()
+        .await
+        .expect("the module loads; only init fails");
+    let dead = &booted.supervisor.modules[0];
+    assert!(!dead.health.dispatchable(), "a boot init fault loads dead");
+    assert!(
+        !dead
+            .health
+            .due_restart(Instant::now() + Duration::from_secs(3600)),
+        "a boot init fault schedules no restart, ever",
+    );
+
+    let mut booted = BootScenario::new()
+        .wasm(wasm)
+        .module(price_alert("2500.50"))
+        .boot()
+        .await
+        .expect("boot");
+    assert!(
+        booted.supervisor.modules[0].health.dispatchable(),
+        "a parseable threshold loads alive",
+    );
+    // The revive re-runs `init` off the seed, so swapping the seed's config
+    // reaches the restart path and nothing else.
+    booted.supervisor.modules[0].seed.artifact.init_config = price_alert_config("not-a-number");
+    let policy = booted.supervisor.policy;
+    let died_at = Instant::now();
+    booted.supervisor.modules[0]
+        .health
+        .record_trap(died_at, died_at, policy);
+    let due = died_at + Duration::from_secs(5);
+    sweep(
+        &booted.supervisor.shared,
+        std::slice::from_mut(&mut booted.supervisor.modules[0]),
+        policy,
+        due,
+    )
+    .await;
+
+    let module = &booted.supervisor.modules[0];
+    assert_eq!(module.live.run.seq, 0, "a failed revive commits no run");
+    assert_eq!(
+        module.health.failure_count(),
+        2,
+        "one recorded trap plus one deferred restart",
+    );
+    assert!(
+        module.health.due_restart(due + Duration::from_secs(3600)),
+        "a restart init fault defers instead of killing",
     );
 }
 
@@ -391,7 +464,7 @@ fn scripted_provider(engine: &wasmtime::Engine) -> crate::supervisor::load::Load
         name: "scripted".into(),
         kind: "scripted-adapter",
         sections: manifest::ExtensionSections::default(),
-        seed: crate::supervisor::load::ProviderSeed {
+        seed: crate::supervisor::load::Seed {
             artifact: crate::supervisor::load::CachedArtifact {
                 component: wasmtime::component::Component::new(engine, EMPTY_COMPONENT)
                     .expect("empty component"),
@@ -407,6 +480,7 @@ fn scripted_provider(engine: &wasmtime::Engine) -> crate::supervisor::load::Load
                 chain_response_max_bytes: limits.chain_response_max_bytes(),
                 state_quota: limits.state_bytes(),
             },
+            event_deadline: limits.event_deadline(),
         },
         liveness: crate::host::actor::Liveness::default(),
         run: crate::host::logs::RunId::new("scripted", 0),
