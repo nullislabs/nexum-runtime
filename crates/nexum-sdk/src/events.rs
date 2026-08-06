@@ -10,6 +10,18 @@ use alloy_primitives::{Address, B256, Bytes, Log as PrimitiveLog, LogData};
 /// The alloy RPC log delivered to modules for chain-log events.
 pub use alloy_rpc_types_eth::Log;
 
+/// Const so the module macro's topic parity check fails the build, not the run.
+pub const fn contains_topic(needle: &B256, set: &[B256]) -> bool {
+    let mut i = 0;
+    while i < set.len() {
+        if set[i].const_eq(needle) {
+            return true;
+        }
+        i += 1;
+    }
+    false
+}
+
 /// Borrowed raw fields of a WIT `chain-log` record, assembled into an
 /// alloy [`Log`] via `From`. Fixed-width byte fields are left-padded
 /// into their EVM word (20 bytes for the address, 32 for topics and
@@ -68,6 +80,20 @@ impl From<ChainLogParts<'_>> for Log {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn contains_topic_is_bytewise_membership() {
+        let set = [B256::with_last_byte(1), B256::with_last_byte(2)];
+        assert!(contains_topic(&B256::with_last_byte(2), &set));
+        assert!(!contains_topic(&B256::with_last_byte(3), &set));
+        assert!(!contains_topic(&B256::ZERO, &[]));
+    }
+
+    /// The parity check the module macro emits must evaluate at const time.
+    const _: () = assert!(contains_topic(
+        &B256::with_last_byte(9),
+        &[B256::ZERO, B256::with_last_byte(9)],
+    ));
 
     #[test]
     fn assembles_full_mined_log() {
