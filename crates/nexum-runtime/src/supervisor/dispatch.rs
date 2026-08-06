@@ -3,7 +3,7 @@
 //! head of every entry point; progress and cursors persist only after a
 //! successful dispatch.
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use alloy_chains::Chain;
 use tracing::{debug, error, warn};
@@ -11,6 +11,7 @@ use tracing_core::Level;
 
 use super::Supervisor;
 use super::cursors::{commit_chain_log_cursor, persist_progress_marker};
+use super::lifecycle::{revive_one, sweep};
 use crate::bindings::nexum;
 use crate::host::component::RuntimeTypes;
 use crate::host::extension::ExtensionEvent;
@@ -18,27 +19,24 @@ use crate::host::logs::{LogRecord, LogSource};
 use crate::manifest::Subscription;
 
 impl<T: RuntimeTypes> Supervisor<T> {
+    /// Revive providers before modules at every multi-target entry point:
+    /// a module revived first would re-run `init` against possibly-dead
+    /// providers, so the sweep mirrors boot's providers-first install order.
+    async fn sweep_all(&mut self, now: Instant) {
+        sweep(&self.shared, &mut self.providers, self.policy, now).await;
+        sweep(&self.shared, &mut self.modules, self.policy, now).await;
+    }
+
     /// Dispatch one block to every alive module subscribed to its chain,
-    /// restarting eligible dead modules first. Returns the number invoked.
+    /// restarting eligible dead components first. Returns the number
+    /// invoked.
     pub async fn dispatch_block(&mut self, block: nexum::host::types::Block) -> usize {
         let chain = Chain::from_id(block.chain_id);
         let chain_id = chain.id();
         let block_number = block.number;
         let event = nexum::host::types::Event::Block(block);
-        let now = std::time::Instant::now();
-
-        // Phase 1: find dead modules whose backoff window has elapsed and
-        // re-instantiate them in place; a trapped store is poisoned, so
-        // recovery needs a fresh Store + re-instantiated bindings.
-        // Poisoned modules are excluded entirely: they stay dead until an
-        // operator removes them from `[[modules]]` and restarts the engine.
-        let restart_candidates: Vec<usize> = (0..self.modules.len())
-            .filter(|&i| self.modules[i].health.due_restart(now))
-            .collect();
-        for idx in restart_candidates {
-            self.try_restart(idx, now).await;
-        }
-        self.sweep_providers(now).await;
+        let now = Instant::now();
+        self.sweep_all(now).await;
 
         let mut dispatched = 0;
         let candidate_indices: Vec<usize> = (0..self.modules.len())
@@ -82,8 +80,8 @@ impl<T: RuntimeTypes> Supervisor<T> {
         log: alloy_rpc_types_eth::Log,
         cursor_key: Option<&str>,
     ) -> bool {
-        let now = std::time::Instant::now();
-        self.sweep_providers(now).await;
+        let now = Instant::now();
+        sweep(&self.shared, &mut self.providers, self.policy, now).await;
         let Some(idx) = self.modules.iter().position(|m| m.name == module_name) else {
             warn!(module = %module_name, "no such module - dropping chain-log");
             return false;
@@ -95,10 +93,10 @@ impl<T: RuntimeTypes> Supervisor<T> {
             return false;
         }
 
-        // Restart-on-trap: re-instantiate before dispatch if the backoff
-        // window elapsed. See `dispatch_block` for the symmetric path.
+        // Restart-on-trap, single-target: the chain-log hot path revives
+        // only its own module, never sweeping the rest.
         if self.modules[idx].health.due_restart(now) {
-            self.try_restart(idx, now).await;
+            revive_one(&self.shared, &mut self.modules[idx], now).await;
         }
 
         if !self.modules[idx].health.dispatchable() {
@@ -140,14 +138,8 @@ impl<T: RuntimeTypes> Supervisor<T> {
     /// and filters match. Returns the number invoked. Like `dispatch_block`:
     /// dead modules past backoff restart first, poisoned modules skip.
     pub async fn dispatch_extension_event(&mut self, event: ExtensionEvent) -> usize {
-        let now = std::time::Instant::now();
-        let restart_candidates: Vec<usize> = (0..self.modules.len())
-            .filter(|&i| self.modules[i].health.due_restart(now))
-            .collect();
-        for idx in restart_candidates {
-            self.try_restart(idx, now).await;
-        }
-        self.sweep_providers(now).await;
+        let now = Instant::now();
+        self.sweep_all(now).await;
 
         let candidate_indices: Vec<usize> = (0..self.modules.len())
             .filter(|&i| {
@@ -193,7 +185,7 @@ impl<T: RuntimeTypes> Supervisor<T> {
         event_kind: &'static str,
         block_number: u64,
         event: &nexum::host::types::Event,
-        now: std::time::Instant,
+        now: Instant,
     ) -> DispatchOutcome {
         let poison_policy = self.policy;
         // Hoisted before the per-module borrow so the trap arm can
@@ -213,7 +205,7 @@ impl<T: RuntimeTypes> Supervisor<T> {
                 "dispatch rate limit exceeded - dropping event",
             );
             metrics::counter!(
-                "shepherd_dispatch_dropped_total",
+                "nexum_runtime_dispatch_dropped_total",
                 "module" => module.name.clone(),
                 "event_kind" => event_kind,
             )
@@ -230,7 +222,7 @@ impl<T: RuntimeTypes> Supervisor<T> {
             );
             return DispatchOutcome::FuelSetFailed;
         }
-        let start = std::time::Instant::now();
+        let start = Instant::now();
         // Fuel bounds only guest instructions; time spent inside a host
         // call (chain RPC, redb, HTTP) is unmetered, so bound the whole
         // dispatch, guest plus every host call it awaits, in wall-clock.
@@ -261,7 +253,7 @@ impl<T: RuntimeTypes> Supervisor<T> {
                     "dispatch ok"
                 );
                 metrics::histogram!(
-                    "shepherd_event_latency_seconds",
+                    "nexum_runtime_event_latency_seconds",
                     "module" => module.name.clone(),
                     "event_kind" => event_kind,
                 )
@@ -284,7 +276,7 @@ impl<T: RuntimeTypes> Supervisor<T> {
                     "on-event returned fault",
                 );
                 metrics::counter!(
-                    "shepherd_module_errors_total",
+                    "nexum_runtime_module_errors_total",
                     "module" => module.name.clone(),
                     "error_kind" => kind,
                 )
@@ -307,7 +299,7 @@ impl<T: RuntimeTypes> Supervisor<T> {
                     "on-event trapped - module marked dead; will retry after backoff",
                 );
                 metrics::counter!(
-                    "shepherd_module_errors_total",
+                    "nexum_runtime_module_errors_total",
                     "module" => module.name.clone(),
                     "error_kind" => "trap",
                 )
@@ -333,7 +325,7 @@ impl<T: RuntimeTypes> Supervisor<T> {
                         "module poisoned - quarantined; remove from engine.toml + restart to clear",
                     );
                     metrics::gauge!(
-                        "shepherd_module_poisoned",
+                        "nexum_runtime_module_poisoned",
                         "module" => module.name.clone(),
                     )
                     .set(1.0);

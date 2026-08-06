@@ -98,8 +98,9 @@ pub(super) struct LoadedProvider {
     /// Trap signal shared with the installed actor; feeds `health` at
     /// sweep time and carries no lifecycle authority of its own.
     pub(super) liveness: Liveness,
-    /// Sequence of the run currently installed; restarts increment it.
-    pub(super) run_seq: u64,
+    /// The run currently installed; a revive mints the successor and
+    /// commits it only on a live install.
+    pub(super) run: RunId,
     /// Lifecycle authority: `health` alive against a dead `liveness` is an
     /// unrecorded trap the next sweep records.
     pub(super) health: Health,
@@ -377,7 +378,7 @@ pub(super) async fn provider<T: RuntimeTypes>(
     // A provider links no service-consuming import, so its store carries
     // an empty service map; the shared map holds the registry that owns
     // the provider's store, and carrying it here would cycle.
-    let store = store::build(shared, &spec, run, HostServices::default())?;
+    let store = store::build(shared, &spec, run.clone(), HostServices::default())?;
 
     let config = default_init_config(&loaded_manifest.config, &namespace);
     let liveness = Liveness::default();
@@ -412,7 +413,7 @@ pub(super) async fn provider<T: RuntimeTypes>(
             spec,
         },
         liveness,
-        run_seq: 0,
+        run,
         health: if installed == Installed::Live {
             Health::alive()
         } else {
