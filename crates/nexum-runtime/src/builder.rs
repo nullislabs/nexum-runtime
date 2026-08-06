@@ -31,6 +31,35 @@ use crate::runtime::event_loop;
 pub use crate::supervisor::WasiClockOverride;
 use crate::supervisor::{self, Supervisor, Viability};
 
+/// Launch refusals around the supervisor boot; the wording is operator-pinned.
+#[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
+pub enum LaunchRefusal {
+    #[error("event loop task terminated abnormally")]
+    EventLoopGone,
+    #[error(
+        "no modules to run - set a module source or declare [[modules]] or \
+         [[adapters]] entries in engine.toml"
+    )]
+    NothingToRun,
+    #[error(
+        "all {modules} module(s) failed initialisation - check the logs above for \
+         per-module errors and fix the wasm binary passed as an override"
+    )]
+    AllDeadOverride { modules: usize },
+    #[error(
+        "all {modules} module(s) failed initialisation - check the logs above for \
+         per-module errors and fix or remove the failing module from engine.toml"
+    )]
+    AllDeadConfigured { modules: usize },
+    #[error(
+        "every declared [[subscription]] belongs to an init-failed module - \
+         the engine would idle with nothing to run; fix or remove the \
+         failing module(s)"
+    )]
+    DeadHoldSubs,
+}
+
 /// Ambient inputs the launcher reads.
 pub struct LaunchContext<'a> {
     /// Owns task spawning and graceful shutdown for the run.
@@ -109,7 +138,7 @@ impl RuntimeHandle {
 fn finish_wait(joined: Option<TaskExit>) -> anyhow::Result<()> {
     match joined {
         Some(_) => Ok(()),
-        None => anyhow::bail!("event loop task terminated abnormally"),
+        None => Err(LaunchRefusal::EventLoopGone.into()),
     }
 }
 
@@ -208,10 +237,7 @@ impl<T: RuntimeTypes> AssembledRuntime<T> {
             )
             .await?
         } else {
-            anyhow::bail!(
-                "no modules to run - set a module source or declare [[modules]] or \
-                 [[adapters]] entries in engine.toml"
-            );
+            return Err(LaunchRefusal::NothingToRun.into());
         };
 
         let alive = supervisor.alive_count();
@@ -224,19 +250,12 @@ impl<T: RuntimeTypes> AssembledRuntime<T> {
             "supervisor ready"
         );
         if alive == 0 {
-            if wasm_override {
-                anyhow::bail!(
-                    "all {} module(s) failed initialisation - check the logs above for \
-                     per-module errors and fix the wasm binary passed as an override",
-                    supervisor.module_count(),
-                );
+            let modules = supervisor.module_count();
+            return Err(if wasm_override {
+                LaunchRefusal::AllDeadOverride { modules }.into()
             } else {
-                anyhow::bail!(
-                    "all {} module(s) failed initialisation - check the logs above for \
-                     per-module errors and fix or remove the failing module from engine.toml",
-                    supervisor.module_count(),
-                );
-            }
+                LaunchRefusal::AllDeadConfigured { modules }.into()
+            });
         }
 
         // The OS signal listener: SIGINT/SIGTERM ends it, and its end (or
@@ -282,11 +301,7 @@ impl<T: RuntimeTypes> AssembledRuntime<T> {
         }
 
         match plan.viability(extension_streams.len()) {
-            Viability::DeadHoldSubs => anyhow::bail!(
-                "every declared [[subscription]] belongs to an init-failed module - \
-                 the engine would idle with nothing to run; fix or remove the \
-                 failing module(s)"
-            ),
+            Viability::DeadHoldSubs => return Err(LaunchRefusal::DeadHoldSubs.into()),
             Viability::Nothing => {
                 // Nothing to drive: return a handle whose event loop is
                 // already complete so `wait` resolves immediately.

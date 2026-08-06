@@ -1,5 +1,6 @@
 //! Error types for manifest parsing and capability enforcement.
 
+use strum::IntoStaticStr;
 use thiserror::Error;
 
 /// Errors from loading or validating a manifest.
@@ -56,7 +57,8 @@ pub struct CapabilityViolation {
 }
 
 /// A component's WIT imports exceed its declared capabilities.
-#[derive(Debug, Error)]
+#[derive(Debug, Error, IntoStaticStr)]
+#[strum(serialize_all = "snake_case")]
 #[non_exhaustive]
 pub enum CapabilityError {
     /// A gated import was not declared in `[capabilities]`.

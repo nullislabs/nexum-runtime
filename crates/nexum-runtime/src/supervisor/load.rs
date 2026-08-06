@@ -1,9 +1,11 @@
 //! Load one module or provider: admission, verified compile, instantiation, `init`.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use anyhow::{Context, Error, Result, anyhow};
+use anyhow::{Context, Error, Result};
+use strum::IntoStaticStr;
+use thiserror::Error as ThisError;
 use tracing::{info, warn};
 use wasmtime::component::{Component, Linker};
 
@@ -32,6 +34,57 @@ use crate::host::state::HostState;
 use crate::manifest::{self, CapabilityRegistry, ComponentKind, LoadedManifest, Subscription};
 use crate::module_id::ModuleId;
 use crate::runtime::dispatch_rate::TokenBucket;
+
+/// Admission refusals ahead of instantiation; the wording is operator-pinned.
+#[derive(Debug, ThisError, IntoStaticStr)]
+#[strum(serialize_all = "snake_case")]
+pub(super) enum LoadRefusal {
+    #[error("{owner} declares manifest section [{section}]; no wired extension claims it")]
+    SectionUnclaimed { owner: String, section: String },
+    #[error("extension namespace {namespace} is claimed twice")]
+    ExtensionNamespaceClaimed { namespace: &'static str },
+    #[error("subscription kind {kind} is claimed twice")]
+    SubscriptionKindClaimed { kind: &'static str },
+    #[error("manifest section [{section}] is claimed twice")]
+    SectionClaimed { section: &'static str },
+    #[error("provider kind {kind} is registered twice")]
+    KindRegisteredTwice { kind: &'static str },
+    #[error("extension {namespace} registers provider kind {kind} without a host service")]
+    ServicelessKind {
+        namespace: &'static str,
+        kind: &'static str,
+    },
+    #[error(
+        "{} declares the worker kind; an [[adapters]] entry requires a \
+         module.toml declaring a registered provider kind ({})",
+        path.display(),
+        registered.join(", ")
+    )]
+    WorkerKindAdapter {
+        path: PathBuf,
+        registered: Vec<&'static str>,
+    },
+    #[error(
+        "{} declares unregistered provider kind {kind}; registered kinds: {}",
+        path.display(),
+        registered.join(", ")
+    )]
+    UnregisteredKind {
+        path: PathBuf,
+        kind: String,
+        registered: Vec<&'static str>,
+    },
+    #[error(
+        "module {module} subscribes to unknown event kind {kind}; no wired extension declares it"
+    )]
+    UnknownEventKind { module: ModuleId, kind: String },
+    #[error(
+        "no [module].component digest for {} and [engine] require_component_digest is set; \
+         pin the artifact's sha256 in its module.toml",
+        path.display()
+    )]
+    DigestUnpinned { path: PathBuf },
+}
 
 /// Restarts reuse the cache, so the boot-time digest holds for every run.
 pub(super) struct CachedArtifact {
@@ -293,10 +346,11 @@ pub(super) async fn module<T: RuntimeTypes>(
                 "cron subscriptions are declared but inert in 0.2 (lands in 0.3)",
             ),
             Subscription::Extension { kind, .. } if !extension_kinds.contains(kind.as_str()) => {
-                return Err(anyhow!(
-                    "module {module_namespace} subscribes to unknown event kind {kind}; \
-                     no wired extension declares it"
-                ));
+                return Err(LoadRefusal::UnknownEventKind {
+                    module: module_namespace.clone(),
+                    kind: kind.clone(),
+                }
+                .into());
             }
             _ => {}
         }
@@ -344,23 +398,20 @@ pub(super) async fn provider<T: RuntimeTypes>(
             // An unregistered kind refuses before compile.
             let row: &ProviderRow<T> = match &loaded_manifest.manifest.module.kind {
                 ComponentKind::Worker => {
-                    return Err(anyhow!(
-                        "{} declares the worker kind; an [[adapters]] entry requires a \
-                         module.toml declaring a registered provider kind ({})",
-                        entry.path.display(),
-                        super::admission::registered_kinds(&shared.kinds),
-                    ));
+                    return Err(LoadRefusal::WorkerKindAdapter {
+                        path: entry.path.clone(),
+                        registered: super::admission::registered_kinds(&shared.kinds),
+                    }
+                    .into());
                 }
-                ComponentKind::Provider(spelling) => {
-                    shared.kinds.get(spelling.as_str()).ok_or_else(|| {
-                        anyhow!(
-                            "{} declares unregistered provider kind {spelling}; registered \
-                                 kinds: {}",
-                            entry.path.display(),
-                            super::admission::registered_kinds(&shared.kinds),
-                        )
-                    })?
-                }
+                ComponentKind::Provider(spelling) => shared
+                    .kinds
+                    .get(spelling.as_str())
+                    .ok_or_else(|| LoadRefusal::UnregisteredKind {
+                        path: entry.path.clone(),
+                        kind: spelling.clone(),
+                        registered: super::admission::registered_kinds(&shared.kinds),
+                    })?,
             };
             info!(
                 component = %entry.path.display(),

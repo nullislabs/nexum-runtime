@@ -3,9 +3,28 @@
 //! installs a facility from the resolved config and returns a handle the
 //! launcher keeps alive for the run.
 
+use metrics_exporter_prometheus::BuildError;
 use tracing::info;
 
 use crate::engine_config::MetricsSection;
+
+/// The foreign cause renders inline, so the operator sees one line.
+#[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
+pub enum PrometheusError {
+    #[error("invalid [engine.metrics].bind_addr `{addr}`: {cause}")]
+    BindAddr {
+        addr: String,
+        cause: std::net::AddrParseError,
+    },
+    #[error("install Prometheus exporter on {addr}: {cause}")]
+    Exporter {
+        addr: std::net::SocketAddr,
+        cause: BuildError,
+    },
+    #[error("install Prometheus recorder: {cause}")]
+    Recorder { cause: BuildError },
+}
 
 /// Inputs an add-on reads at install time.
 pub struct AddOnsContext<'a> {
@@ -43,23 +62,25 @@ pub struct PrometheusAddOn;
 impl RuntimeAddOn for PrometheusAddOn {
     fn install(&self, ctx: &AddOnsContext<'_>) -> anyhow::Result<AddOnHandle> {
         if ctx.metrics.enabled {
-            let addr: std::net::SocketAddr = ctx.metrics.bind_addr.parse().map_err(|e| {
-                anyhow::anyhow!(
-                    "invalid [engine.metrics].bind_addr `{}`: {e}",
-                    ctx.metrics.bind_addr
-                )
-            })?;
+            let addr: std::net::SocketAddr =
+                ctx.metrics
+                    .bind_addr
+                    .parse()
+                    .map_err(|cause| PrometheusError::BindAddr {
+                        addr: ctx.metrics.bind_addr.clone(),
+                        cause,
+                    })?;
             metrics_exporter_prometheus::PrometheusBuilder::new()
                 .with_http_listener(addr)
                 .install()
-                .map_err(|e| anyhow::anyhow!("install Prometheus exporter on {addr}: {e}"))?;
+                .map_err(|cause| PrometheusError::Exporter { addr, cause })?;
             info!(addr = %addr, "metrics exporter listening at /metrics");
         } else {
             // Recorder installed globally so metrics call sites stay live;
             // no HTTP port is opened. It accumulates samples in memory, unread.
             metrics_exporter_prometheus::PrometheusBuilder::new()
                 .install_recorder()
-                .map_err(|e| anyhow::anyhow!("install Prometheus recorder: {e}"))?;
+                .map_err(|cause| PrometheusError::Recorder { cause })?;
         }
         Ok(AddOnHandle::named("prometheus"))
     }

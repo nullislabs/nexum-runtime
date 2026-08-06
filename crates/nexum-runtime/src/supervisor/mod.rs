@@ -23,15 +23,17 @@ use tracing::info;
 use wasmtime::Engine;
 use wasmtime::component::Linker;
 
+use crate::digest::DigestMismatch;
 use crate::engine_config::{EngineConfig, ModuleEntry, ModuleLimits};
 use crate::host::component::{Components, RuntimeTypes};
 use crate::host::extension::{Extension, HostServices, ProviderManifest};
 use crate::host::state::HostState;
+use crate::manifest::CapabilityError;
 use crate::runtime::poison_policy::PoisonPolicy;
 use admission::{ProviderKinds, capability_registry, enforce_extension_uniqueness, provider_kinds};
 use cursors::ChainLogCursors;
-use load::{LoadedModule, LoadedProvider};
-use prepass::{enforce_subscriptions, load_required_manifest, manifest_namespace};
+use load::{LoadRefusal, LoadedModule, LoadedProvider};
+use prepass::{BootRefusal, enforce_subscriptions, load_required_manifest, manifest_namespace};
 use role::Role;
 
 /// Owns every loaded module and provider and exposes the dispatch surface.
@@ -84,54 +86,58 @@ impl<T: RuntimeTypes> Supervisor<T> {
         extensions: &[Arc<dyn Extension<T>>],
         clocks: Option<WasiClockOverride>,
     ) -> Result<Self> {
-        let shared = wire_extensions(engine, components, extensions, clocks, true)?;
-        let registry = capability_registry(&shared.extensions);
-        let prepass = prepass::run(engine_cfg, &registry)?;
-        // Providers boot first, so every module store built after already
-        // routes to the installed instances.
-        let providers = load_role(
-            &engine_cfg.adapters,
-            prepass.adapter_manifests,
-            Role::Adapter,
-            |e| &e.path,
-            async |entry, manifest| {
-                load::provider(
-                    &shared,
-                    entry,
-                    manifest,
-                    &engine_cfg.limits,
-                    engine_cfg.engine.require_component_digest,
-                )
-                .await
-            },
-        )
-        .await?;
-        let provider_manifests = project_manifests(&providers);
-        let modules = load_role(
-            &engine_cfg.modules,
-            prepass.module_manifests,
-            Role::Module,
-            |e| &e.path,
-            async |entry, manifest| {
-                load::module(
-                    &shared,
-                    linker,
-                    entry,
-                    manifest,
-                    &engine_cfg.limits,
-                    engine_cfg.engine.require_component_digest,
-                    &provider_manifests,
-                )
-                .await
-            },
-        )
-        .await?;
-        Ok(assemble(
-            shared,
-            modules,
-            providers,
-            engine_cfg.limits.poison(),
-        ))
+        let booted: Result<Self> = async {
+            let shared = wire_extensions(engine, components, extensions, clocks, true)?;
+            let registry = capability_registry(&shared.extensions);
+            let prepass = prepass::run(engine_cfg, &registry)?;
+            // Providers boot first, so every module store built after already
+            // routes to the installed instances.
+            let providers = load_role(
+                &engine_cfg.adapters,
+                prepass.adapter_manifests,
+                Role::Adapter,
+                |e| &e.path,
+                async |entry, manifest| {
+                    load::provider(
+                        &shared,
+                        entry,
+                        manifest,
+                        &engine_cfg.limits,
+                        engine_cfg.engine.require_component_digest,
+                    )
+                    .await
+                },
+            )
+            .await?;
+            let provider_manifests = project_manifests(&providers);
+            let modules = load_role(
+                &engine_cfg.modules,
+                prepass.module_manifests,
+                Role::Module,
+                |e| &e.path,
+                async |entry, manifest| {
+                    load::module(
+                        &shared,
+                        linker,
+                        entry,
+                        manifest,
+                        &engine_cfg.limits,
+                        engine_cfg.engine.require_component_digest,
+                        &provider_manifests,
+                    )
+                    .await
+                },
+            )
+            .await?;
+            Ok(assemble(
+                shared,
+                modules,
+                providers,
+                engine_cfg.limits.poison(),
+            ))
+        }
+        .await;
+        booted.inspect_err(count_boot_refusal)
     }
 
     /// Single-component boot for `just run` without an `engine.toml`.
@@ -144,38 +150,42 @@ impl<T: RuntimeTypes> Supervisor<T> {
         extensions: &[Arc<dyn Extension<T>>],
         clocks: Option<WasiClockOverride>,
     ) -> Result<Self> {
-        // Provider kinds come only from `engine.toml`, so none register here.
-        let shared = wire_extensions(engine, components, extensions, clocks, false)?;
-        let registry = capability_registry(&shared.extensions);
-        let loaded_manifest = load_required_manifest(
-            &entry.path,
-            entry.manifest.as_deref(),
-            &registry,
-            Role::Module.manifest_role(),
-        )?;
-        enforce_subscriptions(
-            Role::Module,
-            &manifest_namespace(&loaded_manifest),
-            &loaded_manifest,
-            &env.configured_chains,
-        )?;
-        let loaded = load::module(
-            &shared,
-            linker,
-            entry,
-            loaded_manifest,
-            env.limits,
-            env.require_component_digest,
-            &[],
-        )
-        .await?;
-        Ok(Self {
-            shared,
-            modules: vec![loaded],
-            providers: Vec::new(),
-            policy: env.limits.poison(),
-            chain_log_cursors: ChainLogCursors::default(),
-        })
+        let booted: Result<Self> = async {
+            // Provider kinds come only from `engine.toml`, so none register here.
+            let shared = wire_extensions(engine, components, extensions, clocks, false)?;
+            let registry = capability_registry(&shared.extensions);
+            let loaded_manifest = load_required_manifest(
+                &entry.path,
+                entry.manifest.as_deref(),
+                &registry,
+                Role::Module.manifest_role(),
+            )?;
+            enforce_subscriptions(
+                Role::Module,
+                &manifest_namespace(&loaded_manifest),
+                &loaded_manifest,
+                &env.configured_chains,
+            )?;
+            let loaded = load::module(
+                &shared,
+                linker,
+                entry,
+                loaded_manifest,
+                env.limits,
+                env.require_component_digest,
+                &[],
+            )
+            .await?;
+            Ok(Self {
+                shared,
+                modules: vec![loaded],
+                providers: Vec::new(),
+                policy: env.limits.poison(),
+                chain_log_cursors: ChainLogCursors::default(),
+            })
+        }
+        .await;
+        booted.inspect_err(count_boot_refusal)
     }
 
     pub fn module_count(&self) -> usize {
@@ -205,6 +215,32 @@ impl<T: RuntimeTypes> Supervisor<T> {
     pub fn services(&self) -> &HostServices {
         &self.shared.services
     }
+}
+
+/// Counts a refusal under its typed kind; wraps without a typed root go uncounted.
+fn count_boot_refusal(err: &anyhow::Error) {
+    let Some(kind) = boot_refusal_kind(err) else {
+        return;
+    };
+    metrics::counter!("nexum_runtime_boot_refusals_total", "error_kind" => kind).increment(1);
+}
+
+/// A root missing here is a refusal class the counter never sees.
+fn boot_refusal_kind(err: &anyhow::Error) -> Option<&'static str> {
+    err.chain().find_map(|cause| {
+        if let Some(refusal) = cause.downcast_ref::<BootRefusal>() {
+            return Some(refusal.into());
+        }
+        if let Some(refusal) = cause.downcast_ref::<LoadRefusal>() {
+            return Some(refusal.into());
+        }
+        if let Some(violation) = cause.downcast_ref::<CapabilityError>() {
+            return Some(violation.into());
+        }
+        cause
+            .downcast_ref::<DigestMismatch>()
+            .map(|_| "digest_mismatch")
+    })
 }
 
 /// The resulting [`Shared`] is the one wiring every later phase reads.
