@@ -25,7 +25,8 @@ pub struct Settings {
 }
 
 /// Which side of the threshold the alert fires on.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, strum::EnumString)]
+#[strum(serialize_all = "snake_case", ascii_case_insensitive)]
 pub enum Direction {
     /// Fire when `answer >= threshold`.
     Above,
@@ -92,18 +93,12 @@ pub fn parse_config(entries: &[(String, String)]) -> Result<Settings, Fault> {
     }
     let threshold_decimal = config::get_required(entries, "threshold")?;
     let threshold_scaled = config::scale_decimal(threshold_decimal, decimals, "threshold")?;
-    let direction = match config::get_required(entries, "direction")?
-        .to_ascii_lowercase()
-        .as_str()
-    {
-        "above" => Direction::Above,
-        "below" => Direction::Below,
-        other => {
-            return Err(invalid(format!(
-                "direction: expected 'above'|'below', got {other:?}"
-            )));
-        }
-    };
+    let raw_direction = config::get_required(entries, "direction")?;
+    let direction = raw_direction.parse::<Direction>().map_err(|_| {
+        invalid(format!(
+            "direction: expected 'above'|'below', got {raw_direction:?}"
+        ))
+    })?;
     let every_n_blocks = config::get_optional(entries, "every_n_blocks")
         .map(|s| {
             s.parse::<u64>()
@@ -210,9 +205,8 @@ mod tests {
     }
 
     // Decimal-parsing tests for the shared scaler live in
-    // `nexum-sdk::config::tests` now (lifted out of this module per
-    // PR #55 review). The integration-level parse_config tests below
-    // still exercise the wiring end-to-end with the SDK helper.
+    // `nexum-sdk::config::tests`; the parse_config tests below exercise
+    // the wiring end-to-end with the SDK helper.
 
     #[test]
     fn parse_config_happy_path() {
@@ -249,6 +243,30 @@ mod tests {
         let cfg = parse_config(&entries).unwrap();
         assert_eq!(cfg.every_n_blocks, 1);
         assert_eq!(cfg.direction, Direction::Above);
+    }
+
+    #[test]
+    fn parse_config_reads_direction_case_insensitively_and_rejects_the_rest() {
+        let entries = |direction: &str| {
+            vec![
+                (
+                    "oracle_address".into(),
+                    "0x694AA1769357215DE4FAC081bf1f309aDC325306".into(),
+                ),
+                ("decimals".into(), "8".into()),
+                ("threshold".into(), "1".into()),
+                ("direction".into(), direction.to_owned()),
+            ]
+        };
+        assert_eq!(
+            parse_config(&entries("ABOVE")).unwrap().direction,
+            Direction::Above
+        );
+        let err = parse_config(&entries("sideways")).unwrap_err();
+        let Fault::InvalidInput(message) = err else {
+            panic!("expected invalid-input fault, got {err:?}");
+        };
+        assert!(message.contains("sideways"));
     }
 
     #[test]

@@ -3758,6 +3758,7 @@ dependencies = [
  "alloy-sol-types",
  "nexum-sdk",
  "nexum-sdk-test",
+ "strum",
  "tracing",
  "wit-bindgen 0.59.0",
 ]
