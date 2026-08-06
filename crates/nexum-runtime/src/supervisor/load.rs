@@ -183,6 +183,9 @@ pub(super) async fn instantiate_module<T: RuntimeTypes>(
 
 /// Builds the kind's linker and installs on the given store; a `Dead`
 /// verdict carries no error, its meaning stays with the caller.
+/// `event_deadline` bounds the whole install (instantiation, guest `init`,
+/// extension wiring), wider than a module's `init`-only bound, so a hung
+/// install cannot park boot or the sweep.
 pub(super) async fn install_provider<T: RuntimeTypes>(
     shared: &Shared<T>,
     row: &ProviderRow<T>,
@@ -193,8 +196,12 @@ pub(super) async fn install_provider<T: RuntimeTypes>(
 ) -> Result<Installed> {
     let (kind, service) = row;
     let linker = build_provider_linker::<T>(&shared.engine, kind.as_ref())?;
-    kind.install(seed.instance(&linker, sections, store, liveness), service)
-        .await
+    with_dispatch_deadline(
+        seed.event_deadline,
+        kind.install(seed.instance(&linker, sections, store, liveness), service),
+    )
+    .await
+    .map_err(Error::from)?
 }
 
 /// A failed `init` loads the module dead; the dispatcher skips it.

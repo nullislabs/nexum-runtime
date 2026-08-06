@@ -539,12 +539,13 @@ impl Extension<CoreRuntime> for ScriptedExtension {
     }
 }
 
-/// The shared wiring the sweep reinstalls through, with the scripted kind
-/// registered. The `TempDir` keeps the local store alive.
-fn scripted_shared(live: &Arc<AtomicBool>) -> (tempfile::TempDir, Shared<CoreRuntime>) {
+/// The shared wiring the sweep reinstalls through, with the given
+/// extension's kind registered. The `TempDir` keeps the local store alive.
+fn kind_shared(
+    extension: Arc<dyn Extension<CoreRuntime>>,
+) -> (tempfile::TempDir, Shared<CoreRuntime>) {
     let (dir, store) = temp_local_store();
-    let extensions: Vec<Arc<dyn Extension<CoreRuntime>>> =
-        vec![Arc::new(ScriptedExtension(live.clone()))];
+    let extensions = vec![extension];
     let services = HostServices::from_extensions(&extensions).expect("services");
     let kinds =
         crate::supervisor::admission::provider_kinds(&extensions, &services).expect("kinds");
@@ -560,13 +561,16 @@ fn scripted_shared(live: &Arc<AtomicBool>) -> (tempfile::TempDir, Shared<CoreRun
 }
 
 /// A booted provider at run 0. The component is an empty valid one: the
-/// scripted kind never instantiates it.
-fn scripted_provider(engine: &wasmtime::Engine) -> crate::supervisor::load::LoadedProvider {
+/// test kinds never instantiate it.
+fn provider_at_run_zero(
+    engine: &wasmtime::Engine,
+    kind: &'static str,
+) -> crate::supervisor::load::LoadedProvider {
     const EMPTY_COMPONENT: &[u8] = b"(component)";
     let limits = ModuleLimits::default();
     crate::supervisor::load::LoadedProvider {
         name: "scripted".into(),
-        kind: "scripted-adapter",
+        kind,
         sections: manifest::ExtensionSections::default(),
         seed: crate::supervisor::load::Seed {
             artifact: crate::supervisor::load::CachedArtifact {
@@ -597,8 +601,8 @@ fn scripted_provider(engine: &wasmtime::Engine) -> crate::supervisor::load::Load
 #[tokio::test]
 async fn a_dead_provider_reinstall_defers_without_committing_a_run() {
     let live = Arc::new(AtomicBool::new(false));
-    let (_dir, shared) = scripted_shared(&live);
-    let mut provider = scripted_provider(&shared.engine);
+    let (_dir, shared) = kind_shared(Arc::new(ScriptedExtension(live.clone())));
+    let mut provider = provider_at_run_zero(&shared.engine, "scripted-adapter");
     let policy = crate::runtime::poison_policy::PoisonPolicy::new(9, Duration::from_secs(600));
 
     // The actor trapped: the sweep discovers the death through the shared
@@ -633,5 +637,90 @@ async fn a_dead_provider_reinstall_defers_without_committing_a_run() {
         provider.health.failure_count(),
         0,
         "a reinstall is a fresh instance, so the curve resets",
+    );
+}
+
+/// A provider kind whose `install` never returns, for the deadline gate.
+struct HangingKind;
+
+#[async_trait::async_trait]
+impl ProviderKind<CoreRuntime> for HangingKind {
+    fn kind(&self) -> &'static str {
+        "hanging-adapter"
+    }
+
+    fn link(&self, _linker: &mut Linker<HostState<CoreRuntime>>) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    async fn install(
+        &self,
+        _instance: ProviderInstance<'_, CoreRuntime>,
+        _service: &Arc<dyn HostService>,
+    ) -> anyhow::Result<Installed> {
+        std::future::pending().await
+    }
+}
+
+struct HangingExtension;
+
+impl Extension<CoreRuntime> for HangingExtension {
+    fn namespace(&self) -> &'static str {
+        "hanging"
+    }
+
+    fn capabilities(&self) -> manifest::NamespaceCaps {
+        manifest::NamespaceCaps {
+            prefix: "test:hanging/",
+            ifaces: &[],
+        }
+    }
+
+    fn link(&self, _linker: &mut Linker<HostState<CoreRuntime>>) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    fn service(&self) -> Option<Arc<dyn HostService>> {
+        Some(Arc::new(ScriptedService))
+    }
+
+    fn provider(&self) -> Option<Box<dyn ProviderKind<CoreRuntime>>> {
+        Some(Box::new(HangingKind))
+    }
+}
+
+/// A hung `install` fails by the dispatch deadline and defers, instead of
+/// parking the sweep (and with it all dispatch) forever.
+#[tokio::test(start_paused = true)]
+async fn a_hanging_provider_install_fails_by_deadline() {
+    let (_dir, shared) = kind_shared(Arc::new(HangingExtension));
+    let mut provider = provider_at_run_zero(&shared.engine, "hanging-adapter");
+    let policy = crate::runtime::poison_policy::PoisonPolicy::new(9, Duration::from_secs(600));
+
+    provider.liveness.mark_dead();
+    let died_at = provider.liveness.dead_since().expect("marked dead");
+    let now = died_at + Duration::from_secs(5);
+    // Paused time auto-advances only through timers; an unwrapped hung
+    // install would ride this outer timeout instead of its own deadline.
+    tokio::time::timeout(
+        Duration::from_secs(3_600),
+        sweep(&shared, std::slice::from_mut(&mut provider), policy, now),
+    )
+    .await
+    .expect("sweep completed: the install deadline bounded the hung install");
+
+    assert_eq!(provider.run.seq, 0, "a timed-out install commits no run");
+    assert!(
+        !provider.liveness.is_alive(),
+        "a timed-out install leaves the liveness dead",
+    );
+    assert_eq!(
+        provider.health.failure_count(),
+        2,
+        "one recorded trap plus one deferred restart",
+    );
+    assert!(
+        provider.health.due_restart(now + Duration::from_secs(60)),
+        "a deadline hit defers rather than killing the provider permanently",
     );
 }
