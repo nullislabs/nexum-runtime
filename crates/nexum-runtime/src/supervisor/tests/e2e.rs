@@ -76,6 +76,30 @@ async fn e2e_block_subscription_dispatched() {
     );
 }
 
+/// A provider manifest declaring `logging` clears both halves of the gate:
+/// the declaration is known at manifest load and covers the component's
+/// logging import at enforcement.
+#[tokio::test]
+async fn e2e_provider_declaring_logging_boots() {
+    let Some(wasm) = example_wasm_or_skip() else {
+        return;
+    };
+    let booted = BootScenario::over(mock_components())
+        .extensions(acme_extensions())
+        .adapter(
+            Entry::new(
+                TestManifest::new("acme")
+                    .kind("acme-adapter")
+                    .cap("logging"),
+            )
+            .wasm(wasm),
+        )
+        .boot()
+        .await
+        .expect("a provider declaring logging boots");
+    assert_eq!(booted.supervisor.adapter_count(), 1);
+}
+
 /// The override is behaviour-neutral here; guest observation of the pinned
 /// time is covered by the scenario clock test.
 #[cfg(feature = "test-utils")]

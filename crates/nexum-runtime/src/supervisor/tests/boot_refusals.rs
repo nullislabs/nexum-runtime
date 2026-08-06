@@ -144,3 +144,20 @@ async fn boot_denies_an_undeclared_chain_import_for_balance_tracker() {
         .names("capability violation")
         .names("nexum:host/chain");
 }
+
+/// The example component's only gated import is `logging`, so the refusal
+/// is deterministic; the provider path holds the import to the declaration
+/// just as the module path does.
+#[tokio::test]
+async fn boot_denies_an_undeclared_logging_import_for_a_provider() {
+    let Some(wasm) = example_wasm_or_skip() else {
+        return;
+    };
+    BootScenario::over(mock_components())
+        .extensions(acme_extensions())
+        .adapter(Entry::new(TestManifest::new("acme").kind("acme-adapter").cap("chain")).wasm(wasm))
+        .expect_refusal()
+        .await
+        .names("capability violation")
+        .names("nexum:host/logging");
+}
