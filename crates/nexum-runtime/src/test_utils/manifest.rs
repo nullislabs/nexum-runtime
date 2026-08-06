@@ -2,13 +2,15 @@
 
 use std::path::{Path, PathBuf};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, derive_more::From)]
 pub enum ManifestSource {
     /// No explicit path; the loader falls back to discovery beside the component.
     Beside,
     /// A path handed to the loader as-is, existing or not.
+    #[from]
     Path(PathBuf),
     /// Manifest text written out at boot.
+    #[from]
     Toml(String),
 }
 
@@ -29,18 +31,6 @@ impl ManifestSource {
 impl From<TestManifest> for ManifestSource {
     fn from(manifest: TestManifest) -> Self {
         Self::Toml(manifest.to_toml())
-    }
-}
-
-impl From<String> for ManifestSource {
-    fn from(toml: String) -> Self {
-        Self::Toml(toml)
-    }
-}
-
-impl From<PathBuf> for ManifestSource {
-    fn from(path: PathBuf) -> Self {
-        Self::Path(path)
     }
 }
 

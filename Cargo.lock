@@ -3381,6 +3381,7 @@ dependencies = [
 name = "nexum-sdk-test"
 version = "0.1.0"
 dependencies = [
+ "derive_more",
  "nexum-sdk",
  "tracing",
 ]
