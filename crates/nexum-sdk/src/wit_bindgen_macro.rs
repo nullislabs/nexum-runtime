@@ -8,7 +8,7 @@
 //! wit-bindgen output for the world must already be in scope, so
 //! selecting a capability the world does not import is a compile error.
 //! A domain SDK layers its own interfaces on the same `WitBindgenHost`,
-//! or binds logging alone via [`bind_host_logging_via_wit_bindgen!`].
+//! or binds logging alone via [`crate::bind_host_logging_via_wit_bindgen!`].
 //!
 //! ```ignore
 //! wit_bindgen::generate!({ /* ... */ });
@@ -338,9 +338,8 @@ macro_rules! __bind_host_cap_via_wit_bindgen {
 }
 
 /// Logging-only slice of [`bind_host_via_wit_bindgen!`]: needs only the
-/// generated `nexum::host::logging` in scope, never `WitBindgenHost` or
-/// the base block, so a domain world whose `nexum:host/types` is
-/// foreign can still bind logging.
+/// generated `nexum::host::logging` in scope, never `nexum::host::types`
+/// or `WitBindgenHost`.
 ///
 /// The generated names `HostLogSink` and `install_tracing` are visible
 /// in the caller's scope (`macro_rules!` is not hygienic for items).
