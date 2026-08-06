@@ -147,8 +147,12 @@ impl<T: RuntimeTypes> Supervisor<T> {
         // Provider kinds come only from `engine.toml`, so none register here.
         let shared = wire_extensions(engine, components, extensions, clocks, false)?;
         let registry = capability_registry(&shared.extensions);
-        let loaded_manifest =
-            load_required_manifest(&entry.path, entry.manifest.as_deref(), &registry, "module")?;
+        let loaded_manifest = load_required_manifest(
+            &entry.path,
+            entry.manifest.as_deref(),
+            &registry,
+            Role::Module.manifest_role(),
+        )?;
         enforce_subscriptions(
             Role::Module,
             &manifest_namespace(&loaded_manifest),
