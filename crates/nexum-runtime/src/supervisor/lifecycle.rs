@@ -17,7 +17,7 @@ use crate::module_id::ModuleId;
 use crate::runtime::poison_policy::{PoisonPolicy, should_poison};
 use crate::runtime::restart_policy::backoff_for;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, strum::IntoStaticStr)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum LifecycleState {
     /// Callable; the failure count beside it may still be nonzero.
     Alive,

@@ -12,7 +12,7 @@ use crate::module_id::ModuleId;
 use crate::runtime::poison_policy::PoisonPolicy;
 
 /// Keys the per-role metric names and the compile-time tracing field keys.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, strum::IntoStaticStr)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Role {
     Module,
     Adapter,
