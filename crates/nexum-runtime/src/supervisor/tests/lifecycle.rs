@@ -383,18 +383,18 @@ async fn poison_pill_quarantines_module_after_threshold() {
 struct ScriptedKind(Arc<AtomicBool>);
 
 #[async_trait::async_trait]
-impl ProviderKind<TestTypes> for ScriptedKind {
+impl ProviderKind<CoreRuntime> for ScriptedKind {
     fn kind(&self) -> &'static str {
         "scripted-adapter"
     }
 
-    fn link(&self, _linker: &mut Linker<HostState<TestTypes>>) -> anyhow::Result<()> {
+    fn link(&self, _linker: &mut Linker<HostState<CoreRuntime>>) -> anyhow::Result<()> {
         Ok(())
     }
 
     async fn install(
         &self,
-        _instance: ProviderInstance<'_, TestTypes>,
+        _instance: ProviderInstance<'_, CoreRuntime>,
         _service: &Arc<dyn HostService>,
     ) -> anyhow::Result<Installed> {
         Ok(if self.0.load(Ordering::SeqCst) {
@@ -410,7 +410,7 @@ impl HostService for ScriptedService {}
 
 struct ScriptedExtension(Arc<AtomicBool>);
 
-impl Extension<TestTypes> for ScriptedExtension {
+impl Extension<CoreRuntime> for ScriptedExtension {
     fn namespace(&self) -> &'static str {
         "scripted"
     }
@@ -422,7 +422,7 @@ impl Extension<TestTypes> for ScriptedExtension {
         }
     }
 
-    fn link(&self, _linker: &mut Linker<HostState<TestTypes>>) -> anyhow::Result<()> {
+    fn link(&self, _linker: &mut Linker<HostState<CoreRuntime>>) -> anyhow::Result<()> {
         Ok(())
     }
 
@@ -430,16 +430,16 @@ impl Extension<TestTypes> for ScriptedExtension {
         Some(Arc::new(ScriptedService))
     }
 
-    fn provider(&self) -> Option<Box<dyn ProviderKind<TestTypes>>> {
+    fn provider(&self) -> Option<Box<dyn ProviderKind<CoreRuntime>>> {
         Some(Box::new(ScriptedKind(self.0.clone())))
     }
 }
 
 /// The shared wiring the sweep reinstalls through, with the scripted kind
 /// registered. The `TempDir` keeps the local store alive.
-fn scripted_shared(live: &Arc<AtomicBool>) -> (tempfile::TempDir, Shared<TestTypes>) {
+fn scripted_shared(live: &Arc<AtomicBool>) -> (tempfile::TempDir, Shared<CoreRuntime>) {
     let (dir, store) = temp_local_store();
-    let extensions: Vec<Arc<dyn Extension<TestTypes>>> =
+    let extensions: Vec<Arc<dyn Extension<CoreRuntime>>> =
         vec![Arc::new(ScriptedExtension(live.clone()))];
     let services = HostServices::from_extensions(&extensions).expect("services");
     let kinds =

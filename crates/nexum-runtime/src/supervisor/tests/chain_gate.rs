@@ -209,8 +209,7 @@ fn configured_chains_normalise_named_and_numeric_spellings() {
 #[test]
 fn unconfigured_chain_message_says_none_when_engine_toml_declares_no_chains() {
     let chains = ConfiguredChains::from_config(&EngineConfig::default());
-    let msg = crate::supervisor::unconfigured_chain(Role::Module, "example", 424_242, &chains)
-        .to_string();
+    let msg = unconfigured_chain(Role::Module, "example", 424_242, &chains).to_string();
     assert!(msg.contains("configured chains: none"), "{msg}");
     assert!(!msg.contains("no engine.toml was found"), "{msg}");
 }

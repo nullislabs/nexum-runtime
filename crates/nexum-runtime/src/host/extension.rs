@@ -282,7 +282,7 @@ impl HostServices {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::supervisor::TestTypes;
+    use crate::preset::CoreRuntime;
 
     struct Registry(u64);
     impl HostService for Registry {}
@@ -295,7 +295,7 @@ mod tests {
         service: Option<Arc<dyn HostService>>,
     }
 
-    impl Extension<TestTypes> for ServiceExt {
+    impl Extension<CoreRuntime> for ServiceExt {
         fn namespace(&self) -> &'static str {
             self.namespace
         }
@@ -305,7 +305,7 @@ mod tests {
                 ifaces: &[],
             }
         }
-        fn link(&self, _linker: &mut Linker<HostState<TestTypes>>) -> anyhow::Result<()> {
+        fn link(&self, _linker: &mut Linker<HostState<CoreRuntime>>) -> anyhow::Result<()> {
             Ok(())
         }
         fn service(&self) -> Option<Arc<dyn HostService>> {
@@ -316,7 +316,7 @@ mod tests {
     fn ext(
         namespace: &'static str,
         service: Arc<dyn HostService>,
-    ) -> Arc<dyn Extension<TestTypes>> {
+    ) -> Arc<dyn Extension<CoreRuntime>> {
         Arc::new(ServiceExt {
             namespace,
             service: Some(service),
@@ -340,7 +340,7 @@ mod tests {
     /// A serviceless extension contributes nothing to the map.
     #[test]
     fn serviceless_extension_is_absent() {
-        let serviceless: Arc<dyn Extension<TestTypes>> = Arc::new(ServiceExt {
+        let serviceless: Arc<dyn Extension<CoreRuntime>> = Arc::new(ServiceExt {
             namespace: "quiet",
             service: None,
         });

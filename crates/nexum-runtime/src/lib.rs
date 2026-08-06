@@ -15,7 +15,7 @@ use alloy_rpc_client as _;
 use alloy_transport as _;
 use alloy_transport_ws as _;
 
-/// Sealing markers for [`preset::Runtime`] and
+/// Markers reserved for semver evolution of [`preset::Runtime`] and
 /// [`host::component::RuntimeTypes`]: implement alongside the trait.
 #[doc(hidden)]
 pub mod sealed {

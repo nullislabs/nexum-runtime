@@ -323,7 +323,7 @@ pub(super) async fn with_dispatch_deadline<F: std::future::Future>(
         .map_err(|_elapsed| DeadlineExceeded(deadline))
 }
 
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Debug)]
 pub(super) enum DispatchOutcome {
     Ok,
     /// Guest returned a typed `fault` via WIT, not a trap; the module stays alive.

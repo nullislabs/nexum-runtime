@@ -120,8 +120,7 @@ impl From<&alloy_rpc_types_eth::Log> for nexum::host::types::ChainLog {
     }
 }
 
-#[derive(Debug, thiserror::Error, strum::IntoStaticStr)]
-#[strum(serialize_all = "snake_case")]
+#[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub(super) enum FilterError {
     /// `[[subscriptions]].address` did not parse as an EVM address.
