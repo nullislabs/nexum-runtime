@@ -220,6 +220,19 @@ mod tests {
         assert!(message.contains("change_threshold"));
     }
 
+    #[test]
+    fn parse_config_rejects_a_malformed_address() {
+        let err = parse_config(&[
+            ("addresses".into(), "0xdeadbeef".into()),
+            ("change_threshold".into(), "1".into()),
+        ])
+        .unwrap_err();
+        let Fault::InvalidInput(message) = err else {
+            panic!("expected invalid-input fault, got {err:?}");
+        };
+        assert!(message.contains("0xdeadbeef"));
+    }
+
     fn one_addr_settings(threshold_wei: u128) -> Settings {
         Settings {
             addresses: vec![address!("70997970C51812dc3A010C7d01b50e0d17dc79C8")],

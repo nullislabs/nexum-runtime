@@ -7,8 +7,7 @@ use thiserror::Error;
 
 use crate::host::Fault;
 
-/// Why a config lookup or parse failed. Folds into
-/// [`Fault::InvalidInput`] at the boundary via `From`.
+/// Why a config lookup or parse failed.
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum ConfigError {
@@ -141,6 +140,15 @@ mod tests {
         let cfg = entries(&[("a", "1")]);
         let err = get_required(&cfg, "b").unwrap_err();
         assert!(matches!(err, ConfigError::MissingKey { ref key } if key == "b"));
+    }
+
+    #[test]
+    fn config_error_folds_into_an_invalid_input_fault() {
+        let fault = Fault::from(get_required(&entries(&[]), "threshold").unwrap_err());
+        let Fault::InvalidInput(message) = fault else {
+            panic!("expected invalid-input fault, got {fault:?}");
+        };
+        assert!(message.contains("threshold"));
     }
 
     #[test]
