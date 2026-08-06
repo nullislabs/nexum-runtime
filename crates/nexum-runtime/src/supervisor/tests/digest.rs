@@ -51,7 +51,6 @@ fn read_verified_component_requires_a_digest_when_the_flag_is_set() {
         .expect("an unpinned artifact must refuse under the flag");
     Refusal::from(err)
         .variant::<LoadRefusal>(|e| matches!(e, LoadRefusal::DigestUnpinned { .. }))
-        // Operator wording pin.
         .lacks("compile");
 }
 
@@ -139,8 +138,10 @@ async fn boot_single_refuses_a_mismatched_component_digest() {
 
     let (_store, result) = try_boot_single(&wasm, Some(&manifest), false, None).await;
     Refusal::from(result.err().expect("a stale pin must refuse the boot"))
-        .variant::<DigestMismatch>(|_| true)
-        // Operator wording pin.
+        .variant::<DigestMismatch>(|e| {
+            e.declared == wrong_digest()
+                && e.actual == ContentDigest::of_bytes(b"drifted artifact bytes")
+        })
         .lacks("compile");
 }
 
@@ -158,7 +159,6 @@ async fn boot_single_requires_a_digest_when_the_engine_flag_is_set() {
             .expect("an unpinned manifest must refuse under the flag"),
     )
     .variant::<LoadRefusal>(|e| matches!(e, LoadRefusal::DigestUnpinned { .. }))
-    // Operator wording pin.
     .lacks("compile");
 }
 
@@ -196,8 +196,10 @@ async fn boot_refuses_a_provider_with_a_mismatched_digest() {
         )
         .expect_refusal()
         .await
-        .variant::<DigestMismatch>(|_| true)
-        // Operator wording pin.
+        .variant::<DigestMismatch>(|e| {
+            e.declared == wrong_digest()
+                && e.actual == ContentDigest::of_bytes(b"drifted provider bytes")
+        })
         .lacks("compile");
 }
 
@@ -225,6 +227,5 @@ async fn boot_requires_a_module_digest_when_the_engine_flag_is_set() {
         .expect_refusal()
         .await
         .variant::<LoadRefusal>(|e| matches!(e, LoadRefusal::DigestUnpinned { .. }))
-        // Operator wording pin.
         .lacks("compile");
 }

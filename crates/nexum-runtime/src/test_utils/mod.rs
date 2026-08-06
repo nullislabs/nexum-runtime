@@ -105,6 +105,7 @@ mod tests {
     use crate::builder::{LaunchRefusal, RuntimeBuilder};
     use crate::engine_config::EngineConfig;
     use crate::host::component::{ChainMethod, ComponentsBuilder, StateHandle, StateStore};
+    use crate::test_utils::Refusal;
 
     /// A custom component set launches through the public builder on fakes;
     /// it bails at boot only because the default config declares no modules,
@@ -129,13 +130,7 @@ mod tests {
             Ok(_) => panic!("default config declares no modules; launch must bail"),
             Err(err) => err,
         };
-        assert!(
-            matches!(
-                err.downcast_ref::<LaunchRefusal>(),
-                Some(LaunchRefusal::NothingToRun)
-            ),
-            "{err:#}"
-        );
+        Refusal::from(err).variant::<LaunchRefusal>(|e| matches!(e, LaunchRefusal::NothingToRun));
 
         // The fake actually serves and records, independent of the launch.
         let body = pool

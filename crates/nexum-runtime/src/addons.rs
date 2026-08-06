@@ -90,6 +90,7 @@ impl RuntimeAddOn for PrometheusAddOn {
 mod tests {
     use super::*;
     use crate::engine_config::MetricsSection;
+    use crate::test_utils::Refusal;
 
     /// An enabled exporter with an unparseable bind address fails at install.
     #[test]
@@ -103,12 +104,8 @@ mod tests {
             Ok(_) => panic!("invalid bind_addr must not install"),
             Err(err) => err,
         };
-        assert!(
-            matches!(
-                err.downcast_ref::<PrometheusError>(),
-                Some(PrometheusError::BindAddr { addr, .. }) if addr == "not-a-socket-addr"
-            ),
-            "{err:#}"
+        Refusal::from(err).variant::<PrometheusError>(
+            |e| matches!(e, PrometheusError::BindAddr { addr, .. } if addr == "not-a-socket-addr"),
         );
     }
 }

@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use alloy_chains::Chain;
+use derive_more::From;
 use tempfile::TempDir;
 
 use super::manifest::{ManifestSource, TestManifest};
@@ -310,14 +311,8 @@ impl<T: RuntimeTypes> Booted<T> {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, From)]
 pub struct Refusal(anyhow::Error);
-
-impl From<anyhow::Error> for Refusal {
-    fn from(err: anyhow::Error) -> Self {
-        Self(err)
-    }
-}
 
 impl Refusal {
     /// The typed root under the context wraps, for `matches!` on a variant.
@@ -331,14 +326,14 @@ impl Refusal {
     where
         E: std::error::Error + Send + Sync + 'static,
     {
-        match self.root::<E>() {
-            None => panic!(
+        let Some(root) = self.root::<E>() else {
+            panic!(
                 "refusal carries no {}: {}",
                 std::any::type_name::<E>(),
                 self.chain(),
-            ),
-            Some(root) => assert!(pred(root), "refusal variant mismatch: {}", self.chain()),
-        }
+            )
+        };
+        assert!(pred(root), "refusal variant mismatch: {root:?}");
         self
     }
 
@@ -550,7 +545,6 @@ mod tests {
                 matches!(e, BootRefusal::Manifest(ParseError::UnknownCapability { name, .. })
                     if name == "telepathy")
             })
-            // Operator wording pin.
             .lacks("compile");
     }
 
@@ -563,7 +557,6 @@ mod tests {
             .variant::<LoadRefusal>(
                 |e| matches!(e, LoadRefusal::UnregisteredKind { kind, .. } if kind == "acme-feed"),
             )
-            // Operator wording pin.
             .lacks("compile");
     }
 
@@ -579,7 +572,6 @@ mod tests {
                 matches!(e, BootRefusal::ManifestMissing { component }
                     if component.ends_with("orphan.wasm"))
             })
-            // Operator wording pin.
             .lacks("compile");
     }
 
@@ -595,7 +587,6 @@ mod tests {
                 matches!(e, BootRefusal::ManifestNotFound { manifest, .. }
                     if manifest.ends_with("modle.toml"))
             })
-            // Operator wording pin.
             .lacks("compile");
     }
 
@@ -609,7 +600,6 @@ mod tests {
                 matches!(e, LoadRefusal::SectionUnclaimed { owner, section }
                     if owner == "acme-user" && section == "acme")
             })
-            // Operator wording pin.
             .lacks("read component");
 
         BootScenario::new()
