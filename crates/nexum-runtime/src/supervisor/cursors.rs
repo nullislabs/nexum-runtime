@@ -4,6 +4,7 @@
 use std::collections::BTreeMap;
 
 use alloy_chains::Chain;
+use alloy_primitives::{Address, B256, keccak256};
 use tracing::warn;
 
 use crate::host::component::{StateHandle, StateStore};
@@ -126,21 +127,21 @@ pub(super) fn persist_progress_marker<S: StateStore>(
     }
 }
 
-/// Derived from normalized manifest inputs, not the alloy `Filter` (whose
-/// hash is process-randomized), so it is stable across restarts.
+/// Keyed on `0x`-prefixed lowercase hex, not the alloy `Filter` (whose hash
+/// is process-randomized), so it is stable across a restart and across the
+/// typing of the manifest values it was formerly derived from.
 pub(super) fn chainlog_cursor_key(
     chain: Chain,
-    address: Option<&str>,
-    event_signature: Option<&str>,
+    address: Option<Address>,
+    event_signature: Option<B256>,
 ) -> String {
     let normalized = format!(
         "{}|{}|{}",
         chain.id(),
-        address.unwrap_or("").to_ascii_lowercase(),
-        event_signature.unwrap_or("").to_ascii_lowercase(),
+        address.map(|a| format!("{a:#x}")).unwrap_or_default(),
+        event_signature
+            .map(|t| format!("{t:#x}"))
+            .unwrap_or_default(),
     );
-    format!(
-        "chainlog_cursor:{:x}",
-        alloy_primitives::keccak256(normalized.as_bytes())
-    )
+    format!("chainlog_cursor:{:x}", keccak256(normalized.as_bytes()))
 }

@@ -306,6 +306,8 @@ mod tests {
     fn chain_log_filters_and_extension_kinds_reach_the_loaded_subscriptions() {
         const ADDRESS: &str = "0xbA3cB449bD2B4ADddBc894D8697F5170800EAdeC";
         const TOPIC: &str = "0xcf5f9de2984132265203b5c335b25727702ca77262ff622e136baa7362bf1da9";
+        let address: alloy_primitives::Address = ADDRESS.parse().unwrap();
+        let topic: alloy_primitives::B256 = TOPIC.parse().unwrap();
 
         let loaded = load_core(
             &TestManifest::new("example")
@@ -321,7 +323,7 @@ mod tests {
             matches!(
                 &subs[0],
                 Subscription::ChainLog { chain_id: 1, address: Some(a), event_signature: Some(t), .. }
-                    if a == ADDRESS && t == TOPIC
+                    if *a == address && *t == topic
             ),
             "both filters land: {subs:?}",
         );
@@ -329,7 +331,7 @@ mod tests {
             matches!(
                 &subs[1],
                 Subscription::ChainLog { chain_id: 2, address: Some(a), event_signature: None, .. }
-                    if a == ADDRESS
+                    if *a == address
             ),
             "an omitted topic stays unfiltered: {subs:?}",
         );
