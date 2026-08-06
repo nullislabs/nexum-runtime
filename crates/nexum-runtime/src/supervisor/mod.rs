@@ -31,7 +31,7 @@ use crate::runtime::poison_policy::PoisonPolicy;
 use admission::{ProviderKinds, capability_registry, enforce_extension_uniqueness, provider_kinds};
 use cursors::ChainLogCursors;
 use load::{LoadedModule, LoadedProvider};
-use prepass::{enforce_configured_chains, load_required_manifest, manifest_namespace};
+use prepass::{enforce_subscriptions, load_required_manifest, manifest_namespace};
 use role::Role;
 
 /// Owns every loaded module and provider and exposes the dispatch surface.
@@ -149,7 +149,8 @@ impl<T: RuntimeTypes> Supervisor<T> {
         let registry = capability_registry(&shared.extensions);
         let loaded_manifest =
             load_required_manifest(&entry.path, entry.manifest.as_deref(), &registry, "module")?;
-        enforce_configured_chains(
+        enforce_subscriptions(
+            Role::Module,
             &manifest_namespace(&loaded_manifest),
             &loaded_manifest,
             &env.configured_chains,

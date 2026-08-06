@@ -9,6 +9,7 @@ use anyhow::{Context, Error, Result, anyhow};
 use tracing::{info, warn};
 
 use super::role::Role;
+use super::subscriptions::build_alloy_filter;
 use crate::engine_config::EngineConfig;
 use crate::manifest::{self, CapabilityRegistry, LoadedManifest, Subscription};
 
@@ -112,9 +113,11 @@ impl ConfiguredChains {
     }
 }
 
-/// Refuse any subscription naming a chain absent from `[chains]`, before any guest code runs.
-pub(super) fn enforce_configured_chains(
-    module: &str,
+/// Refuse any subscription naming a chain absent from `[chains]` or carrying
+/// an unparseable chain-log filter, before any guest code runs.
+pub(super) fn enforce_subscriptions(
+    role: Role,
+    name: &str,
     loaded: &LoadedManifest,
     chains: &ConfiguredChains,
 ) -> Result<()> {
@@ -124,16 +127,37 @@ pub(super) fn enforce_configured_chains(
             continue;
         };
         if !chains.contains(*chain_id) {
-            return Err(unconfigured_chain(module, *chain_id, chains));
+            return Err(unconfigured_chain(role, name, *chain_id, chains));
+        }
+        if let Subscription::ChainLog {
+            address,
+            event_signature,
+            ..
+        } = sub
+        {
+            build_alloy_filter(address.as_deref(), event_signature.as_deref()).with_context(
+                || {
+                    format!(
+                        "{} {name} declares an invalid chain-log filter on chain {chain_id}",
+                        role.claim_role(),
+                    )
+                },
+            )?;
         }
     }
     Ok(())
 }
 
-pub(super) fn unconfigured_chain(module: &str, chain_id: u64, chains: &ConfiguredChains) -> Error {
+pub(super) fn unconfigured_chain(
+    role: Role,
+    name: &str,
+    chain_id: u64,
+    chains: &ConfiguredChains,
+) -> Error {
+    let noun = role.claim_role();
     if chains.defaulted {
         return anyhow!(
-            "module {module} subscribes to chain {chain_id} but no engine.toml was found \
+            "{noun} {name} subscribes to chain {chain_id} but no engine.toml was found \
              (running on defaults, no chains configured); create engine.toml with a \
              [chains.{chain_id}] entry"
         );
@@ -149,7 +173,7 @@ pub(super) fn unconfigured_chain(module: &str, chain_id: u64, chains: &Configure
             .join(", ")
     };
     anyhow!(
-        "module {module} subscribes to chain {chain_id} but engine.toml declares no \
+        "{noun} {name} subscribes to chain {chain_id} but engine.toml declares no \
          [chains.{chain_id}] entry; configured chains: {configured}"
     )
 }
@@ -174,7 +198,7 @@ pub(super) fn run(engine_cfg: &EngineConfig, registry: &CapabilityRegistry) -> R
         &provider_registry,
         RolePass {
             role: Role::Adapter,
-            chains: None,
+            chains: &configured_chains,
         },
         &mut ledger,
     )?;
@@ -186,7 +210,7 @@ pub(super) fn run(engine_cfg: &EngineConfig, registry: &CapabilityRegistry) -> R
         registry,
         RolePass {
             role: Role::Module,
-            chains: Some(&configured_chains),
+            chains: &configured_chains,
         },
         &mut ledger,
     )?;
@@ -198,7 +222,7 @@ pub(super) fn run(engine_cfg: &EngineConfig, registry: &CapabilityRegistry) -> R
 
 struct RolePass<'a> {
     role: Role,
-    chains: Option<&'a ConfiguredChains>,
+    chains: &'a ConfiguredChains,
 }
 
 /// In declaration order.
@@ -214,10 +238,8 @@ fn load_role_manifests<'a>(
             .with_context(|| format!("{} {}", pass.role.load_context(), path.display()))?;
         let namespace = manifest_namespace(&loaded);
         claim_namespace(ledger, &namespace, pass.role.claim_role(), path)?;
-        if let Some(chains) = pass.chains {
-            enforce_configured_chains(&namespace, &loaded, chains)
-                .with_context(|| format!("{} {}", pass.role.load_context(), path.display()))?;
-        }
+        enforce_subscriptions(pass.role, &namespace, &loaded, pass.chains)
+            .with_context(|| format!("{} {}", pass.role.load_context(), path.display()))?;
         manifests.push(loaded);
     }
     Ok(manifests)
