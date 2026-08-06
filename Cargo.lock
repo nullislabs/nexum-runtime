@@ -3296,6 +3296,7 @@ dependencies = [
 name = "nexum-module-macros"
 version = "0.1.0"
 dependencies = [
+ "alloy-primitives",
  "nexum-world",
  "proc-macro2",
  "quote",
@@ -3396,6 +3397,7 @@ dependencies = [
 name = "nexum-world"
 version = "0.1.0"
 dependencies = [
+ "alloy-primitives",
  "strum",
  "syn 2.0.118",
  "tempfile",
