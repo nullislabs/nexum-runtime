@@ -191,3 +191,18 @@ pub fn build_provider_linker<T: RuntimeTypes>(
     wasmtime_wasi_http::p2::add_only_http_to_linker_async(&mut linker)?;
     Ok(linker)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_utils::clock::ManualClock;
+
+    /// [`build`] serves the guest `clocks.wall`; the extension seam hands out
+    /// that same handle, not a second clock over the same source.
+    #[test]
+    fn the_effective_wall_clock_is_the_handle_the_guest_store_serves() {
+        let clocks = ManualClock::new().as_override();
+        let served = WasiClockOverride::effective_wall(Some(&clocks));
+        assert!(Arc::ptr_eq(&clocks.wall, &served));
+    }
+}

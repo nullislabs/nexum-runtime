@@ -20,6 +20,7 @@ use crate::host::actor::Liveness;
 use crate::host::component::RuntimeTypes;
 use crate::host::state::HostState;
 use crate::manifest::{ExtensionSections, NamespaceCaps};
+use crate::supervisor::WasiClockOverride;
 
 /// One runtime extension; a module importing its interface boots only if both
 /// the linker entry and the capability namespace are registered.
@@ -86,6 +87,18 @@ pub trait Extension<T: RuntimeTypes>: Send + Sync + 'static {
     fn events(&self, sources: &mut EventSources<'_>) -> anyhow::Result<Vec<ExtensionEventStream>> {
         let _ = sources;
         Ok(Vec::new())
+    }
+}
+
+/// Hand every extension the effective wall clock. Every launch path calls
+/// this before it builds the linker.
+pub(crate) fn attach_wall_clock<T: RuntimeTypes>(
+    extensions: &[Arc<dyn Extension<T>>],
+    clocks: Option<&WasiClockOverride>,
+) {
+    let wall = WasiClockOverride::effective_wall(clocks);
+    for ext in extensions {
+        ext.attach_clock(wall.clone());
     }
 }
 

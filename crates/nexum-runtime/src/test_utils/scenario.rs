@@ -11,7 +11,7 @@ use super::manifest::{ManifestSource, TestManifest};
 use super::{in_memory_logs, test_chain_configs};
 use crate::engine_config::{AdapterEntry, ChainConfig, EngineConfig, ModuleEntry, ModuleLimits};
 use crate::host::component::{Components, RuntimeTypes};
-use crate::host::extension::Extension;
+use crate::host::extension::{Extension, attach_wall_clock};
 use crate::host::local_store_redb::LocalStore;
 use crate::host::logs::{LogPipeline, LogRecord};
 use crate::host::provider_pool::ProviderPool;
@@ -204,6 +204,7 @@ impl<T: RuntimeTypes> BootScenario<T> {
     pub async fn boot(self) -> anyhow::Result<Booted<T>> {
         let (config, launch) = self.split();
         let engine = test_wasmtime_engine();
+        attach_wall_clock(&launch.extensions, launch.clocks.as_ref());
         let linker = build_linker::<T>(&engine, &launch.extensions)?;
         let supervisor = Supervisor::boot(
             &engine,
@@ -360,6 +361,7 @@ impl Refusal {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::host::extension::HostWallClock;
     use crate::manifest::NamespaceCaps;
     use crate::test_utils::{example_wasm_or_skip, module_wasm_or_skip};
 
@@ -387,6 +389,33 @@ mod tests {
 
         fn manifest_sections(&self) -> &'static [&'static str] {
             &["acme"]
+        }
+    }
+
+    /// Records the wall clock the boot path hands the extension seam.
+    struct ClockCaptureExtension(Arc<std::sync::OnceLock<Arc<dyn HostWallClock + Send + Sync>>>);
+
+    impl Extension<CoreRuntime> for ClockCaptureExtension {
+        fn namespace(&self) -> &'static str {
+            "clockcap"
+        }
+
+        fn capabilities(&self) -> NamespaceCaps {
+            NamespaceCaps {
+                prefix: "test:clockcap/",
+                ifaces: &[],
+            }
+        }
+
+        fn link(
+            &self,
+            _linker: &mut wasmtime::component::Linker<crate::host::state::HostState<CoreRuntime>>,
+        ) -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        fn attach_clock(&self, wall: Arc<dyn HostWallClock + Send + Sync>) {
+            let _ = self.0.set(wall);
         }
     }
 
@@ -449,8 +478,11 @@ mod tests {
         );
     }
 
+    /// One boot, one override, both readers: the guest logs the pinned wall
+    /// time and the extension seam reads the same instant.
     #[tokio::test]
-    async fn a_clock_override_reaches_the_booted_guest() {
+    async fn a_clock_override_reaches_the_booted_guest_and_the_extension_seam() {
+        use std::sync::OnceLock;
         use std::time::{Duration, UNIX_EPOCH};
 
         use crate::test_utils::clock::ManualClock;
@@ -463,6 +495,9 @@ mod tests {
 
         let clock = ManualClock::new();
         clock.set(UNIX_EPOCH + Duration::from_secs(PINNED_SECS));
+        let seen = Arc::new(OnceLock::new());
+        let capture: Arc<dyn Extension<CoreRuntime>> =
+            Arc::new(ClockCaptureExtension(seen.clone()));
         let mut booted = BootScenario::new()
             .wasm(&wasm)
             .module(
@@ -470,6 +505,7 @@ mod tests {
                     .cap("logging")
                     .block_sub(1),
             )
+            .extensions([capture])
             .clock(clock.as_override())
             .boot()
             .await
@@ -485,6 +521,11 @@ mod tests {
         assert!(
             logged.contains(&pinned),
             "the guest read the overridden wall clock: {logged:?}",
+        );
+        assert_eq!(
+            seen.get().expect("boot attached a clock").now(),
+            Duration::from_secs(PINNED_SECS),
+            "the extension and the guest read one timeline",
         );
     }
 

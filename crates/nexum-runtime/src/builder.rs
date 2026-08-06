@@ -23,7 +23,7 @@ use crate::engine_config::EngineConfig;
 use crate::host::component::{
     BuilderContext, ComponentBuilder, Components, ComponentsBuilder, RuntimeTypes,
 };
-use crate::host::extension::{EventSources, Extension};
+use crate::host::extension::{self, EventSources, Extension};
 use crate::host::logs::LogPipeline;
 use crate::host::provider_pool::ProviderPool;
 use crate::preset::Runtime;
@@ -171,10 +171,7 @@ impl<T: RuntimeTypes> AssembledRuntime<'_, T> {
 
         // Extensions receive the effective wall clock before linking, so
         // their host-side time and guest WASI time share one source.
-        let wall = WasiClockOverride::effective_wall(clocks.as_ref());
-        for ext in &extensions {
-            ext.attach_clock(wall.clone());
-        }
+        extension::attach_wall_clock(&extensions, clocks.as_ref());
         let linker = supervisor::build_linker::<T>(&engine, &extensions)?;
 
         // Boot supervisor - a module-source override wins over
