@@ -25,8 +25,8 @@ thiserror.workspace = true
 async-trait.workspace = true
 # Newtype boilerplate (`Display`, `AsRef`, `From`) for identity wrappers.
 derive_more.workspace = true
-# `strum::IntoStaticStr` on `LogSource`: the snake_case variant name is
-# the tracing `source` field.
+# `strum::IntoStaticStr`: the snake_case variant name is the tracing
+# `source` field (`LogSource`) and the boot-refusal `error_kind` label.
 strum.workspace = true
 tokio.workspace = true
 # Task lifecycle and graceful shutdown; the sole crate that raw-spawns

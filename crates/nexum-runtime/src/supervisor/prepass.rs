@@ -5,12 +5,71 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use alloy_chains::Chain;
-use anyhow::{Context, Error, Result, anyhow};
+use anyhow::{Context, Result};
+use strum::IntoStaticStr;
+use thiserror::Error;
 use tracing::{info, warn};
 
 use super::role::Role;
 use crate::engine_config::EngineConfig;
-use crate::manifest::{self, CapabilityRegistry, LoadedManifest, Subscription};
+use crate::manifest::{self, CapabilityRegistry, LoadedManifest, ParseError, Subscription};
+
+/// Refusals before any compile; the wording is operator-pinned.
+#[derive(Debug, Error, IntoStaticStr)]
+#[strum(serialize_all = "snake_case")]
+pub(super) enum BootRefusal {
+    #[error(
+        "name {name} is claimed twice: {held_role} {} and {role} {}; \
+         [module].name must be unique across [[modules]] and [[adapters]]",
+        held.display(),
+        path.display()
+    )]
+    NamespaceClaimed {
+        name: String,
+        held_role: &'static str,
+        held: PathBuf,
+        role: &'static str,
+        path: PathBuf,
+    },
+    #[error(transparent)]
+    Manifest(#[from] ParseError),
+    #[error(
+        "manifest {} not found for component {}",
+        manifest.display(),
+        component.display()
+    )]
+    ManifestNotFound {
+        manifest: PathBuf,
+        component: PathBuf,
+    },
+    #[error(
+        "no module.toml for component {}; ship one next to the component \
+         or pass its path explicitly (an empty `required = []` under \
+         [capabilities] grants nothing)",
+        component.display()
+    )]
+    ManifestMissing { component: PathBuf },
+    #[error(
+        "{noun} {name} subscribes to chain {chain_id} but no engine.toml was found \
+         (running on defaults, no chains configured); create engine.toml with a \
+         [chains.{chain_id}] entry"
+    )]
+    UnconfiguredChainDefaulted {
+        noun: &'static str,
+        name: String,
+        chain_id: u64,
+    },
+    #[error(
+        "{noun} {name} subscribes to chain {chain_id} but engine.toml declares no \
+         [chains.{chain_id}] entry; configured chains: {configured}"
+    )]
+    UnconfiguredChain {
+        noun: &'static str,
+        name: String,
+        chain_id: u64,
+        configured: String,
+    },
+}
 
 /// One ledger spans both roles: they derive the same keccak local-store namespace.
 pub(super) type NamespaceLedger = BTreeMap<String, (&'static str, PathBuf)>;
@@ -21,14 +80,15 @@ pub(super) fn claim_namespace(
     name: &str,
     role: &'static str,
     path: &Path,
-) -> Result<()> {
+) -> Result<(), BootRefusal> {
     if let Some((held_role, held_path)) = ledger.get(name) {
-        return Err(anyhow!(
-            "name {name} is claimed twice: {held_role} {} and {role} {}; \
-             [module].name must be unique across [[modules]] and [[adapters]]",
-            held_path.display(),
-            path.display(),
-        ));
+        return Err(BootRefusal::NamespaceClaimed {
+            name: name.to_owned(),
+            held_role,
+            held: held_path.clone(),
+            role,
+            path: path.to_path_buf(),
+        });
     }
     ledger.insert(name.to_owned(), (role, path.to_path_buf()));
     Ok(())
@@ -45,24 +105,20 @@ pub(super) fn load_required_manifest(
     explicit: Option<&Path>,
     registry: &CapabilityRegistry,
     role: &'static str,
-) -> Result<LoadedManifest> {
+) -> Result<LoadedManifest, BootRefusal> {
     match resolve_manifest_path(component, explicit).as_deref() {
         Some(p) if p.exists() => {
             info!(manifest = %p.display(), role, "loading component manifest");
             Ok(manifest::load(p, registry)?)
         }
         // Explicit paths only: sibling discovery requires `.exists()`.
-        Some(p) => Err(anyhow!(
-            "manifest {} not found for component {}",
-            p.display(),
-            component.display(),
-        )),
-        None => Err(anyhow!(
-            "no module.toml for component {}; ship one next to the component \
-             or pass its path explicitly (an empty `required = []` under \
-             [capabilities] grants nothing)",
-            component.display(),
-        )),
+        Some(p) => Err(BootRefusal::ManifestNotFound {
+            manifest: p.to_path_buf(),
+            component: component.to_path_buf(),
+        }),
+        None => Err(BootRefusal::ManifestMissing {
+            component: component.to_path_buf(),
+        }),
     }
 }
 
@@ -119,7 +175,7 @@ pub(super) fn enforce_subscriptions(
     name: &str,
     loaded: &LoadedManifest,
     chains: &ConfiguredChains,
-) -> Result<()> {
+) -> Result<(), BootRefusal> {
     for sub in &loaded.manifest.subscriptions {
         let (Subscription::Block { chain_id } | Subscription::ChainLog { chain_id, .. }) = sub
         else {
@@ -137,14 +193,14 @@ pub(super) fn unconfigured_chain(
     name: &str,
     chain_id: u64,
     chains: &ConfiguredChains,
-) -> Error {
+) -> BootRefusal {
     let noun = role.claim_role();
     if chains.defaulted {
-        return anyhow!(
-            "{noun} {name} subscribes to chain {chain_id} but no engine.toml was found \
-             (running on defaults, no chains configured); create engine.toml with a \
-             [chains.{chain_id}] entry"
-        );
+        return BootRefusal::UnconfiguredChainDefaulted {
+            noun,
+            name: name.to_owned(),
+            chain_id,
+        };
     }
     let configured = if chains.ids.is_empty() {
         "none".to_owned()
@@ -156,10 +212,12 @@ pub(super) fn unconfigured_chain(
             .collect::<Vec<_>>()
             .join(", ")
     };
-    anyhow!(
-        "{noun} {name} subscribes to chain {chain_id} but engine.toml declares no \
-         [chains.{chain_id}] entry; configured chains: {configured}"
-    )
+    BootRefusal::UnconfiguredChain {
+        noun,
+        name: name.to_owned(),
+        chain_id,
+        configured,
+    }
 }
 
 /// Every manifest loaded, every name claimed, every subscribed chain gated,
