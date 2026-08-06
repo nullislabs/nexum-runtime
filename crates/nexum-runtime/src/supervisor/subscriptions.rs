@@ -37,18 +37,12 @@ impl<T: RuntimeTypes> Supervisor<T> {
                         resume,
                         max_lookback,
                     } => {
-                        let filter =
-                            build_alloy_filter(address.as_deref(), event_signature.as_deref())
-                                .expect("chain-log filters are validated at load");
+                        let filter = build_alloy_filter(*address, *event_signature);
                         let chain = Chain::from_id(*chain_id);
                         // A `resume` subscription reads its durable cursor
                         // once here at boot; others start at head.
                         let (cursor_key, initial_cursor) = if *resume {
-                            let key = chainlog_cursor_key(
-                                chain,
-                                address.as_deref(),
-                                event_signature.as_deref(),
-                            );
+                            let key = chainlog_cursor_key(chain, *address, *event_signature);
                             let seed = read_chain_log_cursor(
                                 &self.shared.components.store,
                                 module.name.as_str(),
@@ -157,44 +151,17 @@ impl From<&alloy_rpc_types_eth::Log> for nexum::host::types::ChainLog {
     }
 }
 
-#[derive(Debug, thiserror::Error)]
-#[non_exhaustive]
-pub(super) enum FilterError {
-    /// `[[subscriptions]].address` did not parse as an EVM address.
-    #[error("invalid chain-log address {address:?}: {source}")]
-    Address {
-        address: String,
-        #[source]
-        source: alloy_primitives::hex::FromHexError,
-    },
-    /// `[[subscriptions]].event_signature` did not parse as a 32-byte topic.
-    #[error("invalid topic {topic:?}: {source}")]
-    Topic {
-        topic: String,
-        #[source]
-        source: alloy_primitives::hex::FromHexError,
-    },
-}
-
+/// Infallible: the manifest carries typed filter values.
 pub(super) fn build_alloy_filter(
-    address: Option<&str>,
-    event_signature: Option<&str>,
-) -> std::result::Result<alloy_rpc_types_eth::Filter, FilterError> {
-    use alloy_primitives::{Address, B256};
+    address: Option<alloy_primitives::Address>,
+    event_signature: Option<alloy_primitives::B256>,
+) -> alloy_rpc_types_eth::Filter {
     let mut filter = alloy_rpc_types_eth::Filter::new();
-    if let Some(addr_hex) = address {
-        let addr: Address = addr_hex.parse().map_err(|source| FilterError::Address {
-            address: addr_hex.to_owned(),
-            source,
-        })?;
+    if let Some(addr) = address {
         filter = filter.address(addr);
     }
-    if let Some(topic_hex) = event_signature {
-        let topic: B256 = topic_hex.parse().map_err(|source| FilterError::Topic {
-            topic: topic_hex.to_owned(),
-            source,
-        })?;
+    if let Some(topic) = event_signature {
         filter = filter.event_signature(topic);
     }
-    Ok(filter)
+    filter
 }

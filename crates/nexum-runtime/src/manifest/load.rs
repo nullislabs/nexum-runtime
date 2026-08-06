@@ -156,6 +156,29 @@ event_signature = "0x00000000000000000000000000000000000000000000000000000000dea
         }
     }
 
+    /// Malformed chain-log hex refuses the manifest at parse, not at first
+    /// dispatch, with the operator wording pinned verbatim.
+    #[test]
+    fn load_refuses_malformed_chain_log_hex_at_parse() {
+        for (field, detail) in [
+            (
+                "address  = \"0xabc\"",
+                "invalid chain-log address \"0xabc\"",
+            ),
+            (
+                "event_signature = \"not-a-topic\"",
+                "invalid topic \"not-a-topic\"",
+            ),
+        ] {
+            let toml = format!(
+                "[module]\nname = \"bad\"\n\n[[subscription]]\nkind     = \"chain-log\"\n\
+                 chain_id = 1\n{field}\n"
+            );
+            let err = toml::from_str::<Manifest>(&toml).expect_err("malformed hex");
+            assert!(err.to_string().contains(detail), "{err}");
+        }
+    }
+
     #[test]
     fn load_parses_the_retired_log_kind_as_an_extension_kind() {
         // The chain-event kind is `chain-log`; a stale `kind = "log"`
