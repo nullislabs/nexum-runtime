@@ -63,16 +63,18 @@ async fn init_failure_marks_module_dead_excluding_dispatch_and_subscriptions() {
         0,
         "no live module is subscribed to chain 11155111 blocks",
     );
+    let plan = booted.supervisor.subscription_plan();
     assert!(
-        booted.supervisor.block_chains().is_empty(),
-        "dead module must not contribute to block_chains()",
+        plan.block_chains.is_empty(),
+        "dead module must not contribute block chains",
     );
     assert!(
-        booted.supervisor.chain_log_subscriptions().is_empty(),
-        "dead module must not contribute to chain_log_subscriptions()",
+        plan.chain_log_subs.is_empty(),
+        "dead module must not contribute chain-log subscriptions",
     );
-    assert!(
-        booted.supervisor.dead_modules_hold_subscriptions(),
+    assert_eq!(
+        plan.viable,
+        Viability::DeadHoldSubs,
         "the filtered-out subscriptions must be attributed to the dead module",
     );
 }
@@ -101,16 +103,75 @@ async fn alive_module_subscriptions_survive_alongside_dead_module() {
         1,
         "only the example is alive"
     );
-    let chains = booted.supervisor.block_chains();
+    let plan = booted.supervisor.subscription_plan();
     assert_eq!(
-        chains.iter().map(|c| c.id()).collect::<Vec<_>>(),
+        plan.block_chains.iter().map(|c| c.id()).collect::<Vec<_>>(),
         vec![1],
         "the alive module's chain survives; the dead module's does not",
     );
-    assert!(
-        booted.supervisor.dead_modules_hold_subscriptions(),
-        "the dead module's dropped subscription is attributable",
+    assert_eq!(
+        plan.viable,
+        Viability::Live,
+        "one live subscription keeps the plan viable despite the dead module",
     );
+}
+
+/// One health filter covers extension kinds too: a dead module's kind opens
+/// no extension event source, while a live module's survives.
+#[tokio::test]
+async fn dead_module_extension_kind_is_excluded_from_the_plan() {
+    let Some(price_alert_wasm) = module_wasm_or_skip("price-alert") else {
+        return;
+    };
+    let Some(example_wasm) = example_wasm_or_skip() else {
+        return;
+    };
+    struct Ticker;
+    impl Extension<CoreRuntime> for Ticker {
+        fn namespace(&self) -> &'static str {
+            "ticker"
+        }
+        fn capabilities(&self) -> manifest::NamespaceCaps {
+            manifest::NamespaceCaps {
+                prefix: "test:ticker/",
+                ifaces: &[],
+            }
+        }
+        fn link(&self, _linker: &mut Linker<HostState<CoreRuntime>>) -> anyhow::Result<()> {
+            Ok(())
+        }
+        fn subscriptions(&self) -> &'static [&'static str] {
+            &["alarms", "ticks"]
+        }
+    }
+    let booted = BootScenario::new()
+        .extensions([Arc::new(Ticker) as Arc<dyn Extension<CoreRuntime>>])
+        .module(
+            Entry::new(price_alert("not-a-number").extension_sub("alarms", &[]))
+                .wasm(price_alert_wasm),
+        )
+        .module(
+            Entry::new(
+                TestManifest::new("example")
+                    .cap("logging")
+                    .extension_sub("ticks", &[]),
+            )
+            .wasm(example_wasm),
+        )
+        .boot()
+        .await
+        .expect("both modules load; only price-alert's init fails");
+
+    let plan = booted.supervisor.subscription_plan();
+    assert_eq!(
+        plan.extension_kinds
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>(),
+        vec!["ticks"],
+        "the dead module's kind is excluded; the alive module's survives",
+    );
+    assert_eq!(plan.viable, Viability::Live);
 }
 
 /// Boot and restart share one instantiate-and-init helper, so the verdict on

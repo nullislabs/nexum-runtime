@@ -14,7 +14,7 @@ mod subscriptions;
 
 pub use prepass::ConfiguredChains;
 pub use store::{WasiClockOverride, build_linker, build_provider_linker};
-pub use subscriptions::ChainLogSub;
+pub use subscriptions::{ChainLogSub, SubscriptionPlan, Viability};
 
 use std::sync::Arc;
 
@@ -193,14 +193,6 @@ impl<T: RuntimeTypes> Supervisor<T> {
             .iter()
             .filter(|m| m.health.dispatchable())
             .count()
-    }
-
-    /// Distinguishes benign "no subscriptions declared" from "every declared
-    /// subscription belongs to a dead module" (operator error).
-    pub fn dead_modules_hold_subscriptions(&self) -> bool {
-        self.modules
-            .iter()
-            .any(|m| !m.health.dispatchable() && !m.subscriptions.is_empty())
     }
 
     pub fn poisoned_count(&self) -> usize {
