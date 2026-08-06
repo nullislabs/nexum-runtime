@@ -10,11 +10,13 @@
 //! ([`manifest_extensions`]) and are passed to [`synthesize`].
 
 use std::path::{Path, PathBuf};
-use strum::{EnumString, IntoStaticStr, VariantNames};
+use strum::{Display, EnumString, IntoStaticStr, VariantNames};
 
 /// A core capability name; the single source [`CORE`] and the runtime's
 /// capability registry emit from.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, EnumString, VariantNames)]
+#[derive(
+    Clone, Copy, Debug, Eq, PartialEq, Hash, Display, EnumString, IntoStaticStr, VariantNames,
+)]
 #[strum(serialize_all = "kebab-case")]
 #[non_exhaustive]
 pub enum Cap {
@@ -35,24 +37,18 @@ pub enum Cap {
 }
 
 impl Cap {
-    /// The declared name, as a manifest spells it. Const so [`CORE`] and
-    /// [`CORE_IFACES`] can evaluate it.
+    /// The declared name; const (via the derived [`VariantNames`], which
+    /// is in declaration order) so const consumers can evaluate it.
     pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Chain => "chain",
-            Self::Identity => "identity",
-            Self::LocalStore => "local-store",
-            Self::RemoteStore => "remote-store",
-            Self::Messaging => "messaging",
-            Self::Logging => "logging",
-            Self::Http => "http",
-        }
+        Self::VARIANTS[self as usize]
     }
 }
 
 /// A `nexum:host/types.fault` case as a stable snake_case label, in WIT
 /// declaration order; the single source every label mirror emits from.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, EnumString, IntoStaticStr, VariantNames)]
+#[derive(
+    Clone, Copy, Debug, Eq, PartialEq, Hash, Display, EnumString, IntoStaticStr, VariantNames,
+)]
 #[strum(serialize_all = "snake_case")]
 #[non_exhaustive]
 pub enum FaultLabel {
@@ -397,7 +393,7 @@ pub fn find_extensions_manifest(start: &Path) -> Option<PathBuf> {
 /// or another registration is an error.
 pub fn synthesize(declared: &[String], extensions: &[ExtensionRow]) -> Result<ModuleWorld, String> {
     for (idx, ext) in extensions.iter().enumerate() {
-        if CORE.iter().any(|c| c.name.as_str() == ext.name)
+        if ext.name.parse::<Cap>().is_ok()
             || extensions[..idx].iter().any(|prior| prior.name == ext.name)
         {
             return Err(format!(
@@ -408,18 +404,23 @@ pub fn synthesize(declared: &[String], extensions: &[ExtensionRow]) -> Result<Mo
         }
     }
 
-    let known = || {
-        CORE.iter()
-            .map(|c| c.name.as_str())
-            .chain(extensions.iter().map(|e| e.name.as_str()))
-    };
+    let mut caps = Vec::new();
     for name in declared {
-        if !known().any(|k| k == name.as_str()) {
-            let names = known().collect::<Vec<_>>().join(", ");
-            return Err(format!(
-                "unknown capability `{name}` in module.toml [capabilities]; expected one of: \
-                 {names}"
-            ));
+        match name.parse::<Cap>() {
+            Ok(cap) => caps.push(cap),
+            Err(_) if extensions.iter().any(|e| &e.name == name) => {}
+            Err(_) => {
+                let names = Cap::VARIANTS
+                    .iter()
+                    .copied()
+                    .chain(extensions.iter().map(|e| e.name.as_str()))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                return Err(format!(
+                    "unknown capability `{name}` in module.toml [capabilities]; expected one of: \
+                     {names}"
+                ));
+            }
         }
     }
 
@@ -432,7 +433,7 @@ pub fn synthesize(declared: &[String], extensions: &[ExtensionRow]) -> Result<Mo
     let mut packages = vec!["nexum-host".to_owned()];
     let mut adapters = Vec::new();
     for cap in CORE {
-        if !declared.iter().any(|d| d == cap.name.as_str()) {
+        if !caps.contains(&cap.name) {
             continue;
         }
         if let Some(import) = cap.import {
@@ -570,7 +571,7 @@ mod tests {
 
     #[test]
     fn logging_only_world_imports_logging_alone() {
-        let world = synthesize(&["logging".to_string()], &[]).unwrap();
+        let world = synthesize(&[Cap::Logging.to_string()], &[]).unwrap();
         assert!(world.wit.contains("import nexum:host/logging@0.1.0;"));
         assert!(!world.wit.contains("import nexum:host/chain"));
         assert_eq!(world.packages, MODULE_PACKAGES);
@@ -579,14 +580,14 @@ mod tests {
 
     #[test]
     fn extension_row_emits_its_import_and_packages() {
-        let world = synthesize(&["logging".to_string(), "acme".to_string()], &ext()).unwrap();
+        let world = synthesize(&[Cap::Logging.to_string(), "acme".to_string()], &ext()).unwrap();
         assert!(world.wit.contains("import acme:ext/api@0.1.0;"));
         assert_eq!(world.packages, vec!["nexum-host", "acme-ext"]);
     }
 
     #[test]
     fn undeclared_extension_row_stays_out_of_the_world() {
-        let world = synthesize(&["logging".to_string()], &ext()).unwrap();
+        let world = synthesize(&[Cap::Logging.to_string()], &ext()).unwrap();
         assert!(!world.wit.contains("acme"));
         assert_eq!(world.packages, MODULE_PACKAGES);
     }
@@ -594,11 +595,11 @@ mod tests {
     #[test]
     fn extension_shadowing_a_core_name_is_rejected() {
         let rows = vec![ExtensionRow {
-            name: "chain".to_owned(),
+            name: Cap::Chain.to_string(),
             import: "acme:ext/chain@0.1.0".to_owned(),
             packages: Vec::new(),
         }];
-        let err = synthesize(&["chain".to_string()], &rows).unwrap_err();
+        let err = synthesize(&[Cap::Chain.to_string()], &rows).unwrap_err();
         assert!(err.contains("extension capability `chain` collides"));
     }
 
@@ -626,13 +627,16 @@ mod tests {
         assert!(!CORE_IFACES.contains(&Cap::Http.as_str()));
     }
 
-    /// Pin the hand-written const accessor to the derived vocabulary.
+    /// Pin the const accessor and the derived conversions to one vocabulary.
     #[test]
     fn cap_accessor_agrees_with_the_derived_vocabulary() {
         let names: Vec<&str> = CORE.iter().map(|c| c.name.as_str()).collect();
         assert_eq!(names, Cap::VARIANTS);
         for name in Cap::VARIANTS {
-            assert_eq!(name.parse::<Cap>().unwrap().as_str(), *name);
+            let cap = name.parse::<Cap>().unwrap();
+            assert_eq!(cap.as_str(), *name);
+            assert_eq!(<&'static str>::from(cap), *name);
+            assert_eq!(cap.to_string(), *name);
         }
     }
 
@@ -652,6 +656,7 @@ mod tests {
         for label in FaultLabel::VARIANTS {
             let parsed: FaultLabel = label.parse().unwrap();
             assert_eq!(<&'static str>::from(parsed), *label);
+            assert_eq!(parsed.to_string(), *label);
         }
         assert!("nonesuch".parse::<FaultLabel>().is_err());
     }
@@ -698,14 +703,14 @@ mod tests {
 
     #[test]
     fn http_declares_no_world_import() {
-        let world = synthesize(&["logging".to_string(), "http".to_string()], &[]).unwrap();
+        let world = synthesize(&[Cap::Logging.to_string(), Cap::Http.to_string()], &[]).unwrap();
         assert!(!world.wit.contains("wasi:http"));
         assert_eq!(world.packages, MODULE_PACKAGES);
     }
 
     #[test]
     fn duplicate_declarations_emit_one_import() {
-        let world = synthesize(&["chain".to_string(), "chain".to_string()], &[]).unwrap();
+        let world = synthesize(&[Cap::Chain.to_string(), Cap::Chain.to_string()], &[]).unwrap();
         assert_eq!(world.wit.matches("import nexum:host/chain").count(), 1);
         assert_eq!(world.adapters, vec!["chain"]);
     }
