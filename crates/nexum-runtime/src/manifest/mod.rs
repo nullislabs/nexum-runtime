@@ -12,7 +12,7 @@ mod types;
 
 pub(crate) use capabilities::enforce_capabilities;
 pub use capabilities::{CapabilityRegistry, NamespaceCaps};
-pub(crate) use error::ParseError;
+pub(crate) use error::{CapabilityError, ParseError};
 pub(crate) use load::{host_allowed, load};
 pub use types::ExtensionSections;
 pub(crate) use types::{ComponentKind, LoadedManifest, ResourceSection, Subscription};

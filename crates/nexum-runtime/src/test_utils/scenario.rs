@@ -320,6 +320,11 @@ impl From<anyhow::Error> for Refusal {
 }
 
 impl Refusal {
+    /// The typed root under the context wraps, for `matches!` on a variant.
+    pub fn root<E: std::error::Error + Send + Sync + 'static>(&self) -> Option<&E> {
+        self.0.chain().find_map(|cause| cause.downcast_ref::<E>())
+    }
+
     /// Assert the refusal names `needle` somewhere in its context chain.
     #[track_caller]
     pub fn names(self, needle: &str) -> Self {

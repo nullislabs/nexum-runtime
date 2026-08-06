@@ -23,10 +23,12 @@ use tracing::info;
 use wasmtime::Engine;
 use wasmtime::component::Linker;
 
+use crate::digest::DigestMismatch;
 use crate::engine_config::{EngineConfig, ModuleEntry, ModuleLimits};
 use crate::host::component::{Components, RuntimeTypes};
 use crate::host::extension::{Extension, HostServices, ProviderManifest};
 use crate::host::state::HostState;
+use crate::manifest::CapabilityError;
 use crate::runtime::poison_policy::PoisonPolicy;
 use admission::{ProviderKinds, capability_registry, enforce_extension_uniqueness, provider_kinds};
 use cursors::ChainLogCursors;
@@ -217,19 +219,28 @@ impl<T: RuntimeTypes> Supervisor<T> {
 
 /// Counts a refusal under its typed kind; wraps without a typed root go uncounted.
 fn count_boot_refusal(err: &anyhow::Error) {
-    let Some(kind) = err.chain().find_map(|cause| {
-        cause
-            .downcast_ref::<BootRefusal>()
-            .map(<&'static str>::from)
-            .or_else(|| {
-                cause
-                    .downcast_ref::<LoadRefusal>()
-                    .map(<&'static str>::from)
-            })
-    }) else {
+    let Some(kind) = boot_refusal_kind(err) else {
         return;
     };
     metrics::counter!("nexum_runtime_boot_refusals_total", "error_kind" => kind).increment(1);
+}
+
+/// A root missing here is a refusal class the counter never sees.
+fn boot_refusal_kind(err: &anyhow::Error) -> Option<&'static str> {
+    err.chain().find_map(|cause| {
+        if let Some(refusal) = cause.downcast_ref::<BootRefusal>() {
+            return Some(refusal.into());
+        }
+        if let Some(refusal) = cause.downcast_ref::<LoadRefusal>() {
+            return Some(refusal.into());
+        }
+        if let Some(violation) = cause.downcast_ref::<CapabilityError>() {
+            return Some(violation.into());
+        }
+        cause
+            .downcast_ref::<DigestMismatch>()
+            .map(|_| "digest_mismatch")
+    })
 }
 
 /// The resulting [`Shared`] is the one wiring every later phase reads.

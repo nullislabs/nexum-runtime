@@ -51,8 +51,8 @@ fn register_kind<T: RuntimeTypes>(
     Ok(())
 }
 
-pub(super) fn registered_kinds<T: RuntimeTypes>(kinds: &ProviderKinds<T>) -> String {
-    kinds.keys().copied().collect::<Vec<_>>().join(", ")
+pub(super) fn registered_kinds<T: RuntimeTypes>(kinds: &ProviderKinds<T>) -> Vec<&'static str> {
+    kinds.keys().copied().collect()
 }
 
 pub(super) fn extension_subscription_vocabulary<T: RuntimeTypes>(
