@@ -32,6 +32,12 @@ impl From<TestManifest> for ManifestSource {
     }
 }
 
+impl From<&TestManifest> for ManifestSource {
+    fn from(manifest: &TestManifest) -> Self {
+        Self::Toml(manifest.to_toml())
+    }
+}
+
 impl From<String> for ManifestSource {
     fn from(toml: String) -> Self {
         Self::Toml(toml)
@@ -41,6 +47,12 @@ impl From<String> for ManifestSource {
 impl From<PathBuf> for ManifestSource {
     fn from(path: PathBuf) -> Self {
         Self::Path(path)
+    }
+}
+
+impl From<&Path> for ManifestSource {
+    fn from(path: &Path) -> Self {
+        Self::Path(path.to_path_buf())
     }
 }
 

@@ -23,7 +23,7 @@ wasmtime-wasi-http.workspace = true
 anyhow.workspace = true
 thiserror.workspace = true
 async-trait.workspace = true
-# Newtype boilerplate (`Display`, `From`) for identity wrappers.
+# Newtype boilerplate (`Display`, `AsRef`, `From`) for identity wrappers.
 derive_more.workspace = true
 # `strum::IntoStaticStr` on the pub error enums: a snake_case
 # `&'static str` per variant, published for consumers' metric labels;
