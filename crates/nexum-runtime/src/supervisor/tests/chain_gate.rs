@@ -74,6 +74,7 @@ async fn boot_refuses_an_adapter_subscription_on_an_unconfigured_chain() {
         .names("load provider")
         .names("adapter feed subscribes to chain 424242")
         .names("[chains.424242]")
+        .lacks("read component")
         .lacks("compile");
 }
 
@@ -101,8 +102,49 @@ async fn boot_refuses_an_invalid_chain_log_filter() {
             .await
             .names("module example declares an invalid chain-log filter on chain 1")
             .names(detail)
+            .lacks("read component")
             .lacks("compile");
     }
+}
+
+/// The load-time filter check and the collection-time rebuild read the same
+/// manifest values, so the collection rebuild cannot fail.
+#[tokio::test]
+async fn a_validated_chain_log_filter_survives_to_the_collected_subscription() {
+    let Some(wasm) = example_wasm_or_skip() else {
+        return;
+    };
+    let address = "0xC92E8bdf79f0507f65a392b0ab4667716BFE0110";
+    let topic = "0x237e158222e3e6968b72b9db0d8043aacf074ad9f650f0d1606b4d82ee432c00";
+    let booted = BootScenario::new()
+        .wasm(wasm)
+        .module(
+            TestManifest::new("example")
+                .cap("logging")
+                .chain_log_sub_filtered(1, Some(address), Some(topic)),
+        )
+        .boot()
+        .await
+        .expect("the example boots alive");
+
+    let subs = booted.supervisor.chain_log_subscriptions();
+    assert_eq!(
+        subs.len(),
+        1,
+        "the alive module contributes its subscription"
+    );
+    assert_eq!(subs[0].module.as_str(), "example");
+    assert_eq!(subs[0].chain.id(), 1);
+    assert!(subs[0].cursor_key.is_none(), "resume defaults to off");
+    // alloy `Filter` exposes no getter; assert through its serialisation.
+    let serialised = serde_json::to_value(&subs[0].filter).unwrap().to_string();
+    assert!(
+        serialised
+            .to_lowercase()
+            .contains(&address.to_lowercase()[2..]),
+        "{serialised}",
+    );
+    assert!(serialised.contains(&topic[2..]), "{serialised}");
 }
 
 #[tokio::test]
