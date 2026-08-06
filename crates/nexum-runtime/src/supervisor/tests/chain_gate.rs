@@ -36,6 +36,27 @@ async fn boot_refuses_a_subscription_on_an_unconfigured_chain() {
     }
 }
 
+/// The single-boot path reads the same configured-chains gate.
+#[tokio::test]
+async fn boot_single_refuses_a_subscription_on_an_unconfigured_chain() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let manifest = TestManifest::new("gated")
+        .cap("logging")
+        .block_sub(424_242)
+        .write_to(dir.path());
+    let wasm = dir.path().join("missing.wasm");
+
+    let (_store, result) = try_boot_single(&wasm, Some(&manifest), false, None).await;
+    Refusal::from(
+        result
+            .err()
+            .expect("an unconfigured chain must refuse the boot"),
+    )
+    .names("module gated subscribes to chain 424242")
+    .names("configured chains: 1, 100, 11155111")
+    .lacks("compile");
+}
+
 #[tokio::test]
 async fn boot_admits_a_block_subscription_on_a_configured_chain_past_the_chain_gate() {
     BootScenario::new()

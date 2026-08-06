@@ -164,3 +164,34 @@ impl Extension<crate::test_utils::MockTypes> for AcmeExtension {
 fn acme_extensions() -> Vec<Arc<dyn Extension<crate::test_utils::MockTypes>>> {
     vec![Arc::new(AcmeExtension)]
 }
+
+/// [`AcmeExtension`] minus its service, for the serviceless kind gate tests.
+struct ServicelessAcmeExtension;
+
+impl Extension<crate::test_utils::MockTypes> for ServicelessAcmeExtension {
+    fn namespace(&self) -> &'static str {
+        "acme"
+    }
+
+    fn capabilities(&self) -> manifest::NamespaceCaps {
+        manifest::NamespaceCaps {
+            prefix: "test:acme/",
+            ifaces: &[],
+        }
+    }
+
+    fn link(
+        &self,
+        _linker: &mut Linker<HostState<crate::test_utils::MockTypes>>,
+    ) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    fn provider(&self) -> Option<Box<dyn ProviderKind<crate::test_utils::MockTypes>>> {
+        Some(Box::new(AcmeKind))
+    }
+}
+
+fn serviceless_acme_extensions() -> Vec<Arc<dyn Extension<crate::test_utils::MockTypes>>> {
+    vec![Arc::new(ServicelessAcmeExtension)]
+}
