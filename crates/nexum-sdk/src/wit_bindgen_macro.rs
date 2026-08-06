@@ -7,7 +7,8 @@
 //! zero-argument form emits the full six-interface set. Either way the
 //! wit-bindgen output for the world must already be in scope, so
 //! selecting a capability the world does not import is a compile error.
-//! A domain SDK layers its own interfaces on the same `WitBindgenHost`.
+//! A domain SDK layers its own interfaces on the same `WitBindgenHost`,
+//! or binds logging alone via [`bind_host_logging_via_wit_bindgen!`].
 //!
 //! ```ignore
 //! wit_bindgen::generate!({ /* ... */ });
@@ -326,12 +327,26 @@ macro_rules! __bind_host_cap_via_wit_bindgen {
         }
     };
     (logging) => {
+        $crate::bind_host_logging_via_wit_bindgen!();
+
         impl $crate::host::LoggingHost for WitBindgenHost {
             fn log(&self, level: $crate::Level, message: &str) {
                 nexum::host::logging::log(nexum::host::logging::Level::from(level), message);
             }
         }
+    };
+}
 
+/// Logging-only slice of [`bind_host_via_wit_bindgen!`]: needs only the
+/// generated `nexum::host::logging` in scope, never `WitBindgenHost` or
+/// the base block, so a domain world whose `nexum:host/types` is
+/// foreign can still bind logging.
+///
+/// The generated names `HostLogSink` and `install_tracing` are visible
+/// in the caller's scope (`macro_rules!` is not hygienic for items).
+#[macro_export]
+macro_rules! bind_host_logging_via_wit_bindgen {
+    () => {
         /// Translate a `tracing_core::Level` into the wit-bindgen
         /// `logging::Level` wire enum.
         impl ::core::convert::From<$crate::Level> for nexum::host::logging::Level {
@@ -355,7 +370,7 @@ macro_rules! __bind_host_cap_via_wit_bindgen {
 
         impl $crate::tracing::LogSink for HostLogSink {
             fn log(&self, level: $crate::Level, message: &str) {
-                <WitBindgenHost as $crate::host::LoggingHost>::log(&WitBindgenHost, level, message);
+                nexum::host::logging::log(::core::convert::From::from(level), message);
             }
         }
 
