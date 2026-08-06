@@ -883,7 +883,7 @@ pub struct CapturedEvent {
 }
 
 /// A field value as tracing's `Visit` delivered it.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, derive_more::Display)]
 pub enum FieldValue {
     /// A `record_str` value.
     Str(String),
@@ -896,17 +896,6 @@ pub enum FieldValue {
     /// A `record_debug` fallback (`?x`, `%x`, `f64`, ...), pre-rendered
     /// with `{:?}`.
     Debug(String),
-}
-
-impl fmt::Display for FieldValue {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            FieldValue::Str(v) | FieldValue::Debug(v) => f.write_str(v),
-            FieldValue::U64(v) => write!(f, "{v}"),
-            FieldValue::I64(v) => write!(f, "{v}"),
-            FieldValue::Bool(v) => write!(f, "{v}"),
-        }
-    }
 }
 
 impl CapturedEvent {
