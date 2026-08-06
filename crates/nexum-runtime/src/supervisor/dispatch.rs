@@ -10,6 +10,7 @@ use tracing_core::Level;
 use super::Supervisor;
 use super::cursors::{commit_chain_log_cursor, persist_progress_marker};
 use super::lifecycle::{revive_one, sweep};
+use super::role::{Role, report_poison};
 use crate::bindings::nexum;
 use crate::host::component::RuntimeTypes;
 use crate::host::extension::ExtensionEvent;
@@ -288,21 +289,13 @@ impl<T: RuntimeTypes> Supervisor<T> {
                     format!("run terminated abnormally: {}", trap.root_cause()),
                 ));
                 if let Some(recent) = verdict.poisoned {
-                    // A string field, not a `Display` one: the two record
-                    // through different visitor methods and print differently.
-                    let last_error = trap.to_string();
-                    warn!(
-                        module = %module.name,
-                        recent_failures = recent,
-                        window_secs = poison_policy.window.as_secs(),
-                        last_error,
-                        "module poisoned - quarantined; remove from engine.toml + restart to clear",
+                    report_poison(
+                        Role::Module,
+                        &module.name,
+                        recent,
+                        poison_policy.window,
+                        Some(trap.to_string()),
                     );
-                    metrics::gauge!(
-                        "nexum_runtime_module_poisoned",
-                        "module" => module.name.clone(),
-                    )
-                    .set(1.0);
                 }
                 DispatchOutcome::Trapped
             }
