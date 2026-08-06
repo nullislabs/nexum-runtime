@@ -59,7 +59,7 @@ const HTTP_CAPABILITY: &str = nexum_world::Cap::Http.as_str();
 const WASI_CAPABILITIES: &[&str] = WasiCap::VARIANTS;
 
 /// A gated WASI capability; the single source of the `wasi-*` name set.
-#[derive(Clone, Copy, strum::VariantNames, strum::VariantArray)]
+#[derive(Clone, Copy, strum::IntoStaticStr, strum::VariantNames, strum::VariantArray)]
 enum WasiCap {
     #[strum(serialize = "wasi-sockets")]
     Sockets,
@@ -70,9 +70,8 @@ enum WasiCap {
 impl WasiCap {
     const ALL: &'static [Self] = <Self as strum::VariantArray>::VARIANTS;
 
-    /// The declared name; the discriminant indexes `VARIANTS`, so this is const.
-    const fn as_str(self) -> &'static str {
-        Self::VARIANTS[self as usize]
+    fn as_str(self) -> &'static str {
+        self.into()
     }
 
     /// The `wasi:` interface prefix this capability gates.

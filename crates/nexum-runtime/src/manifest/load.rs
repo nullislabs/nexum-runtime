@@ -179,6 +179,34 @@ event_signature = "0x00000000000000000000000000000000000000000000000000000000dea
         }
     }
 
+    /// Typing the field must neither widen nor narrow the accepted spelling:
+    /// `0x`-prefixed or bare, any case, no checksum requirement.
+    #[test]
+    fn load_accepts_every_hex_spelling_of_a_chain_log_address() {
+        let expected: alloy_primitives::Address = "0xc92e8bdf79f0507f65a392b0ab4667716bfe0110"
+            .parse()
+            .expect("canonical address");
+        for spelling in [
+            "0xC92E8bdf79f0507f65a392b0ab4667716BFE0110",
+            "0xc92e8bdf79f0507f65a392b0ab4667716bfe0110",
+            "0xC92E8BDF79F0507F65A392B0AB4667716BFE0110",
+            "c92e8bdf79f0507f65a392b0ab4667716bfe0110",
+        ] {
+            let toml = format!(
+                "[module]\nname = \"ok\"\n\n[[subscription]]\nkind     = \"chain-log\"\n\
+                 chain_id = 1\naddress  = \"{spelling}\"\n"
+            );
+            let manifest: Manifest = toml::from_str(&toml).expect(spelling);
+            assert!(
+                matches!(
+                    &manifest.subscriptions[0],
+                    Subscription::ChainLog { address: Some(a), .. } if *a == expected
+                ),
+                "{spelling} must parse to the canonical address",
+            );
+        }
+    }
+
     #[test]
     fn load_parses_the_retired_log_kind_as_an_extension_kind() {
         // The chain-event kind is `chain-log`; a stale `kind = "log"`

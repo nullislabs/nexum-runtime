@@ -52,9 +52,10 @@ pub enum Subscription {
     ChainLog {
         /// EVM chain id.
         chain_id: u64,
-        /// Contract address filter. Optional.
+        /// Contract address filter, declared as 20-byte hex.
         address: Option<Address>,
-        /// Topic-0 filter; absent matches every event from the address(es).
+        /// Topic-0 filter, declared as 32-byte hex; absent matches every
+        /// event from the address(es).
         event_signature: Option<B256>,
         /// Persist a durable cursor; a restart re-opens AT the cursor block
         /// and replays it.
