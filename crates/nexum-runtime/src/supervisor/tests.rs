@@ -3422,14 +3422,53 @@ fn read_verified_component_computes_a_digest_for_unpinned_loads() {
     assert_eq!(actual, ContentDigest::of_bytes(&bytes));
 }
 
-/// A stray `Component::from_file` would reopen the artifact-swap window.
+/// A stray `Component::from_file` would reopen the artifact-swap window,
+/// and a compile call outside artifact.rs would bypass digest verification.
 #[test]
 fn no_production_component_from_file_call_remains() {
-    let src = include_str!("../supervisor.rs");
-    assert!(
-        !src.contains("Component::from_file("),
-        "supervisor.rs must compile components only via read_verified_component",
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/supervisor");
+    let mut compile_sites = Vec::new();
+    collect_compile_sites(&dir, &mut compile_sites);
+    // Sorted so a second site fails with a stable message; `read_dir` order
+    // is filesystem-defined.
+    compile_sites.sort();
+    assert_eq!(
+        compile_sites,
+        ["artifact.rs"],
+        "the only production compile call must live in artifact.rs",
     );
+}
+
+/// Walk the supervisor's production sources, refuse any `Component::from_file`,
+/// and collect the file names that compile a component. Recurses so a nested
+/// module cannot host an unpinned compile path; test sources are skipped.
+fn collect_compile_sites(dir: &Path, sites: &mut Vec<String>) {
+    for entry in std::fs::read_dir(dir).expect("read supervisor source directory") {
+        let path = entry.expect("directory entry").path();
+        let name = path
+            .file_name()
+            .expect("source entry name")
+            .to_string_lossy()
+            .into_owned();
+        if name == "tests" || name == "tests.rs" {
+            continue;
+        }
+        if path.is_dir() {
+            collect_compile_sites(&path, sites);
+            continue;
+        }
+        if path.extension().and_then(|e| e.to_str()) != Some("rs") {
+            continue;
+        }
+        let src = std::fs::read_to_string(&path).expect("read supervisor source file");
+        assert!(
+            !src.contains("Component::from_file("),
+            "{name} must compile components only via read_verified_component",
+        );
+        if src.contains("compile_component(") {
+            sites.push(name);
+        }
+    }
 }
 
 #[tokio::test]
