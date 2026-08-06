@@ -22,7 +22,8 @@ use crate::host::provider_pool::ProviderPool;
 /// A bundled runtime assembly: the [`RuntimeTypes`] lattice plus the component
 /// builders, extensions, and add-ons the launcher needs.
 ///
-/// Sealed: a preset opts in by also implementing the sealing marker.
+/// The marker bound is reserved for semver evolution: a preset opts in by
+/// also implementing it.
 pub trait Runtime: crate::sealed::SealedRuntime {
     /// The lattice the preset assembles.
     type Types: RuntimeTypes;
