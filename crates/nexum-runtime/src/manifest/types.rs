@@ -83,13 +83,13 @@ pub enum Subscription {
 
 /// Core subscription kinds parsed by shape; others fall through to
 /// [`Subscription::Extension`].
+// `kebab-case` reproduces `nexum_world::SubscriptionKind`, which gates this.
 #[derive(Deserialize)]
-#[serde(tag = "kind", rename_all = "lowercase")]
+#[serde(tag = "kind", rename_all = "kebab-case")]
 enum CoreSubscription {
     Block {
         chain_id: u64,
     },
-    #[serde(rename = "chain-log")]
     ChainLog {
         chain_id: u64,
         #[serde(default, deserialize_with = "chain_log_address")]
@@ -157,12 +157,12 @@ impl<'de> Deserialize<'de> for Subscription {
         let Some(kind) = table.get("kind").and_then(toml::Value::as_str) else {
             return Err(D::Error::missing_field("kind"));
         };
-        match kind {
-            "block" | "chain-log" | "cron" => toml::Value::Table(table.clone())
+        match kind.parse::<nexum_world::SubscriptionKind>() {
+            Ok(_) => toml::Value::Table(table.clone())
                 .try_into::<CoreSubscription>()
                 .map(Into::into)
                 .map_err(D::Error::custom),
-            _ => {
+            Err(_) => {
                 let kind = kind.to_owned();
                 let mut filters = BTreeMap::new();
                 for (key, value) in table {

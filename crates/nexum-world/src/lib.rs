@@ -44,6 +44,22 @@ impl Cap {
     }
 }
 
+/// A core `[[subscription]] kind`. A kind with no variant here is
+/// extension-owned, so the set is the runtime's core/extension split.
+#[derive(
+    Clone, Copy, Debug, Eq, PartialEq, Hash, Display, EnumString, IntoStaticStr, VariantNames,
+)]
+#[strum(serialize_all = "kebab-case")]
+#[non_exhaustive]
+pub enum SubscriptionKind {
+    /// New-block events.
+    Block,
+    /// Chain-log events filtered by address and topic-0.
+    ChainLog,
+    /// Cron-scheduled ticks.
+    Cron,
+}
+
 /// A `nexum:host/types.fault` case as a stable snake_case label, in WIT
 /// declaration order; the single source every label mirror emits from.
 #[derive(
@@ -337,7 +353,11 @@ pub fn manifest_chain_log_topics(text: &str) -> Result<Vec<B256>, String> {
         .ok_or_else(|| "[[subscription]] must be an array of tables".to_string())?;
     let mut topics = Vec::new();
     for sub in subscriptions {
-        if sub.get("kind").and_then(toml::Value::as_str) != Some("chain-log") {
+        let kind = sub
+            .get("kind")
+            .and_then(toml::Value::as_str)
+            .map(str::parse::<SubscriptionKind>);
+        if !matches!(kind, Some(Ok(SubscriptionKind::ChainLog))) {
             continue;
         }
         let Some(raw) = sub.get("event_signature") else {
@@ -836,6 +856,13 @@ allow = []
     fn manifest_with_a_non_string_kind_is_an_error() {
         let err = manifest_kind("[module]\nkind = 3\n").unwrap_err();
         assert!(err.contains("[module].kind must be a string"));
+    }
+
+    /// Pinned manifest grammar; the runtime's serde renames derive from it.
+    #[test]
+    fn subscription_kinds_spell_the_manifest_grammar() {
+        assert_eq!(SubscriptionKind::VARIANTS, ["block", "chain-log", "cron"]);
+        assert!("log".parse::<SubscriptionKind>().is_err());
     }
 
     #[test]

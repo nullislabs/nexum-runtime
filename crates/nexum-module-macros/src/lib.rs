@@ -41,10 +41,9 @@ const HANDLERS: [&str; 6] = [
 /// std prelude names `Result`, `Vec`, or `Ok` (the generated `Guest`
 /// trait refers to them unqualified).
 ///
-/// `subscribes(EventType, ...)` pins topic parity: the build fails
-/// unless the named events' topic-0 hashes (`SolEvent::SIGNATURE_HASH`)
-/// and the manifest's chain-log `event_signature` values match as sets.
-/// The manifest stays authoritative; the attribute only guards it.
+/// `subscribes(EventType, ...)` fails the build unless the named events'
+/// `SolEvent::SIGNATURE_HASH` values and the manifest's chain-log
+/// `event_signature` values match as sets; the manifest stays authoritative.
 #[proc_macro_attribute]
 pub fn module(attr: TokenStream, item: TokenStream) -> TokenStream {
     let args = syn::parse_macro_input!(attr as ModuleArgs);
@@ -119,7 +118,9 @@ pub fn module(attr: TokenStream, item: TokenStream) -> TokenStream {
     }
     let has = |name: &str| present.contains(&name);
 
-    let facts = match derive_manifest_facts() {
+    let facts = match nexum_world::manifest_dir()
+        .and_then(|dir| derive_manifest_facts(&dir, !args.subscribes.is_empty()))
+    {
         Ok(facts) => facts,
         Err(msg) => {
             return syn::Error::new(proc_macro2::Span::call_site(), msg)
@@ -195,11 +196,9 @@ pub fn module(attr: TokenStream, item: TokenStream) -> TokenStream {
     let message_arm = arm("on_message", "Message");
     let custom_arm = arm("on_custom", "Custom");
 
+    let anchors = rebuild_anchors(&anchors);
     quote! {
-        // Anchor a rebuild on the manifest and the extension registry:
-        // the emitted world is derived from them, so an edit to either
-        // must recompile the module.
-        #(const _: &[u8] = ::core::include_bytes!(#anchors);)*
+        #anchors
 
         wit_bindgen::generate!({
             inline: #inline_world,
@@ -279,21 +278,23 @@ impl syn::parse::Parse for ModuleArgs {
     }
 }
 
-/// Everything the macro derives from the crate's manifests.
 struct ManifestFacts {
     /// Rebuild anchor paths: the manifests the emitted world depends on.
     anchors: Vec<String>,
     world: nexum_world::ModuleWorld,
     /// Distinct chain-log `event_signature` topics, in declaration order.
     chain_log_topics: Vec<B256>,
-    /// The module manifest path, for diagnostics.
     path: String,
 }
 
 /// Synthesize the per-module world from the crate's `module.toml`
 /// `[capabilities]` plus the nearest ancestor `extensions.toml`.
-fn derive_manifest_facts() -> Result<ManifestFacts, String> {
-    let crate_dir = nexum_world::manifest_dir()?;
+/// Topics are read only for `want_topics`, so a manifest field no
+/// opted-in module names can never fail a build.
+fn derive_manifest_facts(
+    crate_dir: &std::path::Path,
+    want_topics: bool,
+) -> Result<ManifestFacts, String> {
     let manifest_path = crate_dir.join("module.toml");
     let text = std::fs::read_to_string(&manifest_path).map_err(|e| {
         format!(
@@ -306,11 +307,15 @@ fn derive_manifest_facts() -> Result<ManifestFacts, String> {
     let declared = nexum_world::manifest_capabilities(&text)
         .map_err(|e| format!("{}: {e}", manifest_path.display()))?;
     let manifest_path = manifest_path.to_string_lossy().into_owned();
-    let chain_log_topics = nexum_world::manifest_chain_log_topics(&text)
-        .map_err(|e| format!("{manifest_path}: {e}"))?;
+    let chain_log_topics = if want_topics {
+        nexum_world::manifest_chain_log_topics(&text)
+            .map_err(|e| format!("{manifest_path}: {e}"))?
+    } else {
+        Vec::new()
+    };
 
     let mut anchors = vec![manifest_path.clone()];
-    let extensions = match nexum_world::find_extensions_manifest(&crate_dir) {
+    let extensions = match nexum_world::find_extensions_manifest(crate_dir) {
         None => Vec::new(),
         Some(registry) => {
             let text = std::fs::read_to_string(&registry)
@@ -332,14 +337,25 @@ fn derive_manifest_facts() -> Result<ManifestFacts, String> {
 }
 
 /// Const assertions pinning set equality between the `subscribes(...)`
-/// events' topic-0 hashes and the manifest's chain-log topics. Empty
-/// `events` emits nothing: the parity check is opt-in.
+/// events' topic-0 hashes and the manifest's chain-log topics. Const
+/// eval stops at the first failure, so every message names both sides:
+/// a `SIGNATURE_HASH` cannot be formatted into one.
 fn topic_parity_check(events: &[syn::Path], topics: &[B256]) -> proc_macro2::TokenStream {
     if events.is_empty() {
         return proc_macro2::TokenStream::new();
     }
     let n = events.len();
     let m = topics.len();
+    let declared_list = events
+        .iter()
+        .map(path_string)
+        .collect::<Vec<_>>()
+        .join(", ");
+    let manifest_list = topics
+        .iter()
+        .map(B256::to_string)
+        .collect::<Vec<_>>()
+        .join(", ");
     let manifest_topics = topics.iter().map(|topic| {
         let bytes = topic.0;
         quote! { ::nexum_sdk::prelude::B256::new([#(#bytes),*]) }
@@ -349,8 +365,8 @@ fn topic_parity_check(events: &[syn::Path], topics: &[B256]) -> proc_macro2::Tok
     });
     let declared_checks = events.iter().enumerate().map(|(i, path)| {
         let msg = format!(
-            "module.toml has no chain-log subscription whose event_signature is the topic-0 of \
-             `{}`",
+            "topic drift: `{}`'s topic-0 is not among the module.toml chain-log event_signature \
+             values [{manifest_list}]",
             path_string(path),
         );
         quote! {
@@ -362,8 +378,8 @@ fn topic_parity_check(events: &[syn::Path], topics: &[B256]) -> proc_macro2::Tok
     });
     let manifest_checks = topics.iter().enumerate().map(|(j, topic)| {
         let msg = format!(
-            "module.toml chain-log event_signature {topic} is not the topic-0 of any event named \
-             in `subscribes(...)`",
+            "topic drift: module.toml chain-log event_signature {topic} is not the topic-0 of any \
+             of subscribes({declared_list})",
         );
         quote! {
             ::core::assert!(
@@ -380,6 +396,12 @@ fn topic_parity_check(events: &[syn::Path], topics: &[B256]) -> proc_macro2::Tok
             #(#manifest_checks)*
         };
     }
+}
+
+/// Cargo reruns a build on an `include_bytes!` target's mtime, which is the
+/// only thing making a manifest edit retrigger expansion.
+fn rebuild_anchors(anchors: &[String]) -> proc_macro2::TokenStream {
+    quote! { #(const _: &[u8] = ::core::include_bytes!(#anchors);)* }
 }
 
 /// A path's source spelling, without quote's token spacing.
@@ -438,11 +460,87 @@ mod tests {
         let emitted = topic_parity_check(&[event], &[topic]).to_string();
         assert!(emitted.contains("SIGNATURE_HASH"), "{emitted}");
         assert!(emitted.contains("contains_topic"), "{emitted}");
-        // Declared-side refusal names the event.
-        assert!(emitted.contains("topic-0 of `OrderPlacement`"), "{emitted}");
-        // Manifest-side refusal names the unmatched topic.
-        assert!(emitted.contains(&topic.to_string()), "{emitted}");
+        assert!(
+            emitted.contains("`OrderPlacement`'s topic-0 is not among"),
+            "{emitted}",
+        );
+        assert!(
+            emitted.contains("is not the topic-0 of any of subscribes(OrderPlacement)"),
+            "{emitted}",
+        );
         // Topic bytes are embedded, not re-parsed at build time.
         assert!(emitted.contains("207u8"), "{emitted}");
+    }
+
+    /// Const eval stops at the first failing assert, so whichever fires must
+    /// carry the code-side event and the manifest-side topics together.
+    #[test]
+    fn either_refusal_alone_names_both_sides() {
+        let events: Vec<syn::Path> = vec![syn::parse_quote!(Placed), syn::parse_quote!(Filled)];
+        let topics = [B256::with_last_byte(1), B256::with_last_byte(2)];
+        let emitted = topic_parity_check(&events, &topics).to_string();
+        let msgs = refusal_messages(&emitted);
+        assert_eq!(msgs.len(), 4, "one per event plus one per topic");
+        for msg in msgs {
+            assert!(msg.contains("Placed") || msg.contains("Filled"), "{msg}");
+            assert!(
+                msg.contains(&topics[0].to_string()) || msg.contains(&topics[1].to_string()),
+                "{msg}",
+            );
+        }
+    }
+
+    /// Both manifests the world is derived from are `include_bytes!`ed, so
+    /// editing either retriggers expansion.
+    #[test]
+    fn every_manifest_read_is_a_rebuild_anchor() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(dir.path().join("module.toml"), MANIFEST).expect("write manifest");
+        std::fs::write(
+            dir.path().join("extensions.toml"),
+            "[extensions.acme]\nimport = \"acme:host/acme@0.1.0\"\n",
+        )
+        .expect("write registry");
+
+        let facts = derive_manifest_facts(dir.path(), true).expect("facts");
+        let emitted = rebuild_anchors(&facts.anchors).to_string();
+        for manifest in ["module.toml", "extensions.toml"] {
+            let anchor = dir.path().join(manifest);
+            assert!(
+                facts
+                    .anchors
+                    .contains(&anchor.to_string_lossy().into_owned()),
+                "{manifest} is not anchored",
+            );
+            assert!(emitted.contains(manifest), "{emitted}");
+        }
+        assert_eq!(emitted.matches("include_bytes").count(), 2, "{emitted}");
+    }
+
+    /// A manifest field only `subscribes(...)` reads must not fail the build
+    /// of a module that does not name it.
+    #[test]
+    fn topics_are_read_only_when_the_attribute_names_events() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let manifest = format!(
+            "{MANIFEST}\n[[subscription]]\nkind = \"chain-log\"\nchain_id = 1\n\
+             event_signature = \"not-a-topic\"\n"
+        );
+        std::fs::write(dir.path().join("module.toml"), manifest).expect("write manifest");
+
+        assert!(derive_manifest_facts(dir.path(), false).is_ok());
+        let err = derive_manifest_facts(dir.path(), true).err().unwrap();
+        assert!(err.contains("invalid topic \"not-a-topic\""), "{err}");
+    }
+
+    const MANIFEST: &str = "[module]\nname = \"t\"\n\n[capabilities]\nrequired = [\"logging\"]\n";
+
+    /// The string literals the emitted `assert!`s carry.
+    fn refusal_messages(emitted: &str) -> Vec<String> {
+        emitted
+            .split("topic drift: ")
+            .skip(1)
+            .map(|rest| rest.split('"').next().unwrap_or_default().to_owned())
+            .collect()
     }
 }

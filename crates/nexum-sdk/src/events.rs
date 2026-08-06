@@ -10,8 +10,7 @@ use alloy_primitives::{Address, B256, Bytes, Log as PrimitiveLog, LogData};
 /// The alloy RPC log delivered to modules for chain-log events.
 pub use alloy_rpc_types_eth::Log;
 
-/// Whether `needle` is among `set`; const so the module macro's
-/// manifest topic parity check fails the build, not the run.
+/// Const so the module macro's topic parity check fails the build, not the run.
 pub const fn contains_topic(needle: &B256, set: &[B256]) -> bool {
     let mut i = 0;
     while i < set.len() {
