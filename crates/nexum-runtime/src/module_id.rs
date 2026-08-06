@@ -3,12 +3,11 @@
 use std::borrow::Borrow;
 use std::sync::Arc;
 
-use derive_more::{AsRef, Display, From};
+use derive_more::{Display, From};
 
 /// The manifest namespace. `Arc`-backed so dispatch-path clones are
 /// refcount bumps; `Display` is the bare namespace.
-#[derive(AsRef, Clone, Debug, Display, Eq, From, Hash, Ord, PartialEq, PartialOrd)]
-#[as_ref(str)]
+#[derive(Clone, Debug, Display, Eq, From, Hash, Ord, PartialEq, PartialOrd)]
 #[from(forward)]
 pub struct ModuleId(Arc<str>);
 
