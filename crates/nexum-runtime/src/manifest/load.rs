@@ -175,6 +175,7 @@ event_signature = "0x00000000000000000000000000000000000000000000000000000000dea
                  chain_id = 1\n{field}\n"
             );
             let err = toml::from_str::<Manifest>(&toml).expect_err("malformed hex");
+            // Foreign toml::de::Error; pins our hex message threaded through it.
             assert!(err.to_string().contains(detail), "{err}");
         }
     }
@@ -322,6 +323,7 @@ kind  = "acme-status"
 scope = 7
 "#;
         let err = toml::from_str::<Manifest>(toml).expect_err("non-string filter");
+        // Foreign toml::de::Error; pins our filter message threaded through it.
         assert!(err.to_string().contains("must be a string"), "{err}");
     }
 
@@ -588,6 +590,7 @@ max_state_bytes    = 52428800
         let err = load(&path, &CapabilityRegistry::core()).unwrap_err();
         assert!(matches!(err, ParseError::MissingCapabilities), "{err:?}");
         let msg = err.to_string();
+        // Operator wording pin.
         assert!(msg.contains("[capabilities]"), "{msg}");
         assert!(msg.contains("required = []"), "{msg}");
     }

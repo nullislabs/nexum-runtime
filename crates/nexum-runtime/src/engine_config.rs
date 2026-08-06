@@ -836,6 +836,7 @@ request_timeout_secs = 0
 "#,
         )
         .expect_err("a zero timeout must not parse");
+        // Foreign toml::de::Error; pins our serde message threaded through it.
         assert!(
             err.to_string()
                 .contains("request_timeout_secs must not be 0"),
@@ -854,7 +855,8 @@ rpc_url = "wss://example.test/x"
 "#,
         )
         .expect_err("bogus chain key must not parse");
-        assert!(!err.to_string().is_empty());
+        // Foreign toml::de::Error; pins that it names the offending key.
+        assert!(err.to_string().contains("bogus"), "{err}");
     }
 
     #[test]
@@ -1337,9 +1339,11 @@ key = "value"
         // environment. Use a guaranteed-unique prefix.
         let err =
             substitute_env_vars(r#"x = "${NEXUM_TEST_DEFINITELY_UNSET_VAR_XYZ}""#).unwrap_err();
-        let msg = err.to_string();
-        assert!(msg.contains("NEXUM_TEST_DEFINITELY_UNSET_VAR_XYZ"));
-        assert!(msg.contains("not set"));
+        assert!(
+            matches!(&err, EnvVarError::Missing { name }
+                if name == "NEXUM_TEST_DEFINITELY_UNSET_VAR_XYZ"),
+            "{err}"
+        );
     }
 
     #[test]

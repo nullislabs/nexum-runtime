@@ -33,8 +33,11 @@ fn extension_sections_must_be_claimed() {
     sections.insert("venu".into(), toml::Value::Boolean(true));
     let err = enforce_extension_sections("keeper", &sections, &extensions)
         .expect_err("unclaimed section");
-    assert!(err.to_string().contains("[venu]"), "{err}");
-    assert!(err.to_string().contains("keeper"), "{err}");
+    assert!(
+        matches!(&err, LoadRefusal::SectionUnclaimed { owner, section }
+            if owner == "keeper" && section == "venu"),
+        "{err}"
+    );
 }
 
 /// Two extensions colliding on a subscription kind or a manifest section
@@ -89,14 +92,20 @@ fn extension_claims_must_be_unique() {
         ext("b", &["orders"], &["pool"]),
     ])
     .expect_err("duplicate subscription kind");
-    assert!(err.to_string().contains("orders"), "{err}");
+    assert!(
+        matches!(&err, LoadRefusal::SubscriptionKindClaimed { kind } if *kind == "orders"),
+        "{err}"
+    );
 
     let err = enforce_extension_uniqueness(&[
         ext("a", &["orders"], &["venue"]),
         ext("b", &["fills"], &["venue"]),
     ])
     .expect_err("duplicate manifest section");
-    assert!(err.to_string().contains("[venue]"), "{err}");
+    assert!(
+        matches!(&err, LoadRefusal::SectionClaimed { section } if *section == "venue"),
+        "{err}"
+    );
 }
 
 #[test]
@@ -116,14 +125,12 @@ fn claim_namespace_rejects_cross_role_duplicate_with_both_paths() {
         Path::new("adapters/impostor.wasm"),
     )
     .expect_err("cross-role duplicate must be refused");
-    let msg = format!("{err:#}");
     assert!(
-        msg.contains("module") && msg.contains("adapter"),
-        "the refusal names both roles: {msg}",
-    );
-    assert!(
-        msg.contains("modules/price-alert.wasm") && msg.contains("adapters/impostor.wasm"),
-        "the refusal names both claimant paths: {msg}",
+        matches!(&err, BootRefusal::NamespaceClaimed { name, held_role: "module", held, role: "adapter", path }
+            if name == "price-alert"
+                && held.as_path() == Path::new("modules/price-alert.wasm")
+                && path.as_path() == Path::new("adapters/impostor.wasm")),
+        "the refusal names both claimants: {err}",
     );
 }
 
@@ -155,11 +162,12 @@ async fn boot_rejects_duplicate_names_across_and_within_roles() {
         .module(Entry::new(TestManifest::new("dup").cap("logging")).wasm(module_wasm))
         .expect_refusal()
         .await
-        .names("name dup is claimed twice")
-        .names("adapter")
-        .names("module")
-        .names("missing-adapter.wasm")
-        .names("missing-module.wasm")
+        .variant::<BootRefusal>(|e| {
+            matches!(e, BootRefusal::NamespaceClaimed { name, held_role: "adapter", held, role: "module", path }
+                if name == "dup"
+                    && held.ends_with("missing-adapter.wasm")
+                    && path.ends_with("missing-module.wasm"))
+        })
         .lacks("compile");
 
     let scenario = BootScenario::new();
@@ -172,8 +180,11 @@ async fn boot_rejects_duplicate_names_across_and_within_roles() {
         .module(Entry::new(TestManifest::new("dup").cap("logging")).wasm(second))
         .expect_refusal()
         .await
-        .names("name dup is claimed twice")
-        .names("missing-a.wasm")
-        .names("missing-b.wasm")
+        .variant::<BootRefusal>(|e| {
+            matches!(e, BootRefusal::NamespaceClaimed { name, held_role: "module", held, role: "module", path }
+                if name == "dup"
+                    && held.ends_with("missing-a.wasm")
+                    && path.ends_with("missing-b.wasm"))
+        })
         .lacks("compile");
 }

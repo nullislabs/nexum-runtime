@@ -432,17 +432,20 @@ mod tests {
     #[test]
     fn empty_subscribes_is_rejected() {
         let err = parse_args(quote! { subscribes() }).err().unwrap();
+        // Foreign syn::Error; pins our macro message.
         assert!(err.to_string().contains("at least one event type"), "{err}");
     }
 
     #[test]
     fn unknown_argument_is_rejected() {
         let err = parse_args(quote! { emits(Foo) }).err().unwrap();
+        // Foreign syn::Error; pins our macro message.
         assert!(
             err.to_string().contains("subscribes(EventType, ...)"),
             "{err}"
         );
         let err = parse_args(quote! { subscribes(Foo), extra }).err().unwrap();
+        // Foreign syn::Error; pins our macro message.
         assert!(err.to_string().contains("unexpected tokens"), "{err}");
     }
 
