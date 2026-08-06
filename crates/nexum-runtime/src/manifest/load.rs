@@ -75,10 +75,12 @@ pub fn load(path: &Path, registry: &CapabilityRegistry) -> Result<LoadedManifest
     })
 }
 
-/// Reject a `[module].name` that is not a single safe path component, so it
-/// cannot escape the state directory. An empty name is allowed (the runtime
-/// falls back to `module`).
+/// Reject a `[module].name` that is blank or not a single safe path
+/// component, so it cannot escape the state directory.
 fn validate_module_name(name: &str) -> Result<(), ParseError> {
+    if name.trim().is_empty() {
+        return Err(ParseError::BlankModuleName);
+    }
     if name.contains('/') || name.contains('\\') || name.contains("..") {
         return Err(ParseError::InvalidModuleName(name.to_owned()));
     }
@@ -425,6 +427,24 @@ max_state_bytes    = 52428800
             assert!(
                 matches!(err, ParseError::InvalidModuleName(ref n) if n == bad),
                 "expected rejection for {bad:?}, got {err:?}",
+            );
+        }
+    }
+
+    #[test]
+    fn load_rejects_a_blank_module_name() {
+        // A missing name deserialises to the empty string, so absence,
+        // emptiness, and whitespace all hit the same refusal.
+        for manifest in [
+            "[capabilities]\nrequired = []\n",
+            "[module]\n\n[capabilities]\nrequired = []\n",
+            "[module]\nname = \"\"\n\n[capabilities]\nrequired = []\n",
+            "[module]\nname = \"  \"\n\n[capabilities]\nrequired = []\n",
+        ] {
+            let err = load_inline(manifest).unwrap_err();
+            assert!(
+                matches!(err, ParseError::BlankModuleName),
+                "expected blank-name refusal for {manifest:?}, got {err:?}",
             );
         }
     }

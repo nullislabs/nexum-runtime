@@ -124,6 +124,28 @@ async fn boot_refuses_a_capsless_manifest_before_any_other_gate() {
         .lacks("compile");
 }
 
+/// A blank name is refused at parse for both roles; nothing falls back to
+/// a shared namespace, so the ledger never sees a claim.
+#[tokio::test]
+async fn boot_refuses_a_blank_manifest_name_for_both_roles() {
+    BootScenario::over(mock_components())
+        .extensions(acme_extensions())
+        .adapter(TestManifest::new("").kind("acme-adapter").cap("chain"))
+        .expect_refusal()
+        .await
+        .names("[module].name")
+        .lacks("claimed twice")
+        .lacks("compile");
+
+    BootScenario::new()
+        .module(TestManifest::new("  ").cap("logging"))
+        .expect_refusal()
+        .await
+        .names("[module].name")
+        .lacks("claimed twice")
+        .lacks("compile");
+}
+
 /// Only `chain` is undeclared, so the refusal is deterministic regardless
 /// of import order.
 #[tokio::test]

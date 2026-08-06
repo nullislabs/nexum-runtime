@@ -26,6 +26,9 @@ pub enum ParseError {
     /// state directory.
     #[error("manifest: [module].name {0:?} must not contain '/', '\\', or '..'")]
     InvalidModuleName(String),
+    /// `[module].name` is missing, empty, or whitespace-only.
+    #[error("manifest: [module].name is missing or blank; declare a non-empty name")]
+    BlankModuleName,
     /// No `[capabilities]` section; every manifest must declare one.
     #[error(
         "manifest: no [capabilities] section; capabilities are deny-by-default - \
