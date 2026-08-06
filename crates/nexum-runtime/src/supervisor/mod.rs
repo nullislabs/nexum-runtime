@@ -203,7 +203,6 @@ impl<T: RuntimeTypes> Supervisor<T> {
             .any(|m| !m.health.dispatchable() && !m.subscriptions.is_empty())
     }
 
-    #[cfg_attr(not(test), allow(dead_code))]
     pub fn poisoned_count(&self) -> usize {
         self.modules
             .iter()
