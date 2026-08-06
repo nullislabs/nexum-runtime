@@ -8,6 +8,7 @@ use wasmtime::{Engine, Store};
 use wasmtime_wasi::{HostMonotonicClock, HostWallClock, WasiCtxBuilder};
 
 use super::Shared;
+use super::role::Role;
 use crate::bindings::EventModule;
 use crate::engine_config::{ModuleLimits, OutboundHttpLimits};
 use crate::host::component::{RuntimeTypes, StateHandle, StateStore};
@@ -16,6 +17,7 @@ use crate::host::http::HttpGate;
 use crate::host::logs::{LogSource, RunId, StdioStream};
 use crate::host::state::HostState;
 use crate::manifest::ResourceSection;
+use crate::module_id::ModuleId;
 
 pub(super) type HostStore<T> = Store<HostState<T>>;
 
@@ -98,14 +100,32 @@ pub(super) struct StoreSpec {
     pub(super) state_quota: u64,
 }
 
-/// Takes a freshly minted [`RunId`]; `services` is the module map, empty
-/// for a provider store.
-pub(super) fn build<T: RuntimeTypes>(
+/// Mints the run identity for `name` at `seq` and builds its store.
+pub(super) fn fresh_run_store<T: RuntimeTypes>(
+    shared: &Shared<T>,
+    name: &ModuleId,
+    seq: u64,
+    spec: &StoreSpec,
+    role: Role,
+) -> Result<(RunId, HostStore<T>)> {
+    let run = RunId::new(name.clone(), seq);
+    let store = build(shared, spec, run.clone(), role)?;
+    Ok((run, store))
+}
+
+/// Takes a freshly minted [`RunId`]; `role` picks the service map.
+fn build<T: RuntimeTypes>(
     shared: &Shared<T>,
     spec: &StoreSpec,
     run: RunId,
-    services: HostServices,
+    role: Role,
 ) -> Result<HostStore<T>> {
+    // A provider store carries an empty service map: the shared map holds
+    // the registry that owns this store, and carrying it here would cycle.
+    let services = match role {
+        Role::Module => shared.services.clone(),
+        Role::Adapter => HostServices::default(),
+    };
     let namespace: &str = run.module.as_str();
     // Stdio is captured as tagged log records, stdin stays closed; the ctx
     // grants no network, so the allowlisted wasi:http gate is the only live path.

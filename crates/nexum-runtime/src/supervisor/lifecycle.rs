@@ -3,18 +3,16 @@
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
-use anyhow::{Context, Error, Result, anyhow};
+use anyhow::{Result, anyhow};
 
 use super::Shared;
-use super::load::{LoadedModule, LoadedProvider, run_init};
+use super::load::{LoadedModule, LoadedProvider, install_provider, instantiate_module};
 use super::role::{Role, report_restart_attempt, report_restart_outcome, report_trap};
-use super::store::{self, build_linker, build_provider_linker};
-use crate::bindings::EventModule;
+use super::store::{build_linker, fresh_run_store};
 use crate::digest::ContentDigest;
 use crate::host::actor::Liveness;
 use crate::host::component::RuntimeTypes;
-use crate::host::extension::{HostServices, Installed, ProviderInstance};
-use crate::host::logs::RunId;
+use crate::host::extension::Installed;
 use crate::module_id::ModuleId;
 use crate::runtime::poison_policy::{PoisonPolicy, should_poison};
 use crate::runtime::restart_policy::backoff_for;
@@ -67,6 +65,11 @@ impl Health {
             state: LifecycleState::Dead,
             ..Self::alive()
         }
+    }
+
+    /// The boot verdict: a failed `init` loads the item dead, permanently.
+    pub(super) fn from_init(ok: bool) -> Self {
+        if ok { Self::alive() } else { Self::dead() }
     }
 
     pub(super) fn dispatchable(&self) -> bool {
@@ -193,35 +196,22 @@ impl<T: RuntimeTypes> Sweepable<T> for LoadedModule<T> {
         // Must match the boot-time linker: core interfaces plus every extension hook.
         let linker = build_linker::<T>(&shared.engine, &shared.extensions)?;
         // A restart is a new run; the dead run's logs stay readable until evicted.
-        let run = RunId::new(self.name.clone(), self.live.run.seq + 1);
-        let mut store = store::build(
+        let (run, mut store) = fresh_run_store(
             shared,
+            &self.name,
+            self.live.run.seq + 1,
             &self.seed.spec,
-            run.clone(),
-            shared.services.clone(),
+            Role::Module,
         )?;
-        let bindings =
-            EventModule::instantiate_async(&mut store, &self.seed.artifact.component, &linker)
-                .await
-                .map_err(Error::from)
-                .with_context(|| format!("reinstantiate {}", self.name))?;
+        let (bindings, init) =
+            instantiate_module(&linker, &self.seed, &self.name, &mut store).await?;
         // An init fault defers the restart; only at boot is it permanent.
-        match run_init(
-            &bindings,
-            &mut store,
-            &self.seed.artifact.init_config,
-            self.seed.event_deadline,
-        )
-        .await?
-        {
-            Ok(()) => {}
-            Err(e) => {
-                return Err(anyhow!(
-                    "init returned fault on restart: {} ({})",
-                    crate::host::error::fault_message(&e),
-                    crate::host::error::fault_label(&e),
-                ));
-            }
+        if let Err(e) = init {
+            return Err(anyhow!(
+                "init returned fault on restart: {} ({})",
+                crate::host::error::fault_message(&e),
+                crate::host::error::fault_label(&e),
+            ));
         }
         self.live.bindings = bindings;
         self.live.store = store;
@@ -257,32 +247,26 @@ impl<T: RuntimeTypes> Sweepable<T> for LoadedProvider {
 
     /// Run and liveness commit only on a live install.
     async fn revive(&mut self, shared: &Shared<T>) -> Result<()> {
-        let (kind, service) = shared
+        let row = shared
             .kinds
             .get(self.kind)
             .ok_or_else(|| anyhow!("provider kind {} is not registered", self.kind))?;
-        let linker = build_provider_linker::<T>(&shared.engine, kind.as_ref())?;
-        let run = RunId::new(self.name.clone(), self.run.seq + 1);
-        let store = store::build(
+        let (run, store) = fresh_run_store(
             shared,
+            &self.name,
+            self.run.seq + 1,
             &self.seed.spec,
-            run.clone(),
-            HostServices::default(),
+            Role::Adapter,
         )?;
-        match kind
-            .install(
-                ProviderInstance {
-                    component: &self.seed.artifact.component,
-                    linker: &linker,
-                    store,
-                    config: self.seed.artifact.init_config.clone(),
-                    sections: &self.sections,
-                    fuel_per_call: self.seed.spec.fuel,
-                    liveness: self.liveness.clone(),
-                },
-                service,
-            )
-            .await?
+        match install_provider(
+            shared,
+            row,
+            &self.seed,
+            &self.sections,
+            store,
+            self.liveness.clone(),
+        )
+        .await?
         {
             Installed::Live => {
                 self.run = run;

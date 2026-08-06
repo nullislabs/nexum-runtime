@@ -15,8 +15,10 @@ use super::artifact::read_verified_component;
 use super::dispatch::with_dispatch_deadline;
 use super::lifecycle::Health;
 use super::prepass::manifest_namespace;
+use super::role::Role;
 use super::store::{
-    self, HostStore, ResolvedLimits, StoreSpec, build_provider_linker, resolve_module_limits,
+    HostStore, ResolvedLimits, StoreSpec, build_provider_linker, fresh_run_store,
+    resolve_module_limits,
 };
 use crate::bindings::nexum::host::types::Fault;
 use crate::bindings::{Config, EventModule};
@@ -24,7 +26,7 @@ use crate::digest::ContentDigest;
 use crate::engine_config::{AdapterEntry, ModuleEntry, ModuleLimits};
 use crate::host::actor::Liveness;
 use crate::host::component::RuntimeTypes;
-use crate::host::extension::{HostServices, Installed, ProviderInstance, ProviderManifest};
+use crate::host::extension::{Installed, ProviderInstance, ProviderManifest};
 use crate::host::logs::RunId;
 use crate::host::state::HostState;
 use crate::manifest::{self, CapabilityRegistry, ComponentKind, LoadedManifest, Subscription};
@@ -40,18 +42,33 @@ pub(super) struct CachedArtifact {
     pub(super) init_config: Config,
 }
 
-/// Everything needed to rebuild a module's store and re-run `init`.
-pub(super) struct ModuleSeed {
+/// Everything needed to rebuild a store and re-run `init` or reinstall.
+pub(super) struct Seed {
     pub(super) artifact: CachedArtifact,
     pub(super) spec: StoreSpec,
     /// Wall-clock bound on a whole dispatch, host calls included.
     pub(super) event_deadline: Duration,
 }
 
-/// Everything needed to rebuild a provider's store and reinstall it.
-pub(super) struct ProviderSeed {
-    pub(super) artifact: CachedArtifact,
-    pub(super) spec: StoreSpec,
+impl Seed {
+    /// The borrow of the cached component ends when `install` returns.
+    pub(super) fn instance<'a, T: RuntimeTypes>(
+        &'a self,
+        linker: &'a Linker<HostState<T>>,
+        sections: &'a manifest::ExtensionSections,
+        store: HostStore<T>,
+        liveness: Liveness,
+    ) -> ProviderInstance<'a, T> {
+        ProviderInstance {
+            component: &self.artifact.component,
+            linker,
+            store,
+            config: self.artifact.init_config.clone(),
+            sections,
+            fuel_per_call: self.spec.fuel,
+            liveness,
+        }
+    }
 }
 
 /// Restarts replace bindings, store, and run; the rate bucket carries across.
@@ -65,7 +82,7 @@ pub(super) struct LiveInstance<T: RuntimeTypes> {
 pub(super) struct LoadedModule<T: RuntimeTypes> {
     pub(super) name: ModuleId,
     pub(super) live: LiveInstance<T>,
-    pub(super) seed: ModuleSeed,
+    pub(super) seed: Seed,
     pub(super) subscriptions: Vec<Subscription>,
     pub(super) health: Health,
 }
@@ -75,7 +92,7 @@ pub(super) struct LoadedProvider {
     pub(super) name: ModuleId,
     pub(super) kind: &'static str,
     pub(super) sections: manifest::ExtensionSections,
-    pub(super) seed: ProviderSeed,
+    pub(super) seed: Seed,
     /// Trap signal shared with the installed actor; feeds `health` at
     /// sweep time and carries no lifecycle authority of its own.
     pub(super) liveness: Liveness,
@@ -141,6 +158,45 @@ pub(super) async fn run_init<T: RuntimeTypes>(
         .map_err(Error::from)
 }
 
+/// Instantiates the cached component on a fresh store and runs `init`; what
+/// a guest init fault means (dead at boot, deferred on restart) stays with
+/// the caller.
+pub(super) async fn instantiate_module<T: RuntimeTypes>(
+    linker: &Linker<HostState<T>>,
+    seed: &Seed,
+    name: &ModuleId,
+    store: &mut HostStore<T>,
+) -> Result<(EventModule, Result<(), Fault>)> {
+    let bindings = EventModule::instantiate_async(&mut *store, &seed.artifact.component, linker)
+        .await
+        .map_err(Error::from)
+        .with_context(|| format!("instantiate {name}"))?;
+    let init = run_init(
+        &bindings,
+        store,
+        &seed.artifact.init_config,
+        seed.event_deadline,
+    )
+    .await?;
+    Ok((bindings, init))
+}
+
+/// Builds the kind's linker and installs on the given store; a `Dead`
+/// verdict carries no error, its meaning stays with the caller.
+pub(super) async fn install_provider<T: RuntimeTypes>(
+    shared: &Shared<T>,
+    row: &ProviderRow<T>,
+    seed: &Seed,
+    sections: &manifest::ExtensionSections,
+    store: HostStore<T>,
+    liveness: Liveness,
+) -> Result<Installed> {
+    let (kind, service) = row;
+    let linker = build_provider_linker::<T>(&shared.engine, kind.as_ref())?;
+    kind.install(seed.instance(&linker, sections, store, liveness), service)
+        .await
+}
+
 /// A failed `init` loads the module dead; the dispatcher skips it.
 pub(super) async fn module<T: RuntimeTypes>(
     shared: &Shared<T>,
@@ -193,33 +249,36 @@ pub(super) async fn module<T: RuntimeTypes>(
         chain_response_max_bytes: limits_cfg.chain_response_max_bytes(),
         state_quota: state_bytes,
     };
-    let run = RunId::new(module_namespace.clone(), 0);
-    let mut store = store::build(shared, &spec, run.clone(), shared.services.clone())?;
-    let bindings = EventModule::instantiate_async(&mut store, &component, linker)
-        .await
-        .map_err(Error::from)
-        .with_context(|| format!("instantiate {}", entry.path.display()))?;
-
     let config = default_init_config(&loaded_manifest.config, module_namespace.as_str());
+    let seed = Seed {
+        artifact: CachedArtifact {
+            component,
+            digest,
+            init_config: config,
+        },
+        spec,
+        event_deadline: limits_cfg.event_deadline(),
+    };
+    let (run, mut store) = fresh_run_store(shared, &module_namespace, 0, &seed.spec, Role::Module)?;
+    let (bindings, init) = instantiate_module(linker, &seed, &module_namespace, &mut store).await?;
     // A failed `init` leaves guest state uninitialised, so the module loads dead.
-    let init_succeeded =
-        match run_init(&bindings, &mut store, &config, limits_cfg.event_deadline()).await? {
-            Ok(()) => {
-                info!(module = %module_namespace, "init succeeded");
-                true
-            }
-            Err(e) => {
-                warn!(
-                    module = %module_namespace,
-                    kind = crate::host::error::fault_label(&e),
-                    message = %crate::host::error::fault_message(&e),
-                    "init failed - module loaded but marked dead; dispatcher will skip it",
-                );
-                false
-            }
-        };
+    let init_succeeded = match init {
+        Ok(()) => {
+            info!(module = %module_namespace, "init succeeded");
+            true
+        }
+        Err(e) => {
+            warn!(
+                module = %module_namespace,
+                kind = crate::host::error::fault_label(&e),
+                message = %crate::host::error::fault_message(&e),
+                "init failed - module loaded but marked dead; dispatcher will skip it",
+            );
+            false
+        }
+    };
     // Refuel after init so the first on_event starts with a full budget.
-    store.set_fuel(fuel)?;
+    store.set_fuel(seed.spec.fuel)?;
 
     // Unserviceable subscriptions warn; an undeclared extension kind refuses.
     let extension_kinds = extension_subscription_vocabulary(&shared.extensions);
@@ -247,21 +306,9 @@ pub(super) async fn module<T: RuntimeTypes>(
             run,
             dispatch_bucket: TokenBucket::new(limits_cfg.dispatch_rate(), Instant::now()),
         },
-        seed: ModuleSeed {
-            artifact: CachedArtifact {
-                component,
-                digest,
-                init_config: config,
-            },
-            spec,
-            event_deadline: limits_cfg.event_deadline(),
-        },
+        seed,
         subscriptions: loaded_manifest.manifest.subscriptions.clone(),
-        health: if init_succeeded {
-            Health::alive()
-        } else {
-            Health::dead()
-        },
+        health: Health::from_init(init_succeeded),
     })
 }
 
@@ -278,7 +325,7 @@ pub(super) async fn provider<T: RuntimeTypes>(
     // import fails after compile; the linker withholds the core interfaces.
     let registry = CapabilityRegistry::provider();
     let sections = loaded_manifest.manifest.extensions.clone();
-    let ((kind, service), component, digest) = admit_and_verify(
+    let (row, component, digest) = admit_and_verify(
         shared,
         namespace.as_str(),
         &entry.path,
@@ -291,7 +338,7 @@ pub(super) async fn provider<T: RuntimeTypes>(
                     .with_context(|| format!("install refused for {}", entry.path.display()))?;
             }
             // An unregistered kind refuses before compile.
-            let (kind, service): &ProviderRow<T> = match &loaded_manifest.manifest.module.kind {
+            let row: &ProviderRow<T> = match &loaded_manifest.manifest.module.kind {
                 ComponentKind::Worker => {
                     return Err(anyhow!(
                         "{} declares the worker kind; an [[adapters]] entry requires a \
@@ -313,12 +360,13 @@ pub(super) async fn provider<T: RuntimeTypes>(
             };
             info!(
                 component = %entry.path.display(),
-                kind = kind.kind(),
+                kind = row.0.kind(),
                 "compiling provider component",
             );
-            Ok((kind, service))
+            Ok(row)
         },
     )?;
+    let kind = row.0.as_ref();
 
     info!(
         provider = %namespace,
@@ -330,7 +378,6 @@ pub(super) async fn provider<T: RuntimeTypes>(
         "applied provider resource limits and transport scope",
     );
 
-    let linker = build_provider_linker::<T>(&shared.engine, kind.as_ref())?;
     let spec = StoreSpec {
         http_allowlist: entry.http_allow.clone(),
         http_limits: limits_cfg.http(),
@@ -340,28 +387,22 @@ pub(super) async fn provider<T: RuntimeTypes>(
         chain_response_max_bytes: limits_cfg.chain_response_max_bytes(),
         state_quota: limits_cfg.state_bytes(),
     };
-    let run = RunId::new(namespace.clone(), 0);
-    // The store carries an empty service map: the shared map holds the
-    // registry that owns this store, and carrying it here would cycle.
-    let store = store::build(shared, &spec, run.clone(), HostServices::default())?;
-
     let config = default_init_config(&loaded_manifest.config, namespace.as_str());
+    let seed = Seed {
+        artifact: CachedArtifact {
+            component,
+            digest,
+            init_config: config,
+        },
+        spec,
+        event_deadline: limits_cfg.event_deadline(),
+    };
     let liveness = Liveness::default();
-    let installed = kind
-        .install(
-            ProviderInstance {
-                component: &component,
-                linker: &linker,
-                store,
-                config: config.clone(),
-                sections: &sections,
-                fuel_per_call: limits_cfg.fuel(),
-                liveness: liveness.clone(),
-            },
-            service,
-        )
+    let (run, store) = fresh_run_store(shared, &namespace, 0, &seed.spec, Role::Adapter)?;
+    let installed = install_provider(shared, row, &seed, &sections, store, liveness.clone())
         .await
         .with_context(|| format!("install {}", entry.path.display()))?;
+    // A dead install at boot is permanent; the liveness records it for the sweep.
     if installed == Installed::Dead {
         liveness.mark_dead();
     }
@@ -369,20 +410,9 @@ pub(super) async fn provider<T: RuntimeTypes>(
         name: namespace,
         kind: kind.kind(),
         sections,
-        seed: ProviderSeed {
-            artifact: CachedArtifact {
-                component,
-                digest,
-                init_config: config,
-            },
-            spec,
-        },
+        seed,
         liveness,
         run,
-        health: if installed == Installed::Live {
-            Health::alive()
-        } else {
-            Health::dead()
-        },
+        health: Health::from_init(installed == Installed::Live),
     })
 }

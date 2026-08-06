@@ -391,7 +391,7 @@ fn scripted_provider(engine: &wasmtime::Engine) -> crate::supervisor::load::Load
         name: "scripted".into(),
         kind: "scripted-adapter",
         sections: manifest::ExtensionSections::default(),
-        seed: crate::supervisor::load::ProviderSeed {
+        seed: crate::supervisor::load::Seed {
             artifact: crate::supervisor::load::CachedArtifact {
                 component: wasmtime::component::Component::new(engine, EMPTY_COMPONENT)
                     .expect("empty component"),
@@ -407,6 +407,7 @@ fn scripted_provider(engine: &wasmtime::Engine) -> crate::supervisor::load::Load
                 chain_response_max_bytes: limits.chain_response_max_bytes(),
                 state_quota: limits.state_bytes(),
             },
+            event_deadline: limits.event_deadline(),
         },
         liveness: crate::host::actor::Liveness::default(),
         run: crate::host::logs::RunId::new("scripted", 0),
