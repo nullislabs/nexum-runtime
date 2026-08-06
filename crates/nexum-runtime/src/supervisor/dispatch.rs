@@ -11,7 +11,6 @@ use tracing_core::Level;
 
 use super::Supervisor;
 use super::cursors::{commit_chain_log_cursor, persist_progress_marker};
-use super::lifecycle::record_failure_and_maybe_poison;
 use crate::bindings::nexum;
 use crate::host::component::RuntimeTypes;
 use crate::host::extension::ExtensionEvent;
@@ -34,21 +33,18 @@ impl<T: RuntimeTypes> Supervisor<T> {
         // Poisoned modules are excluded entirely: they stay dead until an
         // operator removes them from `[[modules]]` and restarts the engine.
         let restart_candidates: Vec<usize> = (0..self.modules.len())
-            .filter(|&i| {
-                let m = &self.modules[i];
-                !m.poisoned && !m.alive && m.next_attempt.is_some_and(|t| t <= now)
-            })
+            .filter(|&i| self.modules[i].health.due_restart(now))
             .collect();
         for idx in restart_candidates {
-            self.try_restart(idx).await;
+            self.try_restart(idx, now).await;
         }
-        self.sweep_providers().await;
+        self.sweep_providers(now).await;
 
         let mut dispatched = 0;
         let candidate_indices: Vec<usize> = (0..self.modules.len())
             .filter(|&i| {
                 let m = &self.modules[i];
-                if m.poisoned || !m.alive {
+                if !m.health.dispatchable() {
                     return false;
                 }
                 m.subscriptions
@@ -58,7 +54,7 @@ impl<T: RuntimeTypes> Supervisor<T> {
             .collect();
         for idx in candidate_indices {
             if matches!(
-                self.dispatch_to(idx, chain_id, "block", block_number, &event)
+                self.dispatch_to(idx, chain_id, "block", block_number, &event, now)
                     .await,
                 DispatchOutcome::Ok,
             ) {
@@ -87,7 +83,7 @@ impl<T: RuntimeTypes> Supervisor<T> {
         cursor_key: Option<&str>,
     ) -> bool {
         let now = std::time::Instant::now();
-        self.sweep_providers().await;
+        self.sweep_providers(now).await;
         let Some(idx) = self.modules.iter().position(|m| m.name == module_name) else {
             warn!(module = %module_name, "no such module - dropping chain-log");
             return false;
@@ -95,21 +91,17 @@ impl<T: RuntimeTypes> Supervisor<T> {
 
         // Poison-pill check first, so a poisoned module never triggers a
         // restart attempt.
-        if self.modules[idx].poisoned {
+        if self.modules[idx].health.is_poisoned() {
             return false;
         }
 
         // Restart-on-trap: re-instantiate before dispatch if the backoff
         // window elapsed. See `dispatch_block` for the symmetric path.
-        let needs_restart = {
-            let m = &self.modules[idx];
-            !m.alive && m.next_attempt.is_some_and(|t| t <= now)
-        };
-        if needs_restart {
-            self.try_restart(idx).await;
+        if self.modules[idx].health.due_restart(now) {
+            self.try_restart(idx, now).await;
         }
 
-        if !self.modules[idx].alive {
+        if !self.modules[idx].health.dispatchable() {
             return false;
         }
 
@@ -125,7 +117,8 @@ impl<T: RuntimeTypes> Supervisor<T> {
                 chain.id(),
                 "chain-log",
                 block_number.unwrap_or_default(),
-                &event
+                &event,
+                now,
             )
             .await,
             DispatchOutcome::Ok,
@@ -149,20 +142,17 @@ impl<T: RuntimeTypes> Supervisor<T> {
     pub async fn dispatch_extension_event(&mut self, event: ExtensionEvent) -> usize {
         let now = std::time::Instant::now();
         let restart_candidates: Vec<usize> = (0..self.modules.len())
-            .filter(|&i| {
-                let m = &self.modules[i];
-                !m.poisoned && !m.alive && m.next_attempt.is_some_and(|t| t <= now)
-            })
+            .filter(|&i| self.modules[i].health.due_restart(now))
             .collect();
         for idx in restart_candidates {
-            self.try_restart(idx).await;
+            self.try_restart(idx, now).await;
         }
-        self.sweep_providers().await;
+        self.sweep_providers(now).await;
 
         let candidate_indices: Vec<usize> = (0..self.modules.len())
             .filter(|&i| {
                 let m = &self.modules[i];
-                if m.poisoned || !m.alive {
+                if !m.health.dispatchable() {
                     return false;
                 }
                 m.subscriptions.iter().any(|s| {
@@ -181,7 +171,8 @@ impl<T: RuntimeTypes> Supervisor<T> {
             // Extension events are not chain-scoped: the telemetry chain
             // id and block number carry the 0 sentinel.
             if matches!(
-                self.dispatch_to(idx, 0, event.kind, 0, &event.event).await,
+                self.dispatch_to(idx, 0, event.kind, 0, &event.event, now)
+                    .await,
                 DispatchOutcome::Ok,
             ) {
                 dispatched += 1;
@@ -202,6 +193,7 @@ impl<T: RuntimeTypes> Supervisor<T> {
         event_kind: &'static str,
         block_number: u64,
         event: &nexum::host::types::Event,
+        now: std::time::Instant,
     ) -> DispatchOutcome {
         let poison_policy = self.policy;
         // Hoisted before the per-module borrow so the trap arm can
@@ -212,11 +204,7 @@ impl<T: RuntimeTypes> Supervisor<T> {
         // or entering the guest. The bucket is per-module, so a throttled
         // module never starves the others; over-rate events are dropped
         // and counted with liveness untouched.
-        if !module
-            .live
-            .dispatch_bucket
-            .try_acquire(std::time::Instant::now())
-        {
+        if !module.live.dispatch_bucket.try_acquire(now) {
             debug!(
                 module = %module.name,
                 chain_id,
@@ -257,10 +245,13 @@ impl<T: RuntimeTypes> Supervisor<T> {
         let outcome = with_dispatch_deadline(deadline, call)
             .await
             .unwrap_or_else(|exceeded| Err(wasmtime::Error::from(exceeded)));
+        // One post-call sample, shared by latency telemetry and, in the
+        // trap arm, the health transition (the trap instant is start +
+        // elapsed, not the pre-dispatch `now`).
+        let elapsed = start.elapsed();
+        let latency_ms = elapsed.as_millis() as u64;
         match outcome {
             Ok(Ok(())) => {
-                let elapsed = start.elapsed();
-                let latency_ms = elapsed.as_millis() as u64;
                 debug!(
                     module = %module.name,
                     chain_id,
@@ -277,13 +268,10 @@ impl<T: RuntimeTypes> Supervisor<T> {
                 .record(elapsed.as_secs_f64());
                 // Successful dispatch clears the failure history: a module
                 // that recovered lands back in the steady-state schedule.
-                module.failure_count = 0;
-                module.next_attempt = None;
+                module.health.dispatch_succeeded();
                 DispatchOutcome::Ok
             }
             Ok(Err(fault)) => {
-                let elapsed = start.elapsed();
-                let latency_ms = elapsed.as_millis() as u64;
                 let kind = crate::host::error::fault_label(&fault);
                 warn!(
                     module = %module.name,
@@ -304,19 +292,17 @@ impl<T: RuntimeTypes> Supervisor<T> {
                 DispatchOutcome::Fault
             }
             Err(trap) => {
-                let elapsed = start.elapsed();
-                let latency_ms = elapsed.as_millis() as u64;
-                module.failure_count = module.failure_count.saturating_add(1);
-                let backoff = crate::runtime::restart_policy::backoff_for(module.failure_count);
-                let next_attempt = std::time::Instant::now() + backoff;
+                // The module died when the call ended, not at entry.
+                let died_at = start + elapsed;
+                let verdict = module.health.record_trap(died_at, died_at, poison_policy);
                 error!(
                     module = %module.name,
                     chain_id,
                     event_kind,
                     block_number,
                     latency_ms,
-                    failure_count = module.failure_count,
-                    backoff_ms = backoff.as_millis() as u64,
+                    failure_count = verdict.failure_count,
+                    backoff_ms = verdict.backoff.as_millis() as u64,
                     error = %trap,
                     "on-event trapped - module marked dead; will retry after backoff",
                 );
@@ -326,8 +312,6 @@ impl<T: RuntimeTypes> Supervisor<T> {
                     "error_kind" => "trap",
                 )
                 .increment(1);
-                module.alive = false;
-                module.next_attempt = Some(next_attempt);
                 // Death diagnosis: leave a retrievable panic record on the
                 // dead run carrying the trap's root cause; the full trap
                 // with its wasm frame list already went to host tracing.
@@ -337,7 +321,23 @@ impl<T: RuntimeTypes> Supervisor<T> {
                     Level::ERROR,
                     format!("run terminated abnormally: {}", trap.root_cause()),
                 ));
-                record_failure_and_maybe_poison(module, poison_policy, &trap.to_string());
+                if let Some(recent) = verdict.poisoned {
+                    // A string field, not a `Display` one: the two record
+                    // through different visitor methods and print differently.
+                    let last_error = trap.to_string();
+                    warn!(
+                        module = %module.name,
+                        recent_failures = recent,
+                        window_secs = poison_policy.window.as_secs(),
+                        last_error,
+                        "module poisoned - quarantined; remove from engine.toml + restart to clear",
+                    );
+                    metrics::gauge!(
+                        "shepherd_module_poisoned",
+                        "module" => module.name.clone(),
+                    )
+                    .set(1.0);
+                }
                 DispatchOutcome::Trapped
             }
         }

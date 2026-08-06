@@ -5,8 +5,8 @@ use super::*;
 // ── Init-failed modules must be marked dead ────────────────
 
 /// A module whose `[config]` carries a malformed `threshold` fails `init`
-/// with `fault.invalid-input`; the supervisor marks it `alive = false` so
-/// it receives no dispatches.
+/// with `fault.invalid-input`; the supervisor marks its health dead so it
+/// receives no dispatches.
 #[tokio::test]
 async fn init_failure_marks_module_dead_and_excludes_from_dispatch() {
     let Some(wasm) = module_wasm_or_skip("price-alert") else {
@@ -448,11 +448,11 @@ async fn resource_limit_memory_bomb_traps_and_marks_module_dead() {
 // flaky-bomb traps on the first N events (via wasm `unreachable!`)
 // and recovers on event N+1. Exercises the full restart lifecycle:
 //
-// 1. Dispatch 1: trap -> alive=false, failure_count=1, next_attempt=+1s.
-// 2. Immediate redispatch: skipped (next_attempt in the future).
-// 3. After 1.1s: alive flipped back on, dispatch retried.
-// 4. With fail_first_n=1, the second attempt succeeds -> failure_count
-//    resets to 0, next_attempt = None.
+// 1. Dispatch 1: trap -> backoff, failure_count=1, restart due at +1s.
+// 2. Immediate redispatch: skipped (the backoff has not elapsed).
+// 3. After 1.1s: the restart lands and dispatch is retried.
+// 4. With fail_first_n=1, the second attempt succeeds -> the dispatch
+//    resets failure_count to 0 and the module is alive.
 //
 // Asserts the schedule shape end-to-end with real wall-clock.
 
@@ -552,14 +552,18 @@ fail_first_n = "1"
 // supervisor escalate from "retry" to "permanent quarantine" inside
 // ~4 s of wall clock:
 //
-//   trap 1: failure_count=1, next_attempt=+1s
+//   trap 1: failure_count=1, backoff +1s
 //   sleep 1.1s
-//   trap 2: failure_count=2, next_attempt=+2s
-//   sleep 2.1s
+//   trap 2: failure_count=2, backoff +2s
+//   sleep 1.2s, probe: no restart is due yet
+//   sleep 1.0s
 //   trap 3: failure_count=3 -> POISONED. Recent failures hit the
 //           window threshold; the supervisor stops attempting
 //           restarts entirely. Subsequent dispatches skip the
 //           module silently.
+//
+// The 1.2 s probe pins the module asymmetry: a successful restart keeps
+// the failure count, so trap 2 earns 2 s rather than another 1 s.
 //
 // Tests assert each transition + the post-quarantine no-op semantic.
 
@@ -620,7 +624,20 @@ async fn poison_pill_quarantines_module_after_threshold() {
     let dispatched = supervisor.dispatch_block(block.clone()).await;
     assert_eq!(dispatched, 0);
     assert_eq!(supervisor.poisoned_count(), 0, "2 traps < threshold");
-    tokio::time::sleep(std::time::Duration::from_millis(2_100)).await;
+
+    // Probe inside trap 2's backoff. The restart that preceded trap 2
+    // kept the failure count, so the curve climbed to 2 s and nothing is
+    // due here. A restart that reset the count would leave a 1 s backoff,
+    // land trap 3 in this dispatch, and quarantine the module early.
+    tokio::time::sleep(std::time::Duration::from_millis(1_200)).await;
+    let dispatched = supervisor.dispatch_block(block.clone()).await;
+    assert_eq!(dispatched, 0);
+    assert_eq!(
+        supervisor.poisoned_count(),
+        0,
+        "no restart is due 1.2 s into a 2 s backoff",
+    );
+    tokio::time::sleep(std::time::Duration::from_millis(1_000)).await;
 
     // Trap 3 -> POISONED.
     let dispatched = supervisor.dispatch_block(block.clone()).await;
@@ -634,8 +651,8 @@ async fn poison_pill_quarantines_module_after_threshold() {
     // Post-quarantine: immediately re-dispatch. A poisoned module
     // is excluded regardless of how much time has passed; the
     // backoff timer is no longer load-bearing. We do NOT wait for
-    // the would-be next_attempt because the test just needs to
-    // observe the "skipped silently" semantic, not the timing.
+    // the would-be restart because the test just needs to observe
+    // the "skipped silently" semantic, not the timing.
     let dispatched = supervisor.dispatch_block(block).await;
     assert_eq!(
         dispatched, 0,

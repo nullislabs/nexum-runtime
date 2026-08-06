@@ -19,7 +19,7 @@ impl<T: RuntimeTypes> Supervisor<T> {
     /// numeric id and deduped.
     pub fn block_chains(&self) -> Vec<Chain> {
         let mut out: Vec<Chain> = Vec::new();
-        for module in self.modules.iter().filter(|m| m.alive) {
+        for module in self.modules.iter().filter(|m| m.health.dispatchable()) {
             for sub in &module.subscriptions {
                 if let Subscription::Block { chain_id } = sub {
                     out.push(Chain::from_id(*chain_id));
@@ -36,7 +36,7 @@ impl<T: RuntimeTypes> Supervisor<T> {
     /// stream tags every log with `module_name` for routing.
     pub fn chain_log_subscriptions(&self) -> Vec<ChainLogSub> {
         let mut out = Vec::new();
-        for module in self.modules.iter().filter(|m| m.alive) {
+        for module in self.modules.iter().filter(|m| m.health.dispatchable()) {
             for sub in &module.subscriptions {
                 if let Subscription::ChainLog {
                     chain_id,
