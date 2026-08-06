@@ -28,6 +28,9 @@
 /// handlers. See [`nexum_module_macros::module`].
 pub use nexum_module_macros::module;
 
+/// The `sol!` trait vocabulary the macro-emitted topic parity check names.
+pub use alloy_sol_types as sol_types;
+
 pub mod address;
 pub mod chain;
 pub mod config;
