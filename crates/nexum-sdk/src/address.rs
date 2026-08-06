@@ -10,7 +10,6 @@ use alloy_primitives::Address;
 use crate::host::Fault;
 
 /// Typed errors from [`parse_address_list`] and [`parse_address`].
-/// Folds into [`Fault::InvalidInput`] at the boundary via `From`.
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum AddressParse {
@@ -136,5 +135,19 @@ mod tests {
             }
             other => panic!("expected InvalidAddress, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn address_parse_folds_into_an_invalid_input_fault() {
+        let fault = Fault::from(parse_address("0xdeadbeef").unwrap_err());
+        let Fault::InvalidInput(message) = fault else {
+            panic!("expected invalid-input fault, got {fault:?}");
+        };
+        assert!(message.contains("0xdeadbeef"));
+
+        assert!(matches!(
+            Fault::from(parse_address_list("").unwrap_err()),
+            Fault::InvalidInput(_)
+        ));
     }
 }
