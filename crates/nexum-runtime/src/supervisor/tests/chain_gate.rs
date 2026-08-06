@@ -80,8 +80,8 @@ async fn boot_refuses_an_adapter_subscription_on_an_unconfigured_chain() {
         .lacks("compile");
 }
 
-/// Filter values fail closed at load: an unparseable address or topic
-/// refuses the boot instead of skipping the subscription at collection.
+/// Filter values fail closed at manifest parse: an unparseable address or
+/// topic refuses the boot as a manifest error, before any compile.
 #[tokio::test]
 async fn boot_refuses_an_invalid_chain_log_filter() {
     for (manifest, detail) in [
@@ -89,28 +89,31 @@ async fn boot_refuses_an_invalid_chain_log_filter() {
             TestManifest::new("example")
                 .cap("logging")
                 .chain_log_sub_filtered(1, Some("0xabc"), None),
-            "invalid chain-log address",
+            // Pinned operator wording.
+            "invalid chain-log address \"0xabc\"",
         ),
         (
             TestManifest::new("example")
                 .cap("logging")
                 .chain_log_sub_filtered(1, None, Some("not-a-topic")),
-            "invalid topic",
+            // Pinned operator wording.
+            "invalid topic \"not-a-topic\"",
         ),
     ] {
         BootScenario::new()
             .module(manifest)
             .expect_refusal()
             .await
-            .names("module example declares an invalid chain-log filter on chain 1")
+            .names("load module")
+            .names("manifest: parse")
             .names(detail)
             .lacks("read component")
             .lacks("compile");
     }
 }
 
-/// The load-time filter check and the collection-time rebuild read the same
-/// manifest values, so the collection rebuild cannot fail.
+/// The manifest carries typed filter values, so the collection-time filter
+/// build cannot fail.
 #[tokio::test]
 async fn a_validated_chain_log_filter_survives_to_the_collected_subscription() {
     let Some(wasm) = example_wasm_or_skip() else {

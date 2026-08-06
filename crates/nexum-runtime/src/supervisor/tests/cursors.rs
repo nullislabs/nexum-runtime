@@ -14,7 +14,7 @@ fn progress_marker_key_uses_numeric_chain_id() {
 fn alloy_filter_with_address_and_topic() {
     let addr = "0xC92E8bdf79f0507f65a392b0ab4667716BFE0110";
     let topic = "0x237e158222e3e6968b72b9db0d8043aacf074ad9f650f0d1606b4d82ee432c00";
-    let filter = build_alloy_filter(Some(addr), Some(topic)).unwrap();
+    let filter = build_alloy_filter(Some(addr.parse().unwrap()), Some(topic.parse().unwrap()));
     // alloy `Filter` exposes no getter; assert through its serialisation.
     let serialised = serde_json::to_value(&filter).unwrap();
     let addr_field = serialised
@@ -27,26 +27,13 @@ fn alloy_filter_with_address_and_topic() {
 
 #[test]
 fn alloy_filter_no_address_no_topic() {
-    let filter = build_alloy_filter(None, None).unwrap();
+    let filter = build_alloy_filter(None, None);
     let serialised = serde_json::to_value(&filter).unwrap();
     assert!(
         serialised.get("address").is_none()
             || serialised["address"].is_null()
             || serialised["address"] == serde_json::json!([])
     );
-}
-
-#[test]
-fn alloy_filter_rejects_bad_address() {
-    let err = build_alloy_filter(Some("not-an-address"), None);
-    assert!(err.is_err());
-}
-
-#[test]
-fn alloy_filter_rejects_bad_topic() {
-    let addr = "0xC92E8bdf79f0507f65a392b0ab4667716BFE0110";
-    let err = build_alloy_filter(Some(addr), Some("not-a-topic"));
-    assert!(err.is_err());
 }
 
 /// A mined log carries every block-scoped field; the host projection must
@@ -129,40 +116,61 @@ fn project_chain_log_leaves_pending_fields_none() {
     assert!(!projected.removed);
 }
 
+/// Data-compat guard: the typed derivation must reproduce the key formerly
+/// keccak'd from the lowercased `0x`-prefixed manifest strings, so a resume
+/// cursor written before values were typed still seeds the same stream.
 #[test]
-fn chainlog_cursor_key_is_stable_and_case_insensitive() {
-    // The key must be reproducible across restarts (the alloy `Filter` hash
-    // is process-randomized) and must normalise hex case.
-    let a = chainlog_cursor_key(Chain::from_id(1), Some("0xAbC"), Some("0xDeF"));
-    let b = chainlog_cursor_key(Chain::from_id(1), Some("0xabc"), Some("0xdef"));
-    assert_eq!(a, b, "hex case must not change the key");
-    assert!(
-        a.starts_with("chainlog_cursor:"),
-        "key carries the prefix: {a}"
+fn chainlog_cursor_key_matches_the_legacy_string_derivation() {
+    let addr = "0xC92E8bdf79f0507f65a392b0ab4667716BFE0110";
+    let topic = "0x237e158222e3e6968b72b9db0d8043aacf074ad9f650f0d1606b4d82ee432c00";
+    let key = chainlog_cursor_key(
+        Chain::from_id(1),
+        Some(addr.parse().unwrap()),
+        Some(topic.parse().unwrap()),
+    );
+    let legacy = format!("1|{}|{}", addr.to_ascii_lowercase(), topic);
+    assert_eq!(
+        key,
+        format!(
+            "chainlog_cursor:{:x}",
+            alloy_primitives::keccak256(legacy.as_bytes())
+        ),
     );
 }
 
 #[test]
 fn chainlog_cursor_key_differs_by_each_input() {
-    let base = chainlog_cursor_key(Chain::from_id(1), Some("0xabc"), Some("0xdef"));
+    use alloy_primitives::{Address, B256};
+
+    let addr = Address::repeat_byte(0xab);
+    let topic = B256::repeat_byte(0xde);
+    let base = chainlog_cursor_key(Chain::from_id(1), Some(addr), Some(topic));
+    assert!(
+        base.starts_with("chainlog_cursor:"),
+        "key carries the prefix: {base}"
+    );
     assert_ne!(
         base,
-        chainlog_cursor_key(Chain::from_id(10), Some("0xabc"), Some("0xdef")),
+        chainlog_cursor_key(Chain::from_id(10), Some(addr), Some(topic)),
         "chain id is part of the key",
     );
     assert_ne!(
         base,
-        chainlog_cursor_key(Chain::from_id(1), Some("0x999"), Some("0xdef")),
+        chainlog_cursor_key(
+            Chain::from_id(1),
+            Some(Address::repeat_byte(0x99)),
+            Some(topic)
+        ),
         "address is part of the key",
     );
     assert_ne!(
         base,
-        chainlog_cursor_key(Chain::from_id(1), Some("0xabc"), None),
+        chainlog_cursor_key(Chain::from_id(1), Some(addr), None),
         "topic presence changes the key",
     );
     assert_ne!(
         base,
-        chainlog_cursor_key(Chain::from_id(1), None, Some("0xdef")),
+        chainlog_cursor_key(Chain::from_id(1), None, Some(topic)),
         "address presence changes the key",
     );
 }

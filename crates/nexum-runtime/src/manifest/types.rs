@@ -2,6 +2,7 @@
 
 use std::collections::BTreeMap;
 
+use alloy_primitives::{Address, B256};
 use serde::Deserialize;
 use serde::de::Error as _;
 
@@ -51,11 +52,10 @@ pub enum Subscription {
     ChainLog {
         /// EVM chain id.
         chain_id: u64,
-        /// Contract address as `0x`-prefixed 20-byte hex. Optional.
-        address: Option<String>,
-        /// Topic-0 filter as `0x`-prefixed 32-byte hex; absent matches
-        /// every event from the address(es).
-        event_signature: Option<String>,
+        /// Contract address filter. Optional.
+        address: Option<Address>,
+        /// Topic-0 filter; absent matches every event from the address(es).
+        event_signature: Option<B256>,
         /// Persist a durable cursor; a restart re-opens AT the cursor block
         /// and replays it.
         resume: bool,
@@ -91,10 +91,10 @@ enum CoreSubscription {
     #[serde(rename = "chain-log")]
     ChainLog {
         chain_id: u64,
-        #[serde(default)]
-        address: Option<String>,
-        #[serde(default)]
-        event_signature: Option<String>,
+        #[serde(default, deserialize_with = "chain_log_address")]
+        address: Option<Address>,
+        #[serde(default, deserialize_with = "chain_log_topic")]
+        event_signature: Option<B256>,
         #[serde(default)]
         resume: bool,
         #[serde(default)]
@@ -103,6 +103,29 @@ enum CoreSubscription {
     Cron {
         schedule: String,
     },
+}
+
+fn chain_log_address<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<Address>, D::Error> {
+    // Pinned operator wording.
+    hex_field(d, "invalid chain-log address")
+}
+
+fn chain_log_topic<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<B256>, D::Error> {
+    // Pinned operator wording.
+    hex_field(d, "invalid topic")
+}
+
+/// Refusal lands at manifest load; `label` carries the pinned wording.
+fn hex_field<'de, D, T>(d: D, label: &str) -> Result<Option<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: std::str::FromStr,
+    T::Err: std::fmt::Display,
+{
+    let raw = String::deserialize(d)?;
+    raw.parse()
+        .map(Some)
+        .map_err(|e| D::Error::custom(format!("{label} {raw:?}: {e}")))
 }
 
 impl From<CoreSubscription> for Subscription {

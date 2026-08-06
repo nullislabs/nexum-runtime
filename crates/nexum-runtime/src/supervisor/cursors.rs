@@ -126,18 +126,21 @@ pub(super) fn persist_progress_marker<S: StateStore>(
     }
 }
 
-/// Derived from normalized manifest inputs, not the alloy `Filter` (whose
-/// hash is process-randomized), so it is stable across restarts.
+/// Keyed on canonical lowercase hex, not the alloy `Filter` (whose hash is
+/// process-randomized), so it is stable across restarts; matches the keys
+/// derived from `0x`-prefixed manifest strings before values were typed.
 pub(super) fn chainlog_cursor_key(
     chain: Chain,
-    address: Option<&str>,
-    event_signature: Option<&str>,
+    address: Option<alloy_primitives::Address>,
+    event_signature: Option<alloy_primitives::B256>,
 ) -> String {
     let normalized = format!(
         "{}|{}|{}",
         chain.id(),
-        address.unwrap_or("").to_ascii_lowercase(),
-        event_signature.unwrap_or("").to_ascii_lowercase(),
+        address.map(|a| format!("{a:#x}")).unwrap_or_default(),
+        event_signature
+            .map(|t| format!("{t:#x}"))
+            .unwrap_or_default(),
     );
     format!(
         "chainlog_cursor:{:x}",
