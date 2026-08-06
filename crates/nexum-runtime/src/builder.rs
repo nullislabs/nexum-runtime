@@ -10,7 +10,7 @@
 
 use std::future::IntoFuture;
 use std::marker::PhantomData;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -18,7 +18,7 @@ use nexum_tasks::{DrainOutcome, TaskExit, TaskHandle, TaskManager, TaskSet};
 use tracing::{error, info, warn};
 use wasmtime::Engine;
 
-use crate::addons::{AddOnHandle, AddOns, AddOnsContext, RuntimeAddOn};
+use crate::addons::{AddOnHandle, AddOns, AddOnsContext};
 use crate::engine_config::{EngineConfig, ModuleEntry};
 use crate::host::component::{
     BuilderContext, ComponentBuilder, Components, ComponentsBuilder, RuntimeTypes,
@@ -123,23 +123,23 @@ pub(crate) fn wasmtime_config() -> wasmtime::Config {
 
 /// A fully-assembled runtime: concrete backends, extensions, add-ons, and the
 /// optional module-source override. [`launch`](Self::launch) runs it.
-pub struct AssembledRuntime<'a, T: RuntimeTypes> {
+pub struct AssembledRuntime<T: RuntimeTypes> {
     /// Shared backends threaded into every module store.
     pub components: Components<T>,
     /// Extensions: namespaces, capabilities, linker hooks, services, and
     /// provider kinds.
     pub extensions: Vec<Arc<dyn Extension<T>>>,
     /// Cross-cutting facilities installed before the engine boots.
-    pub add_ons: &'a [&'a dyn RuntimeAddOn],
+    pub add_ons: AddOns,
     /// Single-module source override; `None` runs `[[modules]]`.
-    pub wasm: Option<&'a Path>,
+    pub wasm: Option<PathBuf>,
     /// Manifest paired with `wasm`.
-    pub manifest: Option<&'a Path>,
+    pub manifest: Option<PathBuf>,
     /// Per-store WASI clock override; `None` leaves the ambient host clocks.
     pub clocks: Option<WasiClockOverride>,
 }
 
-impl<T: RuntimeTypes> AssembledRuntime<'_, T> {
+impl<T: RuntimeTypes> AssembledRuntime<T> {
     /// Run the imperative launch sequence and return the running handle.
     pub async fn launch(self, ctx: LaunchContext<'_>) -> anyhow::Result<RuntimeHandle> {
         let AssembledRuntime {
@@ -184,8 +184,8 @@ impl<T: RuntimeTypes> AssembledRuntime<'_, T> {
                 );
             }
             let entry = ModuleEntry {
-                path: wasm.to_path_buf(),
-                manifest: manifest.map(Path::to_path_buf),
+                path: wasm,
+                manifest,
             };
             Supervisor::boot_single(
                 &engine,
@@ -350,9 +350,9 @@ impl<T: RuntimeTypes> AssembledRuntime<'_, T> {
 async fn open_and_launch<T, C, S, L>(
     config: &EngineConfig,
     extensions: Vec<Arc<dyn Extension<T>>>,
-    add_ons: &[&dyn RuntimeAddOn],
-    wasm: Option<&Path>,
-    manifest: Option<&Path>,
+    add_ons: AddOns,
+    wasm: Option<PathBuf>,
+    manifest: Option<PathBuf>,
     clocks: Option<WasiClockOverride>,
     components: ComponentsBuilder<C, S, L>,
 ) -> anyhow::Result<RuntimeHandle>
@@ -501,16 +501,13 @@ impl<'a, R: Runtime> PresetBuilder<'a, R> {
         } = self;
         let mut extensions = preset.extensions(config);
         extensions.extend(appended);
-        // `add_ons` owns the boxed add-ons; `add_on_refs` borrows into it and is
-        // consumed by the launch call, so both must stay in scope for that call.
         let add_ons = preset.add_ons();
-        let add_on_refs: Vec<&dyn RuntimeAddOn> = add_ons.iter().map(|a| &**a).collect();
         open_and_launch(
             config,
             extensions,
-            &add_on_refs,
-            wasm.as_deref(),
-            manifest.as_deref(),
+            add_ons,
+            wasm,
+            manifest,
             clocks,
             preset.components(),
         )
@@ -540,15 +537,12 @@ where
     /// Open the overridden backends and launch, otherwise as
     /// [`PresetBuilder::launch`].
     pub async fn launch(self) -> anyhow::Result<RuntimeHandle> {
-        // `add_ons` owns the boxed add-ons; `add_on_refs` borrows into it and is
-        // consumed by the launch call, so both must stay in scope for that call.
-        let add_on_refs: Vec<&dyn RuntimeAddOn> = self.add_ons.iter().map(|a| &**a).collect();
         open_and_launch(
             self.config,
             self.extensions,
-            &add_on_refs,
-            self.wasm.as_deref(),
-            self.manifest.as_deref(),
+            self.add_ons,
+            self.wasm,
+            self.manifest,
             self.clocks,
             self.components,
         )
@@ -604,7 +598,7 @@ impl<'a, T: RuntimeTypes> TypedBuilder<'a, T> {
             manifest: self.manifest,
             clocks: self.clocks,
             components,
-            add_ons: &[],
+            add_ons: AddOns::new(),
         }
     }
 }
@@ -618,13 +612,13 @@ pub struct ReadyBuilder<'a, T: RuntimeTypes, C, S, L> {
     manifest: Option<PathBuf>,
     clocks: Option<WasiClockOverride>,
     components: ComponentsBuilder<C, S, L>,
-    add_ons: &'a [&'a dyn RuntimeAddOn],
+    add_ons: AddOns,
 }
 
-impl<'a, T: RuntimeTypes, C, S, L> ReadyBuilder<'a, T, C, S, L> {
+impl<T: RuntimeTypes, C, S, L> ReadyBuilder<'_, T, C, S, L> {
     /// Bind the cross-cutting add-on set installed before the engine boots;
     /// defaults to none.
-    pub fn with_add_ons(mut self, add_ons: &'a [&'a dyn RuntimeAddOn]) -> Self {
+    pub fn with_add_ons(mut self, add_ons: AddOns) -> Self {
         self.add_ons = add_ons;
         self
     }
@@ -644,8 +638,8 @@ where
             self.config,
             self.extensions,
             self.add_ons,
-            self.wasm.as_deref(),
-            self.manifest.as_deref(),
+            self.wasm,
+            self.manifest,
             self.clocks,
             self.components,
         )
@@ -660,7 +654,7 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use super::*;
-    use crate::addons::AddOns;
+    use crate::addons::{AddOns, RuntimeAddOn};
     use crate::engine_config::EngineConfig;
     use crate::host::component::{LocalStoreBuilder, LogPipelineBuilder, ProviderPoolBuilder};
     use crate::host::extension::HostWallClock;
@@ -1119,12 +1113,10 @@ mod tests {
             .expect("build core components");
 
         let calls = Arc::new(AtomicUsize::new(0));
-        let add_on = CountingAddOn(calls.clone());
-        let add_on_refs: Vec<&dyn RuntimeAddOn> = vec![&add_on];
         let runtime = AssembledRuntime {
             components,
             extensions: Vec::new(),
-            add_ons: &add_on_refs,
+            add_ons: vec![Box::new(CountingAddOn(calls.clone()))],
             wasm: None,
             manifest: None,
             clocks: None,
