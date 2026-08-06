@@ -46,6 +46,52 @@ async fn boot_admits_a_registered_provider_kind_past_the_kind_gate() {
         .lacks("requires a module.toml");
 }
 
+/// The multi-entry path wires provider kinds, so a serviceless kind refuses
+/// the boot before any entry loads.
+#[tokio::test]
+async fn boot_refuses_a_provider_kind_without_a_host_service() {
+    BootScenario::over(mock_components())
+        .extensions(serviceless_acme_extensions())
+        .expect_refusal()
+        .await
+        .names("extension acme registers provider kind acme-adapter without a host service");
+}
+
+/// Provider kinds come only from `engine.toml`, so single boot skips the
+/// service gate and the first refusal is the missing manifest.
+#[tokio::test]
+async fn boot_single_skips_the_provider_kind_service_gate() {
+    let extensions = serviceless_acme_extensions();
+    let engine = test_wasmtime_engine();
+    let linker = crate::supervisor::build_linker(&engine, &extensions).expect("build_linker");
+    let dir = tempfile::tempdir().expect("tempdir");
+    let entry = ModuleEntry {
+        path: dir.path().join("missing.wasm"),
+        manifest: None,
+    };
+    let limits = ModuleLimits::default();
+    let env = BootEnv {
+        limits: &limits,
+        configured_chains: test_chains(),
+        require_component_digest: false,
+    };
+    let err = Supervisor::boot_single(
+        &engine,
+        &linker,
+        &entry,
+        &mock_components(),
+        &env,
+        &extensions,
+        None,
+    )
+    .await
+    .err()
+    .expect("a missing manifest must refuse the boot");
+    Refusal::from(err)
+        .names("no module.toml")
+        .lacks("without a host service");
+}
+
 /// `[capabilities]` is declared so the failing gate is the subscription kind.
 #[tokio::test]
 async fn boot_refuses_an_undeclared_extension_subscription_kind() {

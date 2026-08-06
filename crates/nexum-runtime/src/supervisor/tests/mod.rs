@@ -79,15 +79,22 @@ async fn try_boot_single(
     let engine = test_wasmtime_engine();
     let linker = make_linker(&engine);
     let (dir, store) = temp_local_store();
+    let entry = ModuleEntry {
+        path: wasm.to_path_buf(),
+        manifest: manifest.map(Path::to_path_buf),
+    };
+    let limits = ModuleLimits::default();
+    let env = BootEnv {
+        limits: &limits,
+        configured_chains: test_chains(),
+        require_component_digest: require_digest,
+    };
     let result = Supervisor::boot_single(
         &engine,
         &linker,
-        wasm,
-        manifest,
+        &entry,
         &test_components(store),
-        &ModuleLimits::default(),
-        &test_chains(),
-        require_digest,
+        &env,
         &core_extensions(),
         clocks,
     )
@@ -156,4 +163,35 @@ impl Extension<crate::test_utils::MockTypes> for AcmeExtension {
 
 fn acme_extensions() -> Vec<Arc<dyn Extension<crate::test_utils::MockTypes>>> {
     vec![Arc::new(AcmeExtension)]
+}
+
+/// [`AcmeExtension`] minus its service, for the serviceless kind gate tests.
+struct ServicelessAcmeExtension;
+
+impl Extension<crate::test_utils::MockTypes> for ServicelessAcmeExtension {
+    fn namespace(&self) -> &'static str {
+        "acme"
+    }
+
+    fn capabilities(&self) -> manifest::NamespaceCaps {
+        manifest::NamespaceCaps {
+            prefix: "test:acme/",
+            ifaces: &[],
+        }
+    }
+
+    fn link(
+        &self,
+        _linker: &mut Linker<HostState<crate::test_utils::MockTypes>>,
+    ) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    fn provider(&self) -> Option<Box<dyn ProviderKind<crate::test_utils::MockTypes>>> {
+        Some(Box::new(AcmeKind))
+    }
+}
+
+fn serviceless_acme_extensions() -> Vec<Arc<dyn Extension<crate::test_utils::MockTypes>>> {
+    vec![Arc::new(ServicelessAcmeExtension)]
 }

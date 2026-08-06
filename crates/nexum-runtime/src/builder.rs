@@ -19,7 +19,7 @@ use tracing::{error, info, warn};
 use wasmtime::Engine;
 
 use crate::addons::{AddOnHandle, AddOns, AddOnsContext, RuntimeAddOn};
-use crate::engine_config::EngineConfig;
+use crate::engine_config::{EngineConfig, ModuleEntry};
 use crate::host::component::{
     BuilderContext, ComponentBuilder, Components, ComponentsBuilder, RuntimeTypes,
 };
@@ -183,15 +183,16 @@ impl<T: RuntimeTypes> AssembledRuntime<'_, T> {
                     "ignoring engine.toml [[modules]] because a module source override was given"
                 );
             }
+            let entry = ModuleEntry {
+                path: wasm.to_path_buf(),
+                manifest: manifest.map(Path::to_path_buf),
+            };
             Supervisor::boot_single(
                 &engine,
                 &linker,
-                wasm,
-                manifest,
+                &entry,
                 &components,
-                &engine_cfg.limits,
-                &supervisor::ConfiguredChains::from_config(engine_cfg),
-                engine_cfg.engine.require_component_digest,
+                &supervisor::BootEnv::from_config(engine_cfg),
                 &extensions,
                 clocks,
             )
