@@ -23,8 +23,6 @@ use crate::host::provider_pool::ProviderPool;
 pub struct Components<T: RuntimeTypes> {
     pub chain: ProviderPool,
     pub store: T::Store,
-    /// Extension backends (the lattice `Ext` payload).
-    pub ext: T::Ext,
     /// Shared log pipeline.
     pub logs: crate::host::logs::LogPipeline,
 }
@@ -34,7 +32,6 @@ impl<T: RuntimeTypes> Clone for Components<T> {
         Self {
             chain: self.chain.clone(),
             store: self.store.clone(),
-            ext: self.ext.clone(),
             logs: self.logs.clone(),
         }
     }

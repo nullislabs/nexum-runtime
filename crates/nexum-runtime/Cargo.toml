@@ -25,9 +25,8 @@ thiserror.workspace = true
 async-trait.workspace = true
 # Newtype boilerplate (`Display`, `AsRef`, `From`) for identity wrappers.
 derive_more.workspace = true
-# `strum::IntoStaticStr` on the pub error enums: a snake_case
-# `&'static str` per variant, published for consumers' metric labels;
-# nothing in-crate consumes the conversion.
+# `strum::IntoStaticStr` on `LogSource`: the snake_case variant name is
+# the tracing `source` field.
 strum.workspace = true
 tokio.workspace = true
 # Task lifecycle and graceful shutdown; the sole crate that raw-spawns

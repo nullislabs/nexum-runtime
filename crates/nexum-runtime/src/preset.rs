@@ -4,7 +4,7 @@
 //! pre-built backends or non-static extensions binds by value through
 //! [`RuntimeBuilder::with_runtime`](crate::builder::RuntimeBuilder::with_runtime).
 //! [`CoreRuntime`] is the domain-free default: a chain provider pool and a
-//! local redb store, no extension payload, with the Prometheus add-on.
+//! local redb store, with the Prometheus add-on.
 
 use std::sync::Arc;
 
@@ -31,8 +31,6 @@ pub trait Runtime: crate::sealed::SealedRuntime {
     type ChainBuilder: ComponentBuilder<Output = ProviderPool>;
     /// Builds the store backend ([`RuntimeTypes::Store`]).
     type StoreBuilder: ComponentBuilder<Output = <Self::Types as RuntimeTypes>::Store>;
-    /// Builds the extension payload ([`RuntimeTypes::Ext`]).
-    type ExtBuilder: ComponentBuilder<Output = <Self::Types as RuntimeTypes>::Ext>;
     /// Builds the shared [`LogPipeline`].
     type LogsBuilder: ComponentBuilder<Output = LogPipeline>;
 
@@ -40,12 +38,7 @@ pub trait Runtime: crate::sealed::SealedRuntime {
     /// preset, so a value-bound preset hands over owned, pre-built backends.
     fn components(
         self,
-    ) -> ComponentsBuilder<
-        Self::ChainBuilder,
-        Self::StoreBuilder,
-        Self::ExtBuilder,
-        Self::LogsBuilder,
-    >;
+    ) -> ComponentsBuilder<Self::ChainBuilder, Self::StoreBuilder, Self::LogsBuilder>;
 
     /// The cross-cutting add-ons installed before the engine boots.
     fn add_ons(&self) -> AddOns;
@@ -61,8 +54,8 @@ pub trait Runtime: crate::sealed::SealedRuntime {
 }
 
 /// The domain-free default preset: a chain provider pool and a local redb
-/// store, no extension payload, with the Prometheus add-on. Doubles as its own
-/// [`RuntimeTypes`] lattice.
+/// store, with the Prometheus add-on. Doubles as its own [`RuntimeTypes`]
+/// lattice.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct CoreRuntime;
 
@@ -71,20 +64,18 @@ impl crate::sealed::SealedRuntime for CoreRuntime {}
 
 impl RuntimeTypes for CoreRuntime {
     type Store = LocalStore;
-    type Ext = ();
 }
 
 impl Runtime for CoreRuntime {
     type Types = Self;
     type ChainBuilder = ProviderPoolBuilder;
     type StoreBuilder = LocalStoreBuilder;
-    type ExtBuilder = ();
     type LogsBuilder = LogPipelineBuilder;
 
     fn components(
         self,
-    ) -> ComponentsBuilder<ProviderPoolBuilder, LocalStoreBuilder, (), LogPipelineBuilder> {
-        ComponentsBuilder::new(ProviderPoolBuilder, LocalStoreBuilder, ())
+    ) -> ComponentsBuilder<ProviderPoolBuilder, LocalStoreBuilder, LogPipelineBuilder> {
+        ComponentsBuilder::new(ProviderPoolBuilder, LocalStoreBuilder)
     }
 
     fn add_ons(&self) -> AddOns {

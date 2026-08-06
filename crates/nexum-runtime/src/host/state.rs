@@ -31,9 +31,6 @@ pub struct HostState<T: RuntimeTypes> {
     pub run: RunId,
     /// Shared log pipeline the `nexum:host/logging` glue routes through.
     pub log_router: Arc<LogRouter>,
-    /// Extension backends (the lattice `Ext` payload), reached via
-    /// [`ExtState`].
-    pub ext: T::Ext,
     /// `chain` backend: per-chain provider pool.
     pub chain: ProviderPool,
     /// Cap on a chain JSON-RPC response body; larger responses are rejected.
@@ -53,21 +50,5 @@ impl<T: RuntimeTypes> WasiView for HostState<T> {
             ctx: &mut self.wasi,
             table: &mut self.table,
         }
-    }
-}
-
-/// Generic access to the extension payload of a host state, without naming
-/// the concrete lattice `T`.
-pub trait ExtState {
-    /// The extension payload type (the lattice `Ext` member).
-    type Ext;
-    /// Borrow the extension payload.
-    fn ext(&self) -> &Self::Ext;
-}
-
-impl<T: RuntimeTypes> ExtState for HostState<T> {
-    type Ext = T::Ext;
-    fn ext(&self) -> &Self::Ext {
-        &self.ext
     }
 }

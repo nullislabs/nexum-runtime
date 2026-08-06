@@ -58,12 +58,6 @@ impl Entry {
     }
 }
 
-impl From<ManifestSource> for Entry {
-    fn from(manifest: ManifestSource) -> Self {
-        Self::new(manifest)
-    }
-}
-
 impl From<TestManifest> for Entry {
     fn from(manifest: TestManifest) -> Self {
         Self::new(manifest)
@@ -78,12 +72,6 @@ impl From<String> for Entry {
 
 impl From<PathBuf> for Entry {
     fn from(manifest: PathBuf) -> Self {
-        Self::new(manifest)
-    }
-}
-
-impl From<&Path> for Entry {
-    fn from(manifest: &Path) -> Self {
         Self::new(manifest)
     }
 }
@@ -113,7 +101,6 @@ impl BootScenario<CoreRuntime> {
             Components {
                 chain: ProviderPool::empty(),
                 store,
-                ext: (),
                 logs: in_memory_logs(),
             },
         )

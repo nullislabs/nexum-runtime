@@ -56,12 +56,11 @@ fn make_linker(engine: &wasmtime::Engine) -> Linker<HostState<CoreRuntime>> {
         .expect("build_linker")
 }
 
-/// An empty chain pool, an empty extension slot, and the given store.
+/// An empty chain pool and the given store.
 fn test_components(store: crate::host::local_store_redb::LocalStore) -> Components<CoreRuntime> {
     Components {
         chain: ProviderPool::empty(),
         store,
-        ext: (),
         logs: crate::test_utils::in_memory_logs(),
     }
 }

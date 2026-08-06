@@ -21,11 +21,7 @@
 //! let store = MockStateStore::new();
 //! let _handle = RuntimeBuilder::new(config)
 //!     .with_types::<MockTypes>()
-//!     .with_components(ComponentsBuilder::new(
-//!         Prebuilt(pool),
-//!         Prebuilt(store.clone()),
-//!         (),
-//!     ))
+//!     .with_components(ComponentsBuilder::new(Prebuilt(pool), Prebuilt(store.clone())))
 //!     .launch()
 //!     .await?;
 //! # Ok(())
@@ -89,13 +85,12 @@ pub fn mock_components() -> Components<MockTypes> {
     mock_components_from(&FakeNode::new(), MockStateStore::new())
 }
 
-/// A [`Components`] bundle serving chain id 1 from `node`, with an empty
-/// extension slot and an in-memory log pipeline.
+/// A [`Components`] bundle serving chain id 1 from `node`, with an in-memory
+/// log pipeline.
 pub fn mock_components_from(node: &FakeNode, store: MockStateStore) -> Components<MockTypes> {
     Components {
         chain: node.pool(&[alloy_chains::Chain::from_id(1)], HARNESS_POLL_INTERVAL),
         store,
-        ext: (),
         logs: in_memory_logs(),
     }
 }
@@ -127,7 +122,6 @@ mod tests {
             .with_components(ComponentsBuilder::new(
                 Prebuilt(pool.clone()),
                 Prebuilt(store),
-                (),
             ))
             .launch()
             .await
