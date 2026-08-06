@@ -113,7 +113,7 @@ impl ConfiguredChains {
 }
 
 /// Refuse any subscription naming a chain absent from `[chains]`, before any
-/// guest code runs; chain-log filter values are already typed at parse.
+/// guest code runs.
 pub(super) fn enforce_subscriptions(
     role: Role,
     name: &str,
