@@ -1,7 +1,5 @@
 //! Event dispatch: rate limit, refuel, invoke `on_event` under the
-//! wall-clock deadline, and record the outcome. Restart sweeps run at the
-//! head of every entry point; progress and cursors persist only after a
-//! successful dispatch.
+//! wall-clock deadline, and record the outcome.
 
 use std::time::{Duration, Instant};
 
@@ -20,17 +18,14 @@ use crate::manifest::Subscription;
 use crate::module_id::ModuleId;
 
 impl<T: RuntimeTypes> Supervisor<T> {
-    /// Revive providers before modules at every multi-target entry point:
-    /// a module revived first would re-run `init` against possibly-dead
-    /// providers, so the sweep mirrors boot's providers-first install order.
+    /// Providers revive before modules: a module revived first would re-run
+    /// `init` against possibly-dead providers.
     async fn sweep_all(&mut self, now: Instant) {
         sweep(&self.shared, &mut self.providers, self.policy, now).await;
         sweep(&self.shared, &mut self.modules, self.policy, now).await;
     }
 
-    /// Dispatch one block to every alive module subscribed to its chain,
-    /// restarting eligible dead components first. Returns the number
-    /// invoked.
+    /// The restart sweep runs first; returns the number of modules invoked.
     pub async fn dispatch_block(&mut self, block: nexum::host::types::Block) -> usize {
         let chain = Chain::from_id(block.chain_id);
         let chain_id = chain.id();
@@ -69,11 +64,8 @@ impl<T: RuntimeTypes> Supervisor<T> {
         dispatched
     }
 
-    /// Dispatch a chain-log event to the module that opened the
-    /// subscription. Returns `true` when accepted; `false` when the module
-    /// is dead, missing, or its callback failed. A trap marks it dead. The
-    /// resume cursor persists only after a successful dispatch, so a block
-    /// is never recorded as done before the module processed it.
+    /// Returns `true` only when the module accepted the event; the resume
+    /// cursor persists only after a successful dispatch.
     pub async fn dispatch_chain_log(
         &mut self,
         module_name: &ModuleId,
@@ -88,14 +80,12 @@ impl<T: RuntimeTypes> Supervisor<T> {
             return false;
         };
 
-        // Poison-pill check first, so a poisoned module never triggers a
-        // restart attempt.
+        // Poison check first: a poisoned module never triggers a restart attempt.
         if self.modules[idx].health.is_poisoned() {
             return false;
         }
 
-        // Restart-on-trap, single-target: the chain-log hot path revives
-        // only its own module, never sweeping the rest.
+        // The chain-log hot path revives only its own module, never the rest.
         if self.modules[idx].health.due_restart(now) {
             revive_one(&self.shared, &mut self.modules[idx], now).await;
         }
@@ -135,9 +125,7 @@ impl<T: RuntimeTypes> Supervisor<T> {
         ok
     }
 
-    /// Dispatch one extension event to every module whose subscription kind
-    /// and filters match. Returns the number invoked. Like `dispatch_block`:
-    /// dead modules past backoff restart first, poisoned modules skip.
+    /// The restart sweep runs first; returns the number of modules invoked.
     pub async fn dispatch_extension_event(&mut self, event: ExtensionEvent) -> usize {
         let now = Instant::now();
         self.sweep_all(now).await;
@@ -161,8 +149,7 @@ impl<T: RuntimeTypes> Supervisor<T> {
             .collect();
         let mut dispatched = 0;
         for idx in candidate_indices {
-            // Extension events are not chain-scoped: the telemetry chain
-            // id and block number carry the 0 sentinel.
+            // Extension events are not chain-scoped; telemetry carries the 0 sentinel.
             if matches!(
                 self.dispatch_to(idx, 0, event.kind, 0, &event.event, now)
                     .await,
@@ -174,11 +161,7 @@ impl<T: RuntimeTypes> Supervisor<T> {
         dispatched
     }
 
-    /// Shared per-module dispatch: refuel, call `on_event`, and record the
-    /// outcome with the same telemetry and lifecycle bookkeeping. Only
-    /// `Ok` counts as accepted; `RateLimited` and `FuelSetFailed` drop the
-    /// event with the module left alive. `chain_id` is telemetry only;
-    /// chain-less kinds pass 0.
+    /// `chain_id` is telemetry only; chain-less kinds pass 0.
     async fn dispatch_to(
         &mut self,
         idx: usize,
@@ -193,10 +176,8 @@ impl<T: RuntimeTypes> Supervisor<T> {
         // synthesize a panic record without re-borrowing `self`.
         let router = self.shared.components.logs.router();
         let module = &mut self.modules[idx];
-        // Dispatch-boundary rate limit: throttle before spending any fuel
-        // or entering the guest. The bucket is per-module, so a throttled
-        // module never starves the others; over-rate events are dropped
-        // and counted with liveness untouched.
+        // Throttle before spending fuel or entering the guest; the bucket is
+        // per-module, so a throttled module never starves the others.
         if !module.live.dispatch_bucket.try_acquire(now) {
             debug!(
                 module = %module.name,
@@ -224,12 +205,8 @@ impl<T: RuntimeTypes> Supervisor<T> {
             return DispatchOutcome::FuelSetFailed;
         }
         let start = Instant::now();
-        // Fuel bounds only guest instructions; time spent inside a host
-        // call (chain RPC, redb, HTTP) is unmetered, so bound the whole
-        // dispatch, guest plus every host call it awaits, in wall-clock.
-        // A deadline hit is fatal like a trap: cancelling the call leaves
-        // the store unusable, and the trap arm marks the module dead so
-        // the restart sweep reinstantiates it on a fresh store.
+        // A deadline hit is fatal like a trap: cancellation leaves the store
+        // unusable, so the trap arm must mark the module dead.
         let deadline = module.seed.event_deadline;
         let call = module
             .live
@@ -238,9 +215,8 @@ impl<T: RuntimeTypes> Supervisor<T> {
         let outcome = with_dispatch_deadline(deadline, call)
             .await
             .unwrap_or_else(|exceeded| Err(wasmtime::Error::from(exceeded)));
-        // One post-call sample, shared by latency telemetry and, in the
-        // trap arm, the health transition (the trap instant is start +
-        // elapsed, not the pre-dispatch `now`).
+        // One post-call sample: the trap instant is start plus elapsed, not
+        // the pre-dispatch `now`.
         let elapsed = start.elapsed();
         let latency_ms = elapsed.as_millis() as u64;
         match outcome {
@@ -259,8 +235,6 @@ impl<T: RuntimeTypes> Supervisor<T> {
                     "event_kind" => event_kind,
                 )
                 .record(elapsed.as_secs_f64());
-                // Successful dispatch clears the failure history: a module
-                // that recovered lands back in the steady-state schedule.
                 module.health.dispatch_succeeded();
                 DispatchOutcome::Ok
             }
@@ -305,9 +279,8 @@ impl<T: RuntimeTypes> Supervisor<T> {
                     "error_kind" => "trap",
                 )
                 .increment(1);
-                // Death diagnosis: leave a retrievable panic record on the
-                // dead run carrying the trap's root cause; the full trap
-                // with its wasm frame list already went to host tracing.
+                // Leave a retrievable panic record on the dead run; the full
+                // trap already went to host tracing.
                 router.record(LogRecord::now(
                     module.live.run.clone(),
                     LogSource::Panic,
@@ -337,9 +310,8 @@ impl<T: RuntimeTypes> Supervisor<T> {
     }
 }
 
-/// A dispatch (guest plus every host call it awaited) outlived its
-/// wall-clock deadline and was cancelled. Distinct from a fuel trap, which
-/// bounds guest instructions.
+/// Distinct from a fuel trap, which bounds guest instructions; this bounds
+/// the whole dispatch, host calls included, in wall-clock.
 #[derive(Debug, thiserror::Error)]
 #[error(
     "dispatch exceeded its {0:?} wall-clock deadline \
@@ -347,11 +319,8 @@ impl<T: RuntimeTypes> Supervisor<T> {
 )]
 pub(super) struct DeadlineExceeded(Duration);
 
-/// Run a guest dispatch future under a wall-clock `deadline`. Fuel bounds
-/// only guest instructions, so this bounds time in host calls (see
-/// [`crate::runtime::limits`]). Returns `Err(DeadlineExceeded)` once the
-/// future outlives `deadline`; dropping it cancels the in-flight host call
-/// at its next await point. Pure guest spinning stays fuel's job.
+/// Cancellation lands at the future's next await point, so pure guest
+/// spinning stays fuel's job (see [`crate::runtime::limits`]).
 pub(super) async fn with_dispatch_deadline<F: std::future::Future>(
     deadline: Duration,
     fut: F,
@@ -361,21 +330,15 @@ pub(super) async fn with_dispatch_deadline<F: std::future::Future>(
         .map_err(|_elapsed| DeadlineExceeded(deadline))
 }
 
-/// Outcome of `dispatch_to` for one module. Private; only the `dispatch_*`
-/// entry points consume it.
 #[derive(Debug, Eq, PartialEq)]
 pub(super) enum DispatchOutcome {
-    /// Guest returned `Ok(())`.
     Ok,
-    /// Guest returned a typed `fault` via WIT.
+    /// Guest returned a typed `fault` via WIT, not a trap; the module stays alive.
     Fault,
-    /// Guest trapped (panic / OOM / fuel / etc). Marked dead, maybe
-    /// quarantined per the poison policy.
+    /// Marked dead, maybe quarantined per the poison policy.
     Trapped,
-    /// `set_fuel` failed before the call; the module stays alive, this
-    /// event is skipped.
+    /// `set_fuel` failed before the call; the module stays alive, the event skips.
     FuelSetFailed,
-    /// Per-module dispatch rate limit exceeded; the event is dropped before
-    /// the guest runs, liveness untouched.
+    /// Dropped before the guest runs; liveness untouched.
     RateLimited,
 }

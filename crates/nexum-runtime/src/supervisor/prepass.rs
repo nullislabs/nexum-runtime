@@ -1,6 +1,5 @@
-//! Everything before any compile: manifest resolution and loading,
-//! namespace claims, and the configured-chains gate. Every refusal here
-//! fires before a single component byte is read or compiled.
+//! Everything before any compile: manifest resolution, namespace claims,
+//! and the configured-chains gate.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -34,10 +33,8 @@ pub(super) fn claim_namespace(
     Ok(())
 }
 
-/// Fallback namespace for a module with an empty `[module].name`.
 pub(super) const MODULE_FALLBACK_NAME: &str = "module";
 
-/// Fallback namespace for a provider with an empty `[module].name`.
 pub(super) const PROVIDER_FALLBACK_NAME: &str = "provider";
 
 /// `[module].name`, or `fallback` when it is empty.
@@ -49,8 +46,7 @@ pub(super) fn manifest_namespace(loaded: &LoadedManifest, fallback: &str) -> Str
     }
 }
 
-/// Load the mandatory manifest for `component`; missing or unresolved
-/// refuses the boot.
+/// Missing or unresolved refuses the boot.
 pub(super) fn load_required_manifest(
     component: &Path,
     explicit: Option<&Path>,
@@ -77,15 +73,12 @@ pub(super) fn load_required_manifest(
     }
 }
 
-/// Resolve a component's manifest: explicit override, else sibling
-/// `module.toml`, else the deprecated `nexum.toml` with a rename warning.
-/// `None` when neither exists.
+/// Explicit override, else sibling `module.toml`, else deprecated
+/// `nexum.toml` with a rename warning; `None` when neither exists.
 fn resolve_manifest_path(component: &Path, explicit: Option<&Path>) -> Option<PathBuf> {
     if let Some(path) = explicit {
         return Some(path.to_path_buf());
     }
-    // Canonical name is module.toml (ADR-0001). nexum.toml is accepted
-    // with a deprecation warning during the 0.1->0.2 transition.
     let dir = component.parent()?.to_owned();
     let canonical = dir.join("module.toml");
     if canonical.exists() {
@@ -104,7 +97,7 @@ fn resolve_manifest_path(component: &Path, explicit: Option<&Path>) -> Option<Pa
     None
 }
 
-/// The operator's configured chain set from `[chains]` in `engine.toml`.
+/// The operator's `[chains]` set from `engine.toml`.
 #[derive(Debug, Clone)]
 pub struct ConfiguredChains {
     /// Numeric EIP-155 ids; named `[chains.*]` keys normalise to the same id.
@@ -144,7 +137,6 @@ pub(super) fn enforce_configured_chains(
     Ok(())
 }
 
-/// Boot error for an unconfigured chain subscription.
 pub(super) fn unconfigured_chain(module: &str, chain_id: u64, chains: &ConfiguredChains) -> Error {
     if chains.defaulted {
         return anyhow!(
@@ -169,15 +161,14 @@ pub(super) fn unconfigured_chain(module: &str, chain_id: u64, chains: &Configure
     )
 }
 
-/// The pre-pass output: every manifest loaded, every name claimed, and
-/// every subscribed chain gated, in `engine.toml` order.
+/// Every manifest loaded, every name claimed, every subscribed chain gated,
+/// in `engine.toml` order.
 pub(super) struct Prepass {
     pub(super) adapter_manifests: Vec<LoadedManifest>,
     pub(super) module_manifests: Vec<LoadedManifest>,
 }
 
-/// Run the pre-pass over `engine_cfg`: adapters first, then modules, so a
-/// refusal lands before any compile in either role.
+/// Adapters first, then modules; every refusal lands before any compile.
 pub(super) fn run(engine_cfg: &EngineConfig, registry: &CapabilityRegistry) -> Result<Prepass> {
     let provider_registry = CapabilityRegistry::provider();
     let mut ledger = NamespaceLedger::new();
@@ -218,8 +209,6 @@ pub(super) fn run(engine_cfg: &EngineConfig, registry: &CapabilityRegistry) -> R
     })
 }
 
-/// One role's pre-pass parameters: manifest-load role, ledger claim role,
-/// error context, fallback namespace, and the optional chains gate.
 struct RolePass<'a> {
     manifest_role: &'static str,
     claim_role: &'static str,
@@ -228,7 +217,7 @@ struct RolePass<'a> {
     chains: Option<&'a ConfiguredChains>,
 }
 
-/// Load, claim, and gate every entry of one role, in declaration order.
+/// In declaration order.
 fn load_role_manifests<'a>(
     entries: impl Iterator<Item = (&'a PathBuf, Option<&'a Path>)>,
     registry: &CapabilityRegistry,

@@ -1,5 +1,4 @@
-//! Dispatch: limits resolution, deadlines, rate limiting, and per-chain
-//! isolation.
+//! Dispatch: limits resolution, deadlines, rate limiting, per-chain isolation.
 
 use super::*;
 
@@ -27,11 +26,7 @@ fn manifest_resource_overrides_take_effect_and_are_field_local() {
     assert_eq!(resolved.state_bytes, 2048);
 }
 
-// `with_dispatch_deadline` bounds a dispatch in wall-clock, covering
-// host-call time fuel cannot meter.
-
-/// `with_dispatch_deadline` cancels rather than awaits an over-long future:
-/// a sleep far past the deadline is dropped, not run.
+/// An over-long future is dropped at the deadline, not awaited out.
 #[tokio::test]
 async fn dispatch_deadline_interrupts_a_sleeping_host_call() {
     use std::sync::Arc;
@@ -39,9 +34,8 @@ async fn dispatch_deadline_interrupts_a_sleeping_host_call() {
 
     let ran_to_completion = Arc::new(AtomicBool::new(false));
     let flag = ran_to_completion.clone();
-    // Models a guest whose host call parks for an hour (a hung RPC / a
-    // server that never answers). Without the deadline this future would
-    // hold the dispatch for the full hour.
+    // Models a host call parked for an hour; without the deadline this
+    // future would hold the dispatch for the full hour.
     let dispatch = async move {
         tokio::time::sleep(Duration::from_secs(3600)).await;
         flag.store(true, Ordering::SeqCst);
@@ -59,17 +53,15 @@ async fn dispatch_deadline_interrupts_a_sleeping_host_call() {
     );
 }
 
-/// The deadline does not punish a dispatch that finishes promptly: the
-/// inner future's value is returned untouched.
+/// The inner future's value is returned untouched.
 #[tokio::test]
 async fn dispatch_deadline_lets_a_prompt_call_finish() {
     let result = with_dispatch_deadline(Duration::from_secs(30), async { 7_u8 }).await;
     assert_eq!(result.expect("prompt call is well under the deadline"), 7);
 }
 
-/// The resolved deadline honours an override, falls back to the default
-/// when unset, and saturates a degenerate `0` up to the 1s floor so it
-/// cannot cut every dispatch off instantly.
+/// A degenerate `0` saturates up to the 1 s floor so it cannot cut every
+/// dispatch off instantly.
 #[test]
 fn event_deadline_resolves_override_default_and_floor() {
     let default = ModuleLimits::default();
@@ -96,11 +88,8 @@ fn event_deadline_resolves_override_default_and_floor() {
     );
 }
 
-/// A guest suspended inside a host call is cut off by the wall-clock
-/// deadline and the module marked dead, then a later dispatch reinstantiates
-/// it on a fresh store. The `slow-host` fixture parks its first
-/// `chain::request` an hour past a 1s deadline, one-shot, so it recovers
-/// after the backoff.
+/// The `slow-host` fixture parks its first `chain::request` an hour past a
+/// 1 s deadline, one-shot, so the module recovers after the backoff.
 #[tokio::test]
 async fn dispatch_deadline_cuts_off_a_blocked_host_call_and_recovers() {
     use std::time::Instant;
@@ -109,8 +98,6 @@ async fn dispatch_deadline_cuts_off_a_blocked_host_call_and_recovers() {
         return;
     };
 
-    // Program the chain backend: the first request parks for an hour (a
-    // hung node), every request answers `eth_blockNumber` once it runs.
     // The park is consumed when the first request begins, so the request
     // dropped at the deadline leaves the next one prompt.
     let node = crate::test_utils::rpc::FakeNode::new();
@@ -120,9 +107,8 @@ async fn dispatch_deadline_cuts_off_a_blocked_host_call_and_recovers() {
     );
     node.delay_next_request(Duration::from_secs(3600));
 
-    // 1s is the floor the resolver saturates up to; short enough to keep
-    // the test quick, long enough to prove the call was cut off (the park
-    // is an hour) rather than never started.
+    // 1 s is the resolver floor; long enough to prove the call was cut off
+    // (the park is an hour) rather than never started.
     let mut booted = BootScenario::over(crate::test_utils::mock_components_from(
         &node,
         crate::test_utils::MockStateStore::new(),
@@ -138,9 +124,7 @@ async fn dispatch_deadline_cuts_off_a_blocked_host_call_and_recovers() {
     .expect("slow-host boots");
     assert_eq!(booted.supervisor.alive_count(), 1, "slow-host loads alive");
 
-    // First dispatch: the guest suspends inside the parked host call and
-    // the 1s deadline cuts it off. It resolves in ~deadline wall-time, not
-    // the hour the mock would otherwise park for.
+    // Resolves in ~deadline wall-time, not the hour the mock parks for.
     let started = Instant::now();
     let dispatched = booted.dispatch_block_on(1).await;
     let elapsed = started.elapsed();
@@ -155,10 +139,8 @@ async fn dispatch_deadline_cuts_off_a_blocked_host_call_and_recovers() {
         "the module is marked dead after the deadline, like a trap",
     );
 
-    // Wait out the 1s restart backoff, then dispatch again. Phase 1 of the
-    // dispatch reinstantiates the dead module on a fresh store (proving the
-    // store poisoned by the dropped fiber was correctly torn down and
-    // rebuilt); the guest's next request is prompt, so it dispatches Ok.
+    // Past the backoff the dispatch reinstantiates the dead module on a
+    // fresh store; the guest's next request is prompt, so it dispatches Ok.
     tokio::time::sleep(Duration::from_millis(1_200)).await;
     assert_eq!(
         booted.dispatch_block_on(1).await,
@@ -172,9 +154,8 @@ async fn dispatch_deadline_cuts_off_a_blocked_host_call_and_recovers() {
     );
 }
 
-/// The dispatch path is per-chain: a module on chain A receives nothing
-/// when a chain-B block arrives, and vice versa. Combined with per-module
-/// restart and poison state this isolates chains by construction.
+/// A module on chain A receives nothing when a chain-B block arrives, and
+/// vice versa.
 #[tokio::test]
 async fn multi_chain_dispatch_isolates_modules_by_chain() {
     let Some(wasm) = example_wasm_or_skip() else {
@@ -204,10 +185,8 @@ async fn multi_chain_dispatch_isolates_modules_by_chain() {
     assert_eq!(booted.supervisor.alive_count(), 2);
 }
 
-/// Per-module dispatch rate limit: a source flooding one module is
-/// throttled (over-rate events dropped) while a second module on another
-/// chain still gets every dispatch. A tiny `[limits.dispatch]` (burst = 2,
-/// refill = 1/s) drains the first bucket almost immediately.
+/// A tiny `[limits.dispatch]` (burst = 2, refill = 1/s) drains the flooded
+/// bucket almost immediately; the calm module's bucket is untouched.
 #[tokio::test]
 async fn dispatch_rate_limit_throttles_a_flood_without_starving_others() {
     let Some(wasm) = example_wasm_or_skip() else {
@@ -229,10 +208,8 @@ async fn dispatch_rate_limit_throttles_a_flood_without_starving_others() {
         .expect("boot");
     assert_eq!(booted.supervisor.alive_count(), 2);
 
-    // Flood chain 1 with far more blocks than the burst allowance. The
-    // loop runs in well under a second, so refill (1 token/s) adds at
-    // most one or two tokens: the flood module is dispatched only a
-    // handful of times and the rest are dropped.
+    // The flood loop runs in well under a second, so refill (1 token/s)
+    // adds at most a token or two.
     const FLOOD: usize = 20;
     let mut flood_dispatched = 0;
     for _ in 0..FLOOD {
@@ -247,9 +224,7 @@ async fn dispatch_rate_limit_throttles_a_flood_without_starving_others() {
         "the flood must be throttled: {flood_dispatched} of {FLOOD} got through",
     );
 
-    // The calm module on chain 100 has its own untouched bucket, so a
-    // block on its chain still dispatches even though the flood module
-    // is being throttled. This is the per-module fairness guarantee.
+    // The calm module's own bucket is untouched, so its chain still dispatches.
     assert_eq!(
         booted.dispatch_block_on(100).await,
         1,
@@ -265,9 +240,8 @@ async fn dispatch_rate_limit_throttles_a_flood_without_starving_others() {
     assert_eq!(booted.supervisor.poisoned_count(), 0);
 }
 
-/// fuel-bomb (always-traps) on chain 1, example (healthy) on chain 100:
-/// the bomb is quarantined under a tight poison policy while the example
-/// keeps dispatching on its own chain throughout.
+/// fuel-bomb (always-traps) on chain 1, example (healthy) on chain 100: the
+/// example keeps dispatching throughout the bomb's quarantine.
 #[tokio::test]
 async fn multi_chain_poisoned_module_does_not_affect_other_chains() {
     let Some(bomb_wasm) = module_wasm_or_skip("fuel-bomb") else {
@@ -276,8 +250,7 @@ async fn multi_chain_poisoned_module_does_not_affect_other_chains() {
     let Some(example_wasm) = example_wasm_or_skip() else {
         return;
     };
-    // Tight policy: 2 failures in 60 s -> quarantine, set through
-    // `[limits.poison]`.
+    // Tight `[limits.poison]`: 2 failures in 60 s quarantines.
     let mut booted = BootScenario::new()
         .limits(ModuleLimits {
             poison: crate::engine_config::PoisonLimitsSection {
@@ -304,8 +277,7 @@ async fn multi_chain_poisoned_module_does_not_affect_other_chains() {
     booted.dispatch_block_on(1).await;
     assert_eq!(booted.supervisor.poisoned_count(), 0);
 
-    // Example keeps dispatching on its own chain - confirm before
-    // the bomb hits the poison threshold.
+    // Confirmed before the bomb hits the poison threshold.
     assert_eq!(
         booted.dispatch_block_on(100).await,
         1,

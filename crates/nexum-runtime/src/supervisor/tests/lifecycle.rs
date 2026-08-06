@@ -22,17 +22,15 @@ fn bad_threshold_price_alert() -> TestManifest {
         .config("every_n_blocks", "1")
 }
 
-/// A module whose `init` fails is loaded but marked dead: it takes no
-/// dispatch, neither its block nor its chain-log subscription reaches the
-/// chain-facing lists, and the dropped subscriptions stay attributable.
+/// Loaded but dead: no dispatch, no chain-facing subscription, and the
+/// dropped subscriptions stay attributable.
 #[tokio::test]
 async fn init_failure_marks_module_dead_excluding_dispatch_and_subscriptions() {
     let Some(wasm) = module_wasm_or_skip("price-alert") else {
         return;
     };
-    // Both a block and a filtered chain-log subscription, so the test
-    // exercises both filter paths rather than a trivially empty chain-log
-    // list.
+    // Both a block and a filtered chain-log subscription, so both filter
+    // paths are exercised.
     let mut booted = BootScenario::new()
         .wasm(wasm)
         .module(bad_threshold_price_alert().chain_log_sub_filtered(
@@ -69,8 +67,7 @@ async fn init_failure_marks_module_dead_excluding_dispatch_and_subscriptions() {
     );
 }
 
-/// Positive control for the alive filter: with one dead and one alive
-/// module, the alive module's subscriptions survive the filter.
+/// Positive control: the alive module's subscriptions survive the filter.
 #[tokio::test]
 async fn alive_module_subscriptions_survive_alongside_dead_module() {
     let Some(price_alert_wasm) = module_wasm_or_skip("price-alert") else {
@@ -106,9 +103,8 @@ async fn alive_module_subscriptions_survive_alongside_dead_module() {
     );
 }
 
-/// The bomb fixture traps on its first dispatch (fuel exhaustion or a
-/// rejected `memory.grow`): the host catches the trap without panicking,
-/// marks the module dead, and never re-enters it.
+/// The host catches the bomb's trap without panicking, marks the module
+/// dead, and never re-enters it.
 async fn bomb_traps_and_marks_module_dead(module: &str) {
     let Some(wasm) = module_wasm_or_skip(module) else {
         return;
@@ -151,8 +147,8 @@ async fn resource_limit_memory_bomb_traps_and_marks_module_dead() {
     bomb_traps_and_marks_module_dead("memory-bomb").await;
 }
 
-/// Isolation invariant: after the bomb traps, a healthy module beside it
-/// still receives every dispatch on the shared chain.
+/// After the bomb traps, a healthy module beside it still receives every
+/// dispatch on the shared chain.
 #[tokio::test]
 async fn resource_limit_dead_bomb_does_not_starve_healthy_module() {
     let Some(bomb_wasm) = module_wasm_or_skip("fuel-bomb") else {
@@ -176,8 +172,7 @@ async fn resource_limit_dead_bomb_does_not_starve_healthy_module() {
     assert_eq!(booted.supervisor.module_count(), 2);
     assert_eq!(booted.supervisor.alive_count(), 2, "both load alive");
 
-    // First dispatch: fuel-bomb burns through its budget and traps; the
-    // example module dispatches normally on the same block.
+    // The bomb traps; the example dispatches normally on the same block.
     assert_eq!(
         booted.dispatch_block_on(1).await,
         1,
@@ -189,15 +184,12 @@ async fn resource_limit_dead_bomb_does_not_starve_healthy_module() {
         "only the example is alive"
     );
 
-    // Second dispatch: only the example accepts; the dead bomb is
-    // skipped by the dispatch fast-path.
+    // Only the example accepts; the dead bomb is skipped.
     assert_eq!(booted.dispatch_block_on(1).await, 1);
     assert_eq!(booted.supervisor.alive_count(), 1);
 }
 
-/// Full restart lifecycle with real wall-clock: trap, in-backoff skip,
-/// restart after the window, then steady state. `fail_first_n = 1` keeps
-/// the wall-clock under 2 s.
+/// Real wall-clock; `fail_first_n = 1` keeps it under 2 s.
 #[tokio::test]
 async fn restart_flaky_module_recovers_after_backoff() {
     let Some(wasm) = module_wasm_or_skip("flaky-bomb") else {
@@ -233,13 +225,11 @@ async fn restart_flaky_module_recovers_after_backoff() {
     );
     assert_eq!(booted.supervisor.alive_count(), 0);
 
-    // Wait for the 1s backoff window to elapse (+ a small fudge for
-    // scheduler jitter).
+    // Wait out the 1 s backoff plus a fudge for scheduler jitter.
     tokio::time::sleep(Duration::from_millis(1100)).await;
 
-    // Dispatch 3: now eligible. fail_first_n=1 was satisfied on
-    // dispatch 1, so this attempt succeeds. The supervisor flips
-    // alive back on, dispatch lands, failure_count resets.
+    // Now eligible; fail_first_n=1 was satisfied on dispatch 1, so this
+    // attempt succeeds and the failure count resets.
     assert_eq!(
         booted.dispatch_block_on(1).await,
         1,
@@ -251,19 +241,8 @@ async fn restart_flaky_module_recovers_after_backoff() {
     assert_eq!(booted.dispatch_block_on(1).await, 1);
 }
 
-/// Escalation from retry to permanent quarantine under a tight poison
-/// policy (3 failures / 60 s), inside ~4 s of wall clock:
-///
-///   trap 1: failure_count=1, backoff +1s
-///   sleep 1.1s
-///   trap 2: failure_count=2, backoff +2s
-///   sleep 1.2s, probe: no restart is due yet
-///   sleep 1.0s
-///   trap 3: failure_count=3, poisoned; restarts stop entirely and
-///           subsequent dispatches skip the module silently.
-///
-/// The 1.2 s probe pins the module asymmetry: a successful restart keeps
-/// the failure count, so trap 2 earns 2 s rather than another 1 s.
+/// Tight policy (3 failures / 60 s) inside ~4 s of wall clock. The 1.2 s
+/// probe pins the asymmetry: a module restart keeps the count, so trap 2 earns 2 s.
 #[tokio::test]
 async fn poison_pill_quarantines_module_after_threshold() {
     let Some(wasm) = module_wasm_or_skip("fuel-bomb") else {
@@ -297,10 +276,8 @@ async fn poison_pill_quarantines_module_after_threshold() {
     assert_eq!(booted.dispatch_block_on(1).await, 0);
     assert_eq!(booted.supervisor.poisoned_count(), 0, "2 traps < threshold");
 
-    // Probe inside trap 2's backoff. The restart that preceded trap 2
-    // kept the failure count, so the curve climbed to 2 s and nothing is
-    // due here. A restart that reset the count would leave a 1 s backoff,
-    // land trap 3 in this dispatch, and quarantine the module early.
+    // The restart before trap 2 kept the count, so the curve climbed to 2 s
+    // and nothing is due here; a resetting restart would land trap 3 now.
     tokio::time::sleep(Duration::from_millis(1_200)).await;
     assert_eq!(booted.dispatch_block_on(1).await, 0);
     assert_eq!(
@@ -318,8 +295,8 @@ async fn poison_pill_quarantines_module_after_threshold() {
         "3 traps inside window quarantine the module",
     );
 
-    // Post-quarantine: a poisoned module is excluded regardless of how
-    // much time has passed; the backoff timer is no longer load-bearing.
+    // A poisoned module is excluded regardless of elapsed time; the backoff
+    // timer is no longer load-bearing.
     assert_eq!(
         booted.dispatch_block_on(1).await,
         0,
@@ -437,9 +414,7 @@ fn scripted_provider(engine: &wasmtime::Engine) -> crate::supervisor::load::Load
     }
 }
 
-/// The sweep mints a provider's successor run inside the reinstall and
-/// commits it only when the install comes back live: a dead reinstall
-/// defers with the run, the liveness, and the failure curve untouched,
+/// A dead reinstall defers with run, liveness, and failure curve untouched,
 /// so the next attempt reuses the sequence rather than burning it.
 #[tokio::test]
 async fn a_dead_provider_reinstall_defers_without_committing_a_run() {

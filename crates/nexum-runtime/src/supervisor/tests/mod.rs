@@ -26,7 +26,6 @@ fn workspace_manifest(relative: &str) -> PathBuf {
     crate::test_utils::wasm::workspace_root().join(relative)
 }
 
-/// The core-only extension set: no domain extensions.
 fn core_extensions() -> Vec<Arc<dyn crate::host::extension::Extension<TestTypes>>> {
     Vec::new()
 }
@@ -35,8 +34,7 @@ fn make_linker(engine: &wasmtime::Engine) -> Linker<HostState<TestTypes>> {
     crate::supervisor::build_linker::<TestTypes>(engine, &core_extensions()).expect("build_linker")
 }
 
-/// Synthetic component bundle for tests: an empty chain pool, an empty
-/// extension slot, and the given store.
+/// An empty chain pool, an empty extension slot, and the given store.
 fn test_components(store: crate::host::local_store_redb::LocalStore) -> Components<TestTypes> {
     Components {
         chain: ProviderPool::empty(),
@@ -46,7 +44,6 @@ fn test_components(store: crate::host::local_store_redb::LocalStore) -> Componen
     }
 }
 
-/// [`ConfiguredChains`] over the shared test chain set.
 fn test_chains() -> ConfiguredChains {
     ConfiguredChains::from_config(&EngineConfig {
         chains: crate::test_utils::test_chain_configs(),
@@ -54,8 +51,7 @@ fn test_chains() -> ConfiguredChains {
     })
 }
 
-/// Return `(dir, store)` so the test holds the `TempDir` and cleans it up
-/// on drop.
+/// The caller-held `TempDir` cleans up the store on drop.
 fn temp_local_store() -> (tempfile::TempDir, crate::host::local_store_redb::LocalStore) {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("ls.redb");
@@ -63,7 +59,6 @@ fn temp_local_store() -> (tempfile::TempDir, crate::host::local_store_redb::Loca
     (dir, store)
 }
 
-/// A synthetic block on `chain_id` for direct dispatch calls.
 fn block_on(chain_id: u64) -> nexum::host::types::Block {
     nexum::host::types::Block {
         chain_id,
@@ -73,8 +68,8 @@ fn block_on(chain_id: u64) -> nexum::host::types::Block {
     }
 }
 
-/// Drive the `boot_single` entry point directly; scenario terminals cover
-/// the multi-entry `boot` path. The returned `TempDir` keeps the store alive.
+/// Scenario terminals cover the multi-entry `boot` path; the returned
+/// `TempDir` keeps the store alive.
 async fn try_boot_single(
     wasm: &Path,
     manifest: Option<&Path>,
@@ -159,7 +154,6 @@ impl Extension<crate::test_utils::MockTypes> for AcmeExtension {
     }
 }
 
-/// The stub extension set registering the `acme-adapter` kind.
 fn acme_extensions() -> Vec<Arc<dyn Extension<crate::test_utils::MockTypes>>> {
     vec![Arc::new(AcmeExtension)]
 }

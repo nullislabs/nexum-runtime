@@ -1,6 +1,5 @@
-//! Durable dispatch progress: the per-chain progress marker and the
-//! chain-log resume cursors, with their in-memory mirror. Cursor writes are
-//! best-effort and happen only after a successful dispatch.
+//! Durable dispatch progress: progress markers and chain-log resume cursors;
+//! writes are best-effort and happen only after a successful dispatch.
 
 use std::collections::BTreeMap;
 
@@ -95,8 +94,8 @@ pub(super) fn progress_key(chain: Chain) -> String {
     format!("last_dispatched_block:{}", chain.id())
 }
 
-/// Best-effort per-module-per-chain progress marker, written after a
-/// successful block dispatch; a failed write warns and dispatch continues.
+/// Written only after a successful block dispatch; a failed write warns and
+/// dispatch continues.
 pub(super) fn persist_progress_marker<S: StateStore>(
     store: &S,
     module: &str,
@@ -127,10 +126,8 @@ pub(super) fn persist_progress_marker<S: StateStore>(
     }
 }
 
-/// Durable resume-cursor key for a chain-log subscription. Derived from
-/// normalized manifest inputs, not the alloy `Filter` (whose hash is
-/// process-randomized), so it is stable across restarts and subscription
-/// ordering.
+/// Derived from normalized manifest inputs, not the alloy `Filter` (whose
+/// hash is process-randomized), so it is stable across restarts.
 pub(super) fn chainlog_cursor_key(
     chain: Chain,
     address: Option<&str>,

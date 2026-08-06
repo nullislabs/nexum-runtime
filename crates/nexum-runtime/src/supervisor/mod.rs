@@ -1,10 +1,5 @@
-//! Multi-module supervisor.
-//!
-//! Loads every `[[modules]]` and `[[adapters]]` entry from `engine.toml`,
-//! instantiates each against a dedicated wasmtime `Store`, and routes
-//! subscribed events. A trap marks a component dead with a backoff; a
-//! failed `init` at boot is permanently dead. Providers ride the same
-//! sweeps via a shared [`Liveness`](crate::host::actor::Liveness).
+//! Multi-module supervisor: loads `engine.toml` entries, one wasmtime `Store`
+//! each, and routes subscribed events.
 
 mod admission;
 mod artifact;
@@ -41,14 +36,9 @@ use prepass::{
 };
 
 /// Owns every loaded module and provider and exposes the dispatch surface.
-/// Generic over the [`RuntimeTypes`] backend lattice.
 pub struct Supervisor<T: RuntimeTypes> {
-    /// Backends and boot-time wiring every load, restart, and dispatch
-    /// path shares.
     shared: Shared<T>,
     modules: Vec<LoadedModule<T>>,
-    /// Providers loaded at boot; swept for restart and poison alongside
-    /// the modules.
     providers: Vec<LoadedProvider>,
     /// Poison-pill thresholds resolved from `[limits.poison]` at boot.
     policy: PoisonPolicy,
@@ -56,28 +46,20 @@ pub struct Supervisor<T: RuntimeTypes> {
     chain_log_cursors: ChainLogCursors,
 }
 
-/// The shared backends: cached at boot so restarts rebuild an identical
-/// store and linker without re-reading configuration.
+/// Cached at boot so restarts rebuild an identical store and linker.
 pub(super) struct Shared<T: RuntimeTypes> {
     pub(super) engine: Engine,
     pub(super) components: Components<T>,
-    /// Extensions wired at boot; the same slice drives admission, linking,
-    /// and capability enforcement.
+    /// The same slice drives admission, linking, and capability enforcement.
     pub(super) extensions: Vec<Arc<dyn Extension<T>>>,
-    /// Extension-owned host services, built once and carried by every
-    /// module store.
+    /// Built once; carried by every module store.
     pub(super) services: HostServices,
-    /// Registered provider kinds paired with their services, for the
-    /// restart sweep to reinstall through.
     pub(super) kinds: ProviderKinds<T>,
-    /// Optional WASI clock override applied to every store. `None` leaves
-    /// the ambient host clocks.
+    /// Applied to every store; `None` leaves the ambient host clocks.
     pub(super) clocks: Option<WasiClockOverride>,
 }
 
 impl<T: RuntimeTypes> Supervisor<T> {
-    /// Compile and instantiate every module and provider in `engine_cfg`.
-    /// The `Engine` and `Linker` are passed in.
     pub async fn boot(
         engine: &Engine,
         linker: &Linker<HostState<T>>,
@@ -89,9 +71,8 @@ impl<T: RuntimeTypes> Supervisor<T> {
         let shared = wire_extensions(engine, components, extensions, clocks)?;
         let registry = capability_registry(&shared.extensions);
         let prepass = prepass::run(engine_cfg, &registry)?;
-        // Providers boot first into their extension-owned services, so
-        // every module store built after already routes to the installed
-        // instances.
+        // Providers boot first, so every module store built after already
+        // routes to the installed instances.
         let providers = load_providers(&shared, engine_cfg, prepass.adapter_manifests).await?;
         let provider_manifests = project_manifests(&providers);
         let modules = load_modules(
@@ -110,10 +91,7 @@ impl<T: RuntimeTypes> Supervisor<T> {
         ))
     }
 
-    /// Construct from a single `(component, manifest)` pair, for `just run`
-    /// without an `engine.toml`.
-    // One flat argument per shared backend and resource knob, plus the
-    // optional clock override; bundling would obscure the call site.
+    /// Single-component boot for `just run` without an `engine.toml`.
     #[allow(clippy::too_many_arguments)]
     pub async fn boot_single(
         engine: &Engine,
@@ -129,8 +107,7 @@ impl<T: RuntimeTypes> Supervisor<T> {
     ) -> Result<Self> {
         enforce_extension_uniqueness(extensions)?;
         let services = HostServices::from_extensions(extensions)?;
-        // The single-module override path serves `just run`; providers are
-        // configured through `engine.toml`, so no kinds register here.
+        // Providers come only from `engine.toml`, so no kinds register here.
         let shared = Shared {
             engine: engine.clone(),
             components: components.clone(),
@@ -170,18 +147,16 @@ impl<T: RuntimeTypes> Supervisor<T> {
         })
     }
 
-    /// Number of modules currently loaded.
     pub fn module_count(&self) -> usize {
         self.modules.len()
     }
 
-    /// Number of providers loaded at boot, alive or not.
+    /// Alive or not.
     pub fn adapter_count(&self) -> usize {
         self.providers.len()
     }
 
-    /// Modules currently alive. Not alive when `init` returned `Err`
-    /// (permanent) or a trap's backoff has not elapsed.
+    /// Excludes init-failed (permanent) and in-backoff modules.
     pub fn alive_count(&self) -> usize {
         self.modules
             .iter()
@@ -189,16 +164,14 @@ impl<T: RuntimeTypes> Supervisor<T> {
             .count()
     }
 
-    /// True when an init-failed module declared subscriptions. Lets the
-    /// launch path tell "no subscriptions declared" (benign) from "every
-    /// declared subscription belongs to a dead module" (operator error).
+    /// Distinguishes benign "no subscriptions declared" from "every declared
+    /// subscription belongs to a dead module" (operator error).
     pub fn dead_modules_hold_subscriptions(&self) -> bool {
         self.modules
             .iter()
             .any(|m| !m.health.dispatchable() && !m.subscriptions.is_empty())
     }
 
-    /// Modules currently poisoned.
     #[cfg_attr(not(test), allow(dead_code))]
     pub fn poisoned_count(&self) -> usize {
         self.modules
@@ -207,15 +180,12 @@ impl<T: RuntimeTypes> Supervisor<T> {
             .count()
     }
 
-    /// The extension-owned services, shared by every module store.
     pub fn services(&self) -> &HostServices {
         &self.shared.services
     }
 }
 
-/// Enforce extension uniqueness, build the shared services, and register
-/// the provider kinds; the resulting [`Shared`] is the one wiring every
-/// later phase reads.
+/// The resulting [`Shared`] is the one wiring every later phase reads.
 fn wire_extensions<T: RuntimeTypes>(
     engine: &Engine,
     components: &Components<T>,
@@ -257,8 +227,7 @@ async fn load_providers<T: RuntimeTypes>(
     Ok(providers)
 }
 
-/// The loaded providers' manifests, as the worker install predicates see
-/// them.
+/// The providers' manifests as the worker install predicates see them.
 fn project_manifests(providers: &[LoadedProvider]) -> Vec<ProviderManifest> {
     providers
         .iter()
@@ -271,8 +240,7 @@ fn project_manifests(providers: &[LoadedProvider]) -> Vec<ProviderManifest> {
         .collect()
 }
 
-/// Load every `[[modules]]` entry against the installed providers, in
-/// declaration order.
+/// In declaration order, against the installed providers.
 async fn load_modules<T: RuntimeTypes>(
     shared: &Shared<T>,
     linker: &Linker<HostState<T>>,
@@ -298,7 +266,6 @@ async fn load_modules<T: RuntimeTypes>(
     Ok(modules)
 }
 
-/// Assemble the booted supervisor and log the loaded and alive tallies.
 fn assemble<T: RuntimeTypes>(
     shared: Shared<T>,
     modules: Vec<LoadedModule<T>>,
@@ -337,7 +304,6 @@ impl RuntimeTypes for TestTypes {
     type Ext = ();
 }
 
-/// The supervisor the runtime's own tests drive.
 #[cfg(test)]
 pub(crate) type DefaultSupervisor = Supervisor<TestTypes>;
 

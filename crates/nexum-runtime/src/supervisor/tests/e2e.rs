@@ -2,7 +2,6 @@
 
 use super::*;
 
-/// Boot supervisor with the example module; verify it starts alive.
 #[tokio::test]
 async fn e2e_supervisor_boots_example_module() {
     let Some(wasm) = example_wasm_or_skip() else {
@@ -33,7 +32,6 @@ fn e2e_example_component_imports_equal_declared_capabilities() {
         .map(|(name, _)| name.to_owned())
         .collect();
 
-    // Capability-bearing imports resolve to exactly the declared set.
     let registry = CapabilityRegistry::core();
     let caps: std::collections::BTreeSet<&str> = imports
         .iter()
@@ -45,8 +43,7 @@ fn e2e_example_component_imports_equal_declared_capabilities() {
         "imports were: {imports:?}"
     );
 
-    // No extension interface leaks in either: the per-module world holds
-    // exactly what the manifest declared.
+    // No extension interface leaks in either.
     assert!(
         imports
             .iter()
@@ -55,8 +52,6 @@ fn e2e_example_component_imports_equal_declared_capabilities() {
     );
 }
 
-/// Boot with a manifest that subscribes to block events; dispatch one
-/// block event and verify the module was invoked and stayed alive.
 #[tokio::test]
 async fn e2e_block_subscription_dispatched() {
     let Some(wasm) = example_wasm_or_skip() else {
@@ -81,10 +76,8 @@ async fn e2e_block_subscription_dispatched() {
     );
 }
 
-/// A `ManualClock` override threads through `boot_single` onto the module
-/// store and is behaviour-neutral: the module boots, dispatches a block,
-/// and stays alive as on the ambient clock. Guest observation of the
-/// pinned time is covered by the scenario clock test.
+/// The override is behaviour-neutral here; guest observation of the pinned
+/// time is covered by the scenario clock test.
 #[cfg(feature = "test-utils")]
 #[tokio::test]
 async fn e2e_manual_clock_override_boots_and_dispatches() {
@@ -115,8 +108,6 @@ async fn e2e_manual_clock_override_boots_and_dispatches() {
     assert_eq!(supervisor.alive_count(), 1, "module must remain alive");
 }
 
-/// Boot one production module through the real wit-bindgen and supervisor
-/// dispatch path and land one block on its subscribed chain.
 async fn production_module_dispatches(module: &str, manifest: &str) {
     let Some(wasm) = module_wasm_or_skip(module) else {
         return;
@@ -149,10 +140,8 @@ async fn e2e_balance_tracker_block_dispatch() {
     .await;
 }
 
-/// End-to-end wasi:http path: http-probe fetches a loopback server on its
-/// allowlist, then an off-list host that the gate denies before any
-/// connection. The guest returns `Ok` only when both legs hold, so
-/// `dispatched == 1` asserts the allow and deny paths together.
+/// The guest returns `Ok` only when both the allow and deny legs hold, so
+/// `dispatched == 1` asserts both paths together.
 #[tokio::test]
 async fn e2e_http_probe_allowlisted_fetch_and_denied_path() {
     let Some(wasm) = module_wasm_or_skip("http-probe") else {
@@ -188,10 +177,8 @@ async fn e2e_http_probe_allowlisted_fetch_and_denied_path() {
     assert_eq!(booted.supervisor.alive_count(), 1);
 }
 
-/// The example module logs via the host logging glue at init and on the
-/// block, so its run holds retrievable HostInterface records after one
-/// dispatch. Driven through the [`TestRuntime`] harness; stdout/stderr
-/// line splitting is covered at the unit level on the StdioStream writer.
+/// The module logs at init and on the block; stdout/stderr line splitting
+/// is covered at the unit level on the StdioStream writer.
 #[tokio::test]
 async fn host_interface_records_are_retrievable_after_a_run() {
     let Some(wasm) = example_wasm_or_skip() else {
@@ -291,9 +278,8 @@ async fn facade_panic_leaves_stderr_host_interface_and_panic_records() {
 
     assert_eq!(booted.dispatch_block_on(1).await, 0, "the bomb panicked");
 
-    // The facade panic hook writes to stderr and reports over the host
-    // logging call before the trap surfaces, and the supervisor
-    // synthesizes the death record: one dead run, three capture points.
+    // One dead run, three capture points: the facade hook's stderr line,
+    // its host logging call, and the synthesized death record.
     let runs = booted.logs().list_runs("panic-bomb");
     assert_eq!(runs.len(), 1);
     let page = booted.logs().read(&runs[0].run, 0);
