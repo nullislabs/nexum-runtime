@@ -325,6 +325,23 @@ impl Refusal {
         self.0.chain().find_map(|cause| cause.downcast_ref::<E>())
     }
 
+    /// Assert the chain carries an `E` matching `pred`.
+    #[track_caller]
+    pub fn variant<E>(self, pred: impl FnOnce(&E) -> bool) -> Self
+    where
+        E: std::error::Error + Send + Sync + 'static,
+    {
+        match self.root::<E>() {
+            None => panic!(
+                "refusal carries no {}: {}",
+                std::any::type_name::<E>(),
+                self.chain(),
+            ),
+            Some(root) => assert!(pred(root), "refusal variant mismatch: {}", self.chain()),
+        }
+        self
+    }
+
     /// Assert the refusal names `needle` somewhere in its context chain.
     #[track_caller]
     pub fn names(self, needle: &str) -> Self {
@@ -354,7 +371,9 @@ impl Refusal {
 mod tests {
     use super::*;
     use crate::host::extension::HostWallClock;
-    use crate::manifest::NamespaceCaps;
+    use crate::manifest::{NamespaceCaps, ParseError};
+    use crate::supervisor::load::LoadRefusal;
+    use crate::supervisor::prepass::BootRefusal;
     use crate::test_utils::{example_wasm_or_skip, module_wasm_or_skip};
 
     /// Claims the `[acme]` manifest section and nothing else.
@@ -527,8 +546,11 @@ mod tests {
             .module(TestManifest::new("bad").cap("telepathy"))
             .expect_refusal()
             .await
-            .names("unknown capability")
-            .names("telepathy")
+            .variant::<BootRefusal>(|e| {
+                matches!(e, BootRefusal::Manifest(ParseError::UnknownCapability { name, .. })
+                    if name == "telepathy")
+            })
+            // Operator wording pin.
             .lacks("compile");
     }
 
@@ -538,7 +560,10 @@ mod tests {
             .adapter(TestManifest::new("feed").kind("acme-feed"))
             .expect_refusal()
             .await
-            .names("unregistered provider kind acme-feed")
+            .variant::<LoadRefusal>(
+                |e| matches!(e, LoadRefusal::UnregisteredKind { kind, .. } if kind == "acme-feed"),
+            )
+            // Operator wording pin.
             .lacks("compile");
     }
 
@@ -550,8 +575,11 @@ mod tests {
             .module(Entry::new(ManifestSource::Beside).wasm(orphan))
             .expect_refusal()
             .await
-            .names("no module.toml")
-            .names("orphan.wasm")
+            .variant::<BootRefusal>(|e| {
+                matches!(e, BootRefusal::ManifestMissing { component }
+                    if component.ends_with("orphan.wasm"))
+            })
+            // Operator wording pin.
             .lacks("compile");
     }
 
@@ -563,8 +591,11 @@ mod tests {
             .module(missing)
             .expect_refusal()
             .await
-            .names("modle.toml")
-            .names("not found")
+            .variant::<BootRefusal>(|e| {
+                matches!(e, BootRefusal::ManifestNotFound { manifest, .. }
+                    if manifest.ends_with("modle.toml"))
+            })
+            // Operator wording pin.
             .lacks("compile");
     }
 
@@ -574,7 +605,11 @@ mod tests {
             .module(acme_section_manifest())
             .expect_refusal()
             .await
-            .names("no wired extension claims it")
+            .variant::<LoadRefusal>(|e| {
+                matches!(e, LoadRefusal::SectionUnclaimed { owner, section }
+                    if owner == "acme-user" && section == "acme")
+            })
+            // Operator wording pin.
             .lacks("read component");
 
         BootScenario::new()
@@ -582,6 +617,8 @@ mod tests {
             .module(acme_section_manifest())
             .expect_refusal()
             .await
+            .variant::<std::io::Error>(|e| e.kind() == std::io::ErrorKind::NotFound)
+            // Operator wording pin.
             .names("read component")
             .lacks("no wired extension claims it");
     }
@@ -690,5 +727,28 @@ mod tests {
     #[should_panic(expected = "refusal names")]
     fn lacks_panics_on_a_present_needle() {
         Refusal(anyhow::anyhow!("boom")).lacks("boom");
+    }
+
+    fn not_found() -> anyhow::Error {
+        std::io::Error::new(std::io::ErrorKind::NotFound, "gone").into()
+    }
+
+    #[test]
+    fn variant_finds_the_typed_root_under_context_wraps() {
+        Refusal(not_found().context("outer context"))
+            .variant::<std::io::Error>(|e| e.kind() == std::io::ErrorKind::NotFound);
+    }
+
+    #[test]
+    #[should_panic(expected = "refusal carries no")]
+    fn variant_panics_on_an_absent_type() {
+        Refusal(anyhow::anyhow!("boom")).variant::<std::io::Error>(|_| true);
+    }
+
+    #[test]
+    #[should_panic(expected = "refusal variant mismatch")]
+    fn variant_panics_on_a_failed_predicate() {
+        Refusal(not_found())
+            .variant::<std::io::Error>(|e| e.kind() == std::io::ErrorKind::PermissionDenied);
     }
 }

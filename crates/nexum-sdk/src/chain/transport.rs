@@ -191,6 +191,7 @@ mod tests {
             panic!("expected failure, got {resp:?}");
         };
         assert_eq!(err.code, -32601);
+        // Operator wording pin.
         assert!(err.message.contains("eth_sendRawTransaction"));
     }
 
@@ -222,6 +223,7 @@ mod tests {
         let TransportError::Transport(kind) = err else {
             panic!("expected transport kind, got {err:?}");
         };
+        // Foreign alloy TransportErrorKind; pins its rendered copy.
         assert!(kind.to_string().contains("timeout"));
     }
 

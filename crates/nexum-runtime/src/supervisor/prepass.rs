@@ -17,7 +17,7 @@ use crate::manifest::{self, CapabilityRegistry, LoadedManifest, ParseError, Subs
 /// Refusals before any compile; the wording is operator-pinned.
 #[derive(Debug, Error, IntoStaticStr)]
 #[strum(serialize_all = "snake_case")]
-pub(super) enum BootRefusal {
+pub(crate) enum BootRefusal {
     #[error(
         "name {name} is claimed twice: {held_role} {} and {role} {}; \
          [module].name must be unique across [[modules]] and [[adapters]]",
