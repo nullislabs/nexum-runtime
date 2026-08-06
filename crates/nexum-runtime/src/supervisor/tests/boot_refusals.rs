@@ -155,7 +155,6 @@ async fn boot_single_skips_the_provider_kind_service_gate() {
     .expect("a missing manifest must refuse the boot");
     Refusal::from(err)
         .variant::<BootRefusal>(|e| matches!(e, BootRefusal::ManifestMissing { .. }))
-        // Operator wording pin.
         .lacks("without a host service");
 }
 
@@ -262,7 +261,6 @@ async fn boot_refuses_a_blank_manifest_name_for_both_roles() {
         .expect_refusal()
         .await
         .variant::<BootRefusal>(|e| matches!(e, BootRefusal::Manifest(ParseError::BlankModuleName)))
-        // Operator wording pin.
         .lacks("claimed twice")
         .lacks("read component")
         .lacks("compile");
@@ -275,7 +273,6 @@ async fn boot_refuses_a_blank_manifest_name_for_both_roles() {
             .variant::<BootRefusal>(|e| {
                 matches!(e, BootRefusal::Manifest(ParseError::BlankModuleName))
             })
-            // Operator wording pin.
             .lacks("claimed twice")
             .lacks("read component")
             .lacks("compile");
@@ -299,9 +296,10 @@ async fn boot_denies_an_undeclared_chain_import_for_balance_tracker() {
         )
         .expect_refusal()
         .await
-        .variant::<CapabilityError>(
-            |e| matches!(e, CapabilityError::Undeclared(v) if v.capability == "chain"),
-        );
+        .variant::<CapabilityError>(|e| {
+            matches!(e, CapabilityError::Undeclared(v)
+                if v.capability == "chain" && v.wit_import.starts_with("nexum:host/chain"))
+        });
 }
 
 /// The example component's only gated import is `logging`, so the refusal
@@ -317,7 +315,8 @@ async fn boot_denies_an_undeclared_logging_import_for_a_provider() {
         .adapter(Entry::new(TestManifest::new("acme").kind("acme-adapter").cap("chain")).wasm(wasm))
         .expect_refusal()
         .await
-        .variant::<CapabilityError>(
-            |e| matches!(e, CapabilityError::Undeclared(v) if v.capability == "logging"),
-        );
+        .variant::<CapabilityError>(|e| {
+            matches!(e, CapabilityError::Undeclared(v)
+                if v.capability == "logging" && v.wit_import.starts_with("nexum:host/logging"))
+        });
 }

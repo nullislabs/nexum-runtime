@@ -168,7 +168,6 @@ async fn boot_rejects_duplicate_names_across_and_within_roles() {
                     && held.ends_with("missing-adapter.wasm")
                     && path.ends_with("missing-module.wasm"))
         })
-        // Operator wording pin.
         .lacks("compile");
 
     let scenario = BootScenario::new();
@@ -182,11 +181,10 @@ async fn boot_rejects_duplicate_names_across_and_within_roles() {
         .expect_refusal()
         .await
         .variant::<BootRefusal>(|e| {
-            matches!(e, BootRefusal::NamespaceClaimed { name, held, path, .. }
+            matches!(e, BootRefusal::NamespaceClaimed { name, held_role: "module", held, role: "module", path }
                 if name == "dup"
                     && held.ends_with("missing-a.wasm")
                     && path.ends_with("missing-b.wasm"))
         })
-        // Operator wording pin.
         .lacks("compile");
 }

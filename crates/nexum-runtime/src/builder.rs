@@ -679,7 +679,9 @@ mod tests {
     use crate::supervisor::prepass::BootRefusal;
     use crate::test_utils::clock::ManualClock;
     use crate::test_utils::wasm::workspace_root;
-    use crate::test_utils::{Prebuilt, TestManifest, example_wasm_or_skip, module_wasm_or_skip};
+    use crate::test_utils::{
+        Prebuilt, Refusal, TestManifest, example_wasm_or_skip, module_wasm_or_skip,
+    };
     use wasmtime::component::Linker;
 
     /// The preset shortcut reaches the supervisor boot, which bails on the
@@ -698,13 +700,7 @@ mod tests {
             Ok(_) => panic!("default config declares no modules; launch must bail"),
             Err(err) => err,
         };
-        assert!(
-            matches!(
-                err.downcast_ref::<LaunchRefusal>(),
-                Some(LaunchRefusal::NothingToRun)
-            ),
-            "{err:#}"
-        );
+        Refusal::from(err).variant::<LaunchRefusal>(|e| matches!(e, LaunchRefusal::NothingToRun));
     }
 
     /// Counts linker hook runs.
@@ -786,13 +782,7 @@ mod tests {
             Ok(_) => panic!("default config declares no modules; launch must bail"),
             Err(err) => err,
         };
-        assert!(
-            matches!(
-                err.downcast_ref::<LaunchRefusal>(),
-                Some(LaunchRefusal::NothingToRun)
-            ),
-            "{err:#}"
-        );
+        Refusal::from(err).variant::<LaunchRefusal>(|e| matches!(e, LaunchRefusal::NothingToRun));
         assert_eq!(preset_linked.load(Ordering::SeqCst), 1, "preset extension");
         assert_eq!(
             appended_linked.load(Ordering::SeqCst),
@@ -852,13 +842,7 @@ mod tests {
             Ok(_) => panic!("default config declares no modules; launch must bail"),
             Err(err) => err,
         };
-        assert!(
-            matches!(
-                err.downcast_ref::<LaunchRefusal>(),
-                Some(LaunchRefusal::NothingToRun)
-            ),
-            "{err:#}"
-        );
+        Refusal::from(err).variant::<LaunchRefusal>(|e| matches!(e, LaunchRefusal::NothingToRun));
         seen.get().expect("clock attached before boot").clone()
     }
 
@@ -998,13 +982,7 @@ mod tests {
             Ok(_) => panic!("default config declares no modules; launch must bail"),
             Err(err) => err,
         };
-        assert!(
-            matches!(
-                err.downcast_ref::<LaunchRefusal>(),
-                Some(LaunchRefusal::NothingToRun)
-            ),
-            "{err:#}"
-        );
+        Refusal::from(err).variant::<LaunchRefusal>(|e| matches!(e, LaunchRefusal::NothingToRun));
         assert_eq!(
             built.load(Ordering::SeqCst),
             1,
@@ -1084,13 +1062,9 @@ mod tests {
             Ok(_) => panic!("init-failing module must abort launch"),
             Err(err) => err,
         };
-        assert!(
-            matches!(
-                err.downcast_ref::<LaunchRefusal>(),
-                Some(LaunchRefusal::AllDeadOverride { modules: 1 })
-            ),
-            "{err:#}"
-        );
+        Refusal::from(err).variant::<LaunchRefusal>(|e| {
+            matches!(e, LaunchRefusal::AllDeadOverride { modules: 1 })
+        });
     }
 
     #[tokio::test]
@@ -1122,14 +1096,10 @@ mod tests {
             Ok(_) => panic!("an unconfigured chain subscription must abort launch"),
             Err(err) => err,
         };
-        assert!(
-            matches!(
-                err.downcast_ref::<BootRefusal>(),
-                Some(BootRefusal::UnconfiguredChain { name, chain_id: 424_242, .. })
-                    if name == "example"
-            ),
-            "the launch error is the boot-time chain refusal: {err:#}",
-        );
+        Refusal::from(err).variant::<BootRefusal>(|e| {
+            matches!(e, BootRefusal::UnconfiguredChain { noun: "module", name, chain_id: 424_242, .. }
+                if name == "example")
+        });
     }
 
     /// Add-ons install before the supervisor boots, exactly once.
@@ -1178,13 +1148,7 @@ mod tests {
             Ok(_) => panic!("no modules configured; launch must bail"),
             Err(err) => err,
         };
-        assert!(
-            matches!(
-                err.downcast_ref::<LaunchRefusal>(),
-                Some(LaunchRefusal::NothingToRun)
-            ),
-            "{err:#}"
-        );
+        Refusal::from(err).variant::<LaunchRefusal>(|e| matches!(e, LaunchRefusal::NothingToRun));
         assert_eq!(
             calls.load(Ordering::SeqCst),
             1,
@@ -1275,13 +1239,7 @@ mod tests {
             .wait()
             .await
             .expect_err("aborted task surfaces an error");
-        assert!(
-            matches!(
-                err.downcast_ref::<LaunchRefusal>(),
-                Some(LaunchRefusal::EventLoopGone)
-            ),
-            "{err:#}"
-        );
+        Refusal::from(err).variant::<LaunchRefusal>(|e| matches!(e, LaunchRefusal::EventLoopGone));
     }
 
     /// Dropping the handle without `wait` still drains the event loop.
