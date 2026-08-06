@@ -19,6 +19,7 @@ use crate::host::actor::Liveness;
 use crate::host::component::RuntimeTypes;
 use crate::host::extension::{HostServices, Installed, ProviderInstance};
 use crate::host::logs::RunId;
+use crate::module_id::ModuleId;
 use crate::runtime::poison_policy::{PoisonPolicy, should_poison};
 use crate::runtime::restart_policy::backoff_for;
 
@@ -219,7 +220,7 @@ impl Role {
 /// so a failed attempt never advances the run sequence.
 pub(super) trait Sweepable<T: RuntimeTypes> {
     const ROLE: Role;
-    fn name(&self) -> &str;
+    fn name(&self) -> &ModuleId;
     fn health(&self) -> &Health;
     fn health_mut(&mut self) -> &mut Health;
     fn digest(&self) -> ContentDigest;
@@ -238,7 +239,7 @@ pub(super) trait Sweepable<T: RuntimeTypes> {
 impl<T: RuntimeTypes> Sweepable<T> for LoadedModule<T> {
     const ROLE: Role = Role::Module;
 
-    fn name(&self) -> &str {
+    fn name(&self) -> &ModuleId {
         &self.name
     }
 
@@ -310,7 +311,7 @@ impl<T: RuntimeTypes> Sweepable<T> for LoadedModule<T> {
 impl<T: RuntimeTypes> Sweepable<T> for LoadedProvider {
     const ROLE: Role = Role::Adapter;
 
-    fn name(&self) -> &str {
+    fn name(&self) -> &ModuleId {
         &self.name
     }
 
@@ -414,7 +415,7 @@ pub(super) async fn sweep<T: RuntimeTypes, S: Sweepable<T>>(
             }
             metrics::counter!(
                 S::ROLE.errors_total(),
-                S::ROLE.label() => item.name().to_owned(),
+                S::ROLE.label() => item.name().clone(),
                 "error_kind" => "trap",
             )
             .increment(1);
@@ -435,7 +436,7 @@ pub(super) async fn sweep<T: RuntimeTypes, S: Sweepable<T>>(
                 }
                 metrics::gauge!(
                     S::ROLE.poisoned_gauge(),
-                    S::ROLE.label() => item.name().to_owned(),
+                    S::ROLE.label() => item.name().clone(),
                 )
                 .set(1.0);
             }
@@ -471,7 +472,7 @@ pub(super) async fn revive_one<T: RuntimeTypes, S: Sweepable<T>>(
     }
     metrics::counter!(
         S::ROLE.restarts_total(),
-        S::ROLE.label() => item.name().to_owned(),
+        S::ROLE.label() => item.name().clone(),
     )
     .increment(1);
     match item.revive(shared).await {

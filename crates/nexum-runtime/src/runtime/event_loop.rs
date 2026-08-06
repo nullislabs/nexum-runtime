@@ -27,6 +27,7 @@ use crate::bindings::nexum;
 use crate::host::component::RuntimeTypes;
 use crate::host::extension::{ExtensionEvent, ExtensionEventStream};
 use crate::host::provider_pool::ProviderPool;
+use crate::module_id::ModuleId;
 use crate::runtime::restart_policy::backoff_for;
 use crate::supervisor::{ChainLogSub, Supervisor};
 use nexum_tasks::{TaskExecutor, TaskExit, TaskSet};
@@ -206,7 +207,7 @@ struct DeliveredTail {
 /// re-open resumes past the scanned range and retracts a reorged tail.
 async fn reconnecting_chain_log_task(
     pool: ProviderPool,
-    module: String,
+    module: ModuleId,
     chain: Chain,
     filter: alloy_rpc_types_eth::Filter,
     resume: ChainLogResume,
@@ -445,7 +446,7 @@ pub type TaggedBlockStream = std::pin::Pin<
 >;
 /// One tagged chain-log item: `(module, chain, log, cursor_key)`;
 /// `cursor_key` is `Some` for a `resume` subscription.
-pub type TaggedChainLog = (String, Chain, alloy_rpc_types_eth::Log, Option<Arc<str>>);
+pub type TaggedChainLog = (ModuleId, Chain, alloy_rpc_types_eth::Log, Option<Arc<str>>);
 pub type TaggedChainLogStream =
     std::pin::Pin<Box<dyn futures::Stream<Item = TaggedChainLog> + Send>>;
 /// Drive the supervisor with events until `shutdown` resolves.
@@ -500,7 +501,7 @@ pub async fn run<T: RuntimeTypes, G>(
             // The alloy `Log` is boxed so the `Chain` tag does not push
             // the enum past the large-variant lint threshold.
             ChainLog(
-                String,
+                ModuleId,
                 Chain,
                 Box<alloy_rpc_types_eth::Log>,
                 Option<Arc<str>>,
@@ -710,7 +711,7 @@ mod tests {
         initial_cursor: Option<u64>,
     ) -> TaggedChainLogStream {
         let subs = vec![ChainLogSub {
-            module: "mod".to_string(),
+            module: "mod".into(),
             chain: alloy_chains::Chain::mainnet(),
             filter: alloy_rpc_types_eth::Filter::default(),
             cursor_key: None,
@@ -1083,7 +1084,7 @@ mod tests {
         let mut tasks = TaskSet::new();
         let subs = vec![
             ChainLogSub {
-                module: "mod-a".to_string(),
+                module: "mod-a".into(),
                 chain: alloy_chains::Chain::mainnet(),
                 filter: alloy_rpc_types_eth::Filter::default(),
                 cursor_key: None,
@@ -1091,7 +1092,7 @@ mod tests {
                 max_lookback: None,
             },
             ChainLogSub {
-                module: "mod-b".to_string(),
+                module: "mod-b".into(),
                 chain: alloy_chains::Chain::mainnet(),
                 filter: alloy_rpc_types_eth::Filter::default(),
                 cursor_key: None,
@@ -1347,7 +1348,7 @@ mod tests {
 
         let block_streams = open_block_streams(&pool, &[Chain::mainnet()], &executor, &mut tasks);
         let log_subs = vec![crate::supervisor::ChainLogSub {
-            module: "test-module".to_string(),
+            module: "test-module".into(),
             chain: Chain::from_id(100),
             filter: Filter::default(),
             cursor_key: None,

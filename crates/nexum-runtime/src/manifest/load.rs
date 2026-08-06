@@ -358,6 +358,17 @@ kind = "acme-provider"
         );
     }
 
+    /// `Display` is the manifest spelling for both kinds.
+    #[test]
+    fn component_kind_displays_its_manifest_spelling() {
+        use crate::manifest::types::ComponentKind;
+        assert_eq!(ComponentKind::Worker.to_string(), "event-module");
+        assert_eq!(
+            ComponentKind::Provider("acme-provider".to_owned()).to_string(),
+            "acme-provider",
+        );
+    }
+
     /// An unknown spelling parses as a provider kind for boot to refuse.
     #[test]
     fn component_kind_keeps_an_unregistered_spelling_for_boot_to_refuse() {

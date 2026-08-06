@@ -108,7 +108,7 @@ pub(super) fn build<T: RuntimeTypes>(
     run: RunId,
     services: HostServices,
 ) -> Result<HostStore<T>> {
-    let namespace: &str = &run.module;
+    let namespace: &str = run.module.as_str();
     // Guest stdio is captured per store as run- and source-tagged log
     // records; stdin stays closed. The ctx grants no network, so the
     // allowlisted wasi:http gate is the only live network path, and the
