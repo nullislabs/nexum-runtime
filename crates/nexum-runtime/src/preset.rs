@@ -54,8 +54,8 @@ pub trait Runtime: crate::sealed::SealedRuntime {
 }
 
 /// The domain-free default preset: a chain provider pool and a local redb
-/// store, with the Prometheus add-on. Doubles as its own
-/// [`RuntimeTypes`] lattice.
+/// store, with the Prometheus add-on. Doubles as its own [`RuntimeTypes`]
+/// lattice.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct CoreRuntime;
 
