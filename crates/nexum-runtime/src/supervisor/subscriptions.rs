@@ -13,79 +13,116 @@ use crate::manifest::Subscription;
 use crate::module_id::ModuleId;
 
 impl<T: RuntimeTypes> Supervisor<T> {
-    /// Alive modules only; sorted by numeric id and deduped.
-    pub fn block_chains(&self) -> Vec<Chain> {
-        let mut out: Vec<Chain> = Vec::new();
-        for module in self.modules.iter().filter(|m| m.health.dispatchable()) {
-            for sub in &module.subscriptions {
-                if let Subscription::Block { chain_id } = sub {
-                    out.push(Chain::from_id(*chain_id));
-                }
+    /// One pass, one health filter: a dead module contributes to no field,
+    /// so no stream of any kind opens for it.
+    pub fn subscription_plan(&self) -> SubscriptionPlan {
+        let mut block_chains: Vec<Chain> = Vec::new();
+        let mut chain_log_subs = Vec::new();
+        let mut extension_kinds = BTreeSet::new();
+        let mut dead_subscribers = false;
+        for module in &self.modules {
+            if !module.health.dispatchable() {
+                dead_subscribers |= !module.subscriptions.is_empty();
+                continue;
             }
-        }
-        out.sort_by_key(|c| c.id());
-        out.dedup();
-        out
-    }
-
-    /// Alive modules only; the stream tags every log with the module for routing.
-    pub fn chain_log_subscriptions(&self) -> Vec<ChainLogSub> {
-        let mut out = Vec::new();
-        for module in self.modules.iter().filter(|m| m.health.dispatchable()) {
             for sub in &module.subscriptions {
-                if let Subscription::ChainLog {
-                    chain_id,
-                    address,
-                    event_signature,
-                    resume,
-                    max_lookback,
-                } = sub
-                {
-                    let filter = build_alloy_filter(address.as_deref(), event_signature.as_deref())
-                        .expect("chain-log filters are validated at load");
-                    let chain = Chain::from_id(*chain_id);
-                    // A `resume` subscription reads its durable cursor
-                    // once here at boot; others start at head.
-                    let (cursor_key, initial_cursor) = if *resume {
-                        let key = chainlog_cursor_key(
+                match sub {
+                    Subscription::Block { chain_id } => {
+                        block_chains.push(Chain::from_id(*chain_id));
+                    }
+                    Subscription::ChainLog {
+                        chain_id,
+                        address,
+                        event_signature,
+                        resume,
+                        max_lookback,
+                    } => {
+                        let filter =
+                            build_alloy_filter(address.as_deref(), event_signature.as_deref())
+                                .expect("chain-log filters are validated at load");
+                        let chain = Chain::from_id(*chain_id);
+                        // A `resume` subscription reads its durable cursor
+                        // once here at boot; others start at head.
+                        let (cursor_key, initial_cursor) = if *resume {
+                            let key = chainlog_cursor_key(
+                                chain,
+                                address.as_deref(),
+                                event_signature.as_deref(),
+                            );
+                            let seed = read_chain_log_cursor(
+                                &self.shared.components.store,
+                                module.name.as_str(),
+                                &key,
+                            );
+                            (Some(key), seed)
+                        } else {
+                            (None, None)
+                        };
+                        chain_log_subs.push(ChainLogSub {
+                            module: module.name.clone(),
                             chain,
-                            address.as_deref(),
-                            event_signature.as_deref(),
-                        );
-                        let seed = read_chain_log_cursor(
-                            &self.shared.components.store,
-                            module.name.as_str(),
-                            &key,
-                        );
-                        (Some(key), seed)
-                    } else {
-                        (None, None)
-                    };
-                    out.push(ChainLogSub {
-                        module: module.name.clone(),
-                        chain,
-                        filter,
-                        cursor_key,
-                        initial_cursor,
-                        max_lookback: *max_lookback,
-                    });
+                            filter,
+                            cursor_key,
+                            initial_cursor,
+                            max_lookback: *max_lookback,
+                        });
+                    }
+                    Subscription::Extension { kind, .. } => {
+                        extension_kinds.insert(kind.clone());
+                    }
+                    Subscription::Cron { .. } => {}
                 }
             }
         }
-        out
+        block_chains.sort_by_key(|c| c.id());
+        block_chains.dedup();
+        SubscriptionPlan {
+            block_chains,
+            chain_log_subs,
+            extension_kinds,
+            dead_subscribers,
+        }
     }
+}
 
-    /// An extension opens an event source only when its kind appears here.
-    pub fn extension_subscription_kinds(&self) -> BTreeSet<String> {
-        self.modules
-            .iter()
-            .flat_map(|m| m.subscriptions.iter())
-            .filter_map(|s| match s {
-                Subscription::Extension { kind, .. } => Some(kind.clone()),
-                _ => None,
-            })
-            .collect()
+/// Everything the launch path opens, projected once from the live modules.
+pub struct SubscriptionPlan {
+    /// Sorted by numeric id and deduped.
+    pub block_chains: Vec<Chain>,
+    /// The stream tags every log with the owning module for routing.
+    pub chain_log_subs: Vec<ChainLogSub>,
+    /// An extension opens an event source only for kinds appearing here.
+    pub extension_kinds: BTreeSet<String>,
+    /// A dead module declares at least one subscription.
+    pub dead_subscribers: bool,
+}
+
+impl SubscriptionPlan {
+    /// A declared extension kind is not yet a source: the extension gates on
+    /// its own service state, so the caller passes how many really opened.
+    pub fn viability(&self, open_extension_sources: usize) -> Viability {
+        if !self.block_chains.is_empty()
+            || !self.chain_log_subs.is_empty()
+            || open_extension_sources > 0
+        {
+            Viability::Live
+        } else if self.dead_subscribers {
+            Viability::DeadHoldSubs
+        } else {
+            Viability::Nothing
+        }
     }
+}
+
+/// The launch verdict; boot-dead is permanent, so it is final at launch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Viability {
+    /// No module declares a subscription; the engine has nothing to run.
+    Nothing,
+    /// Every declared subscription belongs to a dead module.
+    DeadHoldSubs,
+    /// At least one event source drives the engine.
+    Live,
 }
 
 pub struct ChainLogSub {

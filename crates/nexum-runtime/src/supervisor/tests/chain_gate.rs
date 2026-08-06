@@ -8,8 +8,10 @@ async fn empty_supervisor_returns_no_subscriptions() {
         .boot()
         .await
         .expect("an empty scenario boots");
-    assert!(booted.supervisor.block_chains().is_empty());
-    assert!(booted.supervisor.chain_log_subscriptions().is_empty());
+    let plan = booted.supervisor.subscription_plan();
+    assert!(plan.block_chains.is_empty());
+    assert!(plan.chain_log_subs.is_empty());
+    assert_eq!(plan.viability(0), Viability::Nothing);
     assert_eq!(booted.supervisor.module_count(), 0);
 }
 
@@ -127,7 +129,7 @@ async fn a_validated_chain_log_filter_survives_to_the_collected_subscription() {
         .await
         .expect("the example boots alive");
 
-    let subs = booted.supervisor.chain_log_subscriptions();
+    let subs = booted.supervisor.subscription_plan().chain_log_subs;
     assert_eq!(
         subs.len(),
         1,

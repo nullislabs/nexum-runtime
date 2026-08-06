@@ -29,7 +29,7 @@ use crate::host::provider_pool::ProviderPool;
 use crate::preset::Runtime;
 use crate::runtime::event_loop;
 pub use crate::supervisor::WasiClockOverride;
-use crate::supervisor::{self, Supervisor};
+use crate::supervisor::{self, Supervisor, Viability};
 
 /// Ambient inputs the launcher reads.
 pub struct LaunchContext<'a> {
@@ -215,12 +215,12 @@ impl<T: RuntimeTypes> AssembledRuntime<'_, T> {
         };
 
         let alive = supervisor.alive_count();
-        let block_chains = supervisor.block_chains();
+        let plan = supervisor.subscription_plan();
         info!(
             modules = supervisor.module_count(),
             adapters = supervisor.adapter_count(),
             alive,
-            chains = block_chains.len(),
+            chains = plan.block_chains.len(),
             "supervisor ready"
         );
         if alive == 0 {
@@ -262,19 +262,17 @@ impl<T: RuntimeTypes> AssembledRuntime<'_, T> {
         // The handle keeps the log read side reachable after launch consumes
         // the components.
         let logs = components.logs.clone();
-        let chain_log_subs = supervisor.chain_log_subscriptions();
         // Extension event sources open only for subscription kinds some
-        // loaded module declares; each extension gates further on its own
+        // live module declares; each extension gates further on its own
         // service state and returns no stream when it has nothing to
         // observe.
-        let subscribed = supervisor.extension_subscription_kinds();
         let mut reconnect_tasks = TaskSet::new();
         let mut extension_streams = Vec::new();
         {
             let mut sources = EventSources::new(
                 engine_cfg,
                 supervisor.services(),
-                &subscribed,
+                &plan.extension_kinds,
                 &executor,
                 &mut reconnect_tasks,
             );
@@ -283,24 +281,25 @@ impl<T: RuntimeTypes> AssembledRuntime<'_, T> {
             }
         }
 
-        // No subscriptions: nothing to drive. Return a handle whose event loop
-        // is already complete so `wait` resolves immediately.
-        if block_chains.is_empty() && chain_log_subs.is_empty() && extension_streams.is_empty() {
-            if supervisor.dead_modules_hold_subscriptions() {
-                anyhow::bail!(
-                    "every declared [[subscription]] belongs to an init-failed module - \
-                     the engine would idle with nothing to run; fix or remove the \
-                     failing module(s)"
-                );
+        match plan.viability(extension_streams.len()) {
+            Viability::DeadHoldSubs => anyhow::bail!(
+                "every declared [[subscription]] belongs to an init-failed module - \
+                 the engine would idle with nothing to run; fix or remove the \
+                 failing module(s)"
+            ),
+            Viability::Nothing => {
+                // Nothing to drive: return a handle whose event loop is
+                // already complete so `wait` resolves immediately.
+                info!("no [[subscription]] entries - engine has nothing to run; exiting");
+                let event_loop = executor.spawn(async { TaskExit::ReceiverGone });
+                return Ok(RuntimeHandle {
+                    event_loop,
+                    tasks,
+                    logs,
+                    _add_ons: add_on_handles,
+                });
             }
-            info!("no [[subscription]] entries - engine has nothing to run; exiting");
-            let event_loop = executor.spawn(async { TaskExit::ReceiverGone });
-            return Ok(RuntimeHandle {
-                event_loop,
-                tasks,
-                logs,
-                _add_ons: add_on_handles,
-            });
+            Viability::Live => {}
         }
 
         // Open per-chain block subscriptions + per-module chain-log
@@ -308,13 +307,13 @@ impl<T: RuntimeTypes> AssembledRuntime<'_, T> {
         // loop until shutdown.
         let block_streams = event_loop::open_block_streams(
             &components.chain,
-            &block_chains,
+            &plan.block_chains,
             &executor,
             &mut reconnect_tasks,
         );
         let chain_log_streams = event_loop::open_chain_log_streams(
             &components.chain,
-            chain_log_subs,
+            plan.chain_log_subs,
             &executor,
             &mut reconnect_tasks,
         );
