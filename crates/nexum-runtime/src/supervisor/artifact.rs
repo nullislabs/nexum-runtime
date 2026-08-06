@@ -24,6 +24,7 @@ pub(super) fn read_verified_component(
         std::fs::read(path).with_context(|| format!("read component {}", path.display()))?;
     let actual = ContentDigest::of_bytes(&bytes);
     match declared {
+        // A mismatch stays its own anyhow root: callers downcast to `DigestMismatch`.
         Some(declared) => {
             if actual != *declared {
                 return Err(DigestMismatch {
@@ -35,7 +36,6 @@ pub(super) fn read_verified_component(
             }
             debug!(component = %path.display(), digest = %actual, "component digest verified");
         }
-        // The mismatch above stays the anyhow root: callers downcast to `DigestMismatch`.
         None if require_digest => {
             return Err(LoadRefusal::DigestUnpinned {
                 path: path.to_owned(),

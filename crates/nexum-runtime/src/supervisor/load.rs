@@ -56,18 +56,23 @@ pub(super) enum LoadRefusal {
     },
     #[error(
         "{} declares the worker kind; an [[adapters]] entry requires a \
-         module.toml declaring a registered provider kind ({registered})",
-        path.display()
+         module.toml declaring a registered provider kind ({})",
+        path.display(),
+        registered.join(", ")
     )]
-    WorkerKindAdapter { path: PathBuf, registered: String },
+    WorkerKindAdapter {
+        path: PathBuf,
+        registered: Vec<&'static str>,
+    },
     #[error(
-        "{} declares unregistered provider kind {kind}; registered kinds: {registered}",
-        path.display()
+        "{} declares unregistered provider kind {kind}; registered kinds: {}",
+        path.display(),
+        registered.join(", ")
     )]
     UnregisteredKind {
         path: PathBuf,
         kind: String,
-        registered: String,
+        registered: Vec<&'static str>,
     },
     #[error(
         "module {module} subscribes to unknown event kind {kind}; no wired extension declares it"

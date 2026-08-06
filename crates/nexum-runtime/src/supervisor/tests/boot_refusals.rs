@@ -2,6 +2,52 @@
 
 use super::*;
 
+/// A root missing here is a refusal class no operator dashboard sees, so the
+/// table is asserted through the same `with_context` wrap boot applies.
+#[test]
+fn every_typed_refusal_root_labels_the_counter_under_a_context_wrap() {
+    let digest = ContentDigest::of_bytes(b"artifact");
+    let cases: Vec<(anyhow::Error, &str)> = vec![
+        (
+            BootRefusal::ManifestMissing {
+                component: PathBuf::from("orphan.wasm"),
+            }
+            .into(),
+            "manifest_missing",
+        ),
+        (
+            LoadRefusal::SectionClaimed { section: "venue" }.into(),
+            "section_claimed",
+        ),
+        (
+            CapabilityError::UnknownWasi {
+                wit_import: "wasi:sockets/tcp@0.2.0".to_owned(),
+            }
+            .into(),
+            "unknown_wasi",
+        ),
+        (
+            DigestMismatch {
+                path: PathBuf::from("pinned.wasm"),
+                declared: digest,
+                actual: digest,
+            }
+            .into(),
+            "digest_mismatch",
+        ),
+    ];
+    for (err, kind) in cases {
+        let wrapped = err.context("module pinned.wasm");
+        assert_eq!(boot_refusal_kind(&wrapped), Some(kind), "{wrapped:#}");
+    }
+}
+
+/// An untyped refusal is counted under no kind rather than a wrong one.
+#[test]
+fn an_untyped_refusal_carries_no_counter_label() {
+    assert_eq!(boot_refusal_kind(&anyhow::anyhow!("engine gone")), None);
+}
+
 /// Rejected before instantiation, naming the registered kinds; a manifest
 /// without a kind defaults to an event-module.
 #[tokio::test]
@@ -17,11 +63,18 @@ async fn boot_rejects_provider_whose_manifest_is_an_event_module() {
 /// The refusal names the registered kinds.
 #[tokio::test]
 async fn boot_rejects_an_unregistered_provider_kind() {
-    BootScenario::over(mock_components())
+    let refusal = BootScenario::over(mock_components())
         .extensions(acme_extensions())
         .adapter(TestManifest::new("bad").kind("gadget"))
         .expect_refusal()
-        .await
+        .await;
+    assert!(matches!(
+        refusal.root::<LoadRefusal>(),
+        Some(LoadRefusal::UnregisteredKind { kind, registered, .. })
+            if kind == "gadget" && registered == &["acme-adapter"]
+    ));
+    // Operator wording pin.
+    refusal
         .names("unregistered provider kind gadget")
         .names("acme-adapter");
 }
@@ -50,11 +103,19 @@ async fn boot_admits_a_registered_provider_kind_past_the_kind_gate() {
 /// the boot before any entry loads.
 #[tokio::test]
 async fn boot_refuses_a_provider_kind_without_a_host_service() {
-    BootScenario::over(mock_components())
+    let refusal = BootScenario::over(mock_components())
         .extensions(serviceless_acme_extensions())
         .expect_refusal()
-        .await
-        .names("extension acme registers provider kind acme-adapter without a host service");
+        .await;
+    assert!(matches!(
+        refusal.root::<LoadRefusal>(),
+        Some(LoadRefusal::ServicelessKind {
+            namespace: "acme",
+            kind: "acme-adapter"
+        })
+    ));
+    // Operator wording pin.
+    refusal.names("extension acme registers provider kind acme-adapter without a host service");
 }
 
 /// Provider kinds come only from `engine.toml`, so single boot skips the

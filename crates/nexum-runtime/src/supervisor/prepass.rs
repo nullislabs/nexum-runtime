@@ -61,14 +61,26 @@ pub(super) enum BootRefusal {
     },
     #[error(
         "{noun} {name} subscribes to chain {chain_id} but engine.toml declares no \
-         [chains.{chain_id}] entry; configured chains: {configured}"
+         [chains.{chain_id}] entry; configured chains: {}",
+        fmt_chain_ids(configured)
     )]
     UnconfiguredChain {
         noun: &'static str,
         name: String,
         chain_id: u64,
-        configured: String,
+        configured: BTreeSet<u64>,
     },
+}
+
+/// An empty set reads as `none`, never as an empty list.
+fn fmt_chain_ids(ids: &BTreeSet<u64>) -> String {
+    if ids.is_empty() {
+        return "none".to_owned();
+    }
+    ids.iter()
+        .map(u64::to_string)
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 /// One ledger spans both roles: they derive the same keccak local-store namespace.
@@ -202,21 +214,11 @@ pub(super) fn unconfigured_chain(
             chain_id,
         };
     }
-    let configured = if chains.ids.is_empty() {
-        "none".to_owned()
-    } else {
-        chains
-            .ids
-            .iter()
-            .map(u64::to_string)
-            .collect::<Vec<_>>()
-            .join(", ")
-    };
     BootRefusal::UnconfiguredChain {
         noun,
         name: name.to_owned(),
         chain_id,
-        configured,
+        configured: chains.ids.clone(),
     }
 }
 
