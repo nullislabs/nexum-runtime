@@ -277,9 +277,6 @@ pub(super) async fn module<T: RuntimeTypes>(
             false
         }
     };
-    // Refuel after init so the first on_event starts with a full budget.
-    store.set_fuel(seed.spec.fuel)?;
-
     // Unserviceable subscriptions warn; an undeclared extension kind refuses.
     let extension_kinds = extension_subscription_vocabulary(&shared.extensions);
     for sub in &loaded_manifest.manifest.subscriptions {
