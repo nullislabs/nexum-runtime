@@ -171,8 +171,8 @@ pub trait ProviderKind<T: RuntimeTypes>: Send + Sync + 'static {
 
     /// Instantiate and install one provider; [`Installed::Dead`] is a failed
     /// guest `init`, `Err` a boot error.
-    /// Runs under the dispatch deadline and must be cancel-safe: a timeout
-    /// drops the future mid-flight, before any registration completes.
+    /// The host bounds this call by the dispatch deadline and drops the future
+    /// at its next await, so publish into `service` only after the last await.
     async fn install(
         &self,
         instance: ProviderInstance<'_, T>,

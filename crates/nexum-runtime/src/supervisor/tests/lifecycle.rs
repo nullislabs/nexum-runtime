@@ -640,6 +640,14 @@ async fn a_dead_provider_reinstall_defers_without_committing_a_run() {
     );
 }
 
+/// Distinct from every default, so an assertion on elapsed paused time pins
+/// which duration bounded the install.
+const INSTALL_DEADLINE: Duration = Duration::from_secs(7);
+
+/// Long enough that a wrapped install always wins the race; a hung unwrapped
+/// one rides this instead and fails the test.
+const OUTER_TIMEOUT: Duration = Duration::from_secs(3_600);
+
 /// A provider kind whose `install` never returns, for the deadline gate.
 struct HangingKind;
 
@@ -695,20 +703,27 @@ impl Extension<CoreRuntime> for HangingExtension {
 async fn a_hanging_provider_install_fails_by_deadline() {
     let (_dir, shared) = kind_shared(Arc::new(HangingExtension));
     let mut provider = provider_at_run_zero(&shared.engine, "hanging-adapter");
+    provider.seed.event_deadline = INSTALL_DEADLINE;
     let policy = crate::runtime::poison_policy::PoisonPolicy::new(9, Duration::from_secs(600));
 
     provider.liveness.mark_dead();
     let died_at = provider.liveness.dead_since().expect("marked dead");
     let now = died_at + Duration::from_secs(5);
+    let started = tokio::time::Instant::now();
     // Paused time auto-advances only through timers; an unwrapped hung
     // install would ride this outer timeout instead of its own deadline.
     tokio::time::timeout(
-        Duration::from_secs(3_600),
+        OUTER_TIMEOUT,
         sweep(&shared, std::slice::from_mut(&mut provider), policy, now),
     )
     .await
     .expect("sweep completed: the install deadline bounded the hung install");
 
+    assert_eq!(
+        started.elapsed(),
+        INSTALL_DEADLINE,
+        "the install rode the seed's deadline, not another timer",
+    );
     assert_eq!(provider.run.seq, 0, "a timed-out install commits no run");
     assert!(
         !provider.liveness.is_alive(),
@@ -723,4 +738,36 @@ async fn a_hanging_provider_install_fails_by_deadline() {
         provider.health.due_restart(now + Duration::from_secs(60)),
         "a deadline hit defers rather than killing the provider permanently",
     );
+}
+
+/// The boot call site carries the same bound: a hung `install` refuses the
+/// boot instead of parking the launch forever.
+#[tokio::test(start_paused = true)]
+async fn a_hanging_provider_install_refuses_the_boot_by_deadline() {
+    let extension: Arc<dyn Extension<CoreRuntime>> = Arc::new(HangingExtension);
+    let scenario = BootScenario::new()
+        .extensions([extension])
+        .limits(ModuleLimits {
+            event_deadline_secs: Some(INSTALL_DEADLINE.as_secs()),
+            ..Default::default()
+        });
+    let wasm = scenario.dir().join("hanging.wasm");
+    std::fs::write(&wasm, b"(component)").expect("write component");
+
+    let started = tokio::time::Instant::now();
+    let refusal = tokio::time::timeout(
+        OUTER_TIMEOUT,
+        scenario
+            .adapter(Entry::new(TestManifest::new("hanging").kind("hanging-adapter")).wasm(wasm))
+            .expect_refusal(),
+    )
+    .await
+    .expect("boot returned: the install deadline bounded the hung install");
+
+    assert_eq!(
+        started.elapsed(),
+        INSTALL_DEADLINE,
+        "the install rode the configured deadline, not another timer",
+    );
+    refusal.names("did not install in time");
 }
