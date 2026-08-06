@@ -18,7 +18,7 @@ use crate::runtime::poison_policy::{PoisonPolicy, should_poison};
 use crate::runtime::restart_policy::backoff_for;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum LifecycleState {
+enum LifecycleState {
     /// Callable; the failure count beside it may still be nonzero.
     Alive,
     /// Dead pending a restart once `until` passes.
@@ -32,7 +32,7 @@ pub(crate) enum LifecycleState {
 
 /// The failure count survives a restart unless the caller resets it; only a
 /// successful dispatch clears it. Methods take instants; nothing samples the clock.
-pub(crate) struct Health {
+pub(super) struct Health {
     state: LifecycleState,
     failure_count: u32,
     window: VecDeque<Instant>,
