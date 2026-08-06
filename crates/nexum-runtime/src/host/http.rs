@@ -2,14 +2,20 @@
 //! per-module `[capabilities.http].allow` list, clamps guest timeouts to the
 //! `[limits.http]` maxima, and bounds the exchange with a total deadline and
 //! response-body cap. Redirects are not followed; each hop re-enters the gate.
+//! Immediately before connecting, [`reject_prohibited_destination`] resolves
+//! a *named* target and rejects a private/loopback/link-local/metadata-range
+//! answer - narrowing, not closing, the DNS-rebinding gap the allowlist alone
+//! leaves open. See that function's doc comment for what it does not cover.
 
 use std::future::Future;
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
 use bytes::Bytes;
 use http_body::{Body, Frame, SizeHint};
 use http_body_util::BodyExt;
+use tokio::net::lookup_host;
 use tracing::warn;
 use wasmtime_wasi_http::p2::bindings::http::types::ErrorCode;
 use wasmtime_wasi_http::p2::body::{HyperIncomingBody, HyperOutgoingBody};
@@ -91,8 +97,12 @@ fn send_with_limits(
 ) -> HostFutureIncomingResponse {
     let handle = wasmtime_wasi::runtime::spawn(async move {
         let deadline = tokio::time::Instant::now() + limits.total_deadline;
-        let sent =
-            tokio::time::timeout_at(deadline, default_send_request_handler(request, config)).await;
+        let uri = request.uri().clone();
+        let sent = tokio::time::timeout_at(deadline, async move {
+            reject_prohibited_destination(&uri).await?;
+            default_send_request_handler(request, config).await
+        })
+        .await;
         let result = match sent {
             Ok(Ok(mut incoming)) => {
                 // Dropping the inner worker handle aborts the hyper
@@ -183,8 +193,9 @@ impl Body for CappedBody {
 
 /// Allowlist decision for one request URI. Host-only, case-insensitive, exact
 /// or `*.suffix` per [`host_allowed`]; IPv6 literals stay bracketed.
-/// Name-based and pre-resolution, so there is no IP pinning or DNS-rebinding
-/// defence.
+/// Name-based and pre-resolution: on its own this still has no IP-pinning or
+/// DNS-rebinding defence. [`reject_prohibited_destination`], run separately
+/// just before the connection opens, narrows that gap for a *named* target.
 fn admit(uri: &http::Uri, allowlist: &[String]) -> Result<(), ErrorCode> {
     let Some(host) = uri.host() else {
         return Err(ErrorCode::HttpRequestUriInvalid);
@@ -194,6 +205,107 @@ fn admit(uri: &http::Uri, allowlist: &[String]) -> Result<(), ErrorCode> {
     } else {
         Err(ErrorCode::HttpRequestDenied)
     }
+}
+
+/// Resolve a *named* target and reject it if any answer lands in an address
+/// range this host will not connect to. An IP literal in the URI is passed
+/// through untouched: `host_allowed` only ever admits a literal against an
+/// allowlist entry naming that exact literal (never a name, see
+/// `ipv4_literal_matches_only_when_listed`), so reaching it is the allowlist
+/// entry's own stated intent, not the DNS-rebinding shape this check exists
+/// for. An operator who wants a module to reach an internal service by a
+/// stable address should list that address as a literal rather than a name -
+/// this also means the target no longer depends on DNS at all for a
+/// security-relevant decision.
+///
+/// This narrows, but does not close, the gap `admit` itself cannot: it is a
+/// second, independent resolution, not the connection itself. A rebind timed
+/// between this lookup and `default_send_request_handler`'s own, later
+/// resolution still slips through. Closing that fully would mean connecting
+/// to the exact address validated here while still presenting the original
+/// hostname for TLS SNI/cert validation - not reachable through
+/// `default_send_request_handler`'s fixed signature, which derives both the
+/// TCP-connect target and the TLS domain from one `host:port` authority
+/// string with no seam to pass a pre-resolved address through separately.
+///
+/// A resolution failure here is not itself a denial: the real connection
+/// attempt resolves again and reports its own, more specific error.
+async fn reject_prohibited_destination(uri: &http::Uri) -> Result<(), ErrorCode> {
+    let Some(host) = uri.host() else {
+        return Ok(()); // `admit` already rejects a hostless URI before this runs.
+    };
+    if parse_ip_literal(host).is_some() {
+        return Ok(());
+    }
+    let Ok(addrs) = lookup_host((host, 0)).await else {
+        return Ok(());
+    };
+    if addrs.map(|addr| addr.ip()).any(is_prohibited) {
+        return Err(ErrorCode::DestinationIpProhibited);
+    }
+    Ok(())
+}
+
+/// `http::Uri::host()` keeps an IPv6 literal's brackets (see
+/// `ipv6_literal_uses_bracketed_form`); strip them before parsing. Brackets
+/// are only ever valid URI-authority syntax around an IPv6 literal, so
+/// stripping them here never mistakes a name for one.
+fn parse_ip_literal(host: &str) -> Option<IpAddr> {
+    match host.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
+        Some(inner) => inner.parse::<Ipv6Addr>().ok().map(IpAddr::V6),
+        None => host.parse::<IpAddr>().ok(),
+    }
+}
+
+/// True for an address a resolved *name* must not land on: loopback, private
+/// (RFC 1918), link-local (RFC 3927 - this covers the 169.254.169.254 cloud
+/// metadata endpoint too, with no special case needed), carrier-grade NAT
+/// space, unique-local, multicast, and unspecified/broadcast. An IPv4-mapped
+/// IPv6 address is unwrapped and checked against the same IPv4 rules, so
+/// `::ffff:127.0.0.1` cannot rename its way past the IPv6 branch.
+fn is_prohibited(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(v4) => is_prohibited_v4(v4),
+        IpAddr::V6(v6) => v6
+            .to_ipv4_mapped()
+            .map(is_prohibited_v4)
+            .unwrap_or_else(|| is_prohibited_v6(v6)),
+    }
+}
+
+fn is_prohibited_v4(ip: Ipv4Addr) -> bool {
+    ip.is_loopback()
+        || ip.is_private()
+        || ip.is_link_local()
+        || ip.is_unspecified()
+        || ip.is_broadcast()
+        || ip.is_multicast()
+        || is_shared_nat_v4(ip)
+}
+
+/// 100.64.0.0/10 (RFC 6598), carrier-grade NAT space; not covered by
+/// `Ipv4Addr::is_private`, which is RFC 1918 only.
+fn is_shared_nat_v4(ip: Ipv4Addr) -> bool {
+    let [a, b, ..] = ip.octets();
+    a == 100 && (b & 0b1100_0000) == 0b0100_0000
+}
+
+fn is_prohibited_v6(ip: Ipv6Addr) -> bool {
+    ip.is_loopback()
+        || ip.is_unspecified()
+        || ip.is_multicast()
+        || is_unique_local_v6(ip)
+        || is_unicast_link_local_v6(ip)
+}
+
+/// fc00::/7 (RFC 4193).
+fn is_unique_local_v6(ip: Ipv6Addr) -> bool {
+    (ip.segments()[0] & 0xfe00) == 0xfc00
+}
+
+/// fe80::/10 (RFC 4291).
+fn is_unicast_link_local_v6(ip: Ipv6Addr) -> bool {
+    (ip.segments()[0] & 0xffc0) == 0xfe80
 }
 
 impl<T: RuntimeTypes> WasiHttpView for HostState<T> {
@@ -475,6 +587,155 @@ mod tests {
             admit(&uri("/relative/path"), &allow(&["api.acme.example"])),
             Err(ErrorCode::HttpRequestUriInvalid)
         ));
+    }
+
+    //
+    // `reject_prohibited_destination` and its address-range helpers.
+
+    #[test]
+    fn parse_ip_literal_strips_ipv6_brackets_but_not_a_name() {
+        assert_eq!(
+            parse_ip_literal("127.0.0.1"),
+            Some(IpAddr::V4(Ipv4Addr::LOCALHOST))
+        );
+        assert_eq!(
+            parse_ip_literal("[::1]"),
+            Some(IpAddr::V6(Ipv6Addr::LOCALHOST))
+        );
+        assert_eq!(parse_ip_literal("api.acme.example"), None);
+        // A bracketed non-address is not silently accepted as something else.
+        assert_eq!(parse_ip_literal("[not-an-address]"), None);
+    }
+
+    #[test]
+    fn prohibited_v4_covers_loopback_private_link_local_and_shared_nat() {
+        for ip in [
+            "127.0.0.1",       // loopback
+            "10.0.0.1",        // RFC 1918
+            "172.16.0.1",      // RFC 1918
+            "192.168.1.1",     // RFC 1918
+            "169.254.1.1",     // RFC 3927 link-local
+            "169.254.169.254", // cloud metadata endpoint, inside link-local
+            "0.0.0.0",         // unspecified
+            "255.255.255.255", // broadcast
+            "224.0.0.1",       // multicast
+            "100.64.0.1",      // RFC 6598 shared/CGNAT, lower bound
+            "100.127.255.255", // RFC 6598 shared/CGNAT, upper bound
+        ] {
+            let addr: Ipv4Addr = ip.parse().expect("valid IPv4 literal");
+            assert!(is_prohibited_v4(addr), "{ip} must be prohibited");
+        }
+    }
+
+    #[test]
+    fn shared_nat_v4_boundary_does_not_over_match() {
+        // Just outside 100.64.0.0/10 on either side: ordinary public space.
+        assert!(!is_shared_nat_v4("100.63.255.255".parse().unwrap()));
+        assert!(!is_shared_nat_v4("100.128.0.0".parse().unwrap()));
+    }
+
+    #[test]
+    fn public_v4_addresses_are_not_prohibited() {
+        for ip in ["8.8.8.8", "1.1.1.1", "93.184.216.34"] {
+            let addr: Ipv4Addr = ip.parse().expect("valid IPv4 literal");
+            assert!(!is_prohibited_v4(addr), "{ip} must not be prohibited");
+        }
+    }
+
+    #[test]
+    fn prohibited_v6_covers_loopback_unique_local_link_local_and_multicast() {
+        for ip in [
+            "::1",          // loopback
+            "::",           // unspecified
+            "fc00::1",      // RFC 4193 unique-local, lower bound
+            "fdff:ffff::1", // RFC 4193 unique-local, still inside fc00::/7
+            "fe80::1",      // RFC 4291 link-local
+            "febf:ffff::1", // RFC 4291 link-local, upper bound of fe80::/10
+            "ff02::1",      // multicast
+        ] {
+            let addr: Ipv6Addr = ip.parse().expect("valid IPv6 literal");
+            assert!(is_prohibited_v6(addr), "{ip} must be prohibited");
+        }
+    }
+
+    #[test]
+    fn unique_local_and_link_local_v6_boundaries_do_not_over_match() {
+        // fe00::/7 is unique-local; fc00::/8 and fd00::/8 both fall inside it.
+        // fc00::/7 starts one bit below fe80::/10 - a mask bug in either
+        // would leak into the other's range.
+        assert!(!is_unique_local_v6("fe00::1".parse().unwrap()));
+        assert!(!is_unicast_link_local_v6("fec0::1".parse().unwrap()));
+    }
+
+    #[test]
+    fn ipv4_mapped_ipv6_is_checked_against_the_same_v4_rules() {
+        assert!(is_prohibited(IpAddr::V6(
+            "::ffff:127.0.0.1".parse().unwrap()
+        )));
+        assert!(is_prohibited(IpAddr::V6(
+            "::ffff:169.254.169.254".parse().unwrap()
+        )));
+        assert!(!is_prohibited(IpAddr::V6(
+            "::ffff:8.8.8.8".parse().unwrap()
+        )));
+    }
+
+    #[test]
+    fn public_v6_addresses_are_not_prohibited() {
+        assert!(!is_prohibited(IpAddr::V6(
+            "2001:4860:4860::8888".parse().unwrap()
+        )));
+    }
+
+    #[tokio::test]
+    async fn reject_prohibited_destination_passes_through_an_allowlisted_ip_literal() {
+        // The literal itself is what the allowlist admitted; this check
+        // exists for names, not for a literal the operator wrote by hand.
+        assert!(
+            reject_prohibited_destination(&uri("http://127.0.0.1:1/x"))
+                .await
+                .is_ok()
+        );
+    }
+
+    #[tokio::test]
+    async fn reject_prohibited_destination_rejects_a_name_resolving_to_loopback() {
+        // "localhost" resolves to a loopback address on every platform this
+        // runs on, via /etc/hosts or the stub resolver, with no real network
+        // access - the same property the existing loopback test-server helpers
+        // below rely on implicitly.
+        assert!(matches!(
+            reject_prohibited_destination(&uri("http://localhost:1/x")).await,
+            Err(ErrorCode::DestinationIpProhibited)
+        ));
+    }
+
+    #[tokio::test]
+    async fn reject_prohibited_destination_does_not_deny_on_its_own_resolution_failure() {
+        // A name that cannot resolve is not itself a security denial: the
+        // real send path resolves again and reports its own DNS error.
+        assert!(
+            reject_prohibited_destination(&uri(
+                "http://this-name-does-not-resolve.invalid.test:1/x"
+            ))
+            .await
+            .is_ok()
+        );
+    }
+
+    #[tokio::test]
+    async fn send_request_rejects_an_allowlisted_hostname_that_resolves_to_loopback() {
+        // "localhost" passes the string-match allowlist exactly as any other
+        // allowlisted name would - the rejection has to come from resolving
+        // it, not from `admit`, which never sees an IP at all here.
+        let mut gate = HttpGate::new("test-module", allow(&["localhost"]), limits());
+        let pending = gate
+            .send_request(request("http://localhost:1/x"), config())
+            .expect("hostname is allowlisted, so admit() alone passes it");
+        let err = resolve(pending)
+            .await
+            .expect_err("resolving to loopback must still be rejected");
+        assert!(matches!(err, ErrorCode::DestinationIpProhibited));
     }
 
     fn request(u: &str) -> http::Request<HyperOutgoingBody> {
