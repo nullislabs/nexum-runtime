@@ -444,8 +444,7 @@ pub type TaggedBlockStream = std::pin::Pin<
             > + Send,
     >,
 >;
-/// One tagged chain-log item: `(module, chain, log, cursor_key)`;
-/// `cursor_key` is `Some` for a `resume` subscription.
+/// `(module, chain, log, cursor_key)`; `cursor_key` is `Some` for `resume`.
 pub type TaggedChainLog = (ModuleId, Chain, alloy_rpc_types_eth::Log, Option<Arc<str>>);
 pub type TaggedChainLogStream =
     std::pin::Pin<Box<dyn futures::Stream<Item = TaggedChainLog> + Send>>;
@@ -656,8 +655,7 @@ mod tests {
     /// Virtual poll cadence; `start_paused` advances through it instantly.
     const POLL: Duration = Duration::from_millis(50);
 
-    /// A zero-module supervisor over the in-process mock backends via the
-    /// real boot path.
+    /// A zero-module supervisor booted through the real boot path.
     async fn boot_mock_supervisor() -> Booted<MockTypes> {
         BootScenario::over(mock_components())
             .boot()
@@ -1110,9 +1108,8 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn reconnect_task_exits_receiver_gone_when_receiver_drops() {
         let rpc = MockRpc::new();
-        // The open's head fetch, then one poll cycle serving block 1 - the
-        // failing `tx.send` against the dropped receiver is the exit path
-        // under test.
+        // The failing `tx.send` against the dropped receiver is the exit
+        // path under test.
         rpc.push_script(vec![rpc_head(1), rpc_head(1), rpc_ok(&linked_block(1))]);
         let pool = pool_for(&rpc);
 
@@ -1277,9 +1274,8 @@ mod tests {
         );
     }
 
-    /// An engine whose modules declare only `kind = "block"` (or only
-    /// `kind = "chain-log"`) must not bail at boot when the other stream set
-    /// is empty.
+    /// An engine declaring only one stream kind must not bail at boot when
+    /// the other stream set is empty.
     #[tokio::test]
     async fn run_does_not_bail_when_both_stream_kinds_are_empty() {
         use std::time::{Duration, Instant};
@@ -1298,10 +1294,8 @@ mod tests {
         )
         .await;
 
-        // If the bug were present, `run` returns ~0 ms (the empty `logs`
-        // stream's first `.next()` yields `None` and the loop bails on
-        // the bail-on-None arm). With the fix, `run` blocks on `shutdown`
-        // for the full 50 ms.
+        // A regression bails immediately on the empty stream's first `None`;
+        // correct behaviour blocks on `shutdown` for the full 50 ms.
         let elapsed = started.elapsed();
         assert!(
             elapsed >= Duration::from_millis(40),
@@ -1309,12 +1303,8 @@ mod tests {
         );
     }
 
-    // Verify the stream-open + run() + shutdown lifecycle end to end at the
-    // supervisor boundary, without loading a real wasm module.
-
-    /// The `biased` select drains both block and chain-log streams within one
-    /// `run()` session without starving either; the returned tally shows both
-    /// were consumed.
+    /// The `biased` select must drain both stream kinds in one `run()`
+    /// session without starving either.
     #[tokio::test]
     async fn run_delivers_block_and_chain_log_events_without_starvation() {
         use std::time::Duration;
@@ -1341,8 +1331,7 @@ mod tests {
         let executor = manager.executor();
         let mut tasks = TaskSet::new();
 
-        // Pre-push one event of each kind before the loop starts so both mpsc
-        // channels have an item for `run()` to drain on its first pass.
+        // Pre-push one event of each kind so `run()` drains both on its first pass.
         block_node.push_block(alloy_rpc_types_eth::Header::default());
         log_node.push_chain_log(alloy_rpc_types_eth::Log::default());
 
@@ -1357,10 +1346,8 @@ mod tests {
         }];
         let chain_log_streams = open_chain_log_streams(&pool, log_subs, &executor, &mut tasks);
 
-        // The shutdown window only bounds wall time; the assertion is on the
-        // tally, not on timing. 500 ms is orders of magnitude more than the
-        // two channel hops need, so a miss means a broken select arm, not a
-        // slow scheduler.
+        // 500 ms only bounds wall time; the assertion is on the tally, so a
+        // miss means a broken select arm, not a slow scheduler.
         let shutdown = tokio::time::sleep(Duration::from_millis(500));
         let (blocks, chain_logs) = tokio::time::timeout(
             Duration::from_secs(10),
@@ -1412,9 +1399,8 @@ mod tests {
         );
 
         let shutdown = tokio::time::sleep(Duration::from_millis(10));
-        // If the drain were absent, the spawned reconnect tasks would detach
-        // and outlive the supervisor; if the drain hung, the timeout fails
-        // fast instead of stalling the suite until the CI job limit.
+        // Without the drain the reconnect tasks detach; if the drain hangs,
+        // the timeout fails fast instead of stalling the suite.
         tokio::time::timeout(
             Duration::from_secs(10),
             run(

@@ -121,7 +121,6 @@ impl BootScenario<CoreRuntime> {
 }
 
 impl<T: RuntimeTypes> BootScenario<T> {
-    /// A scenario over caller-supplied backends.
     pub fn over(components: Components<T>) -> Self {
         Self::rooted(tempfile::tempdir().expect("scenario tempdir"), components)
     }
@@ -153,19 +152,16 @@ impl<T: RuntimeTypes> BootScenario<T> {
         self
     }
 
-    /// Append a `[[modules]]` entry.
     pub fn module(mut self, entry: impl Into<Entry>) -> Self {
         self.modules.push(entry.into());
         self
     }
 
-    /// Append an `[[adapters]]` entry.
     pub fn adapter(mut self, entry: impl Into<Entry>) -> Self {
         self.adapters.push(entry.into());
         self
     }
 
-    /// Replace the engine `[limits]` every entry resolves against.
     pub fn limits(mut self, limits: ModuleLimits) -> Self {
         self.limits = limits;
         self
@@ -199,13 +195,12 @@ impl<T: RuntimeTypes> BootScenario<T> {
         self
     }
 
-    /// WASI clock override; unset keeps the ambient host clocks.
+    /// Unset keeps the ambient host clocks.
     pub fn clock(mut self, clocks: WasiClockOverride) -> Self {
         self.clocks = Some(clocks);
         self
     }
 
-    /// Boot through [`Supervisor::boot`] over the scenario's backends.
     pub async fn boot(self) -> anyhow::Result<Booted<T>> {
         let (config, launch) = self.split();
         let engine = test_wasmtime_engine();
@@ -234,7 +229,6 @@ impl<T: RuntimeTypes> BootScenario<T> {
         }
     }
 
-    /// Write inline manifests and split into engine config and launch backends.
     fn split(self) -> (EngineConfig, Launch<T>) {
         let dir = self.dir.path().to_path_buf();
         let default_wasm = self.wasm.unwrap_or_else(|| dir.join("component.wasm"));
@@ -281,7 +275,6 @@ impl<T: RuntimeTypes> BootScenario<T> {
     }
 }
 
-/// The scenario's backends, held apart from the config.
 struct Launch<T: RuntimeTypes> {
     dir: TempDir,
     components: Components<T>,
@@ -303,7 +296,6 @@ pub struct Booted<T: RuntimeTypes = CoreRuntime> {
 }
 
 impl<T: RuntimeTypes> Booted<T> {
-    /// The pipeline every booted module logs through.
     pub fn logs(&self) -> &LogPipeline {
         &self.logs
     }
@@ -330,7 +322,6 @@ impl<T: RuntimeTypes> Booted<T> {
     }
 }
 
-/// A boot refusal; assertions read the rendered context chain.
 #[derive(Debug)]
 pub struct Refusal(anyhow::Error);
 

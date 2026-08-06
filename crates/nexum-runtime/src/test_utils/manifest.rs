@@ -2,7 +2,6 @@
 
 use std::path::{Path, PathBuf};
 
-/// Where one boot entry's manifest comes from.
 #[derive(Debug, Clone)]
 pub enum ManifestSource {
     /// No explicit path; the loader falls back to discovery beside the component.

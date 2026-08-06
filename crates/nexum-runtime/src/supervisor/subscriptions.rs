@@ -1,7 +1,5 @@
-//! Project loaded modules' subscriptions into what the event loop opens:
-//! block chains, resolved chain-log filters with resume cursors, and the
-//! extension kind set. Dead modules are excluded so no live subscription
-//! opens for an unreachable module.
+//! Project loaded modules' subscriptions into what the event loop opens;
+//! dead modules are excluded so no stream opens for an unreachable module.
 
 use std::collections::BTreeSet;
 
@@ -16,8 +14,7 @@ use crate::manifest::Subscription;
 use crate::module_id::ModuleId;
 
 impl<T: RuntimeTypes> Supervisor<T> {
-    /// Chains any alive module subscribes to block events on, sorted by
-    /// numeric id and deduped.
+    /// Alive modules only; sorted by numeric id and deduped.
     pub fn block_chains(&self) -> Vec<Chain> {
         let mut out: Vec<Chain> = Vec::new();
         for module in self.modules.iter().filter(|m| m.health.dispatchable()) {
@@ -32,9 +29,7 @@ impl<T: RuntimeTypes> Supervisor<T> {
         out
     }
 
-    /// Per-module chain-log subscriptions for alive modules only. Each
-    /// entry names the module, chain, and filter the event loop opens; the
-    /// stream tags every log with `module_name` for routing.
+    /// Alive modules only; the stream tags every log with the module for routing.
     pub fn chain_log_subscriptions(&self) -> Vec<ChainLogSub> {
         let mut out = Vec::new();
         for module in self.modules.iter().filter(|m| m.health.dispatchable()) {
@@ -50,9 +45,8 @@ impl<T: RuntimeTypes> Supervisor<T> {
                     match build_alloy_filter(address.as_deref(), event_signature.as_deref()) {
                         Ok(filter) => {
                             let chain = Chain::from_id(*chain_id);
-                            // A `resume` subscription gets a durable cursor
-                            // key and its persisted resume point, read once
-                            // here at boot; others start at head as before.
+                            // A `resume` subscription reads its durable cursor
+                            // once here at boot; others start at head.
                             let (cursor_key, initial_cursor) = if *resume {
                                 let key = chainlog_cursor_key(
                                     chain,
@@ -90,8 +84,7 @@ impl<T: RuntimeTypes> Supervisor<T> {
         out
     }
 
-    /// Extension subscription kinds at least one loaded module declares. An
-    /// extension opens an event source only when its kind appears here.
+    /// An extension opens an event source only when its kind appears here.
     pub fn extension_subscription_kinds(&self) -> BTreeSet<String> {
         self.modules
             .iter()
@@ -104,21 +97,14 @@ impl<T: RuntimeTypes> Supervisor<T> {
     }
 }
 
-/// A resolved chain-log subscription for the event loop: owning module,
-/// chain, alloy `Filter`, and, when `resume` is set, the durable cursor key
-/// and resume block.
 pub struct ChainLogSub {
-    /// Module that declared the subscription; also its store namespace.
+    /// Also the module's store namespace.
     pub module: ModuleId,
-    /// Chain the filter applies to.
     pub chain: Chain,
-    /// Alloy filter the poller opens with.
     pub filter: alloy_rpc_types_eth::Filter,
-    /// `Some` iff `resume = true`: the store key the resume cursor lives
-    /// under.
+    /// `Some` iff `resume = true`: the key the resume cursor lives under.
     pub cursor_key: Option<String>,
-    /// The persisted resume block, read at boot for a `resume`
-    /// subscription; `None` otherwise.
+    /// Read once at boot; `None` unless `resume = true`.
     pub initial_cursor: Option<u64>,
     /// Opt-in cap on backfill depth, in blocks. `None` backfills the whole
     /// gap; `Some(cap)` bounds the start to `head - cap`.
@@ -126,7 +112,6 @@ pub struct ChainLogSub {
 }
 
 impl From<&alloy_rpc_types_eth::Log> for nexum::host::types::ChainLog {
-    /// Project an alloy `Log` onto the WIT `chain-log` record without loss.
     /// The chain id is not on the alloy log; the batch level supplies it.
     fn from(log: &alloy_rpc_types_eth::Log) -> Self {
         Self {
@@ -144,7 +129,6 @@ impl From<&alloy_rpc_types_eth::Log> for nexum::host::types::ChainLog {
     }
 }
 
-/// Errors surfaced by [`build_alloy_filter`].
 #[derive(Debug, thiserror::Error, strum::IntoStaticStr)]
 #[strum(serialize_all = "snake_case")]
 #[non_exhaustive]
@@ -152,24 +136,19 @@ pub(super) enum FilterError {
     /// `[[subscriptions]].address` did not parse as an EVM address.
     #[error("invalid chain-log address {address:?}: {source}")]
     Address {
-        /// Raw operator-supplied hex string.
         address: String,
-        /// Underlying alloy parse failure.
         #[source]
         source: alloy_primitives::hex::FromHexError,
     },
     /// `[[subscriptions]].event_signature` did not parse as a 32-byte topic.
     #[error("invalid topic {topic:?}: {source}")]
     Topic {
-        /// Raw operator-supplied hex string.
         topic: String,
-        /// Underlying alloy parse failure.
         #[source]
         source: alloy_primitives::hex::FromHexError,
     },
 }
 
-/// Translate a `[[subscription]]` chain-log entry into an alloy `Filter`.
 pub(super) fn build_alloy_filter(
     address: Option<&str>,
     event_signature: Option<&str>,

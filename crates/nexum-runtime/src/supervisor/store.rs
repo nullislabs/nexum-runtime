@@ -1,6 +1,4 @@
-//! Store and linker construction: one wasmtime `Store` per run, wired to
-//! the shared backends with the per-run namespace, allowlist, memory cap,
-//! and fuel from a [`StoreSpec`].
+//! Store and linker construction: one wasmtime `Store` per run.
 
 use std::sync::Arc;
 
@@ -19,13 +17,10 @@ use crate::host::logs::{LogSource, RunId, StdioStream};
 use crate::host::state::HostState;
 use crate::manifest::ResourceSection;
 
-/// A wasmtime `Store` holding the lattice `HostState`.
 pub(super) type HostStore<T> = Store<HostState<T>>;
 
-/// Per-store WASI clock override applied to every module store; shared
-/// wall and monotonic sources let a test drive guest-visible time. `None`
-/// keeps the ambient host clocks. `RunId.started_at` is host wall-clock
-/// and unaffected.
+/// Shared sources let a test drive guest-visible time; `None` keeps the
+/// ambient clocks. `RunId.started_at` is host wall-clock and unaffected.
 #[derive(Clone)]
 pub struct WasiClockOverride {
     pub(super) wall: Arc<dyn HostWallClock + Send + Sync>,
@@ -33,7 +28,6 @@ pub struct WasiClockOverride {
 }
 
 impl WasiClockOverride {
-    /// Pair a shared wall clock with a shared monotonic clock.
     pub fn new(
         wall: Arc<dyn HostWallClock + Send + Sync>,
         monotonic: Arc<dyn HostMonotonicClock + Send + Sync>,
@@ -42,7 +36,6 @@ impl WasiClockOverride {
     }
 }
 
-/// Adapts a shared wall clock into the by-value `HostWallClock` a store owns.
 struct SharedWallClock(Arc<dyn HostWallClock + Send + Sync>);
 
 impl HostWallClock for SharedWallClock {
@@ -55,8 +48,6 @@ impl HostWallClock for SharedWallClock {
     }
 }
 
-/// Adapts a shared monotonic clock into the by-value `HostMonotonicClock` a
-/// store owns.
 struct SharedMonotonicClock(Arc<dyn HostMonotonicClock + Send + Sync>);
 
 impl HostMonotonicClock for SharedMonotonicClock {
@@ -69,16 +60,14 @@ impl HostMonotonicClock for SharedMonotonicClock {
     }
 }
 
-/// A module's resource budget: `[module.resources]` layered over engine
-/// `[limits]`.
+/// `[module.resources]` layered over engine `[limits]`.
 pub(super) struct ResolvedLimits {
     pub(super) fuel: u64,
     pub(super) memory: usize,
     pub(super) state_bytes: u64,
 }
 
-/// Layer `[module.resources]` over engine `[limits]`; unset fields keep the
-/// default.
+/// Unset `[module.resources]` fields keep the engine `[limits]` default.
 pub(super) fn resolve_module_limits(res: &ResourceSection, cfg: &ModuleLimits) -> ResolvedLimits {
     ResolvedLimits {
         fuel: res.max_fuel_per_event.unwrap_or(cfg.fuel()),
@@ -87,8 +76,8 @@ pub(super) fn resolve_module_limits(res: &ResourceSection, cfg: &ModuleLimits) -
     }
 }
 
-/// Every resource knob one store carries; cached whole for restarts so a
-/// rebuilt store is budgeted exactly like the boot-time one.
+/// Cached whole for restarts, so a rebuilt store is budgeted exactly like
+/// the boot-time one.
 pub(super) struct StoreSpec {
     pub(super) http_allowlist: Vec<String>,
     pub(super) http_limits: OutboundHttpLimits,
@@ -99,9 +88,8 @@ pub(super) struct StoreSpec {
     pub(super) state_quota: u64,
 }
 
-/// Build a fresh wasmtime `Store` wired to the shared backends, budgeted
-/// per `spec`. Each call takes a freshly minted [`RunId`]; `services` is
-/// the module map, or empty for a provider store.
+/// Takes a freshly minted [`RunId`]; `services` is the module map, empty
+/// for a provider store.
 pub(super) fn build<T: RuntimeTypes>(
     shared: &Shared<T>,
     spec: &StoreSpec,
@@ -109,11 +97,8 @@ pub(super) fn build<T: RuntimeTypes>(
     services: HostServices,
 ) -> Result<HostStore<T>> {
     let namespace: &str = run.module.as_str();
-    // Guest stdio is captured per store as run- and source-tagged log
-    // records; stdin stays closed. The ctx grants no network, so the
-    // allowlisted wasi:http gate is the only live network path, and the
-    // guest environment stays empty. WASI clocks default to ambient;
-    // the shared override, when present, virtualises guest time.
+    // Stdio is captured as tagged log records, stdin stays closed; the ctx
+    // grants no network, so the allowlisted wasi:http gate is the only live path.
     let router = shared.components.logs.router();
     let mut builder = WasiCtxBuilder::new();
     builder
@@ -166,11 +151,8 @@ pub(super) fn build<T: RuntimeTypes>(
     Ok(store)
 }
 
-/// Build a `Linker` binding the core `event-module` interfaces plus every
-/// extension's interfaces. Shared by the restart and launch paths. A module
-/// importing an extension interface instantiates only if that extension's
-/// hook is present, so the same `extensions` slice must drive this and
-/// capability enforcement.
+/// The same `extensions` slice must drive this and capability enforcement:
+/// an import instantiates only if that extension's hook is linked.
 pub fn build_linker<T: RuntimeTypes>(
     engine: &Engine,
     extensions: &[Arc<dyn Extension<T>>],
@@ -187,11 +169,8 @@ pub fn build_linker<T: RuntimeTypes>(
     Ok(linker)
 }
 
-/// Build a `Linker` for one provider kind: the kind's scoped imports plus
-/// the WASI base and allowlisted `wasi:http`. Core `nexum:host` interfaces
-/// (local-store, remote-store, identity, logging) are withheld, so a
-/// provider importing one fails to instantiate. Extensions are not linked
-/// into providers.
+/// Core `nexum:host` interfaces are withheld, so a provider importing one
+/// fails to instantiate; extensions are never linked into providers.
 pub fn build_provider_linker<T: RuntimeTypes>(
     engine: &Engine,
     kind: &dyn ProviderKind<T>,

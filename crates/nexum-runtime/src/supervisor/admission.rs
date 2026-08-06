@@ -1,7 +1,4 @@
-//! Everything derived from the wired extensions slice except the linker:
-//! uniqueness, section claims, subscription vocabulary, provider kinds,
-//! and the capability registry. The same slice must drive all of them and
-//! the linker, or admission and instantiation disagree.
+//! Everything derived from the wired extensions slice except the linker.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
@@ -18,9 +15,8 @@ pub(super) type ProviderRow<T> = (Box<dyn ProviderKind<T>>, Arc<dyn HostService>
 /// Registered provider kinds, keyed by their manifest spelling.
 pub(super) type ProviderKinds<T> = BTreeMap<&'static str, ProviderRow<T>>;
 
-/// Collect each extension's provider kind paired with that extension's
-/// service. Refuses a duplicate spelling and a provider whose extension
-/// owns no service to install into.
+/// Refuses a duplicate spelling and a kind whose extension owns no service
+/// to install into.
 pub(super) fn provider_kinds<T: RuntimeTypes>(
     extensions: &[Arc<dyn Extension<T>>],
     services: &HostServices,
@@ -42,7 +38,7 @@ pub(super) fn provider_kinds<T: RuntimeTypes>(
     Ok(kinds)
 }
 
-/// Insert one kind row, refusing a duplicate manifest spelling.
+/// Refuses a duplicate manifest spelling.
 fn register_kind<T: RuntimeTypes>(
     kinds: &mut ProviderKinds<T>,
     provider: Box<dyn ProviderKind<T>>,
@@ -55,12 +51,10 @@ fn register_kind<T: RuntimeTypes>(
     Ok(())
 }
 
-/// Comma-joined registered provider kind spellings, for boot errors.
 pub(super) fn registered_kinds<T: RuntimeTypes>(kinds: &ProviderKinds<T>) -> String {
     kinds.keys().copied().collect::<Vec<_>>().join(", ")
 }
 
-/// Union of subscription kinds the wired extensions declare.
 pub(super) fn extension_subscription_vocabulary<T: RuntimeTypes>(
     extensions: &[Arc<dyn Extension<T>>],
 ) -> BTreeSet<&'static str> {
@@ -89,8 +83,8 @@ pub(super) fn enforce_extension_sections<T: RuntimeTypes>(
     Ok(())
 }
 
-/// Refuse a name two wired extensions both claim (service namespace,
-/// subscription kind, or manifest section), fail-fast at boot.
+/// Refuses a name two wired extensions both claim: service namespace,
+/// subscription kind, or manifest section.
 pub(super) fn enforce_extension_uniqueness<T: RuntimeTypes>(
     extensions: &[Arc<dyn Extension<T>>],
 ) -> Result<()> {
@@ -116,8 +110,7 @@ pub(super) fn enforce_extension_uniqueness<T: RuntimeTypes>(
     Ok(())
 }
 
-/// Assemble the capability registry from the core namespace plus every
-/// extension's. Must agree with the linker built from the same `extensions`.
+/// Must agree with the linker built from the same `extensions`.
 pub(super) fn capability_registry<T: RuntimeTypes>(
     extensions: &[Arc<dyn Extension<T>>],
 ) -> CapabilityRegistry {

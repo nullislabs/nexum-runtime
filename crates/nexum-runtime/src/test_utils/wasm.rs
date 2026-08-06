@@ -13,7 +13,6 @@ pub fn workspace_root() -> PathBuf {
         .to_path_buf()
 }
 
-/// Built artifact path for the guest package `module`.
 pub fn module_wasm(module: &str) -> PathBuf {
     let artifact = module.replace('-', "_");
     workspace_root().join(format!("target/wasm32-wasip2/release/{artifact}.wasm"))

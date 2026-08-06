@@ -95,9 +95,8 @@ fn no_production_component_from_file_call_remains() {
     );
 }
 
-/// Walk the supervisor's production sources, refuse any `Component::from_file`,
-/// and collect the file names that compile a component. Recurses so a nested
-/// module cannot host an unpinned compile path; test sources are skipped.
+/// Recurses so a nested module cannot host an unpinned compile path; test
+/// sources are skipped.
 fn collect_compile_sites(dir: &Path, sites: &mut Vec<String>) {
     for entry in std::fs::read_dir(dir).expect("read supervisor source directory") {
         let path = entry.expect("directory entry").path();

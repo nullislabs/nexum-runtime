@@ -1,11 +1,9 @@
-//! Boot refusals: admission gates that reject a module or provider
-//! before any compile.
+//! Boot refusals: admission gates that reject before any compile.
 
 use super::*;
 
-/// An `[[adapters]]` entry whose manifest is (or defaults to) an
-/// event-module is rejected before instantiation, naming the registered
-/// kinds.
+/// Rejected before instantiation, naming the registered kinds; a manifest
+/// without a kind defaults to an event-module.
 #[tokio::test]
 async fn boot_rejects_provider_whose_manifest_is_an_event_module() {
     BootScenario::over(mock_components())
@@ -16,8 +14,7 @@ async fn boot_rejects_provider_whose_manifest_is_an_event_module() {
         .names("acme-adapter");
 }
 
-/// A kind spelling no extension registered is refused at boot with a
-/// message naming the registered kinds.
+/// The refusal names the registered kinds.
 #[tokio::test]
 async fn boot_rejects_an_unregistered_provider_kind() {
     BootScenario::over(mock_components())
@@ -29,8 +26,8 @@ async fn boot_rejects_an_unregistered_provider_kind() {
         .names("acme-adapter");
 }
 
-/// A registered kind clears the discriminator; boot then reaches the
-/// component read step.
+/// A registered kind clears the discriminator; boot reaches the component
+/// read step.
 #[tokio::test]
 async fn boot_admits_a_registered_provider_kind_past_the_kind_gate() {
     let scenario = BootScenario::over(mock_components()).extensions(acme_extensions());
@@ -49,9 +46,7 @@ async fn boot_admits_a_registered_provider_kind_past_the_kind_gate() {
         .lacks("requires a module.toml");
 }
 
-/// A module subscribing to an extension kind no wired extension declares
-/// is refused at boot; `[capabilities]` is declared so the kind gate is
-/// what fails.
+/// `[capabilities]` is declared so the failing gate is the subscription kind.
 #[tokio::test]
 async fn boot_refuses_an_undeclared_extension_subscription_kind() {
     let Some(wasm) = example_wasm_or_skip() else {
@@ -69,8 +64,8 @@ async fn boot_refuses_an_undeclared_extension_subscription_kind() {
         .names("unknown event kind acme-status");
 }
 
-/// No module.toml anywhere refuses boot before compile with the migration
-/// hint; no wasm needs to exist.
+/// No wasm needs to exist; the refusal precedes compile and carries the
+/// migration hint.
 #[tokio::test]
 async fn boot_refuses_a_component_without_module_toml() {
     let scenario = BootScenario::new();
@@ -97,9 +92,8 @@ async fn boot_refuses_a_nonexistent_explicit_manifest_path() {
         .names("not found");
 }
 
-/// Operator `http_allow` must not stand in for a component's own
-/// `[capabilities]` declaration. Only the module path runs the
-/// subscription-kind gate, so the module leg carries that decoy.
+/// Operator `http_allow` must not stand in for the component's own
+/// `[capabilities]`; only the module path runs the kind gate, so it carries the decoy.
 #[tokio::test]
 async fn boot_refuses_a_capsless_manifest_before_any_other_gate() {
     // Raw TOML: the textual absence of [capabilities] is the fixture.

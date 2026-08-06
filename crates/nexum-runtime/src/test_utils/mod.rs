@@ -61,7 +61,6 @@ use crate::host::component::Components;
 use crate::host::logs::LogPipeline;
 use rpc::FakeNode;
 
-/// Poll cadence for harness-driven pollers.
 pub(crate) const HARNESS_POLL_INTERVAL: Duration = Duration::from_millis(20);
 
 /// A fresh in-memory [`LogPipeline`] at default retention limits.

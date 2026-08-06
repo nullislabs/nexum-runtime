@@ -138,9 +138,8 @@ fn claim_namespace_is_byte_exact() {
         .expect_err("identical strings collide");
 }
 
-/// One ledger spans both roles: the cross-role collision names both roles
-/// and claimant paths, and a module-module duplicate hits the same gate;
-/// neither reaches a compile.
+/// One ledger spans both roles: a cross-role collision names both claimants,
+/// a module-module duplicate hits the same gate, and neither reaches a compile.
 #[tokio::test]
 async fn boot_rejects_duplicate_names_across_and_within_roles() {
     let scenario = BootScenario::over(mock_components()).extensions(acme_extensions());

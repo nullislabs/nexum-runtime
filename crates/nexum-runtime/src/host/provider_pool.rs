@@ -55,8 +55,7 @@ struct ChainEndpoint {
     supports_pubsub: bool,
 }
 
-/// Providers keyed by chain; a missing entry is
-/// [`PoolError::UnknownChain`].
+/// Keyed by chain; a missing entry is [`PoolError::UnknownChain`].
 #[derive(Debug, Clone)]
 pub struct ProviderPool {
     providers: Arc<HashMap<Chain, ChainEndpoint>>,
@@ -136,8 +135,7 @@ impl ProviderPool {
         }
     }
 
-    /// Pool over pre-built providers polling at `poll_interval`; log fetches
-    /// are serial for deterministic RPC order.
+    /// Log fetches are serial for deterministic RPC order.
     #[cfg(any(test, feature = "test-utils"))]
     pub fn for_tests(
         providers: impl IntoIterator<Item = (Chain, DynProvider)>,
@@ -195,8 +193,6 @@ impl ProviderPool {
         Ok(Box::pin(stream))
     }
 
-    /// Provider for `chain`; [`PoolError::UnknownChain`] when the chain
-    /// has no engine config entry.
     pub fn provider(&self, chain: Chain) -> Result<&DynProvider, PoolError> {
         self.providers
             .get(&chain)
@@ -253,10 +249,8 @@ impl ProviderPool {
             .get(&chain)
             .ok_or(PoolError::UnknownChain(chain))?;
         let name = method.as_str();
-        // Pass the params through as a raw JSON value so alloy does
-        // not re-encode them on the way to the node. `SerError` is the
-        // variant alloy's own retry layer treats as terminal for a
-        // malformed request body.
+        // Raw JSON passthrough so alloy does not re-encode; `SerError` is the
+        // variant alloy's retry layer treats as terminal.
         let params: Box<RawValue> = RawValue::from_string(params_json)
             .map_err(|source| PoolError::Rpc(RpcError::SerError(source)))?;
         let result: Box<RawValue> = tokio::time::timeout(
@@ -277,7 +271,6 @@ pub type BlockStream = Pin<Box<dyn Stream<Item = Result<Header, TransportError>>
 /// yields a batch.
 #[derive(Debug, Clone)]
 pub struct CanonicalLogBatch {
-    /// Block height.
     pub number: u64,
     /// Canonical block hash the batch was fetched against.
     pub hash: B256,
@@ -292,8 +285,7 @@ pub struct CanonicalLogBatch {
 pub type CanonicalLogStream =
     Pin<Box<dyn Stream<Item = Result<CanonicalLogBatch, TransportError>> + Send>>;
 
-/// Errors surfaced by [`ProviderPool`]; RPC failures pass through alloy's
-/// typed error and are classified at the WIT edge.
+/// RPC failures pass through alloy's typed error, classified at the WIT edge.
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum PoolError {
@@ -303,7 +295,6 @@ pub enum PoolError {
     /// The configured per-request timeout elapsed.
     #[error("rpc request timed out")]
     Timeout,
-    /// Transport or node failure from alloy's RPC layer.
     #[error(transparent)]
     Rpc(#[from] TransportError),
 }

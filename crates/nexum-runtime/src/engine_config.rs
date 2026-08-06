@@ -265,8 +265,7 @@ fn default_chain_request_timeout_secs() -> u64 {
     30
 }
 
-/// Reject `request_timeout_secs = 0`: a zero timeout would leave every
-/// request unbounded.
+/// A zero timeout would leave every request unbounded.
 fn nonzero_timeout_secs<'de, D: serde::Deserializer<'de>>(d: D) -> Result<u64, D::Error> {
     let secs = u64::deserialize(d)?;
     if secs == 0 {

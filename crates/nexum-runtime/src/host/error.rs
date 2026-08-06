@@ -68,20 +68,16 @@ impl From<PoolError> for ChainError {
 /// decoded revert bytes, a malformed request is `invalid-input`, everything
 /// else a transport [`Fault`].
 fn classify_rpc(source: &TransportError) -> ChainError {
-    // A structured JSON-RPC error response (`{"error": {"code":...,
-    // "data":...}}`) - typically an `eth_call` revert - keeps the node's
-    // code and the hex `error.data` decoded into the abi-encoded revert
-    // body, so a guest can classify the outcome via `decode_revert`.
+    // A structured error response (typically an `eth_call` revert) keeps the
+    // node's code and revert body so a guest can classify via `decode_revert`.
     if let Some(payload) = source.as_error_resp() {
         return ChainError::Rpc(RpcError {
-            // Preserve the node-reported JSON-RPC code. A code outside
-            // `i32` is a JSON-RPC spec violation, clamped to `-32603`
-            // Internal error.
+            // A code outside `i32` is a JSON-RPC spec violation, clamped
+            // to `-32603` Internal error.
             code: i32::try_from(payload.code).unwrap_or(-32603),
             message: source.to_string(),
-            // alloy decodes the hex `error.data` JSON string into `Bytes`
-            // in one step; the guest binding is `Vec<u8>`, so land it
-            // there once. Non-hex or structured data decodes to `None`.
+            // alloy decodes the hex `error.data` into `Bytes`; non-hex or
+            // structured data decodes to `None`.
             data: payload
                 .try_data_as::<Bytes>()
                 .and_then(Result::ok)
@@ -175,7 +171,6 @@ mod tests {
     use alloy_json_rpc::ErrorPayload;
     use alloy_transport::{RpcError as AlloyRpcError, TransportErrorKind};
 
-    /// Build a synthetic transport-level [`TransportError`].
     fn transport_err(msg: &str) -> TransportError {
         TransportErrorKind::custom_str(msg)
     }
@@ -236,8 +231,6 @@ mod tests {
 
     #[test]
     fn transport_failure_maps_to_unavailable_fault() {
-        // A transport-level failure with no timeout marker defaults to an
-        // `unavailable` fault.
         let chain_err = ChainError::from(PoolError::Rpc(transport_err("websocket disconnected")));
         assert!(matches!(
             chain_err,
@@ -293,10 +286,8 @@ mod tests {
 
     #[test]
     fn out_of_range_rpc_code_saturates_to_internal_fallback() {
-        // JSON-RPC codes are conventionally `-32768..-32000`, but the
-        // alloy `ErrorPayload.code` field is `i64`. Defensive: an
-        // out-of-`i32` code should not poison the projection - clamp
-        // to `-32603` so the guest sees a sane code.
+        // alloy's `ErrorPayload.code` is `i64`; an out-of-`i32` code clamps
+        // to `-32603` rather than poisoning the projection.
         let payload: ErrorPayload =
             serde_json::from_str(&format!(r#"{{"code":{},"message":"weird"}}"#, i64::MAX))
                 .expect("payload parses");

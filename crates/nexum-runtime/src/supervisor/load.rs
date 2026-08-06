@@ -1,7 +1,4 @@
-//! Load one module or provider: admission, verified compile,
-//! instantiation, and `init`. A module retains its store and bindings; a
-//! provider's store is consumed by `kind.install`, so the two loaders stay
-//! role-specific.
+//! Load one module or provider: admission, verified compile, instantiation, `init`.
 
 use std::path::Path;
 use std::time::{Duration, Instant};
@@ -34,14 +31,12 @@ use crate::manifest::{self, CapabilityRegistry, ComponentKind, LoadedManifest, S
 use crate::module_id::ModuleId;
 use crate::runtime::dispatch_rate::TokenBucket;
 
-/// The compiled artifact and `init` inputs cached for restarts; restarts
-/// reuse these, so the boot-time digest holds for every run.
+/// Restarts reuse the cache, so the boot-time digest holds for every run.
 pub(super) struct CachedArtifact {
     /// `Component` is internally `Arc`-backed, so the cache is cheap.
     pub(super) component: Component,
     /// sha256 of the loaded artifact bytes, computed even when unpinned.
     pub(super) digest: ContentDigest,
-    /// The manifest `[config]` passed to `init`.
     pub(super) init_config: Config,
 }
 
@@ -49,8 +44,7 @@ pub(super) struct CachedArtifact {
 pub(super) struct ModuleSeed {
     pub(super) artifact: CachedArtifact,
     pub(super) spec: StoreSpec,
-    /// Wall-clock deadline for a whole dispatch (guest plus every host
-    /// call); the backstop for a dispatch parked in a host call.
+    /// Wall-clock bound on a whole dispatch, host calls included.
     pub(super) event_deadline: Duration,
 }
 
@@ -60,17 +54,11 @@ pub(super) struct ProviderSeed {
     pub(super) spec: StoreSpec,
 }
 
-/// The live half of a loaded module: the instantiated run a dispatch
-/// enters. Restarts replace bindings, store, and run; the rate bucket
-/// carries across restarts.
+/// Restarts replace bindings, store, and run; the rate bucket carries across.
 pub(super) struct LiveInstance<T: RuntimeTypes> {
     pub(super) bindings: EventModule,
     pub(super) store: HostStore<T>,
-    /// The run this store instantiates; restarts mint a fresh `RunId` with
-    /// an incremented sequence.
     pub(super) run: RunId,
-    /// Per-module dispatch rate limiter, checked before the guest runs;
-    /// over-rate events are dropped and counted.
     pub(super) dispatch_bucket: TokenBucket,
 }
 
@@ -78,38 +66,25 @@ pub(super) struct LoadedModule<T: RuntimeTypes> {
     pub(super) name: ModuleId,
     pub(super) live: LiveInstance<T>,
     pub(super) seed: ModuleSeed,
-    /// Subscriptions copied from `module.toml`, read on every event to
-    /// decide dispatch.
     pub(super) subscriptions: Vec<Subscription>,
-    /// Lifecycle authority: alive/backoff/dead/poisoned plus the failure
-    /// history. Traps are recorded eagerly by the dispatch arm.
     pub(super) health: Health,
 }
 
-/// One loaded provider; mirrors [`LoadedModule`]'s restart and poison
-/// bookkeeping. Liveness is shared with the installed actor.
 pub(super) struct LoadedProvider {
     /// The provider's namespace: its manifest name.
     pub(super) name: ModuleId,
-    /// Registered kind the restart sweep reinstalls through.
     pub(super) kind: &'static str,
-    /// Extension-owned manifest sections.
     pub(super) sections: manifest::ExtensionSections,
     pub(super) seed: ProviderSeed,
     /// Trap signal shared with the installed actor; feeds `health` at
     /// sweep time and carries no lifecycle authority of its own.
     pub(super) liveness: Liveness,
-    /// The run currently installed; a revive mints the successor and
-    /// commits it only on a live install.
     pub(super) run: RunId,
-    /// Lifecycle authority: `health` alive against a dead `liveness` is an
-    /// unrecorded trap the next sweep records.
+    /// Alive against a dead `liveness` is an unrecorded trap the next sweep records.
     pub(super) health: Health,
 }
 
-/// Shared admission prologue: refuse an unclaimed manifest section, run the
-/// role-specific `admit` step, then verify, compile, and capability-check
-/// the artifact. Any refusal precedes compile cost.
+/// Every refusal precedes compile cost.
 fn admit_and_verify<T: RuntimeTypes, R>(
     shared: &Shared<T>,
     owner: &str,
@@ -152,10 +127,8 @@ fn default_init_config(config: &Config, namespace: &str) -> Config {
     }
 }
 
-/// Call `init` under the dispatch wall-clock deadline, so a hung host call
-/// during init cannot park boot or a restart. A deadline hit or trap is
-/// `Err`; a guest-returned fault is `Ok(Err(fault))` so each call site
-/// applies its own policy (boot loads dead-permanent, restart defers).
+/// Runs under the dispatch deadline so a hung host call cannot park boot or a
+/// restart; a deadline hit or trap is `Err`, a guest fault `Ok(Err(fault))`.
 pub(super) async fn run_init<T: RuntimeTypes>(
     bindings: &EventModule,
     store: &mut HostStore<T>,
@@ -168,8 +141,7 @@ pub(super) async fn run_init<T: RuntimeTypes>(
         .map_err(Error::from)
 }
 
-/// Load one `[[modules]]` entry; a failed `init` loads the module dead so
-/// the dispatcher skips it.
+/// A failed `init` loads the module dead; the dispatcher skips it.
 pub(super) async fn module<T: RuntimeTypes>(
     shared: &Shared<T>,
     linker: &Linker<HostState<T>>,
@@ -215,15 +187,13 @@ pub(super) async fn module<T: RuntimeTypes>(
     let spec = StoreSpec {
         http_allowlist: loaded_manifest.http_allowlist.clone(),
         http_limits: limits_cfg.http(),
-        // Event modules are unscoped for messaging; only providers carry
-        // a topic grant.
+        // Event modules are unscoped for messaging; only providers carry a topic grant.
         messaging_topics: Vec::new(),
         memory_limit: memory,
         fuel,
         chain_response_max_bytes: limits_cfg.chain_response_max_bytes(),
         state_quota: state_bytes,
     };
-    // First run of this module: sequence 0. Restarts increment it.
     let run = RunId::new(module_namespace.clone(), 0);
     let mut store = store::build(shared, &spec, run.clone(), shared.services.clone())?;
     let bindings = EventModule::instantiate_async(&mut store, &component, linker)
@@ -232,8 +202,7 @@ pub(super) async fn module<T: RuntimeTypes>(
         .with_context(|| format!("instantiate {}", entry.path.display()))?;
 
     let config = default_init_config(&loaded_manifest.config, module_namespace.as_str());
-    // A failed `init` leaves guest state uninitialised, so the module
-    // loads dead and the dispatcher skips it rather than waste dispatches.
+    // A failed `init` leaves guest state uninitialised, so the module loads dead.
     let init_succeeded =
         match run_init(&bindings, &mut store, &config, limits_cfg.event_deadline()).await? {
             Ok(()) => {
@@ -253,8 +222,7 @@ pub(super) async fn module<T: RuntimeTypes>(
     // Refuel after init so the first on_event starts with a full budget.
     store.set_fuel(fuel)?;
 
-    // Surface any `[[subscription]]` entries the host cannot service yet,
-    // and refuse an extension kind no wired extension declares.
+    // Unserviceable subscriptions warn; an undeclared extension kind refuses.
     let extension_kinds = extension_subscription_vocabulary(&shared.extensions);
     for sub in &loaded_manifest.manifest.subscriptions {
         match sub {
@@ -298,8 +266,7 @@ pub(super) async fn module<T: RuntimeTypes>(
     })
 }
 
-/// Load one `[[adapters]]` entry; a failed `init` loads the provider dead
-/// and unroutable, permanently.
+/// A failed `init` loads the provider dead and unroutable, permanently.
 pub(super) async fn provider<T: RuntimeTypes>(
     shared: &Shared<T>,
     entry: &AdapterEntry,
@@ -308,9 +275,8 @@ pub(super) async fn provider<T: RuntimeTypes>(
     require_component_digest: bool,
 ) -> Result<LoadedProvider> {
     let namespace: ModuleId = manifest_namespace(&loaded_manifest, PROVIDER_FALLBACK_NAME).into();
-    // The provider registry scopes capabilities to transports: a core-only
-    // declaration fails at manifest load, an undeclared transport import
-    // fails after compile, and the linker withholds the same interfaces.
+    // A core-only declaration fails at manifest load; an undeclared transport
+    // import fails after compile; the linker withholds the same interfaces.
     let registry = CapabilityRegistry::provider();
     let sections = loaded_manifest.manifest.extensions.clone();
     let ((kind, service), component, digest) = admit_and_verify(
@@ -325,8 +291,7 @@ pub(super) async fn provider<T: RuntimeTypes>(
                 ext.admit_provider(namespace.as_str(), &sections)
                     .with_context(|| format!("install refused for {}", entry.path.display()))?;
             }
-            // The manifest kind is the discriminator: an [[adapters]] entry
-            // must name a registered provider kind, caught before compile.
+            // An unregistered kind refuses before compile.
             let (kind, service): &ProviderRow<T> = match &loaded_manifest.manifest.module.kind {
                 ComponentKind::Worker => {
                     return Err(anyhow!(
@@ -377,9 +342,8 @@ pub(super) async fn provider<T: RuntimeTypes>(
         state_quota: limits_cfg.state_bytes(),
     };
     let run = RunId::new(namespace.clone(), 0);
-    // A provider links no service-consuming import, so its store carries
-    // an empty service map; the shared map holds the registry that owns
-    // the provider's store, and carrying it here would cycle.
+    // The store carries an empty service map: the shared map holds the
+    // registry that owns this store, and carrying it here would cycle.
     let store = store::build(shared, &spec, run.clone(), HostServices::default())?;
 
     let config = default_init_config(&loaded_manifest.config, namespace.as_str());

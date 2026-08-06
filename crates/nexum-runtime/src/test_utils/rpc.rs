@@ -1,6 +1,4 @@
-//! In-process mock RPC transports behind the real [`ProviderPool`]:
-//! [`MockRpc`] replays a FIFO response script and records every request;
-//! [`FakeNode`] routes requests by method over settable head/block/log state.
+//! In-process mock RPC transports behind the real [`ProviderPool`].
 
 use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
@@ -20,10 +18,8 @@ use serde_json::value::RawValue;
 use crate::host::component::ChainMethod;
 use crate::host::provider_pool::ProviderPool;
 
-/// One dispatched JSON-RPC request, captured in call order.
 #[derive(Debug, Clone)]
 pub struct CapturedRpc {
-    /// RPC method name.
     pub method: String,
     /// Decoded params array; `Null` when the request carried none.
     pub params: serde_json::Value,
@@ -92,8 +88,7 @@ where
     }
 }
 
-/// FIFO-scripted transport; responses replay in push order regardless of
-/// method.
+/// Responses replay in push order regardless of method.
 #[derive(Clone, Default)]
 pub struct MockRpc {
     asserter: Asserter,
@@ -105,7 +100,6 @@ impl MockRpc {
         Self::default()
     }
 
-    /// A provider over the scripted transport, request capture included.
     pub fn provider(&self) -> DynProvider {
         let client = ClientBuilder::default()
             .layer(CaptureLayer(self.captured.clone()))
@@ -144,7 +138,6 @@ impl MockRpc {
     }
 }
 
-/// A successful response carrying `value` as its JSON result.
 pub fn rpc_ok<T: serde::Serialize>(value: &T) -> MockResponse {
     let body = serde_json::to_string(value).expect("mock response serializes");
     MockResponse::Success(RawValue::from_string(body).expect("serialized JSON is a raw value"))
@@ -176,7 +169,6 @@ pub fn linked_block(number: u64) -> Block {
     block
 }
 
-/// A pool of [`MockRpc`]-backed chains polling at `poll_interval`.
 pub fn mocked_pool<'a>(
     chains: impl IntoIterator<Item = (Chain, &'a MockRpc)>,
     poll_interval: Duration,
@@ -221,7 +213,6 @@ impl FakeNode {
         self.0.state.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    /// A pool serving every chain in `chains` from this node.
     pub fn pool(&self, chains: &[Chain], poll_interval: Duration) -> ProviderPool {
         ProviderPool::for_tests(
             chains.iter().map(|&chain| (chain, self.provider())),
@@ -229,7 +220,6 @@ impl FakeNode {
         )
     }
 
-    /// A provider routed to this node.
     pub fn provider(&self) -> DynProvider {
         let client = ClientBuilder::default().transport(self.clone(), true);
         ProviderBuilder::new().connect_client(client).erased()
@@ -290,8 +280,7 @@ impl FakeNode {
         self.0.wake.notify_waiters();
     }
 
-    /// Canned raw JSON result for `method`, served ahead of the built-in
-    /// routing.
+    /// Served ahead of the built-in routing.
     pub fn on_method(&self, method: ChainMethod, result: impl Into<String>) -> &Self {
         self.state().canned.insert(method.as_str(), result.into());
         self

@@ -13,9 +13,8 @@ async fn empty_supervisor_returns_no_subscriptions() {
     assert_eq!(booted.supervisor.module_count(), 0);
 }
 
-/// The refusal precedes compile; no wasm exists. Block and chain-log
-/// subscriptions hit the same gate with the same wording: the module and
-/// chain id, the missing stanza, and the configured set.
+/// The refusal precedes compile; block and chain-log subscriptions hit the
+/// same gate with the same wording.
 #[tokio::test]
 async fn boot_refuses_a_subscription_on_an_unconfigured_chain() {
     for manifest in [

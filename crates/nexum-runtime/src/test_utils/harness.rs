@@ -182,7 +182,6 @@ pub struct TestRuntime<E = ()> {
 }
 
 impl<E> TestRuntime<E> {
-    /// The fake chain node.
     pub fn chain(&self) -> &FakeNode {
         &self.chain
     }
