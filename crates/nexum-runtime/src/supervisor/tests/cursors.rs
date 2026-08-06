@@ -11,8 +11,6 @@ fn progress_marker_key_uses_numeric_chain_id() {
     assert_eq!(progress_key(chain), "last_dispatched_block:11155111");
 }
 
-// ── build_alloy_filter ────────────────────────────────────────────────
-
 #[test]
 fn alloy_filter_with_address_and_topic() {
     let addr = "0xC92E8bdf79f0507f65a392b0ab4667716BFE0110";

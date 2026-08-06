@@ -8,29 +8,14 @@ async fn e2e_supervisor_boots_example_module() {
     let Some(wasm) = example_wasm_or_skip() else {
         return;
     };
-    let engine = make_wasmtime_engine();
-    let linker = make_linker(&engine);
-    let (_dir, local_store) = temp_local_store();
-    let components = test_components(local_store);
-
-    let limits = ModuleLimits::default();
-    let supervisor = Supervisor::boot_single(
-        &engine,
-        &linker,
-        &wasm,
-        Some(example_module_toml()).as_deref(),
-        &components,
-        &limits,
-        &test_chains(),
-        false,
-        &core_extensions(),
-        None,
-    )
-    .await
-    .expect("boot_single");
-
-    assert_eq!(supervisor.module_count(), 1);
-    assert_eq!(supervisor.alive_count(), 1);
+    let booted = BootScenario::new()
+        .wasm(wasm)
+        .module(workspace_manifest("modules/example/module.toml"))
+        .boot()
+        .await
+        .expect("boot");
+    assert_eq!(booted.supervisor.module_count(), 1);
+    assert_eq!(booted.supervisor.alive_count(), 1);
 }
 
 /// The example component's capability-bearing imports are exactly what its
@@ -40,7 +25,7 @@ fn e2e_example_component_imports_equal_declared_capabilities() {
     let Some(wasm) = example_wasm_or_skip() else {
         return;
     };
-    let engine = make_wasmtime_engine();
+    let engine = test_wasmtime_engine();
     let component = wasmtime::component::Component::from_file(&engine, &wasm).expect("compile");
     let imports: Vec<String> = component
         .component_type()
@@ -77,59 +62,29 @@ async fn e2e_block_subscription_dispatched() {
     let Some(wasm) = example_wasm_or_skip() else {
         return;
     };
-    let dir = tempfile::tempdir().unwrap();
-    let manifest = dir.path().join("module.toml");
-    std::fs::write(
-        &manifest,
-        r#"
-[module]
-name = "example"
+    let mut booted = BootScenario::new()
+        .wasm(wasm)
+        .module(TestManifest::new("example").cap("logging").block_sub(1))
+        .boot()
+        .await
+        .expect("boot");
 
-[capabilities]
-required = ["logging"]
-
-[[subscription]]
-kind     = "block"
-chain_id = 1
-"#,
-    )
-    .unwrap();
-
-    let engine = make_wasmtime_engine();
-    let linker = make_linker(&engine);
-    let (_dir, local_store) = temp_local_store();
-    let components = test_components(local_store);
-    let limits = ModuleLimits::default();
-
-    let mut supervisor = Supervisor::boot_single(
-        &engine,
-        &linker,
-        &wasm,
-        Some(&manifest),
-        &components,
-        &limits,
-        &test_chains(),
-        false,
-        &core_extensions(),
-        None,
-    )
-    .await
-    .expect("boot_single");
-
-    let block = nexum::host::types::Block {
-        chain_id: 1,
-        number: 19_000_000,
-        hash: vec![0xab; 32],
-        timestamp: 1_700_000_000_000,
-    };
-    let dispatched = supervisor.dispatch_block(block).await;
-    assert_eq!(dispatched, 1, "one module subscribed to chain 1 blocks");
-    assert_eq!(supervisor.alive_count(), 1, "module must remain alive");
+    assert_eq!(
+        booted.dispatch_block_on(1).await,
+        1,
+        "one module subscribed to chain 1 blocks",
+    );
+    assert_eq!(
+        booted.supervisor.alive_count(),
+        1,
+        "module must remain alive"
+    );
 }
 
 /// A `ManualClock` override threads through `boot_single` onto the module
 /// store and is behaviour-neutral: the module boots, dispatches a block,
-/// and stays alive as on the ambient clock.
+/// and stays alive as on the ambient clock. Guest observation of the
+/// pinned time is covered by the scenario clock test.
 #[cfg(feature = "test-utils")]
 #[tokio::test]
 async fn e2e_manual_clock_override_boots_and_dispatches() {
@@ -140,106 +95,58 @@ async fn e2e_manual_clock_override_boots_and_dispatches() {
     let Some(wasm) = example_wasm_or_skip() else {
         return;
     };
-    let dir = tempfile::tempdir().unwrap();
-    let manifest = dir.path().join("module.toml");
-    std::fs::write(
-        &manifest,
-        r#"
-[module]
-name = "example"
-
-[capabilities]
-required = ["logging"]
-
-[[subscription]]
-kind     = "block"
-chain_id = 1
-"#,
-    )
-    .unwrap();
-
-    let engine = make_wasmtime_engine();
-    let linker = make_linker(&engine);
-    let (_dir, local_store) = temp_local_store();
-    let components = test_components(local_store);
-    let limits = ModuleLimits::default();
+    let dir = tempfile::tempdir().expect("tempdir");
+    let manifest = TestManifest::new("example")
+        .cap("logging")
+        .block_sub(1)
+        .write_to(dir.path());
 
     let clock = ManualClock::new();
     clock.set(UNIX_EPOCH + Duration::from_secs(1_700_000_000));
 
-    let mut supervisor = Supervisor::boot_single(
-        &engine,
-        &linker,
-        &wasm,
-        Some(&manifest),
-        &components,
-        &limits,
-        &test_chains(),
-        false,
-        &core_extensions(),
-        Some(clock.as_override()),
-    )
-    .await
-    .expect("boot_single with a manual clock override");
-
-    let block = nexum::host::types::Block {
-        chain_id: 1,
-        number: 19_000_000,
-        hash: vec![0xab; 32],
-        timestamp: 1_700_000_000_000,
-    };
-    let dispatched = supervisor.dispatch_block(block).await;
-    assert_eq!(dispatched, 1, "the overridden-clock module dispatched");
-    assert_eq!(supervisor.alive_count(), 1, "module must remain alive");
-
-    // Advancing the shared handle is observable on the same source the store
-    // reads; the boot path did not clone away from it.
-    clock.advance(Duration::from_secs(1));
+    let (_store, result) =
+        try_boot_single(&wasm, Some(&manifest), false, Some(clock.as_override())).await;
+    let mut supervisor = result.expect("boot_single with a manual clock override");
     assert_eq!(
-        wasmtime_wasi::HostWallClock::now(&clock),
-        Duration::from_secs(1_700_000_001),
+        supervisor.dispatch_block(block_on(1)).await,
+        1,
+        "the overridden-clock module dispatched",
     );
+    assert_eq!(supervisor.alive_count(), 1, "module must remain alive");
 }
 
-// ── Production module integration tests ────────────────────
-//
-// One test per module that goes through the real wit-bindgen +
-// WitBindgenHost adapter + supervisor dispatch path, not just the
-// module-level MockHost coverage. Mirrors the example-module e2e
-// shape above; each test is guarded by `module_wasm_or_skip()` so
-// local runs without a fresh `--target wasm32-wasip2 --release`
-// build are skipped rather than failing.
+/// Boot one production module through the real wit-bindgen and supervisor
+/// dispatch path and land one block on its subscribed chain.
+async fn production_module_dispatches(module: &str, manifest: &str) {
+    let Some(wasm) = module_wasm_or_skip(module) else {
+        return;
+    };
+    let mut booted = BootScenario::new()
+        .wasm(wasm)
+        .module(workspace_manifest(manifest))
+        .boot()
+        .await
+        .expect("boot");
+    assert_eq!(
+        booted.dispatch_block_on(SEPOLIA).await,
+        1,
+        "{module} took the dispatch",
+    );
+    assert_eq!(booted.supervisor.alive_count(), 1);
+}
 
 #[tokio::test]
 async fn e2e_price_alert_block_dispatch() {
-    let Some(wasm) = module_wasm_or_skip("price-alert") else {
-        return;
-    };
-    let manifest = production_module_toml("modules/examples/price-alert/module.toml");
-    let engine = make_wasmtime_engine();
-    let linker = make_linker(&engine);
-    let (_dir, store) = temp_local_store();
-
-    let mut supervisor = boot_production_module(&engine, &linker, &store, &wasm, &manifest).await;
-    let dispatched = supervisor.dispatch_block(synthetic_sepolia_block()).await;
-    assert_eq!(dispatched, 1);
-    assert_eq!(supervisor.alive_count(), 1);
+    production_module_dispatches("price-alert", "modules/examples/price-alert/module.toml").await;
 }
 
 #[tokio::test]
 async fn e2e_balance_tracker_block_dispatch() {
-    let Some(wasm) = module_wasm_or_skip("balance-tracker") else {
-        return;
-    };
-    let manifest = production_module_toml("modules/examples/balance-tracker/module.toml");
-    let engine = make_wasmtime_engine();
-    let linker = make_linker(&engine);
-    let (_dir, store) = temp_local_store();
-
-    let mut supervisor = boot_production_module(&engine, &linker, &store, &wasm, &manifest).await;
-    let dispatched = supervisor.dispatch_block(synthetic_sepolia_block()).await;
-    assert_eq!(dispatched, 1);
-    assert_eq!(supervisor.alive_count(), 1);
+    production_module_dispatches(
+        "balance-tracker",
+        "modules/examples/balance-tracker/module.toml",
+    )
+    .await;
 }
 
 /// End-to-end wasi:http path: http-probe fetches a loopback server on its
@@ -258,81 +165,33 @@ async fn e2e_http_probe_allowlisted_fetch_and_denied_path() {
         .mount(&server)
         .await;
 
-    let dir = tempfile::tempdir().unwrap();
-    let manifest = dir.path().join("module.toml");
-    std::fs::write(
-        &manifest,
-        format!(
-            r#"
-[module]
-name = "http-probe"
+    let mut booted = BootScenario::new()
+        .wasm(wasm)
+        .module(
+            TestManifest::new("http-probe")
+                .cap("logging")
+                .cap("http")
+                .http_allow("127.0.0.1")
+                .block_sub(1)
+                .config("probe_url", format!("{}/status", server.uri()))
+                .config("denied_url", "http://denied.invalid/"),
+        )
+        .boot()
+        .await
+        .expect("boot");
 
-[capabilities]
-required = ["logging", "http"]
-
-[capabilities.http]
-allow = ["127.0.0.1"]
-
-[[subscription]]
-kind     = "block"
-chain_id = 1
-
-[config]
-probe_url  = "{}/status"
-denied_url = "http://denied.invalid/"
-"#,
-            server.uri(),
-        ),
-    )
-    .unwrap();
-
-    let engine = make_wasmtime_engine();
-    let linker = make_linker(&engine);
-    let (_store_dir, store) = temp_local_store();
-
-    let mut supervisor = boot_production_module(&engine, &linker, &store, &wasm, &manifest).await;
-    let block = nexum::host::types::Block {
-        chain_id: 1,
-        number: 19_000_000,
-        hash: vec![0xab; 32],
-        timestamp: 1_700_000_000_000,
-    };
-    let dispatched = supervisor.dispatch_block(block).await;
     assert_eq!(
-        dispatched, 1,
+        booted.dispatch_block_on(1).await,
+        1,
         "both http-probe legs (allowlisted fetch + denied off-list fetch) must succeed",
     );
-    assert_eq!(supervisor.alive_count(), 1);
-}
-
-// ── Log pipeline ─────────────────────────────────────────────
-//
-// The typed pipeline captures from three points: the
-// nexum:host/logging glue (HostInterface), the per-store
-// stdout/stderr pipes (Stdout/Stderr), and the supervisor death
-// path (Panic). These E2E tests prove a real run leaves retrievable
-// records and that a dying run leaves a Panic record, both read back
-// through the embedder-facing LogPipeline handle. Stdout/Stderr line
-// splitting is covered at the unit level on the StdioStream writer.
-
-/// Components plus a retained clone of the log pipeline so a test can
-/// read runs and records back after dispatch.
-fn components_with_logs(
-    store: crate::host::local_store_redb::LocalStore,
-) -> (Components<TestTypes>, crate::host::logs::LogPipeline) {
-    let logs = crate::test_utils::in_memory_logs();
-    let components = Components {
-        chain: ProviderPool::empty(),
-        store,
-        ext: (),
-        logs: logs.clone(),
-    };
-    (components, logs)
+    assert_eq!(booted.supervisor.alive_count(), 1);
 }
 
 /// The example module logs via the host logging glue at init and on the
 /// block, so its run holds retrievable HostInterface records after one
-/// dispatch. Driven through the [`TestRuntime`] harness.
+/// dispatch. Driven through the [`TestRuntime`] harness; stdout/stderr
+/// line splitting is covered at the unit level on the StdioStream writer.
 #[tokio::test]
 async fn host_interface_records_are_retrievable_after_a_run() {
     let Some(wasm) = example_wasm_or_skip() else {
@@ -341,17 +200,10 @@ async fn host_interface_records_are_retrievable_after_a_run() {
 
     let mut rt = crate::test_utils::TestRuntime::builder(wasm)
         .manifest_inline(
-            r#"
-[module]
-name = "example"
-
-[capabilities]
-required = ["logging"]
-
-[[subscription]]
-kind     = "block"
-chain_id = 1
-"#,
+            TestManifest::new("example")
+                .cap("logging")
+                .block_sub(1)
+                .to_toml(),
         )
         .launch()
         .await
@@ -390,49 +242,25 @@ chain_id = 1
     rt.wait().await.expect("clean shutdown");
 }
 
+/// A trapping run leaves a supervisor-synthesized Panic record carrying
+/// the trap's root cause.
 #[tokio::test]
 async fn dying_run_leaves_a_panic_record() {
     let Some(wasm) = module_wasm_or_skip("fuel-bomb") else {
         return;
     };
-    let engine = make_wasmtime_engine();
-    let linker = make_linker(&engine);
-    let (_dir, store) = temp_local_store();
-    let (components, logs) = components_with_logs(store);
-    let manifest = fixture_module_toml("modules/fixtures/fuel-bomb/module.toml");
-    let limits = ModuleLimits::default();
-    let mut supervisor = Supervisor::boot_single(
-        &engine,
-        &linker,
-        &wasm,
-        Some(&manifest),
-        &components,
-        &limits,
-        &test_chains(),
-        false,
-        &core_extensions(),
-        None,
-    )
-    .await
-    .expect("boot_single");
+    let mut booted = BootScenario::new()
+        .wasm(wasm)
+        .module(workspace_manifest("modules/fixtures/fuel-bomb/module.toml"))
+        .boot()
+        .await
+        .expect("boot");
 
-    let block = nexum::host::types::Block {
-        chain_id: 1,
-        number: 1,
-        hash: vec![0; 32],
-        timestamp: 1_700_000_000_000,
-    };
-    // fuel-bomb traps on the first event; the supervisor synthesizes a
-    // Panic record on the dead run.
-    assert_eq!(
-        supervisor.dispatch_block(block).await,
-        0,
-        "the bomb trapped"
-    );
+    assert_eq!(booted.dispatch_block_on(1).await, 0, "the bomb trapped");
 
-    let runs = logs.list_runs("fuel-bomb");
+    let runs = booted.logs().list_runs("fuel-bomb");
     assert_eq!(runs.len(), 1);
-    let page = logs.read(&runs[0].run, 0);
+    let page = booted.logs().read(&runs[0].run, 0);
     let panic = page
         .records
         .iter()
@@ -452,45 +280,23 @@ async fn facade_panic_leaves_stderr_host_interface_and_panic_records() {
     let Some(wasm) = module_wasm_or_skip("panic-bomb") else {
         return;
     };
-    let engine = make_wasmtime_engine();
-    let linker = make_linker(&engine);
-    let (_dir, store) = temp_local_store();
-    let (components, logs) = components_with_logs(store);
-    let manifest = fixture_module_toml("modules/fixtures/panic-bomb/module.toml");
-    let limits = ModuleLimits::default();
-    let mut supervisor = Supervisor::boot_single(
-        &engine,
-        &linker,
-        &wasm,
-        Some(&manifest),
-        &components,
-        &limits,
-        &test_chains(),
-        false,
-        &core_extensions(),
-        None,
-    )
-    .await
-    .expect("boot_single");
+    let mut booted = BootScenario::new()
+        .wasm(wasm)
+        .module(workspace_manifest(
+            "modules/fixtures/panic-bomb/module.toml",
+        ))
+        .boot()
+        .await
+        .expect("boot");
 
-    let block = nexum::host::types::Block {
-        chain_id: 1,
-        number: 1,
-        hash: vec![0; 32],
-        timestamp: 1_700_000_000_000,
-    };
-    assert_eq!(
-        supervisor.dispatch_block(block).await,
-        0,
-        "the bomb panicked"
-    );
+    assert_eq!(booted.dispatch_block_on(1).await, 0, "the bomb panicked");
 
     // The facade panic hook writes to stderr and reports over the host
     // logging call before the trap surfaces, and the supervisor
     // synthesizes the death record: one dead run, three capture points.
-    let runs = logs.list_runs("panic-bomb");
+    let runs = booted.logs().list_runs("panic-bomb");
     assert_eq!(runs.len(), 1);
-    let page = logs.read(&runs[0].run, 0);
+    let page = booted.logs().read(&runs[0].run, 0);
     let find = |source: LogSource, needle: &str| {
         page.records
             .iter()

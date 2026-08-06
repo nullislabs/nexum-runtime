@@ -14,46 +14,16 @@ use std::path::{Path, PathBuf};
 use super::*;
 use crate::engine_config::ModuleLimits;
 use crate::manifest::ResourceSection;
+use crate::test_utils::{
+    BootScenario, Entry, ManifestSource, Refusal, TestManifest, example_wasm_or_skip,
+    mock_components, module_wasm_or_skip, test_wasmtime_engine,
+};
 
-/// Workspace root: the topmost ancestor with a `Cargo.toml`.
-fn workspace_root() -> PathBuf {
-    let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
-    manifest
-        .ancestors()
-        .filter(|d| d.join("Cargo.toml").is_file())
-        .last()
-        .unwrap_or(manifest)
-        .to_path_buf()
-}
+const SEPOLIA: u64 = 11_155_111;
 
-/// Path to the pre-built example WASM component.
-fn example_wasm() -> PathBuf {
-    workspace_root().join("target/wasm32-wasip2/release/example.wasm")
-}
-
-fn example_module_toml() -> PathBuf {
-    workspace_root().join("modules/example/module.toml")
-}
-
-/// Returns `None` and prints a skip message if the fixture isn't built.
-fn example_wasm_or_skip() -> Option<PathBuf> {
-    let p = example_wasm();
-    if p.exists() {
-        Some(p)
-    } else {
-        eprintln!(
-            "SKIP: {} not found - run `just build-module` to enable E2E tests",
-            p.display()
-        );
-        None
-    }
-}
-
-pub(crate) fn make_wasmtime_engine() -> wasmtime::Engine {
-    let mut config = wasmtime::Config::new();
-    config.wasm_component_model(true);
-    config.consume_fuel(true);
-    wasmtime::Engine::new(&config).expect("wasmtime engine")
+/// Path to a manifest checked into the workspace tree.
+fn workspace_manifest(relative: &str) -> PathBuf {
+    crate::test_utils::wasm::workspace_root().join(relative)
 }
 
 /// The core-only extension set: no domain extensions.
@@ -93,92 +63,41 @@ fn temp_local_store() -> (tempfile::TempDir, crate::host::local_store_redb::Loca
     (dir, store)
 }
 
-/// Boot a zero-module supervisor over the in-process mock backends via the
-/// real `boot` path.
-pub(crate) async fn boot_mock_supervisor(
-    engine: &wasmtime::Engine,
-) -> Supervisor<crate::test_utils::MockTypes> {
-    let components = crate::test_utils::mock_components();
-    let config = EngineConfig::default();
-    let linker = crate::supervisor::build_linker::<crate::test_utils::MockTypes>(engine, &[])
-        .expect("build_linker");
-    Supervisor::boot(engine, &linker, &config, &components, &[], None)
-        .await
-        .expect("boot mock supervisor")
-}
-
-const SEPOLIA: u64 = 11_155_111;
-
-/// A production module's built `.wasm`; hyphens in the name become underscores.
-fn module_wasm(module_name: &str) -> PathBuf {
-    let artifact = module_name.replace('-', "_");
-    workspace_root().join(format!("target/wasm32-wasip2/release/{artifact}.wasm"))
-}
-
-fn module_wasm_or_skip(module_name: &str) -> Option<PathBuf> {
-    let p = module_wasm(module_name);
-    if p.exists() {
-        Some(p)
-    } else if std::env::var_os("CI").is_some() {
-        // The CI test job builds every module wasm before running the
-        // suite, so a missing artifact here means the pipeline regressed.
-        // Fail loudly rather than skip into a hollow green.
-        panic!(
-            "{} not found under CI - the test job must build the module wasms before the suite runs",
-            p.display()
-        );
-    } else {
-        eprintln!(
-            "SKIP: {} not found - build with `cargo build -p {module_name} --target wasm32-wasip2 --release`",
-            p.display()
-        );
-        None
-    }
-}
-
-/// Resolve the real `module.toml` for one of the production modules.
-fn production_module_toml(relative_path: &str) -> PathBuf {
-    workspace_root().join(relative_path)
-}
-
-fn synthetic_sepolia_block() -> nexum::host::types::Block {
+/// A synthetic block on `chain_id` for direct dispatch calls.
+fn block_on(chain_id: u64) -> nexum::host::types::Block {
     nexum::host::types::Block {
-        chain_id: SEPOLIA,
+        chain_id,
         number: 19_000_000,
         hash: vec![0xab; 32],
         timestamp: 1_700_000_000_000,
     }
 }
 
-/// Boot a single module from `(wasm, manifest)` and return the live
-/// supervisor.
-async fn boot_production_module(
-    engine: &wasmtime::Engine,
-    linker: &Linker<HostState<TestTypes>>,
-    local_store: &crate::host::local_store_redb::LocalStore,
+/// Drive the `boot_single` entry point directly; scenario terminals cover
+/// the multi-entry `boot` path. The returned `TempDir` keeps the store alive.
+async fn try_boot_single(
     wasm: &Path,
-    manifest: &Path,
-) -> DefaultSupervisor {
-    let components = test_components(local_store.clone());
-    let limits = ModuleLimits::default();
-    Supervisor::boot_single(
-        engine,
-        linker,
+    manifest: Option<&Path>,
+    require_digest: bool,
+    clocks: Option<WasiClockOverride>,
+) -> (tempfile::TempDir, anyhow::Result<DefaultSupervisor>) {
+    let engine = test_wasmtime_engine();
+    let linker = make_linker(&engine);
+    let (dir, store) = temp_local_store();
+    let result = Supervisor::boot_single(
+        &engine,
+        &linker,
         wasm,
-        Some(manifest),
-        &components,
-        &limits,
+        manifest,
+        &test_components(store),
+        &ModuleLimits::default(),
         &test_chains(),
-        false,
+        require_digest,
         &core_extensions(),
-        None,
+        clocks,
     )
-    .await
-    .expect("boot_single")
-}
-
-fn fixture_module_toml(relative_path: &str) -> PathBuf {
-    workspace_root().join(relative_path)
+    .await;
+    (dir, result)
 }
 
 /// A stub extension registering the `acme-adapter` provider kind behind a

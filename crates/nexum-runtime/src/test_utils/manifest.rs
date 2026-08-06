@@ -358,6 +358,44 @@ mod tests {
         );
     }
 
+    /// Pins the emitted text itself, so a change to the serialised shape
+    /// shows up in review rather than hiding behind loader compatibility.
+    #[test]
+    fn to_toml_emits_the_exact_golden_text() {
+        let toml = TestManifest::new("golden")
+            .kind("acme-adapter")
+            .cap("logging")
+            .cap("http")
+            .http_allow("127.0.0.1")
+            .config("threshold", "2500.00")
+            .block_sub(1)
+            .chain_log_sub_filtered(11_155_111, Some("0xabc"), None)
+            .to_toml();
+        let golden = r#"[capabilities]
+required = ["logging", "http"]
+
+[capabilities.http]
+allow = ["127.0.0.1"]
+
+[config]
+threshold = "2500.00"
+
+[module]
+kind = "acme-adapter"
+name = "golden"
+
+[[subscription]]
+chain_id = 1
+kind = "block"
+
+[[subscription]]
+address = "0xabc"
+chain_id = 11155111
+kind = "chain-log"
+"#;
+        assert_eq!(toml, golden);
+    }
+
     #[test]
     fn manifest_sources_resolve_to_what_the_loader_receives() {
         let dir = tempfile::tempdir().expect("tempdir");
