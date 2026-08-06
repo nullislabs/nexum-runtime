@@ -124,6 +124,34 @@ async fn boot_refuses_a_capsless_manifest_before_any_other_gate() {
         .lacks("compile");
 }
 
+/// A blank name is refused at parse for both roles. Two blank-named
+/// adapters refuse on the name, not as a second claim on a shared fallback
+/// namespace, and no refusal reaches the component read.
+#[tokio::test]
+async fn boot_refuses_a_blank_manifest_name_for_both_roles() {
+    BootScenario::over(mock_components())
+        .extensions(acme_extensions())
+        .adapter(TestManifest::new("").kind("acme-adapter").cap("chain"))
+        .adapter(TestManifest::new("").kind("acme-adapter").cap("chain"))
+        .expect_refusal()
+        .await
+        .names("[module].name")
+        .lacks("claimed twice")
+        .lacks("read component")
+        .lacks("compile");
+
+    for blank in ["  ", "\t", "\n"] {
+        BootScenario::new()
+            .module(TestManifest::new(blank).cap("logging"))
+            .expect_refusal()
+            .await
+            .names("[module].name")
+            .lacks("claimed twice")
+            .lacks("read component")
+            .lacks("compile");
+    }
+}
+
 /// Only `chain` is undeclared, so the refusal is deterministic regardless
 /// of import order.
 #[tokio::test]

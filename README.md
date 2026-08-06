@@ -42,6 +42,8 @@ just run           # builds the example module and runs the engine with it
 The engine takes a component wasm and its `module.toml` (capabilities + config).
 The manifest is mandatory: pass its path, or ship a `module.toml` next to the wasm.
 Every manifest must declare a `[capabilities]` block; an empty `required = []` grants nothing.
+Every manifest must also declare a `[module].name` that is not blank.
+The engine uses the name as the state namespace, and it refuses a missing, empty, or whitespace-only name.
 
 ```sh
 cargo run -p nexum-cli -- target/wasm32-wasip2/release/example.wasm modules/example/module.toml
