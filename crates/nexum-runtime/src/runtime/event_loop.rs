@@ -121,7 +121,7 @@ async fn reconnecting_block_task(
                 } else {
                     info!(chain_id, attempt, "block subscription reopened");
                     metrics::counter!(
-                        "shepherd_stream_reconnects_total",
+                        "nexum_runtime_stream_reconnects_total",
                         "kind" => "block",
                         "chain_id" => chain_id.to_string(),
                     )
@@ -325,7 +325,7 @@ async fn reconnecting_chain_log_task(
                         "chain-log poller reopened"
                     );
                     metrics::counter!(
-                        "shepherd_stream_reconnects_total",
+                        "nexum_runtime_stream_reconnects_total",
                         "kind" => "chain-log",
                         "chain_id" => chain_id.to_string(),
                         "module" => module.clone(),

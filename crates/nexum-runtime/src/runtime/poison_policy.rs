@@ -2,7 +2,7 @@
 //!
 //! A module reaching `max_failures` traps within a sliding `window` is
 //! poisoned: the supervisor stops dispatching to it (no further restarts),
-//! sets the `shepherd_module_poisoned{module}` gauge to 1, and logs the
+//! sets the `nexum_runtime_module_poisoned{module}` gauge to 1, and logs the
 //! quarantine. Recovery needs an operator-driven full engine restart.
 
 use std::time::Duration;

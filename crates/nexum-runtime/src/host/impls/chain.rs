@@ -37,7 +37,7 @@ fn check_response_cap(
             "chain response exceeds size cap - rejecting before guest copy"
         );
         metrics::counter!(
-            "shepherd_chain_response_capped_total",
+            "nexum_runtime_chain_response_capped_total",
             "chain_id" => chain_id.to_string(),
             "method" => method.to_owned(),
         )
@@ -71,7 +71,7 @@ impl<T: RuntimeTypes> nexum::host::chain::Host for HostState<T> {
                     "chain::request rejected: method is not in the permitted read surface"
                 );
                 metrics::counter!(
-                    "shepherd_chain_request_total",
+                    "nexum_runtime_chain_request_total",
                     "chain_id" => chain_id.to_string(),
                     "method" => "<denied>",
                     "outcome" => "err",
@@ -94,7 +94,7 @@ impl<T: RuntimeTypes> nexum::host::chain::Host for HostState<T> {
         tracing::trace!(elapsed_ms = ?start.elapsed(), "chain::request done");
         let outcome = if result.is_ok() { "ok" } else { "err" };
         metrics::counter!(
-            "shepherd_chain_request_total",
+            "nexum_runtime_chain_request_total",
             "chain_id" => chain_id.to_string(),
             "method" => name,
             "outcome" => outcome,
@@ -138,7 +138,7 @@ impl<T: RuntimeTypes> nexum::host::chain::Host for HostState<T> {
                             "chain batch aggregate exceeds size cap - rejecting entry before guest copy"
                         );
                         metrics::counter!(
-                            "shepherd_chain_response_capped_total",
+                            "nexum_runtime_chain_response_capped_total",
                             "chain_id" => chain_id.to_string(),
                             "method" => method,
                         )

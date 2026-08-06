@@ -205,7 +205,7 @@ impl<T: RuntimeTypes> Supervisor<T> {
                 "dispatch rate limit exceeded - dropping event",
             );
             metrics::counter!(
-                "shepherd_dispatch_dropped_total",
+                "nexum_runtime_dispatch_dropped_total",
                 "module" => module.name.clone(),
                 "event_kind" => event_kind,
             )
@@ -253,7 +253,7 @@ impl<T: RuntimeTypes> Supervisor<T> {
                     "dispatch ok"
                 );
                 metrics::histogram!(
-                    "shepherd_event_latency_seconds",
+                    "nexum_runtime_event_latency_seconds",
                     "module" => module.name.clone(),
                     "event_kind" => event_kind,
                 )
@@ -276,7 +276,7 @@ impl<T: RuntimeTypes> Supervisor<T> {
                     "on-event returned fault",
                 );
                 metrics::counter!(
-                    "shepherd_module_errors_total",
+                    "nexum_runtime_module_errors_total",
                     "module" => module.name.clone(),
                     "error_kind" => kind,
                 )
@@ -299,7 +299,7 @@ impl<T: RuntimeTypes> Supervisor<T> {
                     "on-event trapped - module marked dead; will retry after backoff",
                 );
                 metrics::counter!(
-                    "shepherd_module_errors_total",
+                    "nexum_runtime_module_errors_total",
                     "module" => module.name.clone(),
                     "error_kind" => "trap",
                 )
@@ -325,7 +325,7 @@ impl<T: RuntimeTypes> Supervisor<T> {
                         "module poisoned - quarantined; remove from engine.toml + restart to clear",
                     );
                     metrics::gauge!(
-                        "shepherd_module_poisoned",
+                        "nexum_runtime_module_poisoned",
                         "module" => module.name.clone(),
                     )
                     .set(1.0);

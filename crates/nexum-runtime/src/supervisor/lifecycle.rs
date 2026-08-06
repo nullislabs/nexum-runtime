@@ -188,22 +188,22 @@ impl Role {
 
     const fn errors_total(self) -> &'static str {
         match self {
-            Self::Module => "shepherd_module_errors_total",
-            Self::Adapter => "shepherd_adapter_errors_total",
+            Self::Module => "nexum_runtime_module_errors_total",
+            Self::Adapter => "nexum_runtime_adapter_errors_total",
         }
     }
 
     const fn restarts_total(self) -> &'static str {
         match self {
-            Self::Module => "shepherd_module_restarts_total",
-            Self::Adapter => "shepherd_adapter_restarts_total",
+            Self::Module => "nexum_runtime_module_restarts_total",
+            Self::Adapter => "nexum_runtime_adapter_restarts_total",
         }
     }
 
     const fn poisoned_gauge(self) -> &'static str {
         match self {
-            Self::Module => "shepherd_module_poisoned",
-            Self::Adapter => "shepherd_adapter_poisoned",
+            Self::Module => "nexum_runtime_module_poisoned",
+            Self::Adapter => "nexum_runtime_adapter_poisoned",
         }
     }
 
