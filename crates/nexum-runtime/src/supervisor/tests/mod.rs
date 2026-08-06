@@ -10,14 +10,35 @@ mod ledger;
 mod lifecycle;
 
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
+use alloy_chains::Chain;
+use tracing_core::Level;
+
+use super::admission::enforce_extension_sections;
+use super::artifact::read_verified_component;
+use super::cursors::{
+    chainlog_cursor_key, commit_chain_log_cursor, progress_key, read_chain_log_cursor,
+};
+use super::dispatch::with_dispatch_deadline;
+use super::prepass::{NamespaceLedger, claim_namespace, unconfigured_chain};
+use super::store::resolve_module_limits;
+use super::subscriptions::build_alloy_filter;
 use super::*;
+use crate::bindings::nexum;
+use crate::digest::{ContentDigest, DigestMismatch};
 use crate::engine_config::ModuleLimits;
-use crate::manifest::ResourceSection;
+use crate::host::extension::{HostService, Installed, ProviderInstance, ProviderKind};
+use crate::host::logs::LogSource;
+use crate::host::provider_pool::ProviderPool;
+use crate::manifest::{self, CapabilityRegistry, ResourceSection};
+use crate::preset::CoreRuntime;
 use crate::test_utils::{
     BootScenario, Entry, ManifestSource, Refusal, TestManifest, example_wasm_or_skip,
     mock_components, module_wasm_or_skip, test_wasmtime_engine,
 };
+
+type DefaultSupervisor = Supervisor<CoreRuntime>;
 
 const SEPOLIA: u64 = 11_155_111;
 
@@ -26,16 +47,17 @@ fn workspace_manifest(relative: &str) -> PathBuf {
     crate::test_utils::wasm::workspace_root().join(relative)
 }
 
-fn core_extensions() -> Vec<Arc<dyn crate::host::extension::Extension<TestTypes>>> {
+fn core_extensions() -> Vec<Arc<dyn crate::host::extension::Extension<CoreRuntime>>> {
     Vec::new()
 }
 
-fn make_linker(engine: &wasmtime::Engine) -> Linker<HostState<TestTypes>> {
-    crate::supervisor::build_linker::<TestTypes>(engine, &core_extensions()).expect("build_linker")
+fn make_linker(engine: &wasmtime::Engine) -> Linker<HostState<CoreRuntime>> {
+    crate::supervisor::build_linker::<CoreRuntime>(engine, &core_extensions())
+        .expect("build_linker")
 }
 
 /// An empty chain pool, an empty extension slot, and the given store.
-fn test_components(store: crate::host::local_store_redb::LocalStore) -> Components<TestTypes> {
+fn test_components(store: crate::host::local_store_redb::LocalStore) -> Components<CoreRuntime> {
     Components {
         chain: ProviderPool::empty(),
         store,

@@ -297,56 +297,5 @@ fn assemble<T: RuntimeTypes>(
     }
 }
 
-/// Core-only lattice for the runtime's own tests (`Ext = ()`).
-#[cfg(test)]
-#[derive(Clone, Copy, Default)]
-pub(crate) struct TestTypes;
-
-#[cfg(test)]
-impl crate::sealed::SealedRuntimeTypes for TestTypes {}
-
-#[cfg(test)]
-impl RuntimeTypes for TestTypes {
-    type Store = crate::host::local_store_redb::LocalStore;
-    type Ext = ();
-}
-
-#[cfg(test)]
-pub(crate) type DefaultSupervisor = Supervisor<TestTypes>;
-
-#[cfg(test)]
-use admission::enforce_extension_sections;
-#[cfg(test)]
-use artifact::read_verified_component;
-#[cfg(test)]
-use cursors::{chainlog_cursor_key, commit_chain_log_cursor, progress_key, read_chain_log_cursor};
-#[cfg(test)]
-use dispatch::with_dispatch_deadline;
-#[cfg(test)]
-use prepass::{NamespaceLedger, claim_namespace, unconfigured_chain};
-#[cfg(test)]
-use store::resolve_module_limits;
-#[cfg(test)]
-use subscriptions::build_alloy_filter;
-
-#[cfg(test)]
-use crate::bindings::nexum;
-#[cfg(test)]
-use crate::digest::{ContentDigest, DigestMismatch};
-#[cfg(test)]
-use crate::host::extension::{HostService, Installed, ProviderInstance, ProviderKind};
-#[cfg(test)]
-use crate::host::logs::LogSource;
-#[cfg(test)]
-use crate::host::provider_pool::ProviderPool;
-#[cfg(test)]
-use crate::manifest::{self, CapabilityRegistry};
-#[cfg(test)]
-use alloy_chains::Chain;
-#[cfg(test)]
-use std::time::Duration;
-#[cfg(test)]
-use tracing_core::Level;
-
 #[cfg(test)]
 pub(crate) mod tests;

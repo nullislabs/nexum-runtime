@@ -44,17 +44,7 @@ impl<T: RuntimeTypes> Clone for Components<T> {
 mod tests {
     use super::*;
     use crate::host::local_store_redb::{LocalStore, ModuleStore};
-
-    /// Core-only lattice (no extension payload).
-    #[derive(Clone, Copy, Default)]
-    struct CoreTypes;
-
-    impl crate::sealed::SealedRuntimeTypes for CoreTypes {}
-
-    impl RuntimeTypes for CoreTypes {
-        type Store = LocalStore;
-        type Ext = ();
-    }
+    use crate::preset::CoreRuntime;
 
     fn store<T: StateStore>() {}
     fn handle<T: StateHandle>() {}
@@ -64,6 +54,6 @@ mod tests {
     fn concrete_backends_satisfy_the_traits() {
         store::<LocalStore>();
         handle::<ModuleStore>();
-        lattice::<CoreTypes>();
+        lattice::<CoreRuntime>();
     }
 }

@@ -7,7 +7,7 @@ use super::*;
 #[test]
 fn extension_sections_must_be_claimed() {
     struct Claiming;
-    impl Extension<TestTypes> for Claiming {
+    impl Extension<CoreRuntime> for Claiming {
         fn namespace(&self) -> &'static str {
             "acme"
         }
@@ -17,14 +17,14 @@ fn extension_sections_must_be_claimed() {
                 ifaces: &[],
             }
         }
-        fn link(&self, _linker: &mut Linker<HostState<TestTypes>>) -> anyhow::Result<()> {
+        fn link(&self, _linker: &mut Linker<HostState<CoreRuntime>>) -> anyhow::Result<()> {
             Ok(())
         }
         fn manifest_sections(&self) -> &'static [&'static str] {
             &["venue"]
         }
     }
-    let extensions: Vec<Arc<dyn Extension<TestTypes>>> = vec![Arc::new(Claiming)];
+    let extensions: Vec<Arc<dyn Extension<CoreRuntime>>> = vec![Arc::new(Claiming)];
 
     let mut sections = manifest::ExtensionSections::new();
     sections.insert("venue".into(), toml::Value::Boolean(true));
@@ -46,7 +46,7 @@ fn extension_claims_must_be_unique() {
         subscriptions: &'static [&'static str],
         sections: &'static [&'static str],
     }
-    impl Extension<TestTypes> for Claiming {
+    impl Extension<CoreRuntime> for Claiming {
         fn namespace(&self) -> &'static str {
             self.namespace
         }
@@ -56,7 +56,7 @@ fn extension_claims_must_be_unique() {
                 ifaces: &[],
             }
         }
-        fn link(&self, _linker: &mut Linker<HostState<TestTypes>>) -> anyhow::Result<()> {
+        fn link(&self, _linker: &mut Linker<HostState<CoreRuntime>>) -> anyhow::Result<()> {
             Ok(())
         }
         fn subscriptions(&self) -> &'static [&'static str] {
@@ -70,7 +70,7 @@ fn extension_claims_must_be_unique() {
         namespace: &'static str,
         subscriptions: &'static [&'static str],
         sections: &'static [&'static str],
-    ) -> Arc<dyn Extension<TestTypes>> {
+    ) -> Arc<dyn Extension<CoreRuntime>> {
         Arc::new(Claiming {
             namespace,
             subscriptions,
