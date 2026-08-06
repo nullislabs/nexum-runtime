@@ -347,20 +347,19 @@ impl<T: RuntimeTypes> AssembledRuntime<'_, T> {
 
 /// Opens the backends with a fresh [`TaskManager`], then drives
 /// [`AssembledRuntime::launch`]; the shared tail of every terminal stage.
-async fn open_and_launch<T, C, S, E, L>(
+async fn open_and_launch<T, C, S, L>(
     config: &EngineConfig,
     extensions: Vec<Arc<dyn Extension<T>>>,
     add_ons: &[&dyn RuntimeAddOn],
     wasm: Option<&Path>,
     manifest: Option<&Path>,
     clocks: Option<WasiClockOverride>,
-    components: ComponentsBuilder<C, S, E, L>,
+    components: ComponentsBuilder<C, S, L>,
 ) -> anyhow::Result<RuntimeHandle>
 where
     T: RuntimeTypes,
     C: ComponentBuilder<Output = ProviderPool>,
     S: ComponentBuilder<Output = T::Store>,
-    E: ComponentBuilder<Output = T::Ext>,
     L: ComponentBuilder<Output = LogPipeline>,
 {
     let tasks = TaskManager::new();
@@ -466,12 +465,12 @@ impl<'a, R: Runtime> PresetBuilder<'a, R> {
     /// Override the preset's component builders before launch; `map` swaps one
     /// seam while the preset's extensions and add-ons carry through. Mirror of
     /// [`TypedBuilder::with_components`].
-    pub fn with_components<C, S, E, L>(
+    pub fn with_components<C, S, L>(
         self,
         map: impl FnOnce(
-            ComponentsBuilder<R::ChainBuilder, R::StoreBuilder, R::ExtBuilder, R::LogsBuilder>,
-        ) -> ComponentsBuilder<C, S, E, L>,
-    ) -> PresetComponentsBuilder<'a, R::Types, C, S, E, L> {
+            ComponentsBuilder<R::ChainBuilder, R::StoreBuilder, R::LogsBuilder>,
+        ) -> ComponentsBuilder<C, S, L>,
+    ) -> PresetComponentsBuilder<'a, R::Types, C, S, L> {
         // Gather the preset's extensions and add-ons before `components`
         // consumes the preset by value.
         let mut extensions = self.preset.extensions(self.config);
@@ -521,22 +520,21 @@ impl<'a, R: Runtime> PresetBuilder<'a, R> {
 
 /// A preset with its component builders overridden through
 /// [`PresetBuilder::with_components`], leaving only [`launch`](Self::launch).
-pub struct PresetComponentsBuilder<'a, T: RuntimeTypes, C, S, E, L> {
+pub struct PresetComponentsBuilder<'a, T: RuntimeTypes, C, S, L> {
     config: &'a EngineConfig,
     extensions: Vec<Arc<dyn Extension<T>>>,
     add_ons: AddOns,
     wasm: Option<PathBuf>,
     manifest: Option<PathBuf>,
     clocks: Option<WasiClockOverride>,
-    components: ComponentsBuilder<C, S, E, L>,
+    components: ComponentsBuilder<C, S, L>,
 }
 
-impl<T, C, S, E, L> PresetComponentsBuilder<'_, T, C, S, E, L>
+impl<T, C, S, L> PresetComponentsBuilder<'_, T, C, S, L>
 where
     T: RuntimeTypes,
     C: ComponentBuilder<Output = ProviderPool>,
     S: ComponentBuilder<Output = T::Store>,
-    E: ComponentBuilder<Output = T::Ext>,
     L: ComponentBuilder<Output = LogPipeline>,
 {
     /// Open the overridden backends and launch, otherwise as
@@ -595,10 +593,10 @@ impl<'a, T: RuntimeTypes> TypedBuilder<'a, T> {
     }
 
     /// Bind the component builders that open the backends at launch.
-    pub fn with_components<C, S, E, L>(
+    pub fn with_components<C, S, L>(
         self,
-        components: ComponentsBuilder<C, S, E, L>,
-    ) -> ReadyBuilder<'a, T, C, S, E, L> {
+        components: ComponentsBuilder<C, S, L>,
+    ) -> ReadyBuilder<'a, T, C, S, L> {
         ReadyBuilder {
             config: self.config,
             extensions: self.extensions,
@@ -613,17 +611,17 @@ impl<'a, T: RuntimeTypes> TypedBuilder<'a, T> {
 
 /// The assembly is complete; [`launch`](Self::launch) opens the backends and
 /// runs.
-pub struct ReadyBuilder<'a, T: RuntimeTypes, C, S, E, L> {
+pub struct ReadyBuilder<'a, T: RuntimeTypes, C, S, L> {
     config: &'a EngineConfig,
     extensions: Vec<Arc<dyn Extension<T>>>,
     wasm: Option<PathBuf>,
     manifest: Option<PathBuf>,
     clocks: Option<WasiClockOverride>,
-    components: ComponentsBuilder<C, S, E, L>,
+    components: ComponentsBuilder<C, S, L>,
     add_ons: &'a [&'a dyn RuntimeAddOn],
 }
 
-impl<'a, T: RuntimeTypes, C, S, E, L> ReadyBuilder<'a, T, C, S, E, L> {
+impl<'a, T: RuntimeTypes, C, S, L> ReadyBuilder<'a, T, C, S, L> {
     /// Bind the cross-cutting add-on set installed before the engine boots;
     /// defaults to none.
     pub fn with_add_ons(mut self, add_ons: &'a [&'a dyn RuntimeAddOn]) -> Self {
@@ -632,12 +630,11 @@ impl<'a, T: RuntimeTypes, C, S, E, L> ReadyBuilder<'a, T, C, S, E, L> {
     }
 }
 
-impl<T, C, S, E, L> ReadyBuilder<'_, T, C, S, E, L>
+impl<T, C, S, L> ReadyBuilder<'_, T, C, S, L>
 where
     T: RuntimeTypes,
     C: ComponentBuilder<Output = ProviderPool>,
     S: ComponentBuilder<Output = T::Store>,
-    E: ComponentBuilder<Output = T::Ext>,
     L: ComponentBuilder<Output = LogPipeline>,
 {
     /// Open the backends and launch, driving [`AssembledRuntime::launch`]
@@ -728,11 +725,10 @@ mod tests {
         type Types = CoreRuntime;
         type ChainBuilder = ProviderPoolBuilder;
         type StoreBuilder = LocalStoreBuilder;
-        type ExtBuilder = ();
         type LogsBuilder = LogPipelineBuilder;
 
-        fn components(self) -> ComponentsBuilder<ProviderPoolBuilder, LocalStoreBuilder, ()> {
-            ComponentsBuilder::new(ProviderPoolBuilder, LocalStoreBuilder, ())
+        fn components(self) -> ComponentsBuilder<ProviderPoolBuilder, LocalStoreBuilder> {
+            ComponentsBuilder::new(ProviderPoolBuilder, LocalStoreBuilder)
         }
 
         fn add_ons(&self) -> AddOns {
@@ -827,7 +823,6 @@ mod tests {
             .with_components(ComponentsBuilder::new(
                 ProviderPoolBuilder,
                 LocalStoreBuilder,
-                (),
             ))
             .launch()
             .await
@@ -881,14 +876,13 @@ mod tests {
         type Types = CoreRuntime;
         type ChainBuilder = ProviderPoolBuilder;
         type StoreBuilder = LocalStoreBuilder;
-        type ExtBuilder = ();
         type LogsBuilder = Prebuilt<LogPipeline>;
 
         fn components(
             self,
-        ) -> ComponentsBuilder<ProviderPoolBuilder, LocalStoreBuilder, (), Prebuilt<LogPipeline>>
+        ) -> ComponentsBuilder<ProviderPoolBuilder, LocalStoreBuilder, Prebuilt<LogPipeline>>
         {
-            ComponentsBuilder::new(ProviderPoolBuilder, LocalStoreBuilder, ())
+            ComponentsBuilder::new(ProviderPoolBuilder, LocalStoreBuilder)
                 .with_logs(Prebuilt(self.logs))
         }
 
@@ -935,11 +929,10 @@ mod tests {
         type Types = CoreRuntime;
         type ChainBuilder = ProviderPoolBuilder;
         type StoreBuilder = LocalStoreBuilder;
-        type ExtBuilder = ();
         type LogsBuilder = LogPipelineBuilder;
 
-        fn components(self) -> ComponentsBuilder<ProviderPoolBuilder, LocalStoreBuilder, ()> {
-            ComponentsBuilder::new(ProviderPoolBuilder, LocalStoreBuilder, ())
+        fn components(self) -> ComponentsBuilder<ProviderPoolBuilder, LocalStoreBuilder> {
+            ComponentsBuilder::new(ProviderPoolBuilder, LocalStoreBuilder)
         }
 
         fn add_ons(&self) -> AddOns {
@@ -1050,7 +1043,6 @@ mod tests {
             .with_components(ComponentsBuilder::new(
                 ProviderPoolBuilder,
                 LocalStoreBuilder,
-                (),
             ))
             .launch()
             .await
@@ -1083,7 +1075,6 @@ mod tests {
             .with_components(ComponentsBuilder::new(
                 ProviderPoolBuilder,
                 LocalStoreBuilder,
-                (),
             ))
             .launch()
             .await
@@ -1122,7 +1113,7 @@ mod tests {
             data_dir: &data_dir,
             executor: &executor,
         };
-        let components = ComponentsBuilder::new(ProviderPoolBuilder, LocalStoreBuilder, ())
+        let components = ComponentsBuilder::new(ProviderPoolBuilder, LocalStoreBuilder)
             .build::<CoreRuntime>(&build_ctx)
             .await
             .expect("build core components");
@@ -1174,7 +1165,6 @@ mod tests {
             .with_components(ComponentsBuilder::new(
                 ProviderPoolBuilder,
                 LocalStoreBuilder,
-                (),
             ))
             .launch()
             .await

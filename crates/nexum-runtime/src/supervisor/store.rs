@@ -167,7 +167,6 @@ fn build<T: RuntimeTypes>(
             messaging_topics: spec.messaging_topics.clone(),
             run,
             log_router: router,
-            ext: shared.components.ext.clone(),
             chain: shared.components.chain.clone(),
             chain_response_max_bytes: spec.chain_response_max_bytes,
             // Provider guests never reach this: `build_provider_linker`

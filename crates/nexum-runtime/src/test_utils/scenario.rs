@@ -113,7 +113,6 @@ impl BootScenario<CoreRuntime> {
             Components {
                 chain: ProviderPool::empty(),
                 store,
-                ext: (),
                 logs: in_memory_logs(),
             },
         )

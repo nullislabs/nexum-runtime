@@ -1,6 +1,6 @@
 //! Per-component builders. Each core backend is a [`ComponentBuilder`];
-//! [`ComponentsBuilder`] assembles the core seams, the lattice `Ext` payload,
-//! and the log pipeline into a [`Components`] bundle.
+//! [`ComponentsBuilder`] assembles the core seams and the log pipeline into a
+//! [`Components`] bundle.
 
 use std::future::Future;
 use std::path::Path;
@@ -93,55 +93,38 @@ pub enum BuildError {
     /// The store backend builder failed.
     #[error("build the store backend: {0}")]
     Store(anyhow::Error),
-    /// The extension payload builder failed.
-    #[error("build the extension payload: {0}")]
-    Ext(anyhow::Error),
     /// The log pipeline builder failed.
     #[error("build the log pipeline: {0}")]
     Logs(anyhow::Error),
 }
 
-/// The empty extension payload: a no-op builder for a core-only lattice
-/// (`Ext = ()`).
-impl ComponentBuilder for () {
-    type Output = ();
-
-    async fn build(self, _ctx: &BuilderContext<'_>) -> anyhow::Result<()> {
-        Ok(())
-    }
-}
-
-/// Assembles the core, `Ext`, and log-pipeline builders into a [`Components`]
+/// Assembles the core and log-pipeline builders into a [`Components`]
 /// bundle; the logs slot defaults to [`LogPipelineBuilder`].
-pub struct ComponentsBuilder<C, S, E, L = LogPipelineBuilder> {
+pub struct ComponentsBuilder<C, S, L = LogPipelineBuilder> {
     pub chain: C,
     /// Builds the store backend ([`RuntimeTypes::Store`]).
     pub store: S,
-    /// Builds the extension payload ([`RuntimeTypes::Ext`]).
-    pub ext: E,
     /// Builds the shared [`LogPipeline`].
     pub logs: L,
 }
 
-impl<C, S, E> ComponentsBuilder<C, S, E> {
+impl<C, S> ComponentsBuilder<C, S> {
     /// Create a new [`ComponentsBuilder`] with the default log pipeline.
-    pub fn new(chain: C, store: S, ext: E) -> Self {
+    pub fn new(chain: C, store: S) -> Self {
         Self {
             chain,
             store,
-            ext,
             logs: LogPipelineBuilder,
         }
     }
 }
 
-impl<C, S, E, L> ComponentsBuilder<C, S, E, L> {
+impl<C, S, L> ComponentsBuilder<C, S, L> {
     /// Replace the log pipeline builder.
-    pub fn with_logs<L2>(self, logs: L2) -> ComponentsBuilder<C, S, E, L2> {
+    pub fn with_logs<L2>(self, logs: L2) -> ComponentsBuilder<C, S, L2> {
         ComponentsBuilder {
             chain: self.chain,
             store: self.store,
-            ext: self.ext,
             logs,
         }
     }
@@ -153,19 +136,12 @@ impl<C, S, E, L> ComponentsBuilder<C, S, E, L> {
         T: RuntimeTypes,
         C: ComponentBuilder<Output = ProviderPool>,
         S: ComponentBuilder<Output = T::Store>,
-        E: ComponentBuilder<Output = T::Ext>,
         L: ComponentBuilder<Output = LogPipeline>,
     {
         let chain = self.chain.build(ctx).await.map_err(BuildError::Chain)?;
         let store = self.store.build(ctx).await.map_err(BuildError::Store)?;
-        let ext = self.ext.build(ctx).await.map_err(BuildError::Ext)?;
         let logs = self.logs.build(ctx).await.map_err(BuildError::Logs)?;
-        Ok(Components {
-            chain,
-            store,
-            ext,
-            logs,
-        })
+        Ok(Components { chain, store, logs })
     }
 }
 
@@ -189,7 +165,7 @@ mod tests {
             executor: &executor,
         };
 
-        let components = ComponentsBuilder::new(ProviderPoolBuilder, LocalStoreBuilder, ())
+        let components = ComponentsBuilder::new(ProviderPoolBuilder, LocalStoreBuilder)
             .build::<CoreRuntime>(&ctx)
             .await
             .expect("build core components");
@@ -219,7 +195,7 @@ mod tests {
         };
 
         let custom = LogPipeline::in_memory(config.limits.logs());
-        let components = ComponentsBuilder::new(ProviderPoolBuilder, LocalStoreBuilder, ())
+        let components = ComponentsBuilder::new(ProviderPoolBuilder, LocalStoreBuilder)
             .with_logs(crate::test_utils::Prebuilt(custom.clone()))
             .build::<CoreRuntime>(&ctx)
             .await

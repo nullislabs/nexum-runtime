@@ -9,8 +9,7 @@
 //! [`store`](TestRuntime::store) and [`logs`](TestRuntime::logs). Events
 //! dispatch on the spawned event-loop task, so
 //! [`wait_for_log`](TestRuntime::wait_for_log) polls for an observable
-//! effect. Bind an extension payload through
-//! [`builder_with_ext`](TestRuntime::builder_with_ext).
+//! effect.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -31,14 +30,10 @@ use crate::host::logs::{LogPipeline, LogRecord};
 
 /// Builder for a [`TestRuntime`]; the launched handle shares the same mock
 /// backends. A manifest is mandatory.
-pub struct TestRuntimeBuilder<E = ()>
-where
-    E: Clone + Send + Sync + 'static,
-{
+pub struct TestRuntimeBuilder {
     wasm: PathBuf,
     manifest: ManifestSource,
-    extensions: Vec<Arc<dyn Extension<MockTypes<E>>>>,
-    ext: E,
+    extensions: Vec<Arc<dyn Extension<MockTypes>>>,
     limits: ModuleLimits,
     chain: FakeNode,
     chains: Vec<Chain>,
@@ -46,23 +41,13 @@ where
     clock: ManualClock,
 }
 
-impl TestRuntime<()> {
-    /// Start a harness for the module at `wasm`, with an empty extension slot.
-    pub fn builder(wasm: impl Into<PathBuf>) -> TestRuntimeBuilder<()> {
-        TestRuntime::builder_with_ext(wasm, ())
-    }
-}
-
-impl<E: Clone + Send + Sync + 'static> TestRuntime<E> {
-    /// Start a harness binding `ext` as the extension payload; pair with
-    /// [`extension`](TestRuntimeBuilder::extension) to register its linker
-    /// hook and capability namespace.
-    pub fn builder_with_ext(wasm: impl Into<PathBuf>, ext: E) -> TestRuntimeBuilder<E> {
+impl TestRuntime {
+    /// Start a harness for the module at `wasm`.
+    pub fn builder(wasm: impl Into<PathBuf>) -> TestRuntimeBuilder {
         TestRuntimeBuilder {
             wasm: wasm.into(),
             manifest: ManifestSource::Beside,
             extensions: Vec::new(),
-            ext,
             limits: ModuleLimits::default(),
             chain: FakeNode::new(),
             chains: vec![Chain::from_id(1)],
@@ -72,7 +57,7 @@ impl<E: Clone + Send + Sync + 'static> TestRuntime<E> {
     }
 }
 
-impl<E: Clone + Send + Sync + 'static> TestRuntimeBuilder<E> {
+impl TestRuntimeBuilder {
     /// Load the manifest from an existing file.
     pub fn manifest_path(mut self, path: impl Into<PathBuf>) -> Self {
         self.manifest = ManifestSource::Path(path.into());
@@ -86,7 +71,7 @@ impl<E: Clone + Send + Sync + 'static> TestRuntimeBuilder<E> {
     }
 
     /// Register an extension.
-    pub fn extension(mut self, extension: Arc<dyn Extension<MockTypes<E>>>) -> Self {
+    pub fn extension(mut self, extension: Arc<dyn Extension<MockTypes>>) -> Self {
         self.extensions.push(extension);
         self
     }
@@ -94,7 +79,7 @@ impl<E: Clone + Send + Sync + 'static> TestRuntimeBuilder<E> {
     /// Register several extensions at once.
     pub fn extensions(
         mut self,
-        extensions: impl IntoIterator<Item = Arc<dyn Extension<MockTypes<E>>>>,
+        extensions: impl IntoIterator<Item = Arc<dyn Extension<MockTypes>>>,
     ) -> Self {
         self.extensions.extend(extensions);
         self
@@ -129,7 +114,7 @@ impl<E: Clone + Send + Sync + 'static> TestRuntimeBuilder<E> {
     }
 
     /// Open the module and start the runtime through the public builder path.
-    pub async fn launch(self) -> anyhow::Result<TestRuntime<E>> {
+    pub async fn launch(self) -> anyhow::Result<TestRuntime> {
         // A temp directory roots any inline manifest and stands in as the
         // (unused, in-memory backends) state directory.
         let tmp = tempfile::tempdir()?;
@@ -144,14 +129,13 @@ impl<E: Clone + Send + Sync + 'static> TestRuntimeBuilder<E> {
 
         let pool = self.chain.pool(&self.chains, HARNESS_POLL_INTERVAL);
         let handle = RuntimeBuilder::new(&config)
-            .with_types::<MockTypes<E>>()
+            .with_types::<MockTypes>()
             .with_extensions(self.extensions)
             .with_module_source(Some(self.wasm), manifest)
             .with_wasi_clocks(self.clock.as_override())
             .with_components(ComponentsBuilder::new(
                 Prebuilt(pool),
                 Prebuilt(self.store.clone()),
-                Prebuilt(self.ext.clone()),
             ))
             .launch()
             .await?;
@@ -161,7 +145,6 @@ impl<E: Clone + Send + Sync + 'static> TestRuntimeBuilder<E> {
             chain: self.chain,
             store: self.store,
             clock: self.clock,
-            ext: self.ext,
             _tmp: tmp,
         })
     }
@@ -169,18 +152,17 @@ impl<E: Clone + Send + Sync + 'static> TestRuntimeBuilder<E> {
 
 /// A launched in-process runtime over the mock assembly; dropping it fires
 /// the shutdown trigger.
-pub struct TestRuntime<E = ()> {
+pub struct TestRuntime {
     handle: RuntimeHandle,
     chain: FakeNode,
     store: MockStateStore,
     clock: ManualClock,
-    ext: E,
     // Holds any inline manifest for the lifetime of the harness; dropped
     // when the `TestRuntime` is dropped (or consumed by `wait`).
     _tmp: tempfile::TempDir,
 }
 
-impl<E> TestRuntime<E> {
+impl TestRuntime {
     pub fn chain(&self) -> &FakeNode {
         &self.chain
     }
@@ -193,11 +175,6 @@ impl<E> TestRuntime<E> {
     /// The manual clock driving guest-visible time.
     pub fn clock(&self) -> &ManualClock {
         &self.clock
-    }
-
-    /// The extension payload bound into the lattice ext slot.
-    pub fn ext(&self) -> &E {
-        &self.ext
     }
 
     /// The shared log pipeline.
@@ -385,18 +362,17 @@ mod tests {
         rt.wait().await.expect("clean shutdown");
     }
 
-    /// The extension slot threads through the harness: a trivial extension
-    /// and an ext payload compose, the module dispatches, and the harness
-    /// hands the payload back.
+    /// An extension threads through the harness: its linker hook runs at
+    /// boot and the module still dispatches.
     #[tokio::test]
-    async fn harness_threads_an_extension_and_ext_payload() {
+    async fn harness_threads_an_extension() {
         let Some(wasm) = example_wasm_or_skip() else {
             return;
         };
 
         struct CountingExtension(Arc<AtomicUsize>);
 
-        impl Extension<MockTypes<Arc<AtomicUsize>>> for CountingExtension {
+        impl Extension<MockTypes> for CountingExtension {
             fn namespace(&self) -> &'static str {
                 "test"
             }
@@ -408,9 +384,7 @@ mod tests {
             }
             fn link(
                 &self,
-                _linker: &mut wasmtime::component::Linker<
-                    crate::host::state::HostState<MockTypes<Arc<AtomicUsize>>>,
-                >,
+                _linker: &mut wasmtime::component::Linker<crate::host::state::HostState<MockTypes>>,
             ) -> anyhow::Result<()> {
                 self.0.fetch_add(1, Ordering::SeqCst);
                 Ok(())
@@ -420,25 +394,22 @@ mod tests {
         let calls = Arc::new(AtomicUsize::new(0));
         let extension = Arc::new(CountingExtension(calls.clone()));
 
-        let mut rt = TestRuntime::builder_with_ext(wasm, calls.clone())
+        let mut rt = TestRuntime::builder(wasm)
             .extension(extension)
             .manifest_inline(example_block_manifest())
             .launch()
             .await
             .expect("launch with a trivial extension");
 
-        // The extension's linker hook ran during boot, and the payload the
-        // harness threaded is the one it hands back.
         assert!(
             calls.load(Ordering::SeqCst) >= 1,
             "the extension linker hook ran at boot",
         );
-        assert!(Arc::ptr_eq(rt.ext(), &calls), "the ext payload is retained");
 
         rt.push_block(header_numbered(21_000_000));
         rt.wait_for_log("example", "block 21000000")
             .await
-            .expect("the module dispatched under the extension-bearing lattice");
+            .expect("the module dispatched with the extension linked");
 
         rt.shutdown();
         rt.wait().await.expect("clean shutdown");

@@ -1,18 +1,13 @@
 //! The [`RuntimeTypes`] lattice over the in-process mocks.
 
-use std::marker::PhantomData;
-
 use crate::host::component::RuntimeTypes;
 use crate::test_utils::MockStateStore;
 
-/// Lattice binding the mock backends. The extension slot is the type
-/// parameter `E` (default `()`); an extension crate binds its own payload as
-/// `MockTypes<MyExt>`. A type-level marker, only ever named.
-pub struct MockTypes<E = ()>(PhantomData<fn() -> E>);
+/// Lattice binding the mock backends. A type-level marker, only ever named.
+pub struct MockTypes;
 
-impl<E: Clone + Send + Sync + 'static> crate::sealed::SealedRuntimeTypes for MockTypes<E> {}
+impl crate::sealed::SealedRuntimeTypes for MockTypes {}
 
-impl<E: Clone + Send + Sync + 'static> RuntimeTypes for MockTypes<E> {
+impl RuntimeTypes for MockTypes {
     type Store = MockStateStore;
-    type Ext = E;
 }
