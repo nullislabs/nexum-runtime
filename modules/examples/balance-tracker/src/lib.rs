@@ -40,6 +40,7 @@ impl BalanceTracker {
         let Some(cfg) = SETTINGS.get() else {
             return Ok(());
         };
-        logic::on_block(&WitBindgenHost, block.chain_id, cfg).map_err(Into::into)
+        logic::on_block(&WitBindgenHost, block.chain_id, cfg)?;
+        Ok(())
     }
 }

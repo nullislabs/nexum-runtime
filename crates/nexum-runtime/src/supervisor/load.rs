@@ -205,10 +205,7 @@ async fn run_init<T: RuntimeTypes>(
     config: &Config,
     deadline: Duration,
 ) -> Result<Result<(), Fault>> {
-    with_dispatch_deadline(deadline, bindings.call_init(store, config))
-        .await
-        .map_err(Error::from)?
-        .map_err(Error::from)
+    Ok(with_dispatch_deadline(deadline, bindings.call_init(store, config)).await??)
 }
 
 /// Instantiates the cached component on a fresh store and runs `init`; what
@@ -222,6 +219,7 @@ pub(super) async fn instantiate_module<T: RuntimeTypes>(
 ) -> Result<(EventModule, Result<(), Fault>)> {
     let bindings = EventModule::instantiate_async(&mut *store, &seed.artifact.component, linker)
         .await
+        // wasmtime::Error is not StdError, so anyhow's with_context needs the bridge.
         .map_err(Error::from)
         .with_context(|| format!("instantiate {name}"))?;
     let init = run_init(
@@ -253,7 +251,6 @@ pub(super) async fn install_provider<T: RuntimeTypes>(
         kind.install(seed.instance(&linker, sections, store, liveness), service),
     )
     .await
-    .map_err(Error::from)
     .with_context(|| format!("provider kind {} did not install in time", kind.kind()))?
 }
 
