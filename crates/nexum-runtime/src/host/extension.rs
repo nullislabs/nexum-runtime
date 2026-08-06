@@ -12,6 +12,7 @@ use futures::Stream;
 use nexum_tasks::{TaskExecutor, TaskExit, TaskSet};
 use wasmtime::Store;
 use wasmtime::component::{Component, Linker};
+pub use wasmtime_wasi::HostWallClock;
 
 use crate::bindings::nexum::host::types::Event;
 use crate::engine_config::EngineConfig;
@@ -32,6 +33,12 @@ pub trait Extension<T: RuntimeTypes>: Send + Sync + 'static {
     /// Add the extension's imports to a worker linker, after core interfaces
     /// and before instantiation.
     fn link(&self, linker: &mut Linker<HostState<T>>) -> anyhow::Result<()>;
+
+    /// The effective host wall clock, handed once per launch before
+    /// [`link`](Self::link): the WASI override's wall clock when set, else real.
+    fn attach_clock(&self, wall: Arc<dyn HostWallClock + Send + Sync>) {
+        let _ = wall;
+    }
 
     /// Host service this extension owns, published under its namespace.
     fn service(&self) -> Option<Arc<dyn HostService>> {

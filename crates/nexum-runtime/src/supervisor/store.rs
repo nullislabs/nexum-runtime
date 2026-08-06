@@ -19,8 +19,9 @@ use crate::manifest::ResourceSection;
 
 pub(super) type HostStore<T> = Store<HostState<T>>;
 
-/// Shared sources let a test drive guest-visible time; `None` keeps the
-/// ambient clocks. `RunId.started_at` is host wall-clock and unaffected.
+/// Shared sources let a test drive guest-visible time and the wall clock
+/// extensions receive; `None` keeps the ambient clocks. `RunId.started_at`
+/// is host wall-clock and unaffected.
 #[derive(Clone)]
 pub struct WasiClockOverride {
     pub(super) wall: Arc<dyn HostWallClock + Send + Sync>,
@@ -33,6 +34,15 @@ impl WasiClockOverride {
         monotonic: Arc<dyn HostMonotonicClock + Send + Sync>,
     ) -> Self {
         Self { wall, monotonic }
+    }
+
+    /// The effective host wall clock: the override's wall clock when set,
+    /// else the real host clock.
+    pub fn effective_wall(clocks: Option<&Self>) -> Arc<dyn HostWallClock + Send + Sync> {
+        match clocks {
+            Some(clocks) => clocks.wall.clone(),
+            None => Arc::new(wasmtime_wasi::clocks::WallClock::default()),
+        }
     }
 }
 

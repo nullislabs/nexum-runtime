@@ -168,6 +168,13 @@ impl<T: RuntimeTypes> AssembledRuntime<'_, T> {
 
         // wasmtime engine + linker - one of each, shared across modules.
         let engine = Engine::new(&wasmtime_config())?;
+
+        // Extensions receive the effective wall clock before linking, so
+        // their host-side time and guest WASI time share one source.
+        let wall = WasiClockOverride::effective_wall(clocks.as_ref());
+        for ext in &extensions {
+            ext.attach_clock(wall.clone());
+        }
         let linker = supervisor::build_linker::<T>(&engine, &extensions)?;
 
         // Boot supervisor - a module-source override wins over
@@ -654,16 +661,19 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Arc, OnceLock};
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     use super::*;
     use crate::addons::AddOns;
     use crate::engine_config::EngineConfig;
     use crate::host::component::{LocalStoreBuilder, LogPipelineBuilder, ProviderPoolBuilder};
+    use crate::host::extension::HostWallClock;
     use crate::host::state::HostState;
     use crate::manifest::NamespaceCaps;
     use crate::preset::{CoreRuntime, Runtime as RuntimePreset};
+    use crate::test_utils::clock::ManualClock;
     use crate::test_utils::wasm::workspace_root;
     use crate::test_utils::{Prebuilt, TestManifest, example_wasm_or_skip, module_wasm_or_skip};
     use wasmtime::component::Linker;
@@ -773,6 +783,93 @@ mod tests {
             appended_linked.load(Ordering::SeqCst),
             1,
             "appended extension"
+        );
+    }
+
+    /// Captures the wall clock handed through the extension seam.
+    struct ClockCaptureExt {
+        seen: Arc<OnceLock<Arc<dyn HostWallClock + Send + Sync>>>,
+    }
+
+    impl Extension<CoreRuntime> for ClockCaptureExt {
+        fn namespace(&self) -> &'static str {
+            "clockcap"
+        }
+        fn capabilities(&self) -> NamespaceCaps {
+            NamespaceCaps {
+                prefix: "clockcap:ext/",
+                ifaces: &[],
+            }
+        }
+        fn link(&self, _linker: &mut Linker<HostState<CoreRuntime>>) -> anyhow::Result<()> {
+            Ok(())
+        }
+        fn attach_clock(&self, wall: Arc<dyn HostWallClock + Send + Sync>) {
+            let _ = self.seen.set(wall);
+        }
+    }
+
+    /// Launch expecting the empty-module-set bail; the clock attach runs
+    /// before the boot that bails.
+    async fn launch_capturing_clock(
+        clocks: Option<WasiClockOverride>,
+    ) -> Arc<dyn HostWallClock + Send + Sync> {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut config = EngineConfig::default();
+        config.engine.state_dir = dir.path().join("state");
+
+        let seen = Arc::new(OnceLock::new());
+        let ext: Arc<dyn Extension<CoreRuntime>> = Arc::new(ClockCaptureExt { seen: seen.clone() });
+        let mut builder = RuntimeBuilder::new(&config)
+            .with_types::<CoreRuntime>()
+            .with_extensions([ext]);
+        if let Some(clocks) = clocks {
+            builder = builder.with_wasi_clocks(clocks);
+        }
+        let err = match builder
+            .with_components(ComponentsBuilder::new(
+                ProviderPoolBuilder,
+                LocalStoreBuilder,
+                (),
+            ))
+            .launch()
+            .await
+        {
+            Ok(_) => panic!("default config declares no modules; launch must bail"),
+            Err(err) => err,
+        };
+        assert!(err.to_string().contains("no modules to run"), "{err}");
+        seen.get().expect("clock attached before boot").clone()
+    }
+
+    /// The override's wall clock and the extension's attached clock read one
+    /// timeline.
+    #[tokio::test]
+    async fn extension_clock_follows_the_wasi_override() {
+        let clock = ManualClock::new();
+        clock.set(UNIX_EPOCH + Duration::from_secs(1_000));
+
+        let wall = launch_capturing_clock(Some(clock.as_override())).await;
+        assert_eq!(wall.now(), Duration::from_secs(1_000));
+
+        clock.advance(Duration::from_secs(50));
+        assert_eq!(
+            wall.now(),
+            Duration::from_secs(1_050),
+            "override and extension share one timeline",
+        );
+    }
+
+    /// Without an override the extension receives the real host clock.
+    #[tokio::test]
+    async fn extension_clock_defaults_to_the_real_clock() {
+        let wall = launch_capturing_clock(None).await;
+        let host = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("host time is past the epoch");
+        assert!(
+            wall.now().abs_diff(host) < Duration::from_secs(60),
+            "attached clock tracks host wall time",
         );
     }
 
