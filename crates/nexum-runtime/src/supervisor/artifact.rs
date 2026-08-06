@@ -51,6 +51,7 @@ pub(super) fn read_verified_component(
     let component = CodeBuilder::new(engine)
         .wasm_binary_or_text(&bytes, Some(path))
         .and_then(|builder| builder.compile_component())
+        // wasmtime::Error is not StdError, so anyhow's with_context needs the bridge.
         .map_err(Error::from)
         .with_context(|| format!("compile {}", path.display()))?;
     Ok((component, actual))

@@ -424,7 +424,7 @@ mod tests {
 
     #[test]
     fn fragment_and_query_after_the_host_do_not_influence_the_host_check() {
-        // Historical bug (see issue #57): a naive host-extractor could
+        // Historical bug: a naive host-extractor could
         // be fooled by a `/`-bearing query string or fragment appended
         // after the real host. `http::Uri::host` is unaffected by
         // either - the decoy text never becomes part of the host.

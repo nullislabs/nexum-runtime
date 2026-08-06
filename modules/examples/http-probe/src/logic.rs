@@ -3,7 +3,7 @@
 //! HTTP flows through the [`Fetch`] seam; `lib.rs` hands [`on_block`]
 //! `nexum_sdk::http::WasiFetch`, tests hand it a stub fetcher.
 
-use nexum_sdk::config::{self, ConfigError};
+use nexum_sdk::config;
 use nexum_sdk::host::Fault;
 use nexum_sdk::http::{Fetch, FetchError};
 
@@ -90,8 +90,8 @@ fn internal(message: String) -> Fault {
 
 /// Parse `module.toml::[config]` into a typed [`Settings`].
 pub fn parse_config(entries: &[(String, String)]) -> Result<Settings, Fault> {
-    let probe_url = config::get_required(entries, "probe_url").map_err(config_err)?;
-    let denied_url = config::get_required(entries, "denied_url").map_err(config_err)?;
+    let probe_url = config::get_required(entries, "probe_url")?;
+    let denied_url = config::get_required(entries, "denied_url")?;
     let every_n_blocks = match config::get_optional(entries, "every_n_blocks") {
         Some(raw) => raw
             .parse::<u64>()
@@ -110,10 +110,6 @@ pub fn parse_config(entries: &[(String, String)]) -> Result<Settings, Fault> {
 
 fn invalid_input(message: String) -> Fault {
     Fault::InvalidInput(message)
-}
-
-fn config_err(e: ConfigError) -> Fault {
-    invalid_input(e.to_string())
 }
 
 #[cfg(test)]
