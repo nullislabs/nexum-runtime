@@ -18,28 +18,42 @@ pub fn module_wasm(module: &str) -> PathBuf {
     workspace_root().join(format!("target/wasm32-wasip2/release/{artifact}.wasm"))
 }
 
-/// Built wasm for the guest package `module`; missing means skip locally,
-/// panic under CI.
+/// Environment opt-out for a run without the guest wasms built.
+pub const ALLOW_MISSING_WASM: &str = "NEXUM_ALLOW_MISSING_WASM";
+
+/// Built wasm for the guest package `module`.
+///
+/// A missing artifact fails by default, everywhere. Skipping was previously
+/// the local default, which made a run without `just build` report the same
+/// counts as a real one while every wasm-dependent test returned early. A
+/// green suite has to mean the tests ran.
 pub fn module_wasm_or_skip(module: &str) -> Option<PathBuf> {
-    locate(module_wasm(module), std::env::var_os("CI").is_some())
+    locate(
+        module_wasm(module),
+        std::env::var_os(ALLOW_MISSING_WASM).is_some(),
+    )
 }
 
 pub fn example_wasm_or_skip() -> Option<PathBuf> {
     module_wasm_or_skip("example")
 }
 
-fn locate(wasm: PathBuf, ci: bool) -> Option<PathBuf> {
+fn locate(wasm: PathBuf, allow_missing: bool) -> Option<PathBuf> {
     if wasm.exists() {
         return Some(wasm);
     }
     assert!(
-        !ci,
-        "{} not found under CI: the test job must build the module wasms before the suite runs",
+        allow_missing,
+        "{} not found: run `just build` first, or set {}=1 to skip every \
+         wasm-dependent test. A skipped run reports the same counts as a \
+         real one, so the skip is opt-in.",
         wasm.display(),
+        ALLOW_MISSING_WASM,
     );
     eprintln!(
-        "SKIP: {} not found - run `just build` to build the guest wasms",
+        "SKIP: {} not found and {} is set",
         wasm.display(),
+        ALLOW_MISSING_WASM,
     );
     None
 }
@@ -75,16 +89,16 @@ mod tests {
     }
 
     #[test]
-    fn missing_wasm_soft_skips_outside_ci() {
+    #[should_panic(expected = "run `just build` first")]
+    fn missing_wasm_fails_by_default() {
         let dir = tempfile::tempdir().expect("tempdir");
-        assert_eq!(locate(dir.path().join("absent.wasm"), false), None);
+        locate(dir.path().join("absent.wasm"), false);
     }
 
     #[test]
-    #[should_panic(expected = "not found under CI")]
-    fn missing_wasm_hard_fails_under_ci() {
+    fn missing_wasm_skips_only_behind_the_opt_out() {
         let dir = tempfile::tempdir().expect("tempdir");
-        locate(dir.path().join("absent.wasm"), true);
+        assert_eq!(locate(dir.path().join("absent.wasm"), true), None);
     }
 
     #[test]
