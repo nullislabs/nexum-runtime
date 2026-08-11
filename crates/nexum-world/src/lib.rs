@@ -301,39 +301,6 @@ pub fn manifest_capabilities(text: &str) -> Result<Vec<String>, String> {
     Ok(table.keys().cloned().collect())
 }
 
-/// The declared `[component] name` from the manifest text. A service
-/// registers under it, so it is also what a dependant writes.
-pub fn manifest_name(text: &str) -> Result<String, String> {
-    let value: toml::Table = text
-        .parse()
-        .map_err(|e| format!("component.toml is not valid TOML: {e}"))?;
-    value
-        .get("component")
-        .and_then(|component| component.get("name"))
-        .ok_or_else(|| "[component].name is missing".to_string())?
-        .as_str()
-        .map(str::to_owned)
-        .ok_or_else(|| "[component].name must be a string".to_string())
-}
-
-/// The declared `[component] kind` from the manifest text; `None` when
-/// absent (the runtime defaults it to a module).
-pub fn manifest_kind(text: &str) -> Result<Option<String>, String> {
-    let value: toml::Table = text
-        .parse()
-        .map_err(|e| format!("component.toml is not valid TOML: {e}"))?;
-    match value
-        .get("component")
-        .and_then(|component| component.get("kind"))
-    {
-        None => Ok(None),
-        Some(kind) => kind
-            .as_str()
-            .map(|kind| Some(kind.to_owned()))
-            .ok_or_else(|| "[component].kind must be a string".to_string()),
-    }
-}
-
 /// The distinct chain-log `event_signature` topics from the manifest
 /// text, in declaration order. Same hex grammar as the runtime's load.
 pub fn manifest_chain_log_topics(text: &str) -> Result<Vec<B256>, String> {
@@ -871,24 +838,6 @@ logging = "yes"
         )
         .expect_err("a non-table dependency must refuse");
         assert!(err.contains("must be a table"), "{err}");
-    }
-
-    #[test]
-    fn manifest_kind_reads_the_module_kind() {
-        let kind = manifest_kind("[component]\nname = \"x\"\nkind = \"venue-adapter\"\n").unwrap();
-        assert_eq!(kind.as_deref(), Some("venue-adapter"));
-    }
-
-    #[test]
-    fn manifest_without_a_kind_is_none() {
-        assert_eq!(manifest_kind("[component]\nname = \"x\"\n").unwrap(), None);
-        assert_eq!(manifest_kind("").unwrap(), None);
-    }
-
-    #[test]
-    fn manifest_with_a_non_string_kind_is_an_error() {
-        let err = manifest_kind("[component]\nkind = 3\n").unwrap_err();
-        assert!(err.contains("[component].kind must be a string"));
     }
 
     /// Pinned manifest grammar; the runtime's serde renames derive from it.
