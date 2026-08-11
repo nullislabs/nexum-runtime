@@ -220,3 +220,7 @@ mod tests {
         assert!(store.module("").is_err(), "empty namespace rejected");
     }
 }
+
+/// Metric capture for a scoped recorder, so a test can assert that a
+/// counter fired rather than that a call site exists.
+pub mod metrics_capture;
