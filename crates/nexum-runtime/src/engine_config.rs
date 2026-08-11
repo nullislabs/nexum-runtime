@@ -126,6 +126,7 @@ pub enum EngineConfigError {
 
 /// Engine-side configuration loaded from `engine.toml`.
 #[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct EngineConfig {
     #[serde(default)]
     pub engine: EngineSection,
@@ -145,7 +146,7 @@ pub struct EngineConfig {
     /// `(component.wasm, component.toml)` pair.
     #[serde(default)]
     pub modules: Vec<ModuleEntry>,
-    /// Provider components the supervisor boots alongside modules. Like a
+    /// Service components the supervisor boots alongside modules. Like a
     /// module, but the operator, not the author, scopes its transport here.
     #[serde(default)]
     pub services: Vec<ServiceEntry>,
@@ -157,6 +158,7 @@ pub struct EngineConfig {
 /// One `[[modules]]` table. `manifest` defaults to a sibling
 /// `component.toml`.
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ModuleEntry {
     /// Path to the compiled `.wasm` component.
     pub path: std::path::PathBuf,
@@ -169,10 +171,11 @@ pub struct ModuleEntry {
 /// `http_allow` is the operator's transport grant: an empty list denies all
 /// outbound HTTP.
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ServiceEntry {
-    /// Path to the compiled `.wasm` adapter component.
+    /// Path to the compiled `.wasm` service component.
     pub path: std::path::PathBuf,
-    /// Path to the adapter's `component.toml`. Defaults to `<path-parent>/component.toml`.
+    /// Path to the service's `component.toml`. Defaults to `<path-parent>/component.toml`.
     #[serde(default)]
     pub manifest: Option<std::path::PathBuf>,
     /// Outbound HTTP host allowlist: exact hostname or `*.suffix` wildcard.
@@ -181,6 +184,7 @@ pub struct ServiceEntry {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct EngineSection {
     #[serde(default = "default_state_dir")]
     pub state_dir: PathBuf,
@@ -221,6 +225,7 @@ fn default_log_backfill_concurrency() -> usize {
 /// `[engine.metrics]`. When `enabled`, serves `/metrics` on `bind_addr`
 /// via a Prometheus HTTP exporter. Default disabled.
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct MetricsSection {
     #[serde(default)]
     pub enabled: bool,
@@ -243,6 +248,7 @@ fn default_metrics_bind() -> String {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ChainConfig {
     /// JSON-RPC endpoint. `ws(s)://` engages pubsub (needed for
     /// `eth_subscribe`); `http(s)://` is request/response only.
@@ -326,6 +332,7 @@ fn clamp_http_ms(ms: u64) -> Duration {
 /// values resolve to built-in defaults. Sections are documented on their
 /// own types.
 #[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ModuleLimits {
     /// Fuel budget granted per `on_event` invocation.
     pub fuel_per_event: Option<u64>,
@@ -521,6 +528,7 @@ impl ModuleLimits {
 /// on the matching guest-settable `request-options` timeouts: a higher
 /// guest value is clamped down, an unset one inherits the ceiling.
 #[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct HttpLimitsSection {
     /// Ceiling on the guest-settable connect timeout, in milliseconds.
     pub connect_timeout_max_ms: Option<u64>,
@@ -542,6 +550,7 @@ pub struct HttpLimitsSection {
 /// `[limits.chain]` chain JSON-RPC response size limit. Optional; defaults
 /// to 1 MiB.
 #[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ChainLimitsSection {
     /// Cap on one chain JSON-RPC response body, in bytes.
     pub response_body_max_bytes: Option<u64>,
@@ -565,6 +574,7 @@ pub struct OutboundHttpLimits {
 /// `[limits.logs]` per-run retention knobs. Both optional; degenerate
 /// zeroes saturate up to 1.
 #[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct LogLimitsSection {
     /// Byte budget for one run's in-memory ring.
     pub bytes_per_run: Option<usize>,
@@ -577,6 +587,7 @@ pub struct LogLimitsSection {
 /// a sliding `window_secs` is quarantined and no longer dispatched until
 /// an operator-driven engine restart.
 #[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct PoisonLimitsSection {
     /// Maximum traps within the window before a module is poisoned.
     pub max_failures: Option<u32>,
@@ -588,6 +599,7 @@ pub struct PoisonLimitsSection {
 /// (keyed by its namespace) may accrue at most `max_charges` within a
 /// sliding `window_secs`; a charged decode failure counts the same.
 #[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct QuotaLimitsSection {
     /// Maximum submissions (plus charged decode failures) per caller in the
     /// window.
@@ -600,6 +612,7 @@ pub struct QuotaLimitsSection {
 /// consuming service polls each provider's `status` export for the
 /// receipts it watches. Optional; a zero saturates up to 1 ms.
 #[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct StatusPollSection {
     /// Milliseconds between status poll sweeps.
     pub interval_ms: Option<u64>,
@@ -610,6 +623,7 @@ pub struct StatusPollSection {
 /// poll fan-out; at the cap a new watch is refused and logged, live
 /// watches are never dropped.
 #[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct WatchLimitsSection {
     /// Maximum receipts under status watch at once.
     pub max_entries: Option<usize>,
@@ -624,6 +638,7 @@ pub struct WatchLimitsSection {
 /// optional; omitted values resolve to the production defaults, and a
 /// degenerate zero saturates up to 1 via [`ModuleLimits::dispatch_rate`].
 #[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct DispatchLimitsSection {
     /// Burst allowance: the token-bucket capacity.
     pub burst: Option<u32>,
@@ -929,6 +944,67 @@ response_body_max_bytes = 1_024
         // Unset fields keep the built-in defaults.
         assert_eq!(http.first_byte_timeout_max, Duration::from_secs(30));
         assert_eq!(http.between_bytes_timeout_max, Duration::from_secs(30));
+    }
+
+    /// An ignored key reads as an absent one, and an absent policy section
+    /// is the permissive case, so a typo must refuse rather than parse.
+    #[test]
+    fn an_unknown_key_refuses_and_names_itself() {
+        for (label, toml) in [
+            ("top-level section", "[polcy]\nmax_memory_bytes = 1\n"),
+            ("key in a section", "[engine]\nstate_dr = \"./data\"\n"),
+            (
+                "key in a nested section",
+                "[limits.http]\ntotal_deadline_ms = 1\nresponse_body_max_byte = 1\n",
+            ),
+            (
+                "key in a table entry",
+                "[[modules]]\npath = \"m.wasm\"\nmanifets = \"c.toml\"\n",
+            ),
+        ] {
+            let err = toml::from_str::<EngineConfig>(toml)
+                .expect_err(&format!("{label} must refuse an unknown key"));
+            let msg = err.to_string();
+            assert!(msg.contains("unknown"), "{label}: {msg}");
+        }
+    }
+
+    /// The guard must not reject what the schema does accept.
+    #[test]
+    fn a_fully_populated_config_still_parses() {
+        let cfg: EngineConfig = toml::from_str(
+            r#"
+[engine]
+state_dir = "./data"
+
+[limits]
+fuel_per_event = 7
+
+[limits.http]
+total_deadline_ms = 1000
+
+[chains.1]
+rpc_url = "https://example.test"
+
+[extensions.acme]
+anything = "goes here, the engine never reads it"
+
+[[modules]]
+path = "m.wasm"
+
+[[services]]
+path = "s.wasm"
+http_allow = ["api.acme.example"]
+"#,
+        )
+        .expect("every documented section parses under the guard");
+        assert_eq!(cfg.limits.fuel(), 7);
+        assert_eq!(cfg.modules.len(), 1);
+        assert_eq!(cfg.services.len(), 1);
+        assert!(
+            cfg.extensions.contains_key("acme"),
+            "an extension table stays opaque and unguarded",
+        );
     }
 
     #[test]
