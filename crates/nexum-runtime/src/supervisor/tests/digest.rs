@@ -5,7 +5,7 @@ use super::*;
 /// The committed byte-stable `.wat` fixture and the manifest pinning its sha256.
 fn pinned_fixture() -> (PathBuf, PathBuf) {
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("testdata/pinned");
-    (dir.join("component.wat"), dir.join("module.toml"))
+    (dir.join("component.wat"), dir.join("component.toml"))
 }
 
 fn wrong_digest() -> ContentDigest {
@@ -187,8 +187,8 @@ async fn boot_refuses_a_provider_with_a_mismatched_digest() {
     scenario
         .adapter(
             Entry::new(
-                TestManifest::new("acme")
-                    .kind("acme-adapter")
+                TestManifest::new("acme-adapter")
+                    .kind("service")
                     .cap("chain")
                     .component_digest(wrong_digest().to_string()),
             )
@@ -211,7 +211,14 @@ async fn boot_requires_a_provider_digest_when_the_engine_flag_is_set() {
     let wasm = scenario.dir().join("acme.wasm");
     std::fs::write(&wasm, b"unpinned provider bytes").expect("write artifact");
     scenario
-        .adapter(Entry::new(TestManifest::new("acme").kind("acme-adapter").cap("chain")).wasm(wasm))
+        .adapter(
+            Entry::new(
+                TestManifest::new("acme-adapter")
+                    .kind("service")
+                    .cap("chain"),
+            )
+            .wasm(wasm),
+        )
         .expect_refusal()
         .await
         .variant::<LoadRefusal>(|e| matches!(e, LoadRefusal::DigestUnpinned { .. }));

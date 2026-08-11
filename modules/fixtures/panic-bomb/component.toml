@@ -5,15 +5,12 @@
 # integration test asserts one dead run carries Stderr, HostInterface,
 # and Panic records.
 
-[module]
+[component]
 name = "panic-bomb"
 version = "0.1.0"
 
-[capabilities]
-required = ["logging"]
-
-[capabilities.http]
-allow = []
+[dependencies]
+logging = {}
 
 [[subscription]]
 kind = "block"

@@ -118,7 +118,9 @@ async fn dispatch_deadline_cuts_off_a_blocked_host_call_and_recovers() {
         ..ModuleLimits::default()
     })
     .wasm(wasm)
-    .module(workspace_manifest("modules/fixtures/slow-host/module.toml"))
+    .module(workspace_manifest(
+        "modules/fixtures/slow-host/component.toml",
+    ))
     .boot()
     .await
     .expect("slow-host boots");
@@ -260,8 +262,10 @@ async fn multi_chain_poisoned_module_does_not_affect_other_chains() {
             ..Default::default()
         })
         .module(
-            Entry::new(workspace_manifest("modules/fixtures/fuel-bomb/module.toml"))
-                .wasm(bomb_wasm),
+            Entry::new(workspace_manifest(
+                "modules/fixtures/fuel-bomb/component.toml",
+            ))
+            .wasm(bomb_wasm),
         )
         .module(
             Entry::new(TestManifest::new("example").cap("logging").block_sub(100))

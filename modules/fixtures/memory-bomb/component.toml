@@ -3,15 +3,12 @@
 # MiB per-module cap. The host traps + the integration test asserts
 # the supervisor marks the module dead.
 
-[module]
+[component]
 name = "memory-bomb"
 version = "0.1.0"
 
-[capabilities]
-required = ["logging"]
-
-[capabilities.http]
-allow = []
+[dependencies]
+logging = {}
 
 [[subscription]]
 kind = "block"

@@ -1,8 +1,0 @@
-# `component` pins the sibling component.wat; re-pin with `sha256sum` after edits.
-
-[module]
-name = "pinned-wat"
-component = "sha256:bff6492a4f3b14ba4e777c2f2ad7a5a3bb33c3a6e5c9cf566f23df15178fadbb"
-
-[capabilities]
-required = []

@@ -427,8 +427,7 @@ mod tests {
 
     /// A manifest declaring the `[acme]` section, which no builder emits.
     fn acme_section_manifest() -> String {
-        "[module]\nname = \"acme-user\"\n\n[capabilities]\nrequired = []\n\n[acme]\nventure = 1\n"
-            .to_owned()
+        "[component]\nname = \"acme-user\"\n\n[dependencies]\n\n[acme]\nventure = 1\n".to_owned()
     }
 
     #[tokio::test]
@@ -551,7 +550,7 @@ mod tests {
     #[tokio::test]
     async fn an_unregistered_adapter_kind_refuses_before_any_compile() {
         BootScenario::new()
-            .adapter(TestManifest::new("feed").kind("acme-feed"))
+            .adapter(TestManifest::new("acme-feed").kind("service"))
             .expect_refusal()
             .await
             .variant::<LoadRefusal>(
@@ -642,7 +641,7 @@ mod tests {
             .module(TestManifest::new("a").cap("logging"))
             .module(Entry::new(TestManifest::new("b").cap("logging")).wasm("other.wasm"))
             .adapter(
-                Entry::new(TestManifest::new("feed").kind("acme-feed"))
+                Entry::new(TestManifest::new("acme-feed").kind("service"))
                     .http_allow(["api.acme.example"]),
             );
         // Holding _launch keeps the manifest tempdir alive for the asserts.

@@ -156,8 +156,9 @@ async fn boot_rejects_duplicate_names_across_and_within_roles() {
     );
     scenario
         .adapter(
-            Entry::new(TestManifest::new("dup").kind("acme-adapter").cap("chain"))
-                .wasm(adapter_wasm),
+            // Named to collide with the module below: the namespace claim
+            // runs before the kind is resolved, so the collision is what fires.
+            Entry::new(TestManifest::new("dup").kind("service").cap("chain")).wasm(adapter_wasm),
         )
         .module(Entry::new(TestManifest::new("dup").cap("logging")).wasm(module_wasm))
         .expect_refusal()

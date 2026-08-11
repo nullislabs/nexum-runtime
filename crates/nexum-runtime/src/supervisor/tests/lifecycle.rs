@@ -289,7 +289,7 @@ async fn bomb_traps_and_marks_module_dead(module: &str) {
     let mut booted = BootScenario::new()
         .wasm(wasm)
         .module(workspace_manifest(&format!(
-            "modules/fixtures/{module}/module.toml"
+            "modules/fixtures/{module}/component.toml"
         )))
         .boot()
         .await
@@ -336,8 +336,10 @@ async fn resource_limit_dead_bomb_does_not_starve_healthy_module() {
     };
     let mut booted = BootScenario::new()
         .module(
-            Entry::new(workspace_manifest("modules/fixtures/fuel-bomb/module.toml"))
-                .wasm(bomb_wasm),
+            Entry::new(workspace_manifest(
+                "modules/fixtures/fuel-bomb/component.toml",
+            ))
+            .wasm(bomb_wasm),
         )
         .module(
             Entry::new(TestManifest::new("example").cap("logging").block_sub(1)).wasm(example_wasm),
@@ -434,7 +436,9 @@ async fn poison_pill_quarantines_module_after_threshold() {
             ..Default::default()
         })
         .wasm(wasm)
-        .module(workspace_manifest("modules/fixtures/fuel-bomb/module.toml"))
+        .module(workspace_manifest(
+            "modules/fixtures/fuel-bomb/component.toml",
+        ))
         .boot()
         .await
         .expect("boot");
@@ -758,7 +762,7 @@ async fn a_hanging_provider_install_refuses_the_boot_by_deadline() {
     let refusal = tokio::time::timeout(
         OUTER_TIMEOUT,
         scenario
-            .adapter(Entry::new(TestManifest::new("hanging").kind("hanging-adapter")).wasm(wasm))
+            .adapter(Entry::new(TestManifest::new("hanging-adapter").kind("service")).wasm(wasm))
             .expect_refusal(),
     )
     .await

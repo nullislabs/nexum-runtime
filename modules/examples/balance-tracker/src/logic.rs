@@ -109,7 +109,7 @@ fn parse_u256_le(bytes: &[u8]) -> Option<U256> {
     Some(U256::from_le_bytes(buf))
 }
 
-/// Parse `module.toml::[config]` into a typed [`Settings`].
+/// Parse `component.toml::[config]` into a typed [`Settings`].
 pub fn parse_config(entries: &[(String, String)]) -> Result<Settings, Fault> {
     let addresses_raw = config::get_required(entries, "addresses")?;
     let change_threshold_raw = config::get_required(entries, "change_threshold")?;

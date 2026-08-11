@@ -4,15 +4,12 @@
 # host traps `OutOfFuel`. The integration test asserts the trap is
 # caught + the module is marked dead.
 
-[module]
+[component]
 name = "fuel-bomb"
 version = "0.1.0"
 
-[capabilities]
-required = ["logging"]
-
-[capabilities.http]
-allow = []
+[dependencies]
+logging = {}
 
 [[subscription]]
 kind = "block"

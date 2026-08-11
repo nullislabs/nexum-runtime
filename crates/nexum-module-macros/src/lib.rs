@@ -24,12 +24,12 @@ const HANDLERS: [&str; 5] = ["init", "on_block", "on_chain_logs", "on_tick", "on
 /// `wit_bindgen::generate!`, the host adapter, the `Guest` impl, and
 /// `export!` around the untouched impl.
 ///
-/// The world is per module: the macro reads the crate's `module.toml`
+/// The world is per module: the macro reads the crate's `component.toml`
 /// and synthesizes a world importing exactly the
-/// `[capabilities].required` and `optional` declarations, so the
+/// `[dependencies]` keys, so the
 /// load-time capability check passes by construction. An undeclared
 /// capability's bindings do not exist. Requirements: the manifest sits
-/// at the crate root with a `[capabilities]` section; the crate depends
+/// at the crate root with a `[dependencies]` table; the crate depends
 /// on `wit-bindgen` directly; and the crate root must not shadow the
 /// std prelude names `Result`, `Vec`, or `Ok` (the generated `Guest`
 /// trait refers to them unqualified).
@@ -278,19 +278,19 @@ struct ManifestFacts {
     path: String,
 }
 
-/// Synthesize the per-module world from the crate's `module.toml`
-/// `[capabilities]` plus the nearest ancestor `extensions.toml`.
+/// Synthesize the per-module world from the crate's `component.toml`
+/// `[dependencies]` plus the nearest ancestor `extensions.toml`.
 /// Topics are read only for `want_topics`, so a manifest field no
 /// opted-in module names can never fail a build.
 fn derive_manifest_facts(
     crate_dir: &std::path::Path,
     want_topics: bool,
 ) -> Result<ManifestFacts, String> {
-    let manifest_path = crate_dir.join("module.toml");
+    let manifest_path = crate_dir.join("component.toml");
     let text = std::fs::read_to_string(&manifest_path).map_err(|e| {
         format!(
             "could not read {} ({e}); #[nexum_sdk::module] derives the component's WIT world \
-             from the manifest's [capabilities] section, so the manifest must sit next to \
+             from the manifest's [dependencies] table, so the manifest must sit next to \
              Cargo.toml",
             manifest_path.display()
         )
@@ -356,7 +356,7 @@ fn topic_parity_check(events: &[syn::Path], topics: &[B256]) -> proc_macro2::Tok
     });
     let declared_checks = events.iter().enumerate().map(|(i, path)| {
         let msg = format!(
-            "topic drift: `{}`'s topic-0 is not among the module.toml chain-log event_signature \
+            "topic drift: `{}`'s topic-0 is not among the component.toml chain-log event_signature \
              values [{manifest_list}]",
             path_string(path),
         );
@@ -369,7 +369,7 @@ fn topic_parity_check(events: &[syn::Path], topics: &[B256]) -> proc_macro2::Tok
     });
     let manifest_checks = topics.iter().enumerate().map(|(j, topic)| {
         let msg = format!(
-            "topic drift: module.toml chain-log event_signature {topic} is not the topic-0 of any \
+            "topic drift: component.toml chain-log event_signature {topic} is not the topic-0 of any \
              of subscribes({declared_list})",
         );
         quote! {
@@ -489,7 +489,7 @@ mod tests {
     #[test]
     fn every_manifest_read_is_a_rebuild_anchor() {
         let dir = tempfile::tempdir().expect("tempdir");
-        std::fs::write(dir.path().join("module.toml"), MANIFEST).expect("write manifest");
+        std::fs::write(dir.path().join("component.toml"), MANIFEST).expect("write manifest");
         std::fs::write(
             dir.path().join("extensions.toml"),
             "[extensions.acme]\nimport = \"acme:host/acme@0.1.0\"\n",
@@ -498,7 +498,7 @@ mod tests {
 
         let facts = derive_manifest_facts(dir.path(), true).expect("facts");
         let emitted = rebuild_anchors(&facts.anchors).to_string();
-        for manifest in ["module.toml", "extensions.toml"] {
+        for manifest in ["component.toml", "extensions.toml"] {
             let anchor = dir.path().join(manifest);
             assert!(
                 facts
@@ -520,14 +520,14 @@ mod tests {
             "{MANIFEST}\n[[subscription]]\nkind = \"chain-log\"\nchain_id = 1\n\
              event_signature = \"not-a-topic\"\n"
         );
-        std::fs::write(dir.path().join("module.toml"), manifest).expect("write manifest");
+        std::fs::write(dir.path().join("component.toml"), manifest).expect("write manifest");
 
         assert!(derive_manifest_facts(dir.path(), false).is_ok());
         let err = derive_manifest_facts(dir.path(), true).err().unwrap();
         assert!(err.contains("invalid topic \"not-a-topic\""), "{err}");
     }
 
-    const MANIFEST: &str = "[module]\nname = \"t\"\n\n[capabilities]\nrequired = [\"logging\"]\n";
+    const MANIFEST: &str = "[component]\nname = \"t\"\n\n[dependencies]\nlogging = {}\n";
 
     /// The string literals the emitted `assert!`s carry.
     fn refusal_messages(emitted: &str) -> Vec<String> {

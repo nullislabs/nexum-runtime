@@ -54,7 +54,7 @@ fn an_untyped_refusal_carries_no_counter_label() {
 async fn boot_rejects_provider_whose_manifest_is_an_event_module() {
     BootScenario::over(mock_components())
         .extensions(acme_extensions())
-        .adapter(TestManifest::new("acme").kind("event-module"))
+        .adapter(TestManifest::new("acme").kind("module"))
         .expect_refusal()
         .await
         .variant::<LoadRefusal>(|e| {
@@ -68,7 +68,7 @@ async fn boot_rejects_provider_whose_manifest_is_an_event_module() {
 async fn boot_rejects_an_unregistered_provider_kind() {
     BootScenario::over(mock_components())
         .extensions(acme_extensions())
-        .adapter(TestManifest::new("bad").kind("gadget"))
+        .adapter(TestManifest::new("gadget").kind("service"))
         .expect_refusal()
         .await
         .variant::<LoadRefusal>(|e| {
@@ -88,9 +88,13 @@ async fn boot_admits_a_registered_provider_kind_past_the_kind_gate() {
     let missing = scenario.dir().join("missing-acme.wasm");
     scenario
         .adapter(
-            Entry::new(TestManifest::new("acme").kind("acme-adapter").cap("chain"))
-                .wasm(missing)
-                .http_allow(["api.acme.example"]),
+            Entry::new(
+                TestManifest::new("acme-adapter")
+                    .kind("service")
+                    .cap("chain"),
+            )
+            .wasm(missing)
+            .http_allow(["api.acme.example"]),
         )
         .expect_refusal()
         .await
@@ -98,7 +102,7 @@ async fn boot_admits_a_registered_provider_kind_past_the_kind_gate() {
         // Operator wording pin.
         .names("read component")
         .names("missing-acme")
-        .lacks("requires a module.toml");
+        .lacks("requires a component.toml");
 }
 
 /// The multi-entry path wires provider kinds, so a serviceless kind refuses
@@ -157,7 +161,7 @@ async fn boot_single_skips_the_provider_kind_service_gate() {
         .lacks("without a host service");
 }
 
-/// `[capabilities]` is declared so the failing gate is the subscription kind.
+/// `[dependencies]` is declared so the failing gate is the subscription kind.
 #[tokio::test]
 async fn boot_refuses_an_undeclared_extension_subscription_kind() {
     let Some(wasm) = example_wasm_or_skip() else {
@@ -180,7 +184,7 @@ async fn boot_refuses_an_undeclared_extension_subscription_kind() {
 /// No wasm needs to exist; the refusal precedes compile and carries the
 /// migration hint.
 #[tokio::test]
-async fn boot_refuses_a_component_without_module_toml() {
+async fn boot_refuses_a_component_without_a_manifest() {
     let scenario = BootScenario::new();
     let orphan = scenario.dir().join("orphan.wasm");
     scenario
@@ -192,7 +196,7 @@ async fn boot_refuses_a_component_without_module_toml() {
                 if component.ends_with("orphan.wasm"))
         })
         // Operator wording pin.
-        .names("required = []")
+        .names("empty [dependencies] table grants")
         .lacks("compile");
 }
 
@@ -211,11 +215,11 @@ async fn boot_refuses_a_nonexistent_explicit_manifest_path() {
 }
 
 /// Operator `http_allow` must not stand in for the component's own
-/// `[capabilities]`; only the module path runs the kind gate, so it carries the decoy.
+/// `[dependencies]`; only the module path runs the kind gate, so it carries the decoy.
 #[tokio::test]
 async fn boot_refuses_a_capsless_manifest_before_any_other_gate() {
-    // Raw TOML: the textual absence of [capabilities] is the fixture.
-    let provider = "[module]\nname = \"acme\"\nkind = \"acme-adapter\"\n\n\
+    // Raw TOML: the textual absence of [dependencies] is the fixture.
+    let provider = "[component]\nname = \"acme-adapter\"\nkind = \"service\"\n\n\
                     [venue]\nbody_version = 2\n\n\
                     [[subscription]]\nkind = \"acme-status\"\n";
     BootScenario::over(mock_components())
@@ -227,11 +231,11 @@ async fn boot_refuses_a_capsless_manifest_before_any_other_gate() {
             matches!(e, BootRefusal::Manifest(ParseError::MissingCapabilities))
         })
         // Operator wording pin.
-        .names("required = []")
+        .names("empty one grants nothing")
         .lacks("no wired extension claims")
         .lacks("compile");
 
-    let module = "[module]\nname = \"example\"\n\n\
+    let module = "[component]\nname = \"example\"\n\n\
                   [venue]\nbody_version = 2\n\n\
                   [[subscription]]\nkind = \"acme-status\"\n";
     BootScenario::new()
@@ -242,7 +246,7 @@ async fn boot_refuses_a_capsless_manifest_before_any_other_gate() {
             matches!(e, BootRefusal::Manifest(ParseError::MissingCapabilities))
         })
         // Operator wording pin.
-        .names("required = []")
+        .names("empty one grants nothing")
         .lacks("unknown event kind")
         .lacks("no wired extension claims")
         .lacks("compile");
@@ -255,8 +259,8 @@ async fn boot_refuses_a_capsless_manifest_before_any_other_gate() {
 async fn boot_refuses_a_blank_manifest_name_for_both_roles() {
     BootScenario::over(mock_components())
         .extensions(acme_extensions())
-        .adapter(TestManifest::new("").kind("acme-adapter").cap("chain"))
-        .adapter(TestManifest::new("").kind("acme-adapter").cap("chain"))
+        .adapter(TestManifest::new("").kind("service").cap("chain"))
+        .adapter(TestManifest::new("").kind("service").cap("chain"))
         .expect_refusal()
         .await
         .variant::<BootRefusal>(|e| matches!(e, BootRefusal::Manifest(ParseError::BlankModuleName)))
@@ -311,7 +315,14 @@ async fn boot_denies_an_undeclared_logging_import_for_a_provider() {
     };
     BootScenario::over(mock_components())
         .extensions(acme_extensions())
-        .adapter(Entry::new(TestManifest::new("acme").kind("acme-adapter").cap("chain")).wasm(wasm))
+        .adapter(
+            Entry::new(
+                TestManifest::new("acme-adapter")
+                    .kind("service")
+                    .cap("chain"),
+            )
+            .wasm(wasm),
+        )
         .expect_refusal()
         .await
         .variant::<CapabilityError>(|e| {

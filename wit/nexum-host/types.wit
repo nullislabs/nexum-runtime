@@ -67,7 +67,7 @@ interface types {
         custom(custom-event),
     }
 
-    /// Opaque config from module.toml [config] section.
+    /// Opaque config from the component.toml [config] section.
     type config = list<tuple<string, string>>;
 
     /// The cross-domain failure vocabulary richer interfaces embed as a

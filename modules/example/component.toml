@@ -1,20 +1,13 @@
 # Example module manifest - exercises the 0.2 manifest schema end-to-end.
 
-[module]
+[component]
 name = "example"
 version = "0.1.0"
 # Optional content pin, verified when present:
 #   component = "sha256:<64 hex chars>"   (sha256sum of the .wasm)
 
-[capabilities]
-# Capabilities this module requests. The engine grants every one or
-# refuses the module at boot.
-required = ["logging"]
-
-[capabilities.http]
-# Per-module HTTP allowlist. Empty list = no outbound HTTP permitted.
-# Entries are exact hostnames or *.domain wildcards.
-allow = []
+[dependencies]
+logging = {}
 
 [config]
 # Stringly-typed in 0.2 (typed variant on 0.3 roadmap). Numbers and

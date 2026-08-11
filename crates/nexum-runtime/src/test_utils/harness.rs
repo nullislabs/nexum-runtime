@@ -119,7 +119,7 @@ impl TestRuntimeBuilder {
         // (unused, in-memory backends) state directory.
         let tmp = tempfile::tempdir()?;
 
-        let manifest = self.manifest.resolve(&tmp.path().join("module.toml"));
+        let manifest = self.manifest.resolve(&tmp.path().join("component.toml"));
 
         let mut config = EngineConfig::default();
         config.engine.state_dir = tmp.path().to_path_buf();
@@ -249,7 +249,7 @@ mod tests {
             .to_toml()
     }
 
-    /// A block manifest plus a `[module].component` pin of the wasm's bytes.
+    /// A block manifest plus a `[component].digest` pin of the wasm's bytes.
     fn pinned_block_manifest(name: &str, chain_id: u64, wasm: &std::path::Path) -> String {
         let digest = crate::digest::ContentDigest::of_bytes(
             &std::fs::read(wasm).expect("read module wasm for pinning"),

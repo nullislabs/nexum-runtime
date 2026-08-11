@@ -9,7 +9,7 @@ async fn e2e_supervisor_boots_example_module() {
     };
     let booted = BootScenario::new()
         .wasm(wasm)
-        .module(workspace_manifest("modules/example/module.toml"))
+        .module(workspace_manifest("modules/example/component.toml"))
         .boot()
         .await
         .expect("boot");
@@ -88,8 +88,8 @@ async fn e2e_provider_declaring_logging_boots() {
         .extensions(acme_extensions())
         .adapter(
             Entry::new(
-                TestManifest::new("acme")
-                    .kind("acme-adapter")
+                TestManifest::new("acme-adapter")
+                    .kind("service")
                     .cap("logging"),
             )
             .wasm(wasm),
@@ -152,14 +152,15 @@ async fn production_module_dispatches(module: &str, manifest: &str) {
 
 #[tokio::test]
 async fn e2e_price_alert_block_dispatch() {
-    production_module_dispatches("price-alert", "modules/examples/price-alert/module.toml").await;
+    production_module_dispatches("price-alert", "modules/examples/price-alert/component.toml")
+        .await;
 }
 
 #[tokio::test]
 async fn e2e_balance_tracker_block_dispatch() {
     production_module_dispatches(
         "balance-tracker",
-        "modules/examples/balance-tracker/module.toml",
+        "modules/examples/balance-tracker/component.toml",
     )
     .await;
 }
@@ -265,7 +266,9 @@ async fn dying_run_leaves_a_panic_record() {
     };
     let mut booted = BootScenario::new()
         .wasm(wasm)
-        .module(workspace_manifest("modules/fixtures/fuel-bomb/module.toml"))
+        .module(workspace_manifest(
+            "modules/fixtures/fuel-bomb/component.toml",
+        ))
         .boot()
         .await
         .expect("boot");
@@ -297,7 +300,7 @@ async fn facade_panic_leaves_stderr_host_interface_and_panic_records() {
     let mut booted = BootScenario::new()
         .wasm(wasm)
         .module(workspace_manifest(
-            "modules/fixtures/panic-bomb/module.toml",
+            "modules/fixtures/panic-bomb/component.toml",
         ))
         .boot()
         .await

@@ -56,7 +56,7 @@ pub(crate) enum LoadRefusal {
     },
     #[error(
         "{} declares the worker kind; an [[adapters]] entry requires a \
-         module.toml declaring a registered provider kind ({})",
+         component.toml declaring a registered provider kind ({})",
         path.display(),
         registered.join(", ")
     )]
@@ -79,8 +79,8 @@ pub(crate) enum LoadRefusal {
     )]
     UnknownEventKind { module: ModuleId, kind: String },
     #[error(
-        "no [module].component digest for {} and [engine] require_component_digest is set; \
-         pin the artifact's sha256 in its module.toml",
+        "no [component].digest digest for {} and [engine] require_component_digest is set; \
+         pin the artifact's sha256 in its component.toml",
         path.display()
     )]
     DigestUnpinned { path: PathBuf },
@@ -288,7 +288,7 @@ pub(super) async fn module<T: RuntimeTypes>(
         fuel,
         memory,
         state_bytes,
-    } = resolve_module_limits(&loaded_manifest.manifest.module.resources, limits_cfg);
+    } = resolve_module_limits(&loaded_manifest.manifest.component.resources, limits_cfg);
     info!(
         module = %module_namespace,
         fuel,
@@ -392,22 +392,27 @@ pub(super) async fn provider<T: RuntimeTypes>(
                     .with_context(|| format!("install refused for {}", entry.path.display()))?;
             }
             // An unregistered kind refuses before compile.
-            let row: &ProviderRow<T> = match &loaded_manifest.manifest.module.kind {
-                ComponentKind::Worker => {
+            // A service's name is the service type, so the name selects
+            // the row. A module declared as an adapter refuses before compile.
+            let row: &ProviderRow<T> = match loaded_manifest.manifest.component.kind {
+                ComponentKind::Module => {
                     return Err(LoadRefusal::WorkerKindAdapter {
                         path: entry.path.clone(),
                         registered: super::admission::registered_kinds(&shared.kinds),
                     }
                     .into());
                 }
-                ComponentKind::Provider(spelling) => shared
-                    .kinds
-                    .get(spelling.as_str())
-                    .ok_or_else(|| LoadRefusal::UnregisteredKind {
-                        path: entry.path.clone(),
-                        kind: spelling.clone(),
-                        registered: super::admission::registered_kinds(&shared.kinds),
-                    })?,
+                ComponentKind::Service => {
+                    let name = loaded_manifest.manifest.component.name.as_str();
+                    shared
+                        .kinds
+                        .get(name)
+                        .ok_or_else(|| LoadRefusal::UnregisteredKind {
+                            path: entry.path.clone(),
+                            kind: name.to_owned(),
+                            registered: super::admission::registered_kinds(&shared.kinds),
+                        })?
+                }
             };
             info!(
                 component = %entry.path.display(),

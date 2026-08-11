@@ -1,5 +1,5 @@
 //! Capability enforcement: cross-checks a component's WIT imports against
-//! its `[capabilities]` declarations.
+//! its `[dependencies]` declarations.
 //!
 //! The core `nexum:host` namespace is built in; each extension registers
 //! its own via [`CapabilityRegistry::register`]. `wasi:http` is gated by
@@ -181,7 +181,7 @@ impl CapabilityRegistry {
 }
 
 /// Deny every gated import the manifest does not declare; absent
-/// `[capabilities]` is the empty set. Runs before instantiation.
+/// an absent `[dependencies]` table is the empty set. Runs before instantiation.
 pub fn enforce_capabilities<'a>(
     loaded: &LoadedManifest,
     component_imports: impl Iterator<Item = &'a str>,
@@ -189,10 +189,10 @@ pub fn enforce_capabilities<'a>(
 ) -> Result<(), CapabilityError> {
     let declared: HashSet<&str> = loaded
         .manifest
-        .capabilities
+        .dependencies
         .as_ref()
         .into_iter()
-        .flat_map(|c| c.required.iter())
+        .flat_map(|deps| deps.keys())
         .map(String::as_str)
         .collect();
 
@@ -235,7 +235,7 @@ pub fn enforce_capabilities<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::manifest::types::{CapabilitiesSection, Manifest};
+    use crate::manifest::types::{Dependency, Manifest};
 
     /// A registry with one extension namespace registered, mirroring
     /// what a composition root assembles.
@@ -305,10 +305,12 @@ mod tests {
     fn manifest_with_caps(required: &[&str]) -> LoadedManifest {
         LoadedManifest {
             manifest: Manifest {
-                capabilities: Some(CapabilitiesSection {
-                    required: required.iter().map(|s| s.to_string()).collect(),
-                    http: None,
-                }),
+                dependencies: Some(
+                    required
+                        .iter()
+                        .map(|s| ((*s).to_owned(), Dependency::default()))
+                        .collect(),
+                ),
                 ..Default::default()
             },
             http_allowlist: vec![],

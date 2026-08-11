@@ -4,15 +4,12 @@
 # fixture under a pinned clock override and asserts the logged time matches
 # the override, proving the guest observes virtualized time end to end.
 
-[module]
+[component]
 name = "clock-reader"
 version = "0.1.0"
 
-[capabilities]
-required = ["logging"]
-
-[capabilities.http]
-allow = []
+[dependencies]
+logging = {}
 
 [[subscription]]
 kind = "block"

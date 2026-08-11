@@ -14,9 +14,9 @@ pub const CORE_CAPABILITIES: &[&str] = &nexum_world::CORE_IFACES;
 #[derive(Debug, Deserialize, Default)]
 pub struct Manifest {
     #[serde(default)]
-    pub module: ModuleSection,
+    pub component: ComponentSection,
     #[serde(default)]
-    pub capabilities: Option<CapabilitiesSection>,
+    pub dependencies: Option<DependencySection>,
     #[serde(default)]
     pub config: toml::Table,
     /// Event subscriptions wired before `_init`. `block` and `chain-log`
@@ -183,7 +183,10 @@ impl<'de> Deserialize<'de> for Subscription {
 }
 
 #[derive(Debug, Deserialize, Default)]
-pub struct ModuleSection {
+pub struct ComponentSection {
+    /// Instance identity. A service's name is also what a dependant
+    /// writes, and both roles share one keccak local-store namespace, so
+    /// it is unique across `[[modules]]` and `[[adapters]]`.
     #[serde(default)]
     pub name: String,
     #[allow(dead_code)] // Parsed but has no reader.
@@ -192,43 +195,29 @@ pub struct ModuleSection {
     /// Pinned `sha256:<64 hex chars>` digest, verified against the loaded
     /// bytes before compile.
     #[serde(default)]
-    pub component: Option<String>,
-    /// Component kind; defaults to the worker (`event-module`), a provider
-    /// names its registered kind.
+    pub digest: Option<String>,
+    /// What this component is; defaults to a module.
     #[serde(default)]
     pub kind: ComponentKind,
-    /// Per-module resource overrides; each unset field inherits the engine
-    /// `[limits]` default.
+    /// Per-component resource requests; each unset field inherits the
+    /// engine `[limits]` default and never widens it.
     #[serde(default)]
     pub resources: ResourceSection,
 }
 
-/// The worker kind's manifest spelling.
-pub const WORKER_KIND: &str = "event-module";
-
-/// Component kind a manifest declares: the worker, or a provider spelling
-/// an extension registers. Defaults to the worker; an unregistered spelling
-/// is refused at boot.
-#[derive(Debug, Deserialize, Default, Clone, PartialEq, Eq, derive_more::Display)]
-#[serde(from = "String")]
+/// What a component is. A module consumes; a service also registers its
+/// name for other components to depend on, so a service's name is the
+/// service type an extension declares.
+#[derive(Debug, Deserialize, Default, Clone, Copy, PartialEq, Eq, Hash, derive_more::Display)]
+#[serde(rename_all = "kebab-case")]
 pub enum ComponentKind {
-    /// Event-driven worker (`event-module`).
+    /// Consumes host capabilities and services; registers nothing.
     #[default]
-    #[display("{WORKER_KIND}")]
-    Worker,
-    /// A provider, named by its manifest spelling.
-    #[display("{_0}")]
-    Provider(String),
-}
-
-impl From<String> for ComponentKind {
-    fn from(kind: String) -> Self {
-        if kind == WORKER_KIND {
-            Self::Worker
-        } else {
-            Self::Provider(kind)
-        }
-    }
+    #[display("module")]
+    Module,
+    /// Also registers its name for other components to depend on.
+    #[display("service")]
+    Service,
 }
 
 /// `[module.resources]` overrides; each unset field keeps the engine
@@ -246,21 +235,19 @@ pub struct ResourceSection {
     pub max_state_bytes: Option<u64>,
 }
 
-/// `deny_unknown_fields` so a manifest still carrying the removed
-/// `optional` key refuses at parse rather than losing the declaration.
+/// `[dependencies]`: each key names a host capability or a service, and
+/// its table carries the attributes that qualify it.
+pub type DependencySection = BTreeMap<String, Dependency>;
+
+/// One dependency's attributes. `deny_unknown_fields` so a misspelled
+/// attribute refuses rather than being ignored.
 #[derive(Debug, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
-pub struct CapabilitiesSection {
+pub struct Dependency {
+    /// Hosts this component may reach. Only the `http` dependency takes
+    /// it; load refuses it anywhere else.
     #[serde(default)]
-    pub required: Vec<String>,
-    #[serde(default)]
-    pub http: Option<HttpSection>,
-}
-
-#[derive(Debug, Deserialize, Default)]
-pub struct HttpSection {
-    #[serde(default)]
-    pub allow: Vec<String>,
+    pub hosts: Vec<String>,
 }
 
 /// Loaded + validated manifest, plus the data the engine needs to
@@ -275,6 +262,6 @@ pub struct LoadedManifest {
     /// module's `init`. Scalars become their text form; arrays and tables
     /// their TOML representation.
     pub config: Vec<(String, String)>,
-    /// `[module].component` parsed to its typed digest.
+    /// `[component].digest` parsed to its typed digest.
     pub component_digest: Option<crate::digest::ContentDigest>,
 }

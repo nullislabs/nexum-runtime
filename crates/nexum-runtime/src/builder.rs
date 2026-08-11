@@ -997,7 +997,7 @@ mod tests {
         let Some(wasm) = example_wasm_or_skip() else {
             return;
         };
-        let manifest = workspace_root().join("modules/example/module.toml");
+        let manifest = workspace_root().join("modules/example/component.toml");
 
         let dir = tempfile::tempdir().expect("tempdir");
         let mut config = EngineConfig::default();
@@ -1071,10 +1071,10 @@ mod tests {
     async fn launch_bails_on_an_unconfigured_chain_subscription() {
         let dir = tempfile::tempdir().expect("tempdir");
         let wasm = dir.path().join("missing.wasm");
-        let manifest = dir.path().join("module.toml");
+        let manifest = dir.path().join("component.toml");
         std::fs::write(
             &manifest,
-            "[module]\nname = \"example\"\n\n[capabilities]\nrequired = [\"logging\"]\n\n\
+            "[component]\nname = \"example\"\n\n[dependencies]\nlogging = {}\n\n\
              [[subscription]]\nkind = \"block\"\nchain_id = 424242\n",
         )
         .expect("write manifest");
@@ -1163,7 +1163,7 @@ mod tests {
         let Some(wasm) = example_wasm_or_skip() else {
             return;
         };
-        let manifest = workspace_root().join("modules/example/module.toml");
+        let manifest = workspace_root().join("modules/example/component.toml");
 
         let dir = tempfile::tempdir().expect("tempdir");
         let mut config = EngineConfig::default();

@@ -1,4 +1,4 @@
-//! `module.toml` builder for tests.
+//! `component.toml` builder for tests.
 
 use std::path::{Path, PathBuf};
 
@@ -59,25 +59,25 @@ impl TestManifest {
         }
     }
 
-    /// Set `[module].kind`; unset defaults to worker at load.
+    /// Set `[component].kind`; unset defaults to a module at load.
     pub fn kind(mut self, kind: impl Into<String>) -> Self {
         self.kind = Some(kind.into());
         self
     }
 
-    /// Set `[module].component` to a content-digest pin.
+    /// Set `[component].digest` to a content-digest pin.
     pub fn component_digest(mut self, digest: impl Into<String>) -> Self {
         self.component = Some(digest.into());
         self
     }
 
-    /// Append to `[capabilities].required`; the section is emitted even when empty.
+    /// Append a `[dependencies]` key; the table is emitted even when empty.
     pub fn cap(mut self, cap: impl Into<String>) -> Self {
         self.caps.push(cap.into());
         self
     }
 
-    /// Append to `[capabilities.http].allow`; the section is emitted only when non-empty.
+    /// Append a host to the `http` dependency; implies that dependency.
     pub fn http_allow(mut self, host: impl Into<String>) -> Self {
         self.http_allow.push(host.into());
         self
@@ -131,29 +131,32 @@ impl TestManifest {
     }
 
     pub fn to_toml(&self) -> String {
-        let mut module = toml::Table::new();
-        module.insert("name".into(), self.name.clone().into());
+        let mut component = toml::Table::new();
+        component.insert("name".into(), self.name.clone().into());
         if let Some(kind) = &self.kind {
-            module.insert("kind".into(), kind.clone().into());
+            component.insert("kind".into(), kind.clone().into());
         }
-        if let Some(component) = &self.component {
-            module.insert("component".into(), component.clone().into());
+        if let Some(digest) = &self.component {
+            component.insert("digest".into(), digest.clone().into());
         }
 
-        let mut capabilities = toml::Table::new();
-        let required: Vec<toml::Value> = self.caps.iter().map(|c| c.clone().into()).collect();
-        capabilities.insert("required".into(), required.into());
+        // Each dependency is a table, so an attribute belongs to the thing
+        // it qualifies. `hosts` implies the http dependency.
+        let mut dependencies = toml::Table::new();
+        for cap in &self.caps {
+            dependencies.insert(cap.clone(), toml::Table::new().into());
+        }
         if !self.http_allow.is_empty() {
-            let allow: Vec<toml::Value> =
+            let hosts: Vec<toml::Value> =
                 self.http_allow.iter().map(|h| h.clone().into()).collect();
             let mut http = toml::Table::new();
-            http.insert("allow".into(), allow.into());
-            capabilities.insert("http".into(), http.into());
+            http.insert("hosts".into(), hosts.into());
+            dependencies.insert("http".into(), http.into());
         }
 
         let mut root = toml::Table::new();
-        root.insert("module".into(), module.into());
-        root.insert("capabilities".into(), capabilities.into());
+        root.insert("component".into(), component.into());
+        root.insert("dependencies".into(), dependencies.into());
         if !self.config.is_empty() {
             let config: toml::Table = self
                 .config
@@ -173,9 +176,9 @@ impl TestManifest {
         toml::to_string(&root).expect("serialise the test manifest")
     }
 
-    /// Write the manifest as `module.toml` under `dir` and return its path.
+    /// Write the manifest as `component.toml` under `dir` and return its path.
     pub fn write_to(&self, dir: &Path) -> PathBuf {
-        self.write_as(&dir.join("module.toml"))
+        self.write_as(&dir.join("component.toml"))
     }
 
     pub fn write_as(&self, path: &Path) -> PathBuf {
@@ -218,10 +221,13 @@ mod tests {
                 .chain_log_sub(11_155_111),
         );
 
-        assert_eq!(loaded.manifest.module.name, "example");
-        assert_eq!(loaded.manifest.module.kind, ComponentKind::Worker);
-        let caps = loaded.manifest.capabilities.expect("capabilities section");
-        assert_eq!(caps.required, ["logging", "chain"]);
+        assert_eq!(loaded.manifest.component.name, "example");
+        assert_eq!(loaded.manifest.component.kind, ComponentKind::Module);
+        let deps = loaded.manifest.dependencies.expect("dependency table");
+        assert_eq!(
+            deps.keys().map(String::as_str).collect::<Vec<_>>(),
+            ["chain", "logging"],
+        );
 
         let subs = &loaded.manifest.subscriptions;
         assert_eq!(subs.len(), 2, "both subscriptions parsed: {subs:?}");
@@ -243,19 +249,17 @@ mod tests {
         const DIGEST: &str =
             "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
         let loaded = load_core(
-            &TestManifest::new("feeder")
-                .kind("price-provider")
+            &TestManifest::new("price-provider")
+                .kind("service")
                 .component_digest(DIGEST)
                 .cap("logging")
                 .config("threshold", "2500.00")
                 .config("quoted", "a \"quoted\" value"),
         );
 
-        assert_eq!(
-            loaded.manifest.module.kind,
-            ComponentKind::Provider("price-provider".into()),
-        );
-        assert_eq!(loaded.manifest.module.component.as_deref(), Some(DIGEST));
+        assert_eq!(loaded.manifest.component.kind, ComponentKind::Service);
+        assert_eq!(loaded.manifest.component.name, "price-provider");
+        assert_eq!(loaded.manifest.component.digest.as_deref(), Some(DIGEST));
         assert_eq!(
             loaded.config,
             vec![
@@ -267,10 +271,10 @@ mod tests {
     }
 
     #[test]
-    fn capabilities_section_is_emitted_even_without_entries() {
+    fn dependency_table_is_emitted_even_without_entries() {
         let loaded = load_core(&TestManifest::new("bare"));
-        let caps = loaded.manifest.capabilities.expect("capabilities section");
-        assert!(caps.required.is_empty());
+        let deps = loaded.manifest.dependencies.expect("dependency table");
+        assert!(deps.is_empty());
     }
 
     #[test]
@@ -284,11 +288,11 @@ mod tests {
         );
 
         assert_eq!(loaded.http_allowlist, ["127.0.0.1", "*.acme.example"]);
-        let caps = loaded.manifest.capabilities.expect("capabilities section");
+        let deps = loaded.manifest.dependencies.expect("dependency table");
         assert_eq!(
-            caps.required,
-            ["logging", "http"],
-            "the nested http table must not swallow the sibling required key",
+            deps.keys().map(String::as_str).collect::<Vec<_>>(),
+            ["http", "logging"],
+            "the http attributes must not displace a sibling dependency",
         );
     }
 
@@ -342,7 +346,7 @@ mod tests {
     #[test]
     fn to_toml_emits_the_exact_golden_text() {
         let toml = TestManifest::new("golden")
-            .kind("acme-adapter")
+            .kind("service")
             .cap("logging")
             .cap("http")
             .http_allow("127.0.0.1")
@@ -350,18 +354,17 @@ mod tests {
             .block_sub(1)
             .chain_log_sub_filtered(11_155_111, Some("0xabc"), None)
             .to_toml();
-        let golden = r#"[capabilities]
-required = ["logging", "http"]
-
-[capabilities.http]
-allow = ["127.0.0.1"]
+        let golden = r#"[component]
+kind = "service"
+name = "golden"
 
 [config]
 threshold = "2500.00"
 
-[module]
-kind = "acme-adapter"
-name = "golden"
+[dependencies.http]
+hosts = ["127.0.0.1"]
+
+[dependencies.logging]
 
 [[subscription]]
 chain_id = 1
@@ -378,7 +381,7 @@ kind = "chain-log"
     #[test]
     fn manifest_sources_resolve_to_what_the_loader_receives() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let at = dir.path().join("module.toml");
+        let at = dir.path().join("component.toml");
 
         assert_eq!(ManifestSource::Beside.resolve(&at), None);
         assert!(!at.exists(), "a discovered manifest writes nothing");
@@ -393,7 +396,7 @@ kind = "chain-log"
 
         let inline = ManifestSource::from(TestManifest::new("inline").cap("logging"));
         assert_eq!(inline.resolve(&at).as_deref(), Some(at.as_path()));
-        assert_eq!(load_path(&at).manifest.module.name, "inline");
+        assert_eq!(load_path(&at).manifest.component.name, "inline");
     }
 
     #[test]
@@ -408,7 +411,7 @@ kind = "chain-log"
             .block_sub(100)
             .write_as(&dir.path().join("b.toml"));
 
-        assert_eq!(load_path(&a).manifest.module.name, "module-a");
-        assert_eq!(load_path(&b).manifest.module.name, "module-b");
+        assert_eq!(load_path(&a).manifest.component.name, "module-a");
+        assert_eq!(load_path(&b).manifest.component.name, "module-b");
     }
 }

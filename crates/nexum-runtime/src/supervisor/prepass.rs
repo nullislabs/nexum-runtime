@@ -20,7 +20,7 @@ use crate::manifest::{self, CapabilityRegistry, LoadedManifest, ParseError, Subs
 pub(crate) enum BootRefusal {
     #[error(
         "name {name} is claimed twice: {held_role} {} and {role} {}; \
-         [module].name must be unique across [[modules]] and [[adapters]]",
+         [component].name must be unique across [[modules]] and [[adapters]]",
         held.display(),
         path.display()
     )]
@@ -43,9 +43,9 @@ pub(crate) enum BootRefusal {
         component: PathBuf,
     },
     #[error(
-        "no module.toml for component {}; ship one next to the component \
-         or pass its path explicitly (an empty `required = []` under \
-         [capabilities] grants nothing)",
+        "no component.toml for component {}; ship one next to the component \
+         or pass its path explicitly (an empty [dependencies] table grants \
+         nothing)",
         component.display()
     )]
     ManifestMissing { component: PathBuf },
@@ -106,9 +106,9 @@ pub(super) fn claim_namespace(
     Ok(())
 }
 
-/// `[module].name`; manifest parse already refused a blank one.
+/// `[component].name`; manifest parse already refused a blank one.
 pub(super) fn manifest_namespace(loaded: &LoadedManifest) -> String {
-    loaded.manifest.module.name.clone()
+    loaded.manifest.component.name.clone()
 }
 
 /// Missing or unresolved refuses the boot.
@@ -134,26 +134,27 @@ pub(super) fn load_required_manifest(
     }
 }
 
-/// Explicit override, else sibling `module.toml`, else deprecated
-/// `nexum.toml` with a rename warning; `None` when neither exists.
+/// Explicit override, else sibling `component.toml`. A retired name found
+/// where the manifest should be is reported rather than ignored, since a
+/// silent miss reads as a missing manifest.
 fn resolve_manifest_path(component: &Path, explicit: Option<&Path>) -> Option<PathBuf> {
     if let Some(path) = explicit {
         return Some(path.to_path_buf());
     }
     let dir = component.parent()?.to_owned();
-    let canonical = dir.join("module.toml");
+    let canonical = dir.join("component.toml");
     if canonical.exists() {
         return Some(canonical);
     }
-    let legacy = dir.join("nexum.toml");
-    if legacy.exists() {
-        warn!(
-            target: "manifest",
-            path = %legacy.display(),
-            "nexum.toml is deprecated; rename to module.toml \
-             (ADR-0001). Support will be removed in 0.3."
-        );
-        return Some(legacy);
+    for retired in ["module.toml", "nexum.toml"] {
+        let path = dir.join(retired);
+        if path.exists() {
+            warn!(
+                target: "manifest",
+                path = %path.display(),
+                "{retired} is not read; the manifest is component.toml (ADR-0016)"
+            );
+        }
     }
     None
 }

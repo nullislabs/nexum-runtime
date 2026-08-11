@@ -76,8 +76,8 @@ async fn boot_refuses_an_adapter_subscription_on_an_unconfigured_chain() {
     BootScenario::over(mock_components())
         .extensions(acme_extensions())
         .adapter(
-            TestManifest::new("feed")
-                .kind("acme-adapter")
+            TestManifest::new("acme-adapter")
+                .kind("service")
                 .cap("chain")
                 .block_sub(424_242),
         )
@@ -85,11 +85,11 @@ async fn boot_refuses_an_adapter_subscription_on_an_unconfigured_chain() {
         .await
         .variant::<BootRefusal>(|e| {
             matches!(e, BootRefusal::UnconfiguredChain { noun: "adapter", name, chain_id: 424_242, .. }
-                if name == "feed")
+                if name == "acme-adapter")
         })
         // Operator wording pin.
         .names("load provider")
-        .names("adapter feed subscribes to chain 424242")
+        .names("adapter acme-adapter subscribes to chain 424242")
         .names("[chains.424242]")
         .lacks("read component")
         .lacks("compile");

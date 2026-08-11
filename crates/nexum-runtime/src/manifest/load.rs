@@ -1,5 +1,5 @@
-//! Parse and validate `module.toml`, plus the host-matching helper the
-//! wasi:http gate uses to enforce `[capabilities.http].allow`.
+//! Parse and validate `component.toml`, plus the host-matching helper the
+//! wasi:http gate uses to enforce the http dependency's `hosts`.
 
 use std::path::Path;
 
@@ -9,49 +9,57 @@ use super::capabilities::CapabilityRegistry;
 use super::error::ParseError;
 use super::types::{LoadedManifest, Manifest};
 
-/// Parse and validate `module.toml`; no `[capabilities]` section refuses the
+/// Parse and validate `component.toml`; no `[dependencies]` table refuses the
 /// manifest (`required = []` is valid).
 pub fn load(path: &Path, registry: &CapabilityRegistry) -> Result<LoadedManifest, ParseError> {
     let raw = std::fs::read_to_string(path)?;
     let manifest: Manifest = toml::from_str(&raw)?;
 
-    validate_module_name(&manifest.module.name)?;
+    validate_module_name(&manifest.component.name)?;
 
     let component_digest = manifest
-        .module
         .component
+        .digest
         .as_deref()
         .map(str::parse)
         .transpose()
         .map_err(|source| ParseError::InvalidComponentDigest {
-            value: manifest.module.component.clone().unwrap_or_default(),
+            value: manifest.component.digest.clone().unwrap_or_default(),
             source,
         })?;
 
-    let caps = manifest
-        .capabilities
+    let deps = manifest
+        .dependencies
         .as_ref()
         .ok_or(ParseError::MissingCapabilities)?;
 
-    for name in &caps.required {
+    for (name, dep) in deps {
         if !registry.is_known(name) {
             return Err(ParseError::UnknownCapability {
                 name: name.clone(),
                 known: registry.known_names(),
             });
         }
+        // `hosts` qualifies the http dependency and nothing else; accepting
+        // it elsewhere would silently drop a grant the author believes in.
+        if !dep.hosts.is_empty() && name != nexum_world::Cap::Http.as_str() {
+            return Err(ParseError::MisplacedDependencyAttribute {
+                dependency: name.clone(),
+                attribute: "hosts",
+            });
+        }
     }
-    if !caps.required.is_empty() {
-        info!(target: "manifest", required = %caps.required.join(", "), "required capabilities");
+    if !deps.is_empty() {
+        let names: Vec<&str> = deps.keys().map(String::as_str).collect();
+        info!(target: "manifest", dependencies = %names.join(", "), "dependencies");
     }
 
-    let http_allowlist = caps
-        .http
-        .as_ref()
-        .map(|h| h.allow.clone())
+    let http_allowlist = deps
+        .get(nexum_world::Cap::Http.as_str())
+        .map(|dep| dep.hosts.clone())
         .unwrap_or_default();
     if !http_allowlist.is_empty() {
-        info!(target: "manifest", allow = %http_allowlist.join(", "), "http allowlist");
+        info!(target: "manifest", hosts = %http_allowlist.join(", "), "http hosts");
     }
 
     let config = manifest
@@ -68,7 +76,7 @@ pub fn load(path: &Path, registry: &CapabilityRegistry) -> Result<LoadedManifest
     })
 }
 
-/// Reject a `[module].name` that is blank or not a single safe path
+/// Reject a `[component].name` that is blank or not a single safe path
 /// component, so it cannot escape the state directory.
 fn validate_module_name(name: &str) -> Result<(), ParseError> {
     if name.trim().is_empty() {
@@ -115,11 +123,12 @@ mod tests {
     #[test]
     fn load_parses_block_and_chain_log_subscriptions() {
         let toml = r#"
-[module]
+[component]
 name = "twap-monitor"
 
-[capabilities]
-required = ["chain", "local-store"]
+[dependencies]
+chain = {}
+local-store = {}
 
 [[subscription]]
 kind     = "block"
@@ -132,7 +141,7 @@ address  = "0xC92E8bdf79f0507f65a392b0ab4667716BFE0110"
 event_signature = "0x00000000000000000000000000000000000000000000000000000000deadbeef"
 "#;
         let manifest: Manifest = toml::from_str(toml).expect("parse");
-        assert_eq!(manifest.module.name, "twap-monitor");
+        assert_eq!(manifest.component.name, "twap-monitor");
         assert_eq!(manifest.subscriptions.len(), 2);
         assert!(matches!(
             &manifest.subscriptions[0],
@@ -164,7 +173,7 @@ event_signature = "0x00000000000000000000000000000000000000000000000000000000dea
             ),
         ] {
             let toml = format!(
-                "[module]\nname = \"bad\"\n\n[[subscription]]\nkind     = \"chain-log\"\n\
+                "[component]\nname = \"bad\"\n\n[[subscription]]\nkind     = \"chain-log\"\n\
                  chain_id = 1\n{field}\n"
             );
             let err = toml::from_str::<Manifest>(&toml).expect_err("malformed hex");
@@ -187,7 +196,7 @@ event_signature = "0x00000000000000000000000000000000000000000000000000000000dea
             "c92e8bdf79f0507f65a392b0ab4667716bfe0110",
         ] {
             let toml = format!(
-                "[module]\nname = \"ok\"\n\n[[subscription]]\nkind     = \"chain-log\"\n\
+                "[component]\nname = \"ok\"\n\n[[subscription]]\nkind     = \"chain-log\"\n\
                  chain_id = 1\naddress  = \"{spelling}\"\n"
             );
             let manifest: Manifest = toml::from_str(&toml).expect(spelling);
@@ -207,7 +216,7 @@ event_signature = "0x00000000000000000000000000000000000000000000000000000000dea
     #[test]
     fn world_topic_extraction_agrees_with_load() {
         let toml = r#"
-[module]
+[component]
 name = "watcher"
 
 [[subscription]]
@@ -252,7 +261,7 @@ event_signature = "cf5f9de2984132265203b5c335b25727702ca77262ff622e136baa7362bf1
             loaded,
         );
 
-        let bad = "[module]\nname = \"bad\"\n\n[[subscription]]\nkind = \"chain-log\"\n\
+        let bad = "[component]\nname = \"bad\"\n\n[[subscription]]\nkind = \"chain-log\"\n\
                    chain_id = 1\nevent_signature = \"not-a-topic\"\n";
         assert!(toml::from_str::<Manifest>(bad).is_err());
         assert!(nexum_world::manifest_chain_log_topics(bad).is_err());
@@ -265,7 +274,7 @@ event_signature = "cf5f9de2984132265203b5c335b25727702ca77262ff622e136baa7362bf1
         // extension vocabulary, so a not-yet-migrated manifest still
         // surfaces clearly rather than silently dropping events.
         let toml = r#"
-[module]
+[component]
 name = "stale"
 
 [[subscription]]
@@ -282,7 +291,7 @@ chain_id = "1"
     #[test]
     fn load_parses_extension_subscriptions_with_string_filters() {
         let toml = r#"
-[module]
+[component]
 name = "watcher"
 
 [[subscription]]
@@ -308,7 +317,7 @@ scope = "primary"
     #[test]
     fn load_rejects_a_non_string_extension_filter() {
         let toml = r#"
-[module]
+[component]
 name = "watcher"
 
 [[subscription]]
@@ -324,7 +333,7 @@ scope = 7
     #[test]
     fn load_parses_extension_sections_opaquely() {
         let toml = r#"
-[module]
+[component]
 name = "keeper"
 
 [venue]
@@ -335,7 +344,7 @@ kind     = "block"
 chain_id = 1
 "#;
         let manifest: Manifest = toml::from_str(toml).expect("parse");
-        assert_eq!(manifest.module.name, "keeper");
+        assert_eq!(manifest.component.name, "keeper");
         assert_eq!(manifest.subscriptions.len(), 1);
         assert_eq!(manifest.extensions.len(), 1);
         let venue = manifest.extensions.get("venue").expect("venue section");
@@ -349,7 +358,7 @@ chain_id = 1
     #[test]
     fn load_defaults_to_no_extension_sections() {
         let toml = r#"
-[module]
+[component]
 name = "plain"
 "#;
         let manifest: Manifest = toml::from_str(toml).expect("parse");
@@ -359,7 +368,7 @@ name = "plain"
     #[test]
     fn load_parses_cron_subscription() {
         let toml = r#"
-[module]
+[component]
 name = "scheduler"
 
 [[subscription]]
@@ -376,14 +385,15 @@ schedule = "*/5 * * * *"
     #[test]
     fn load_rejects_unknown_capability() {
         let toml = r#"
-[module]
+[component]
 name = "bad"
 
-[capabilities]
-required = ["chain", "not-a-real-cap"]
+[dependencies]
+chain = {}
+not-a-real-cap = {}
 "#;
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("module.toml");
+        let path = dir.path().join("component.toml");
         std::fs::write(&path, toml).unwrap();
         let err = load(&path, &CapabilityRegistry::core()).unwrap_err();
         assert!(
@@ -392,7 +402,7 @@ required = ["chain", "not-a-real-cap"]
         // Operator-facing wording and order, pinned verbatim.
         assert_eq!(
             err.to_string(),
-            "manifest: unknown capability \"not-a-real-cap\" in [capabilities] (known: chain, \
+            "manifest: unknown dependency \"not-a-real-cap\" in [dependencies] (known: chain, \
              identity, local-store, remote-store, logging, http, wasi-sockets, \
              wasi-filesystem)"
         );
@@ -403,14 +413,14 @@ required = ["chain", "not-a-real-cap"]
         // `clock` is no longer a host capability (WASI clocks are ambient);
         // a manifest declaring it fails like any other unknown name.
         let toml = r#"
-[module]
+[component]
 name = "stale"
 
-[capabilities]
-required = ["clock"]
+[dependencies]
+clock = {}
 "#;
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("module.toml");
+        let path = dir.path().join("component.toml");
         std::fs::write(&path, toml).unwrap();
         let err = load(&path, &CapabilityRegistry::core()).unwrap_err();
         assert!(matches!(err, ParseError::UnknownCapability { ref name, .. } if name == "clock"));
@@ -419,11 +429,10 @@ required = ["clock"]
     #[test]
     fn load_parses_config_table() {
         let toml = r#"
-[module]
+[component]
 name = "example"
 
-[capabilities]
-required = []
+[dependencies]
 
 [config]
 chain_id = 1
@@ -431,7 +440,7 @@ label    = "mainnet"
 enabled  = true
 "#;
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("module.toml");
+        let path = dir.path().join("component.toml");
         std::fs::write(&path, toml).unwrap();
         let loaded = load(&path, &CapabilityRegistry::core()).unwrap();
         let config: std::collections::HashMap<_, _> = loaded.config.into_iter().collect();
@@ -441,97 +450,90 @@ enabled  = true
     }
 
     #[test]
-    fn component_kind_defaults_to_the_worker() {
+    fn component_kind_defaults_to_a_module() {
         use crate::manifest::types::ComponentKind;
         let manifest: Manifest = toml::from_str(
             r#"
-[module]
+[component]
 name = "plain"
 "#,
         )
         .expect("parse");
-        assert_eq!(manifest.module.kind, ComponentKind::Worker);
+        assert_eq!(manifest.component.kind, ComponentKind::Module);
     }
 
     #[test]
-    fn component_kind_carries_a_provider_spelling() {
+    fn component_kind_reads_service() {
         use crate::manifest::types::ComponentKind;
         let manifest: Manifest = toml::from_str(
             r#"
-[module]
-name = "acme"
-kind = "acme-provider"
+[component]
+name = "acme-provider"
+kind = "service"
 "#,
         )
         .expect("parse");
-        assert_eq!(
-            manifest.module.kind,
-            ComponentKind::Provider("acme-provider".to_owned()),
-        );
+        assert_eq!(manifest.component.kind, ComponentKind::Service);
+        // A service's name is the service type, so the name selects the row.
+        assert_eq!(manifest.component.name, "acme-provider");
     }
 
     /// `Display` is the manifest spelling for both kinds.
     #[test]
     fn component_kind_displays_its_manifest_spelling() {
         use crate::manifest::types::ComponentKind;
-        assert_eq!(ComponentKind::Worker.to_string(), "event-module");
-        assert_eq!(
-            ComponentKind::Provider("acme-provider".to_owned()).to_string(),
-            "acme-provider",
-        );
+        assert_eq!(ComponentKind::Module.to_string(), "module");
+        assert_eq!(ComponentKind::Service.to_string(), "service");
     }
 
-    /// An unknown spelling parses as a provider kind for boot to refuse.
+    /// The kind is a closed role now, so an invented spelling refuses at
+    /// parse instead of surviving to boot as a provider name.
     #[test]
-    fn component_kind_keeps_an_unregistered_spelling_for_boot_to_refuse() {
-        use crate::manifest::types::ComponentKind;
-        let manifest: Manifest = toml::from_str(
+    fn component_kind_refuses_an_unknown_spelling() {
+        let err = toml::from_str::<Manifest>(
             r#"
-[module]
+[component]
 name = "bad"
 kind = "gadget"
 "#,
         )
-        .expect("parse");
-        assert_eq!(
-            manifest.module.kind,
-            ComponentKind::Provider("gadget".to_owned()),
-        );
+        .expect_err("an unknown kind must refuse");
+        assert!(err.to_string().contains("gadget"), "{err}");
     }
 
     #[test]
     fn resources_section_parses() {
         let toml = r#"
-[module]
+[component]
 name = "twap"
 
-[module.resources]
+[component.resources]
 max_memory_bytes   = 10485760
 max_fuel_per_event = 100000
 max_state_bytes    = 52428800
 "#;
         let m: Manifest = toml::from_str(toml).expect("parse");
-        assert_eq!(m.module.resources.max_memory_bytes, Some(10_485_760));
-        assert_eq!(m.module.resources.max_fuel_per_event, Some(100_000));
-        assert_eq!(m.module.resources.max_state_bytes, Some(52_428_800));
+        assert_eq!(m.component.resources.max_memory_bytes, Some(10_485_760));
+        assert_eq!(m.component.resources.max_fuel_per_event, Some(100_000));
+        assert_eq!(m.component.resources.max_state_bytes, Some(52_428_800));
     }
 
     #[test]
     fn resources_section_defaults_to_none() {
-        let m: Manifest = toml::from_str("[module]\nname = \"x\"\n").expect("parse");
-        assert_eq!(m.module.resources.max_memory_bytes, None);
-        assert_eq!(m.module.resources.max_fuel_per_event, None);
-        assert_eq!(m.module.resources.max_state_bytes, None);
+        let m: Manifest = toml::from_str("[component]\nname = \"x\"\n").expect("parse");
+        assert_eq!(m.component.resources.max_memory_bytes, None);
+        assert_eq!(m.component.resources.max_fuel_per_event, None);
+        assert_eq!(m.component.resources.max_state_bytes, None);
     }
 
     #[test]
     fn load_rejects_module_name_that_escapes_the_state_dir() {
-        // Name validation precedes the [capabilities] presence check.
+        // Name validation precedes the [dependencies] presence check.
         for bad in ["../evil", "a/b", "a\\b", "..", "/etc/passwd", "foo/../bar"] {
             // Single-quoted TOML literal string: no backslash-escape processing.
-            let toml = format!("[module]\nname = '{bad}'\n");
+            let toml = format!("[component]\nname = '{bad}'\n");
             let dir = tempfile::tempdir().unwrap();
-            let path = dir.path().join("module.toml");
+            let path = dir.path().join("component.toml");
             std::fs::write(&path, toml).unwrap();
             let err = load(&path, &CapabilityRegistry::core()).unwrap_err();
             assert!(
@@ -546,13 +548,14 @@ max_state_bytes    = 52428800
         // A missing name deserialises to the empty string, so absence,
         // emptiness, and whitespace all hit the same refusal.
         let mut manifests = vec![
-            "[capabilities]\nrequired = []\n".to_owned(),
-            "[module]\n\n[capabilities]\nrequired = []\n".to_owned(),
+            "[dependencies]\n".to_owned(),
+            "[component]\n\n[dependencies]\n".to_owned(),
         ];
         // Basic strings: `\t` and `\n` reach the parser as the whitespace.
-        manifests.extend(["", "  ", r"\t", r"\n", r" \t \n "].map(|blank| {
-            format!("[module]\nname = \"{blank}\"\n\n[capabilities]\nrequired = []\n")
-        }));
+        manifests.extend(
+            ["", "  ", r"\t", r"\n", r" \t \n "]
+                .map(|blank| format!("[component]\nname = \"{blank}\"\n\n[dependencies]\n")),
+        );
         for manifest in manifests {
             let err = load_inline(&manifest).unwrap_err();
             assert!(
@@ -565,27 +568,27 @@ max_state_bytes    = 52428800
     #[test]
     fn load_accepts_plain_module_name() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("module.toml");
+        let path = dir.path().join("component.toml");
         std::fs::write(
             &path,
-            "[module]\nname = \"twap-monitor\"\n\n[capabilities]\nrequired = []\n",
+            "[component]\nname = \"twap-monitor\"\n\n[dependencies]\n",
         )
         .unwrap();
         let loaded = load(&path, &CapabilityRegistry::core()).unwrap();
-        assert_eq!(loaded.manifest.module.name, "twap-monitor");
+        assert_eq!(loaded.manifest.component.name, "twap-monitor");
     }
 
     #[test]
-    fn load_rejects_missing_capabilities_section() {
+    fn load_rejects_a_missing_dependency_table() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("module.toml");
-        std::fs::write(&path, "[module]\nname = \"bare\"\n").unwrap();
+        let path = dir.path().join("component.toml");
+        std::fs::write(&path, "[component]\nname = \"bare\"\n").unwrap();
         let err = load(&path, &CapabilityRegistry::core()).unwrap_err();
         assert!(matches!(err, ParseError::MissingCapabilities), "{err:?}");
         let msg = err.to_string();
         // Operator wording pin.
-        assert!(msg.contains("[capabilities]"), "{msg}");
-        assert!(msg.contains("required = []"), "{msg}");
+        assert!(msg.contains("[dependencies]"), "{msg}");
+        assert!(msg.contains("empty one grants nothing"), "{msg}");
     }
 
     #[test]
@@ -593,10 +596,10 @@ max_state_bytes    = 52428800
         // Silently ignoring the key would drop a declaration the author
         // believes is in effect, so the section denies unknown fields.
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("module.toml");
+        let path = dir.path().join("component.toml");
         std::fs::write(
             &path,
-            "[module]\nname = \"legacy\"\n\n[capabilities]\nrequired = [\"logging\"]\noptional = []\n",
+            "[component]\nname = \"legacy\"\n\n[dependencies]\nlogging = {}\noptional = []\n",
         )
         .unwrap();
         let err = load(&path, &CapabilityRegistry::core()).unwrap_err();
@@ -604,37 +607,33 @@ max_state_bytes    = 52428800
     }
 
     #[test]
-    fn load_accepts_empty_capabilities_block() {
+    fn load_accepts_an_empty_dependency_table() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("module.toml");
-        std::fs::write(
-            &path,
-            "[module]\nname = \"minimal\"\n\n[capabilities]\nrequired = []\n",
-        )
-        .unwrap();
+        let path = dir.path().join("component.toml");
+        std::fs::write(&path, "[component]\nname = \"minimal\"\n\n[dependencies]\n").unwrap();
         let loaded = load(&path, &CapabilityRegistry::core()).unwrap();
-        let caps = loaded
+        let deps = loaded
             .manifest
-            .capabilities
+            .dependencies
             .as_ref()
-            .expect("caps section parsed");
-        assert!(caps.required.is_empty());
+            .expect("dependency table parsed");
+        assert!(deps.is_empty());
     }
 
     fn load_inline(toml: &str) -> Result<LoadedManifest, ParseError> {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("module.toml");
+        let path = dir.path().join("component.toml");
         std::fs::write(&path, toml).unwrap();
         load(&path, &CapabilityRegistry::core())
     }
 
     fn digest_manifest(component_line: &str) -> String {
-        format!("[module]\nname = \"pinned\"\n{component_line}\n\n[capabilities]\nrequired = []\n")
+        format!("[component]\nname = \"pinned\"\n{component_line}\n\n[dependencies]\n")
     }
 
     #[test]
     fn load_rejects_a_schemeless_component_digest() {
-        let err = load_inline(&digest_manifest("component = \"notahash\"")).unwrap_err();
+        let err = load_inline(&digest_manifest("digest = \"notahash\"")).unwrap_err();
         assert!(
             matches!(err, ParseError::InvalidComponentDigest { ref value, .. } if value == "notahash"),
             "{err:?}",
@@ -643,7 +642,7 @@ max_state_bytes    = 52428800
 
     #[test]
     fn load_rejects_an_explicitly_empty_component_digest() {
-        let err = load_inline(&digest_manifest("component = \"\"")).unwrap_err();
+        let err = load_inline(&digest_manifest("digest = \"\"")).unwrap_err();
         assert!(
             matches!(err, ParseError::InvalidComponentDigest { ref value, .. } if value.is_empty()),
             "{err:?}",
@@ -653,14 +652,14 @@ max_state_bytes    = 52428800
     #[test]
     fn load_defaults_an_absent_component_digest_to_none() {
         let loaded = load_inline(&digest_manifest("")).expect("absent digest loads");
-        assert!(loaded.manifest.module.component.is_none());
+        assert!(loaded.manifest.component.digest.is_none());
         assert!(loaded.component_digest.is_none());
     }
 
     #[test]
     fn load_parses_a_valid_component_digest_and_round_trips() {
         let pin = format!("sha256:{}", "ab".repeat(32));
-        let loaded = load_inline(&digest_manifest(&format!("component = \"{pin}\"")))
+        let loaded = load_inline(&digest_manifest(&format!("digest = \"{pin}\"")))
             .expect("valid digest loads");
         let digest = loaded.component_digest.expect("digest parsed");
         assert_eq!(digest.to_string(), pin);

@@ -16,7 +16,7 @@ world event-module {
     // nexum:host interfaces: wasi:clocks and wasi:random are linked
     // into every module store, and hosts link
     // wasi:http/outgoing-handler, gated per-module by the
-    // `[capabilities.http].allow` allowlist in module.toml.
+    // hosts list on the http dependency in component.toml.
 
     export init: func(config: config) -> result<_, fault>;
     export on-event: func(event: event) -> result<_, fault>;

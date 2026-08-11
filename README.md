@@ -39,14 +39,14 @@ Without Nix, any Rust 1.94+ toolchain with the `wasm32-wasip2` target, `cargo-ne
 just run           # builds the example module and runs the engine with it
 ```
 
-The engine takes a component wasm and its `module.toml` (capabilities + config).
-The manifest is mandatory: pass its path, or ship a `module.toml` next to the wasm.
-Every manifest must declare a `[capabilities]` block; an empty `required = []` grants nothing.
+The engine takes a component wasm and its `component.toml` (capabilities + config).
+The manifest is mandatory: pass its path, or ship a `component.toml` next to the wasm.
+Every manifest must declare a `[dependencies]` table; an empty one grants nothing.
 Every manifest must also declare a `[module].name` that is not blank.
 The engine uses the name as the state namespace, and it refuses a missing, empty, or whitespace-only name.
 
 ```sh
-cargo run -p nexum-cli -- target/wasm32-wasip2/release/example.wasm modules/example/module.toml
+cargo run -p nexum-cli -- target/wasm32-wasip2/release/example.wasm modules/example/component.toml
 ```
 
 A module that subscribes to `block` or `chain-log` events needs its chain declared in `engine.toml`, or the engine refuses to boot.
@@ -65,7 +65,7 @@ The example module declares no subscriptions, so `just run` needs no `engine.tom
 A manifest may pin its artifact with `component = "sha256:<64 hex chars>"` in `[module]` (one `sha256sum` of the `.wasm`).
 A present pin is strictly verified against the loaded bytes before compilation; a mismatch or a malformed pin refuses the boot.
 An absent pin loads with a warning that logs the computed digest; set `require_component_digest = true` under `[engine]` in `engine.toml` to make an absent pin a boot error.
-The default sibling `module.toml` lives in the same trust domain as the artifact, so an author-side pin closes accidental drift only.
+The default sibling `component.toml` lives in the same trust domain as the artifact, so an author-side pin closes accidental drift only.
 Against a compromised artifact store, supply an operator-owned manifest from outside the artifact directory via the `manifest` key on `[[modules]]`/`[[adapters]]`, combined with `require_component_digest = true`.
 
 ## Licence

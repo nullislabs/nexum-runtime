@@ -21,10 +21,10 @@ build-fixtures:
 build: build-engine build-module build-examples build-fixtures
 
 # Build the module then run the engine with it. The second argument is the
-# module's module.toml; a manifest is mandatory (an explicit path or a
-# module.toml sibling of the wasm), and the engine refuses to boot without one.
+# module's component.toml; a manifest is mandatory (an explicit path or a
+# component.toml sibling of the wasm), and the engine refuses to boot without one.
 run: build-module build-engine
-    cargo run -p nexum-cli -- target/wasm32-wasip2/release/example.wasm modules/example/module.toml
+    cargo run -p nexum-cli -- target/wasm32-wasip2/release/example.wasm modules/example/component.toml
 
 # Run host engine unit tests.
 test:
