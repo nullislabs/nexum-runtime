@@ -58,8 +58,6 @@ There is no partial grant and no degraded mode.
 A module therefore never needs to ask what it holds.
 What it requested and what it holds are the same set, or it is not running.
 
-`[capabilities].optional` is removed.
-
 A partial grant was considered and rejected.
 It costs a host interface for the guest to read its grant, a fault case for calling an ungranted capability, and a branch in every module, and it describes a state the operator can avoid by fixing the configuration.
 
