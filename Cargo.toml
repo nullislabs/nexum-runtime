@@ -147,6 +147,10 @@ toml = "1"
 # Metrics facade + Prometheus exporter (engine `/metrics` listener).
 metrics = "0.24"
 metrics-exporter-prometheus = { version = "0.18", default-features = false, features = ["http-listener"] }
+# Recording recorder for the test harness: a scoped recorder lets a test
+# assert that a counter fired with the labels it claims, so a "counted"
+# done-condition is checkable rather than satisfied by an unreachable call.
+metrics-util = { version = "0.20", default-features = false, features = ["debugging"] }
 
 # alloy JSON-RPC client + transport (engine chain backend and the
 # guest SDK's host-backed transport).

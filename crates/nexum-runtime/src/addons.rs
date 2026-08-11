@@ -74,6 +74,7 @@ impl RuntimeAddOn for PrometheusAddOn {
                 .with_http_listener(addr)
                 .install()
                 .map_err(|cause| PrometheusError::Exporter { addr, cause })?;
+            crate::metrics::describe_all();
             info!(addr = %addr, "metrics exporter listening at /metrics");
         } else {
             // Recorder installed globally so metrics call sites stay live;
@@ -81,6 +82,7 @@ impl RuntimeAddOn for PrometheusAddOn {
             metrics_exporter_prometheus::PrometheusBuilder::new()
                 .install_recorder()
                 .map_err(|cause| PrometheusError::Recorder { cause })?;
+            crate::metrics::describe_all();
         }
         Ok(AddOnHandle::named("prometheus"))
     }

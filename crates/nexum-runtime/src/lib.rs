@@ -30,6 +30,7 @@ pub mod digest;
 pub mod engine_config;
 pub mod host;
 pub mod manifest;
+pub mod metrics;
 pub mod module_id;
 pub mod preset;
 pub mod runtime;
