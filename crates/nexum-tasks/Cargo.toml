@@ -10,6 +10,7 @@ description = "Task lifecycle and graceful shutdown for the Nexum runtime"
 workspace = true
 
 [dependencies]
-tokio.workspace = true
+# The only crate permitted to raw-spawn tokio tasks.
+tokio = { workspace = true, features = ["macros", "rt", "sync", "time"] }
 futures.workspace = true
 tracing.workspace = true

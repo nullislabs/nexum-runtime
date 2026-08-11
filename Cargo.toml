@@ -40,7 +40,8 @@ repository = "https://github.com/nullislabs/nexum-runtime"
 # Error + async plumbing.
 anyhow = "1"
 thiserror = "2"
-tokio = { version = "1", features = ["full"] }
+# Featureless on purpose: each consuming crate enables its own surface.
+tokio = { version = "1" }
 futures = "0.3"
 # Cold `dyn` boot paths only (`ProviderKind::install`); hot guest traits
 # use native async-fn-in-trait.

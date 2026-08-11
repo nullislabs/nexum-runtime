@@ -17,4 +17,4 @@ nexum-launch = { path = "../nexum-launch" }
 nexum-runtime = { path = "../nexum-runtime" }
 
 anyhow.workspace = true
-tokio.workspace = true
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

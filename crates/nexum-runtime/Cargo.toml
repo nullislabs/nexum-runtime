@@ -28,7 +28,15 @@ derive_more.workspace = true
 # `strum::IntoStaticStr`: the snake_case variant name is the tracing
 # `source` field (`LogSource`) and the boot-refusal `error_kind` label.
 strum.workspace = true
-tokio.workspace = true
+# No `rt`: spawning belongs to `nexum-tasks`.
+tokio = { workspace = true, features = [
+    "io-util",
+    "macros",
+    "net",
+    "signal",
+    "sync",
+    "time",
+] }
 # Task lifecycle and graceful shutdown; the sole crate that raw-spawns
 # tokio tasks. Every engine task routes through its executor.
 nexum-tasks = { path = "../nexum-tasks" }
@@ -111,7 +119,7 @@ test-utils = ["dep:tempfile", "dep:tower", "dep:alloy-json-rpc", "dep:metrics-ut
 # without every invocation passing `--features test-utils`.
 nexum-runtime = { path = ".", features = ["test-utils"] }
 # `start_paused` reconnect tests advance the backoff clock virtually.
-tokio = { workspace = true, features = ["test-util"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "test-util"] }
 tempfile.workspace = true
 wiremock.workspace = true
 tracing-subscriber.workspace = true
