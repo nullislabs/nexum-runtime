@@ -17,6 +17,18 @@ fail() {
     status=1
 }
 
+# Drop fenced code blocks and inline code spans from a message before
+# checking it. Prose that quotes a banned string in order to explain the rule
+# is not a use of it, and a rule that cannot be written down is unusable. Code
+# spans carry the quoted form, so removing them separates the two cases
+# without guessing at intent.
+strip_code() {
+    # SC2016: the backticks are markdown fences and code spans, matched
+    # literally. Single quotes are correct here and expansion is not wanted.
+    # shellcheck disable=SC2016
+    sed -e '/^[[:space:]]*```/,/^[[:space:]]*```/d' -e 's/`[^`]*`//g'
+}
+
 # U+2014 em-dash and U+2013 en-dash. House style takes an ASCII hyphen, a
 # colon, or two sentences.
 DASHES='\x{2014}|\x{2013}'
@@ -42,7 +54,7 @@ if [ -n "${1:-}" ]; then
         [ -n "$sha" ] || continue
         short=${sha:0:8}
         subject=$(git log -1 --format=%s "$sha")
-        body=$(git log -1 --format=%B "$sha")
+        body=$(git log -1 --format=%B "$sha" | strip_code)
 
         if ! printf '%s' "$subject" | grep -qP "$SUBJECT"; then
             fail "$short subject is not a Conventional Commit: $subject"
@@ -58,10 +70,11 @@ fi
 
 if [ -n "${PR_BODY:-}" ]; then
     echo "content-lint: pull-request body"
-    if printf '%s' "$PR_BODY" | grep -qP "$DASHES"; then
+    prose=$(printf '%s' "$PR_BODY" | strip_code)
+    if printf '%s' "$prose" | grep -qP "$DASHES"; then
         fail "pull-request body contains an em-dash or en-dash"
     fi
-    if printf '%s' "$PR_BODY" | grep -qiE "$FORBIDDEN"; then
+    if printf '%s' "$prose" | grep -qiE "$FORBIDDEN"; then
         fail "pull-request body carries a forbidden attribution trailer"
     fi
 fi
