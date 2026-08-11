@@ -127,4 +127,7 @@ jobs:
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - uses: ./.github/actions/rust-setup
-      - run: cargo doc --workspace --no-deps --locked
+      # --all-features so feature-gated modules are documented too. Without
+      # it `test_utils` is never built by rustdoc, and a broken intra-doc
+      # link there lands green.
+      - run: cargo doc --workspace --all-features --no-deps --locked
