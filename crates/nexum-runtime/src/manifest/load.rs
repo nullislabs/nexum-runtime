@@ -156,6 +156,57 @@ event_signature = "0x00000000000000000000000000000000000000000000000000000000dea
         }
     }
 
+    /// Malformed chain-log hex refuses the manifest at parse, not at first
+    /// dispatch, with the operator wording pinned verbatim.
+    #[test]
+    fn load_refuses_malformed_chain_log_hex_at_parse() {
+        for (field, detail) in [
+            (
+                "address  = \"0xabc\"",
+                "invalid chain-log address \"0xabc\"",
+            ),
+            (
+                "event_signature = \"not-a-topic\"",
+                "invalid topic \"not-a-topic\"",
+            ),
+        ] {
+            let toml = format!(
+                "[module]\nname = \"bad\"\n\n[[subscription]]\nkind     = \"chain-log\"\n\
+                 chain_id = 1\n{field}\n"
+            );
+            let err = toml::from_str::<Manifest>(&toml).expect_err("malformed hex");
+            assert!(err.to_string().contains(detail), "{err}");
+        }
+    }
+
+    /// Typing the field must neither widen nor narrow the accepted spelling:
+    /// `0x`-prefixed or bare, any case, no checksum requirement.
+    #[test]
+    fn load_accepts_every_hex_spelling_of_a_chain_log_address() {
+        let expected: alloy_primitives::Address = "0xc92e8bdf79f0507f65a392b0ab4667716bfe0110"
+            .parse()
+            .expect("canonical address");
+        for spelling in [
+            "0xC92E8bdf79f0507f65a392b0ab4667716BFE0110",
+            "0xc92e8bdf79f0507f65a392b0ab4667716bfe0110",
+            "0xC92E8BDF79F0507F65A392B0AB4667716BFE0110",
+            "c92e8bdf79f0507f65a392b0ab4667716bfe0110",
+        ] {
+            let toml = format!(
+                "[module]\nname = \"ok\"\n\n[[subscription]]\nkind     = \"chain-log\"\n\
+                 chain_id = 1\naddress  = \"{spelling}\"\n"
+            );
+            let manifest: Manifest = toml::from_str(&toml).expect(spelling);
+            assert!(
+                matches!(
+                    &manifest.subscriptions[0],
+                    Subscription::ChainLog { address: Some(a), .. } if *a == expected
+                ),
+                "{spelling} must parse to the canonical address",
+            );
+        }
+    }
+
     #[test]
     fn load_parses_the_retired_log_kind_as_an_extension_kind() {
         // The chain-event kind is `chain-log`; a stale `kind = "log"`

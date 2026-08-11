@@ -9,7 +9,6 @@ use anyhow::{Context, Error, Result, anyhow};
 use tracing::{info, warn};
 
 use super::role::Role;
-use super::subscriptions::build_alloy_filter;
 use crate::engine_config::EngineConfig;
 use crate::manifest::{self, CapabilityRegistry, LoadedManifest, Subscription};
 
@@ -113,8 +112,8 @@ impl ConfiguredChains {
     }
 }
 
-/// Refuse any subscription naming a chain absent from `[chains]` or carrying
-/// an unparseable chain-log filter, before any guest code runs.
+/// Refuse any subscription naming a chain absent from `[chains]`, before any
+/// guest code runs.
 pub(super) fn enforce_subscriptions(
     role: Role,
     name: &str,
@@ -128,21 +127,6 @@ pub(super) fn enforce_subscriptions(
         };
         if !chains.contains(*chain_id) {
             return Err(unconfigured_chain(role, name, *chain_id, chains));
-        }
-        if let Subscription::ChainLog {
-            address,
-            event_signature,
-            ..
-        } = sub
-        {
-            build_alloy_filter(address.as_deref(), event_signature.as_deref()).with_context(
-                || {
-                    format!(
-                        "{} {name} declares an invalid chain-log filter on chain {chain_id}",
-                        role.claim_role(),
-                    )
-                },
-            )?;
         }
     }
     Ok(())

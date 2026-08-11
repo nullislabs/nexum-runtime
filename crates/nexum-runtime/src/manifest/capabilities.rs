@@ -9,6 +9,8 @@
 
 use std::collections::HashSet;
 
+use strum::VariantNames;
+
 use super::error::{CapabilityError, CapabilityViolation};
 use super::types::{CORE_CAPABILITIES, LoadedManifest};
 
@@ -54,14 +56,42 @@ const HTTP_CAPABILITY: &str = nexum_world::Cap::Http.as_str();
 
 /// Gated WASI capability names; declaring one grants the matching `wasi:`
 /// interface group. See [`classify_wasi`].
-const WASI_CAPABILITIES: &[&str] = &["wasi-sockets", "wasi-filesystem"];
+const WASI_CAPABILITIES: &[&str] = WasiCap::VARIANTS;
+
+/// A gated WASI capability; the single source of the `wasi-*` name set.
+#[derive(Clone, Copy, strum::IntoStaticStr, strum::VariantNames, strum::VariantArray)]
+enum WasiCap {
+    #[strum(serialize = "wasi-sockets")]
+    Sockets,
+    #[strum(serialize = "wasi-filesystem")]
+    Filesystem,
+}
+
+impl WasiCap {
+    const ALL: &'static [Self] = <Self as strum::VariantArray>::VARIANTS;
+
+    fn as_str(self) -> &'static str {
+        self.into()
+    }
+
+    /// The `wasi:` interface prefix this capability gates.
+    const fn gated_prefix(self) -> &'static str {
+        match self {
+            Self::Sockets => "wasi:sockets/",
+            Self::Filesystem => "wasi:filesystem/",
+        }
+    }
+}
+
+/// Always-linked `wasi:` prefixes: io, clocks, random, stdio/exit/terminal.
+const AMBIENT_WASI_PREFIXES: &[&str] = &["wasi:io/", "wasi:clocks/", "wasi:random/", "wasi:cli/"];
 
 /// A `wasi:` import (other than `wasi:http`) classified against the gate.
 enum WasiGate {
-    /// Always linked, never declared: io, clocks, random, stdio/exit/terminal.
+    /// Always linked, never declared.
     Ambient,
-    /// Usable only when the named capability is declared.
-    Gated(&'static str),
+    /// Usable only when the capability is declared.
+    Gated(WasiCap),
     /// Unrecognised `wasi:` interface: refused fail-closed.
     Unknown,
 }
@@ -69,20 +99,13 @@ enum WasiGate {
 /// Classify a non-http `wasi:` interface id, ignoring any `@version` suffix.
 fn classify_wasi(import_name: &str) -> WasiGate {
     let iface = import_name.split('@').next().unwrap_or(import_name);
-    if iface.starts_with("wasi:io/")
-        || iface.starts_with("wasi:clocks/")
-        || iface.starts_with("wasi:random/")
-    {
-        WasiGate::Ambient
-    } else if iface.starts_with("wasi:filesystem/") {
-        WasiGate::Gated("wasi-filesystem")
-    } else if iface.starts_with("wasi:sockets/") {
-        WasiGate::Gated("wasi-sockets")
-    } else if iface.starts_with("wasi:cli/") {
-        WasiGate::Ambient
-    } else {
-        WasiGate::Unknown
+    if AMBIENT_WASI_PREFIXES.iter().any(|p| iface.starts_with(p)) {
+        return WasiGate::Ambient;
     }
+    WasiCap::ALL
+        .iter()
+        .find(|cap| iface.starts_with(cap.gated_prefix()))
+        .map_or(WasiGate::Unknown, |&cap| WasiGate::Gated(cap))
 }
 
 /// Capability namespaces recognised by enforcement: the core namespace plus
@@ -181,10 +204,10 @@ pub fn enforce_capabilities<'a>(
         if without_version.starts_with("wasi:") && !without_version.starts_with(WASI_HTTP_PREFIX) {
             match classify_wasi(import_name) {
                 WasiGate::Ambient => {}
-                WasiGate::Gated(cap) if declared.contains(cap) => {}
+                WasiGate::Gated(cap) if declared.contains(cap.as_str()) => {}
                 WasiGate::Gated(cap) => {
                     return Err(CapabilityViolation {
-                        capability: cap.to_owned(),
+                        capability: cap.as_str().to_owned(),
                         wit_import: import_name.to_owned(),
                     }
                     .into());
