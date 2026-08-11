@@ -10,6 +10,9 @@ description = "Task lifecycle and graceful shutdown for the Nexum runtime"
 workspace = true
 
 [dependencies]
-tokio.workspace = true
+# The only crate that raw-spawns: `rt` for `Handle`/`JoinHandle`/
+# `spawn_blocking`, `sync` for the watch shutdown signal and the mpsc
+# drain, `time` plus `macros` for the bounded-drain `select!` deadline.
+tokio = { workspace = true, features = ["macros", "rt", "sync", "time"] }
 futures.workspace = true
 tracing.workspace = true
