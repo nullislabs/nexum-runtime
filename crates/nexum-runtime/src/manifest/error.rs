@@ -47,7 +47,7 @@ pub enum ParseError {
 #[derive(Debug, Error)]
 #[error(
     "component imports `{capability}` ({wit_import}) but it is not listed in \
-     [capabilities].required or [capabilities].optional"
+     [capabilities].required"
 )]
 pub struct CapabilityViolation {
     /// Capability name.

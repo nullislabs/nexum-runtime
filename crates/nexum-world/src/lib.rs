@@ -160,7 +160,7 @@ impl ChainMethod {
 
 /// One manifest capability and its world wiring.
 pub struct Capability {
-    /// The name declared under `[capabilities].required` / `optional`.
+    /// The name declared under `[capabilities].required`.
     pub name: Cap,
     /// The WIT import the declaration turns into; `None` for a
     /// capability with no world import (`http`).
@@ -276,7 +276,7 @@ pub struct ModuleWorld {
     pub adapters: Vec<&'static str>,
 }
 
-/// The declared capability names (`required` then `optional`) from the
+/// The declared capability names from `[capabilities].required` in the
 /// manifest text. A missing or malformed `[capabilities]` section is an
 /// error.
 pub fn manifest_capabilities(text: &str) -> Result<Vec<String>, String> {
@@ -285,7 +285,7 @@ pub fn manifest_capabilities(text: &str) -> Result<Vec<String>, String> {
         .map_err(|e| format!("module.toml is not valid TOML: {e}"))?;
     let caps = value.get("capabilities").ok_or_else(|| {
         "module.toml has no [capabilities] section; the module/adapter macro derives the \
-         component's WIT world from [capabilities].required/optional, so declare it (an empty \
+         component's WIT world from [capabilities].required, so declare it (an empty \
          `required = []` is valid)"
             .to_string()
     })?;
@@ -304,9 +304,15 @@ pub fn manifest_capabilities(text: &str) -> Result<Vec<String>, String> {
                 .collect(),
         }
     };
-    let mut names = list("required")?;
-    names.extend(list("optional")?);
-    Ok(names)
+    if caps.get("optional").is_some() {
+        return Err(
+            "[capabilities].optional is removed: a capability request is granted whole \
+                    or the component refuses at boot, so move the names to \
+                    [capabilities].required or delete them"
+                .to_string(),
+        );
+    }
+    list("required")
 }
 
 /// The declared `[module] name` from the manifest text, the id the
@@ -825,19 +831,33 @@ import = "beta:ext/api@0.1.0"
     }
 
     #[test]
-    fn manifest_capabilities_reads_required_and_optional() {
+    fn manifest_capabilities_reads_required() {
         let caps = manifest_capabilities(
             r#"
 [capabilities]
 required = ["logging", "chain"]
-optional = ["remote-store"]
 
 [capabilities.http]
 allow = []
 "#,
         )
         .unwrap();
-        assert_eq!(caps, vec!["logging", "chain", "remote-store"]);
+        assert_eq!(caps, vec!["logging", "chain"]);
+    }
+
+    #[test]
+    fn manifest_capabilities_refuses_the_removed_optional_key() {
+        // The macro runs at build time, so an author who kept the key gets a
+        // compile error rather than a boot refusal.
+        let err = manifest_capabilities(
+            r#"
+[capabilities]
+required = ["logging"]
+optional = ["remote-store"]
+"#,
+        )
+        .expect_err("the removed key must refuse");
+        assert!(err.contains("[capabilities].optional is removed"), "{err}");
     }
 
     #[test]

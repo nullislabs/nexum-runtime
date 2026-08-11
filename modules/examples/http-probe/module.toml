@@ -9,7 +9,6 @@ version = "0.1.0"
 
 [capabilities]
 required = ["logging", "http"]
-optional = []
 
 [capabilities.http]
 # Hosts this module may fetch from. Any other host is denied with the

@@ -33,7 +33,7 @@ pub fn load(path: &Path, registry: &CapabilityRegistry) -> Result<LoadedManifest
         .as_ref()
         .ok_or(ParseError::MissingCapabilities)?;
 
-    for name in caps.required.iter().chain(caps.optional.iter()) {
+    for name in &caps.required {
         if !registry.is_known(name) {
             return Err(ParseError::UnknownCapability {
                 name: name.clone(),
@@ -43,13 +43,6 @@ pub fn load(path: &Path, registry: &CapabilityRegistry) -> Result<LoadedManifest
     }
     if !caps.required.is_empty() {
         info!(target: "manifest", required = %caps.required.join(", "), "required capabilities");
-    }
-    if !caps.optional.is_empty() {
-        info!(
-            target: "manifest",
-            optional = %caps.optional.join(", "),
-            "optional capabilities (advisory)",
-        );
     }
 
     let http_allowlist = caps
@@ -596,6 +589,21 @@ max_state_bytes    = 52428800
     }
 
     #[test]
+    fn load_refuses_a_manifest_still_carrying_optional() {
+        // Silently ignoring the key would drop a declaration the author
+        // believes is in effect, so the section denies unknown fields.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("module.toml");
+        std::fs::write(
+            &path,
+            "[module]\nname = \"legacy\"\n\n[capabilities]\nrequired = [\"logging\"]\noptional = []\n",
+        )
+        .unwrap();
+        let err = load(&path, &CapabilityRegistry::core()).unwrap_err();
+        assert!(err.to_string().contains("optional"), "{err}");
+    }
+
+    #[test]
     fn load_accepts_empty_capabilities_block() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("module.toml");
@@ -611,7 +619,6 @@ max_state_bytes    = 52428800
             .as_ref()
             .expect("caps section parsed");
         assert!(caps.required.is_empty());
-        assert!(caps.optional.is_empty());
     }
 
     fn load_inline(toml: &str) -> Result<LoadedManifest, ParseError> {

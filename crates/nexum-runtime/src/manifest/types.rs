@@ -246,12 +246,13 @@ pub struct ResourceSection {
     pub max_state_bytes: Option<u64>,
 }
 
+/// `deny_unknown_fields` so a manifest still carrying the removed
+/// `optional` key refuses at parse rather than losing the declaration.
 #[derive(Debug, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 pub struct CapabilitiesSection {
     #[serde(default)]
     pub required: Vec<String>,
-    #[serde(default)]
-    pub optional: Vec<String>,
     #[serde(default)]
     pub http: Option<HttpSection>,
 }

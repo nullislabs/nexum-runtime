@@ -7,13 +7,9 @@ version = "0.1.0"
 #   component = "sha256:<64 hex chars>"   (sha256sum of the .wasm)
 
 [capabilities]
-# 0.2 reference engine provides all listed capabilities; this list is a
-# sanity check + future-proofing.
+# Capabilities this module requests. The engine grants every one or
+# refuses the module at boot.
 required = ["logging"]
-
-# Capabilities the module would use opportunistically. In 0.2 these are
-# parsed and logged; trap-stub fallback for absent optionals ships in 0.3.
-optional = []
 
 [capabilities.http]
 # Per-module HTTP allowlist. Empty list = no outbound HTTP permitted.

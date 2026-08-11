@@ -193,7 +193,7 @@ pub fn enforce_capabilities<'a>(
         .capabilities
         .as_ref()
         .into_iter()
-        .flat_map(|c| c.required.iter().chain(c.optional.iter()))
+        .flat_map(|c| c.required.iter())
         .map(String::as_str)
         .collect();
 
@@ -303,12 +303,11 @@ mod tests {
         assert_eq!(r.wit_import_to_cap("wasi:sockets/tcp@0.2.0"), None);
     }
 
-    fn manifest_with_caps(required: &[&str], optional: &[&str]) -> LoadedManifest {
+    fn manifest_with_caps(required: &[&str]) -> LoadedManifest {
         LoadedManifest {
             manifest: Manifest {
                 capabilities: Some(CapabilitiesSection {
                     required: required.iter().map(|s| s.to_string()).collect(),
-                    optional: optional.iter().map(|s| s.to_string()).collect(),
                     http: None,
                 }),
                 ..Default::default()
@@ -367,7 +366,7 @@ mod tests {
 
     #[test]
     fn enforce_passes_when_all_imports_declared() {
-        let loaded = manifest_with_caps(&["chain", "acme-api"], &["http"]);
+        let loaded = manifest_with_caps(&["chain", "acme-api", "http"]);
         let imports = [
             "nexum:host/chain@0.1.0",
             "test:acme/acme-api@0.1.0",
@@ -380,7 +379,7 @@ mod tests {
 
     #[test]
     fn enforce_rejects_wasi_http_import_without_declaration() {
-        let loaded = manifest_with_caps(&["chain"], &[]);
+        let loaded = manifest_with_caps(&["chain"]);
         let imports = [
             "nexum:host/chain@0.1.0",
             "wasi:http/outgoing-handler@0.2.12",
@@ -396,21 +395,18 @@ mod tests {
 
     #[test]
     fn enforce_accepts_wasi_http_when_http_declared() {
-        // Required and optional declarations both cover the import.
-        for (required, optional) in [(&["http"][..], &[][..]), (&[][..], &["http"][..])] {
-            let loaded = manifest_with_caps(required, optional);
-            let imports = [
-                "wasi:http/outgoing-handler@0.2.12",
-                "wasi:http/types@0.2.12",
-            ];
-            let r = registry_with_ext();
-            assert!(enforce_capabilities(&loaded, imports.into_iter(), &r).is_ok());
-        }
+        let loaded = manifest_with_caps(&["http"]);
+        let imports = [
+            "wasi:http/outgoing-handler@0.2.12",
+            "wasi:http/types@0.2.12",
+        ];
+        let r = registry_with_ext();
+        assert!(enforce_capabilities(&loaded, imports.into_iter(), &r).is_ok());
     }
 
     #[test]
     fn enforce_rejects_undeclared_import() {
-        let loaded = manifest_with_caps(&["chain"], &[]);
+        let loaded = manifest_with_caps(&["chain"]);
         // module imports remote-store but didn't declare it
         let imports = ["nexum:host/chain@0.1.0", "nexum:host/remote-store@0.1.0"];
         let r = registry_with_ext();
@@ -419,14 +415,6 @@ mod tests {
             panic!("expected undeclared: {err:?}")
         };
         assert_eq!(v.capability, "remote-store");
-    }
-
-    #[test]
-    fn enforce_optional_caps_are_also_allowed() {
-        let loaded = manifest_with_caps(&["chain"], &["remote-store"]);
-        let imports = ["nexum:host/chain@0.1.0", "nexum:host/remote-store@0.1.0"];
-        let r = registry_with_ext();
-        assert!(enforce_capabilities(&loaded, imports.into_iter(), &r).is_ok());
     }
 
     #[test]
@@ -466,7 +454,7 @@ mod tests {
 
     #[test]
     fn provider_enforce_refuses_an_undeclared_logging_import() {
-        let loaded = manifest_with_caps(&["chain"], &[]);
+        let loaded = manifest_with_caps(&["chain"]);
         let r = CapabilityRegistry::provider();
         let err = enforce_capabilities(&loaded, ["nexum:host/logging@0.1.0"].into_iter(), &r)
             .unwrap_err();
@@ -479,7 +467,7 @@ mod tests {
 
     #[test]
     fn provider_enforce_admits_a_declared_logging_import() {
-        let loaded = manifest_with_caps(&["logging"], &[]);
+        let loaded = manifest_with_caps(&["logging"]);
         let r = CapabilityRegistry::provider();
         assert!(
             enforce_capabilities(&loaded, ["nexum:host/logging@0.1.0"].into_iter(), &r).is_ok()
@@ -497,7 +485,7 @@ mod tests {
 
     #[test]
     fn ambient_wasi_needs_no_declaration() {
-        let loaded = manifest_with_caps(&["logging"], &[]);
+        let loaded = manifest_with_caps(&["logging"]);
         let imports = [
             "wasi:io/streams@0.2.6",
             "wasi:io/poll@0.2.6",
@@ -517,7 +505,7 @@ mod tests {
 
     #[test]
     fn undeclared_gated_wasi_is_refused() {
-        let loaded = manifest_with_caps(&["logging"], &[]);
+        let loaded = manifest_with_caps(&["logging"]);
         let r = registry_with_ext();
         for (import, cap) in [
             ("wasi:sockets/tcp@0.2.6", "wasi-sockets"),
@@ -534,7 +522,7 @@ mod tests {
 
     #[test]
     fn declared_gated_wasi_is_permitted() {
-        let loaded = manifest_with_caps(&["wasi-sockets", "wasi-filesystem"], &[]);
+        let loaded = manifest_with_caps(&["wasi-sockets", "wasi-filesystem"]);
         let imports = [
             "wasi:sockets/tcp@0.2.6",
             "wasi:sockets/udp@0.2.6",
@@ -547,7 +535,7 @@ mod tests {
 
     #[test]
     fn declaring_one_gated_cap_does_not_grant_another() {
-        let loaded = manifest_with_caps(&["wasi-filesystem"], &[]);
+        let loaded = manifest_with_caps(&["wasi-filesystem"]);
         let r = registry_with_ext();
         assert!(
             enforce_capabilities(&loaded, ["wasi:filesystem/types@0.2.6"].into_iter(), &r).is_ok()
@@ -559,7 +547,7 @@ mod tests {
     fn unknown_wasi_interface_is_refused_fail_closed() {
         // Even with an unrelated gated cap declared, an unrecognised wasi:
         // namespace is denied outright.
-        let loaded = manifest_with_caps(&["wasi-sockets"], &[]);
+        let loaded = manifest_with_caps(&["wasi-sockets"]);
         let r = registry_with_ext();
         let err =
             enforce_capabilities(&loaded, ["wasi:nn/tensor@0.2.0"].into_iter(), &r).unwrap_err();
@@ -568,8 +556,8 @@ mod tests {
 
     #[test]
     fn wasi_gate_ignores_version_suffix() {
-        let declared = manifest_with_caps(&["wasi-sockets"], &[]);
-        let none = manifest_with_caps(&["logging"], &[]);
+        let declared = manifest_with_caps(&["wasi-sockets"]);
+        let none = manifest_with_caps(&["logging"]);
         let r = registry_with_ext();
         assert!(enforce_capabilities(&declared, ["wasi:sockets/tcp"].into_iter(), &r).is_ok());
         assert!(
