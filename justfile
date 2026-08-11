@@ -42,6 +42,11 @@ fmt:
 lint:
     cargo clippy --workspace --all-targets --all-features -- -D warnings
 
+# Check house style: banned characters in tracked files, and the commit
+# messages this branch adds over main. Compiles nothing.
+content range="main..HEAD":
+    ./scripts/content-lint.sh "{{ range }}"
+
 # Check the workspace quickly.
 check:
     cargo check --target wasm32-wasip2 -p example
@@ -49,10 +54,10 @@ check:
     cargo check -p nexum-cli
 
 # Run the full CI series locally before pushing. Mirrors
-# .github/workflows/ci.yml one-to-one: rustfmt, clippy, rustdoc, the
-# module wasms the integration tests need, and the workspace test
-# suite via nextest plus the doctests, all under the `-D warnings` the
-# CI workflow sets globally.
+# .github/workflows/ci.yml one-to-one: house style, rustfmt, clippy,
+# rustdoc, the module wasms the integration tests need, and the workspace
+# test suite via nextest plus the doctests, all under the `-D warnings`
+# the CI workflow sets globally.
 ci:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -61,6 +66,7 @@ ci:
     # is already sccache from the devshell shellHook.
     export RUSTFLAGS="${RUSTFLAGS:-} -D warnings"
     export RUSTDOCFLAGS="${RUSTDOCFLAGS:-} -D warnings"
+    ./scripts/content-lint.sh "main..HEAD"
     cargo fmt --all --check
     cargo clippy --workspace --all-targets --all-features -- -D warnings
     cargo doc --workspace --no-deps
