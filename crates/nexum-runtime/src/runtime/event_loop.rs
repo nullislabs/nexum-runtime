@@ -714,7 +714,7 @@ mod tests {
         initial_cursor: Option<u64>,
     ) -> TaggedChainLogStream {
         let subs = vec![ChainLogSub {
-            module: "mod".into(),
+            module: ModuleId::parse("mod").expect("valid module name"),
             chain: alloy_chains::Chain::mainnet(),
             filter: alloy_rpc_types_eth::Filter::default(),
             cursor_key: None,
@@ -1087,7 +1087,7 @@ mod tests {
         let mut tasks = TaskSet::new();
         let subs = vec![
             ChainLogSub {
-                module: "mod-a".into(),
+                module: ModuleId::parse("mod-a").expect("valid module name"),
                 chain: alloy_chains::Chain::mainnet(),
                 filter: alloy_rpc_types_eth::Filter::default(),
                 cursor_key: None,
@@ -1095,7 +1095,7 @@ mod tests {
                 max_lookback: None,
             },
             ChainLogSub {
-                module: "mod-b".into(),
+                module: ModuleId::parse("mod-b").expect("valid module name"),
                 chain: alloy_chains::Chain::mainnet(),
                 filter: alloy_rpc_types_eth::Filter::default(),
                 cursor_key: None,
@@ -1342,7 +1342,7 @@ mod tests {
 
         let block_streams = open_block_streams(&pool, &[Chain::mainnet()], &executor, &mut tasks);
         let log_subs = vec![crate::supervisor::ChainLogSub {
-            module: "test-module".into(),
+            module: ModuleId::parse("test-module").expect("valid module name"),
             chain: Chain::from_id(100),
             filter: Filter::default(),
             cursor_key: None,

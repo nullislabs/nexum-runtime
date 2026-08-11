@@ -3,6 +3,8 @@
 use strum::IntoStaticStr;
 use thiserror::Error;
 
+use crate::module_id::InvalidModuleName;
+
 /// Errors from loading or validating a manifest.
 #[derive(Debug, Error)]
 #[non_exhaustive]
@@ -49,6 +51,16 @@ pub enum ParseError {
         #[source]
         source: crate::digest::DigestParseError,
     },
+}
+
+/// Reports a refused `[component].name` in the manifest vocabulary.
+impl From<InvalidModuleName> for ParseError {
+    fn from(err: InvalidModuleName) -> Self {
+        match err {
+            InvalidModuleName::Blank => Self::BlankModuleName,
+            InvalidModuleName::UnsafePathComponent(name) => Self::InvalidModuleName(name),
+        }
+    }
 }
 
 /// A capability-bearing WIT import the manifest did not declare.

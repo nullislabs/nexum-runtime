@@ -8,6 +8,7 @@ use tracing::info;
 use super::capabilities::CapabilityRegistry;
 use super::error::ParseError;
 use super::types::{LoadedManifest, Manifest};
+use crate::module_id::ModuleId;
 
 /// Parse and validate `component.toml`; no `[dependencies]` table refuses the
 /// manifest (`required = []` is valid).
@@ -15,7 +16,9 @@ pub fn load(path: &Path, registry: &CapabilityRegistry) -> Result<LoadedManifest
     let raw = std::fs::read_to_string(path)?;
     let manifest: Manifest = toml::from_str(&raw)?;
 
-    validate_module_name(&manifest.component.name)?;
+    // The one producer of a `ModuleId`: the name reaches the filesystem as a
+    // state-directory namespace, so it is parsed, never validated in passing.
+    let name = ModuleId::parse(&manifest.component.name)?;
 
     let component_digest = manifest
         .component
@@ -69,23 +72,12 @@ pub fn load(path: &Path, registry: &CapabilityRegistry) -> Result<LoadedManifest
         .collect();
 
     Ok(LoadedManifest {
+        name,
         manifest,
         http_allowlist,
         config,
         component_digest,
     })
-}
-
-/// Reject a `[component].name` that is blank or not a single safe path
-/// component, so it cannot escape the state directory.
-fn validate_module_name(name: &str) -> Result<(), ParseError> {
-    if name.trim().is_empty() {
-        return Err(ParseError::BlankModuleName);
-    }
-    if name.contains('/') || name.contains('\\') || name.contains("..") {
-        return Err(ParseError::InvalidModuleName(name.to_owned()));
-    }
-    Ok(())
 }
 
 /// Whether `host` matches any allowlist pattern: exact, or a `*.suffix`

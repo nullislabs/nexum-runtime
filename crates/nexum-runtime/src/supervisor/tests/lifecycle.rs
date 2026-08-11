@@ -573,7 +573,7 @@ fn provider_at_run_zero(
     const EMPTY_COMPONENT: &[u8] = b"(component)";
     let limits = ModuleLimits::default();
     crate::supervisor::load::LoadedProvider {
-        name: "scripted".into(),
+        name: crate::module_id::ModuleId::parse("scripted").expect("valid module name"),
         kind,
         sections: manifest::ExtensionSections::default(),
         seed: crate::supervisor::load::Seed {
@@ -595,7 +595,10 @@ fn provider_at_run_zero(
             event_deadline: limits.event_deadline(),
         },
         liveness: crate::host::actor::Liveness::default(),
-        run: crate::host::logs::RunId::new("scripted", 0),
+        run: crate::host::logs::RunId::new(
+            crate::module_id::ModuleId::parse("scripted").expect("valid module name"),
+            0,
+        ),
         health: crate::supervisor::lifecycle::Health::alive(),
     }
 }

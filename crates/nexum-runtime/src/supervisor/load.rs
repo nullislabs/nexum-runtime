@@ -264,7 +264,7 @@ pub(super) async fn module<T: RuntimeTypes>(
     require_component_digest: bool,
     provider_manifests: &[ServiceManifest],
 ) -> Result<LoadedModule<T>> {
-    let module_namespace: ModuleId = manifest_namespace(&loaded_manifest).into();
+    let module_namespace: ModuleId = manifest_namespace(&loaded_manifest);
     let registry = capability_registry(&shared.extensions);
     let sections = &loaded_manifest.manifest.extensions;
     let ((), component, digest) = admit_and_verify(
@@ -374,7 +374,7 @@ pub(super) async fn provider<T: RuntimeTypes>(
     limits_cfg: &ModuleLimits,
     require_component_digest: bool,
 ) -> Result<LoadedProvider> {
-    let namespace: ModuleId = manifest_namespace(&loaded_manifest).into();
+    let namespace: ModuleId = manifest_namespace(&loaded_manifest);
     // A core-only declaration fails at manifest load; an undeclared gated
     // import fails after compile; the linker withholds the core interfaces.
     let registry = CapabilityRegistry::provider();

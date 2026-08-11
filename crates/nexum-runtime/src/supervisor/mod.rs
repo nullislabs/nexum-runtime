@@ -162,7 +162,7 @@ impl<T: RuntimeTypes> Supervisor<T> {
             )?;
             enforce_subscriptions(
                 Role::Module,
-                &manifest_namespace(&loaded_manifest),
+                manifest_namespace(&loaded_manifest).as_str(),
                 &loaded_manifest,
                 &env.configured_chains,
             )?;
