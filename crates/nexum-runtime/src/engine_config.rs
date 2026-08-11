@@ -6,6 +6,7 @@
 //! else defaults (no chains, `state_dir = ./data`).
 
 use std::collections::HashMap;
+use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -425,6 +426,12 @@ impl ModuleLimits {
         }
     }
 
+    /// Addresses the operator permits despite falling in a refused range.
+    /// Empty by default, so every refused range stays refused.
+    pub fn http_permitted_destinations(&self) -> Vec<IpAddr> {
+        self.http.permit_destinations.clone()
+    }
+
     /// Resolved log retention limits; degenerate zeroes saturate up to 1.
     pub fn logs(&self) -> LogRetentionLimits {
         LogRetentionLimits {
@@ -530,6 +537,10 @@ pub struct HttpLimitsSection {
     pub total_deadline_ms: Option<u64>,
     /// Cap on one incoming response body, in bytes.
     pub response_body_max_bytes: Option<u64>,
+    /// Addresses in otherwise-refused ranges that this deployment permits.
+    /// The operator writes these; a module manifest cannot add to them.
+    #[serde(default)]
+    pub permit_destinations: Vec<IpAddr>,
 }
 
 /// `[limits.chain]` chain JSON-RPC response size limit. Optional; defaults
@@ -922,6 +933,43 @@ response_body_max_bytes = 1_024
         // Unset fields keep the built-in defaults.
         assert_eq!(http.first_byte_timeout_max, Duration::from_secs(30));
         assert_eq!(http.between_bytes_timeout_max, Duration::from_secs(30));
+    }
+
+    #[test]
+    fn permit_destinations_defaults_to_empty_and_parses_both_families() {
+        let bare: EngineConfig = toml::from_str("[limits]\n").expect("bare limits parse");
+        assert!(
+            bare.limits.http_permitted_destinations().is_empty(),
+            "an absent list permits nothing"
+        );
+
+        let cfg: EngineConfig = toml::from_str(
+            r#"
+[limits.http]
+permit_destinations = ["10.0.5.7", "::1"]
+"#,
+        )
+        .expect("permit_destinations parses");
+        assert_eq!(
+            cfg.limits.http_permitted_destinations(),
+            vec![
+                IpAddr::V4(std::net::Ipv4Addr::new(10, 0, 5, 7)),
+                IpAddr::V6(std::net::Ipv6Addr::LOCALHOST),
+            ]
+        );
+    }
+
+    #[test]
+    fn permit_destinations_refuses_a_value_that_is_not_an_address() {
+        let err = toml::from_str::<EngineConfig>(
+            r#"
+[limits.http]
+permit_destinations = ["10.0.5.0/24"]
+"#,
+        )
+        .expect_err("a CIDR range is not an address");
+        // Serde's own type mismatch, not a message we threaded through it.
+        assert!(err.to_string().contains("permit_destinations"), "{err}");
     }
 
     #[test]

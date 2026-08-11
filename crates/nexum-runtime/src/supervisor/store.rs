@@ -93,6 +93,8 @@ pub(super) fn resolve_module_limits(res: &ResourceSection, cfg: &ModuleLimits) -
 pub(super) struct StoreSpec {
     pub(super) http_allowlist: Vec<String>,
     pub(super) http_limits: OutboundHttpLimits,
+    /// Operator-permitted addresses that would otherwise be refused.
+    pub(super) http_permitted: Vec<std::net::IpAddr>,
     pub(super) messaging_topics: Vec<String>,
     pub(super) memory_limit: usize,
     pub(super) fuel: u64,
@@ -163,7 +165,12 @@ fn build<T: RuntimeTypes>(
             table: ResourceTable::new(),
             limits,
             http_ctx: wasmtime_wasi_http::WasiHttpCtx::new(),
-            http_gate: HttpGate::new(namespace, spec.http_allowlist.clone(), spec.http_limits),
+            http_gate: HttpGate::new(
+                namespace,
+                spec.http_allowlist.clone(),
+                spec.http_limits,
+                spec.http_permitted.clone(),
+            ),
             messaging_topics: spec.messaging_topics.clone(),
             run,
             log_router: router,
