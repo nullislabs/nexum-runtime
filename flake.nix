@@ -1,5 +1,5 @@
 {
-  description = "Nexum runtime – WASM Component Model host for web3 modules";
+  description = "Nexum runtime: WASM Component Model host for web3 modules";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
@@ -23,7 +23,7 @@
         rustToolchain = pkgs.rust-bin.stable."1.94.0".default.override {
           extensions = [ "rust-src" "rust-analyzer" "clippy" "rustfmt" ];
           targets = [
-            # WASM host/guest targets — the runtime's primary output.
+            # WASM host/guest targets: the runtime's primary output.
             "wasm32-wasip2"
             "wasm32-unknown-unknown"
             # Native desktop/server targets we build and ship on.
@@ -31,7 +31,7 @@
             "aarch64-unknown-linux-gnu"
             "aarch64-apple-darwin"
             "x86_64-apple-darwin"
-            # Mobile targets — the client library is consumed on Android/iOS.
+            # Mobile targets: the client library is consumed on Android/iOS.
             "aarch64-linux-android"
             "x86_64-linux-android"
             "aarch64-apple-ios"
@@ -55,7 +55,7 @@
             openssl
           ] ++ lib.optionals stdenv.isLinux [ mold ];
 
-          # Link native Linux targets with mold — far faster than bfd/gold on
+          # Link native Linux targets with mold, far faster than bfd/gold on
           # the iterate-compile-link loop. Scoped per-target so it never touches
           # wasm or cross linking, and set as env (not a committed .cargo config)
           # so CI, which has no mold installed, keeps using its default linker.
@@ -75,7 +75,7 @@
               export RUSTC_WRAPPER=sccache
               export CARGO_INCREMENTAL=0 # sccache and incremental are exclusive
             fi
-            echo "nexum dev shell — $(rustc --version)"
+            echo "nexum dev shell $(rustc --version)"
             command -v sccache >/dev/null && echo "  compiler cache: $(sccache --version)"
             echo "  test runner: $(cargo nextest --version | head -n1)"
             ${lib.optionalString stdenv.isLinux ''command -v mold >/dev/null && echo "  linker (native): mold $(mold --version | head -n1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n1)"''}

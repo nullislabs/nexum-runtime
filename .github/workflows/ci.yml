@@ -29,6 +29,30 @@ env:
   SCCACHE_GHA_ENABLED: "true"
 
 jobs:
+  content:
+    name: content
+    runs-on: ubuntu-latest
+    steps:
+      # fetch-depth: 0 so the commit range in a pull request resolves; the
+      # default shallow clone has no merge base to walk back to.
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+      # No toolchain: this job reads text, so it must not wait on rust-setup.
+      # The pull-request body arrives through the environment and never through
+      # the command line, so its content cannot be read as shell.
+      - name: House style
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          range=""
+          if [ -n "$BASE_SHA" ]; then
+            range="$BASE_SHA..$HEAD_SHA"
+          fi
+          ./scripts/content-lint.sh "$range"
+
   fmt:
     name: rustfmt
     runs-on: ubuntu-latest

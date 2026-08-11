@@ -1,6 +1,6 @@
 package nexum:host@0.1.0;
 
-/// Event-driven module — automation, background processing.
+/// Event-driven module: automation, background processing.
 /// No UI capabilities. Runs on any conforming host.
 world event-module {
     use types.{config, event, fault};

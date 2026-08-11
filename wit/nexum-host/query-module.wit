@@ -1,6 +1,6 @@
 package nexum:host@0.1.0;
 
-/// Query module — synchronous, side-effect-free evaluation.
+/// Query module: synchronous, side-effect-free evaluation.
 ///
 /// EXPERIMENTAL (0.2): the shape of this world is provisional and may
 /// change in a future minor release without a major bump. Hosts and SDKs

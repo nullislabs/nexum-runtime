@@ -533,7 +533,7 @@ mod tests {
             .expect("launch example subscribed to both blocks and chain-logs");
 
         // Both events are queued before either is awaited, so the biased
-        // select genuinely arbitrates between two ready streams — a
+        // select genuinely arbitrates between two ready streams: a
         // sequential push→wait→push→wait would never create contention.
         // The log shares height 42 so neither poller starts past the block.
         rt.push_block(header_numbered(42));
@@ -547,7 +547,7 @@ mod tests {
             .expect("block event dispatched");
         rt.wait_for_log("example", "received 1 chain-log entries")
             .await
-            .expect("chain-log event dispatched — neither event kind starved the other");
+            .expect("chain-log event dispatched, neither event kind starved the other");
 
         rt.shutdown();
         rt.wait().await.expect("clean shutdown");
