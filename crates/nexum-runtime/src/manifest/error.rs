@@ -13,13 +13,13 @@ pub enum ParseError {
     /// Manifest file was not valid TOML.
     #[error("manifest: parse: {0}")]
     Toml(#[from] toml::de::Error),
-    /// A dependency the engine does not recognise as a host capability
+    /// A dependency the engine does not recognize as a host capability
     /// or a registered service.
     #[error("manifest: unknown dependency {name:?} in [dependencies] (known: {known})")]
     UnknownCapability {
-        /// The unrecognised name.
+        /// The unrecognized name.
         name: String,
-        /// Comma-joined recognised capability names.
+        /// Comma-joined recognized capability names.
         known: String,
     },
     /// `[component].name` contains `/`, `\`, or `..`, so it could escape
@@ -72,9 +72,9 @@ pub enum CapabilityError {
     /// A gated import was not declared in `[dependencies]`.
     #[error(transparent)]
     Undeclared(#[from] CapabilityViolation),
-    /// An unrecognised `wasi:` interface was imported; refused fail-closed.
+    /// An unrecognized `wasi:` interface was imported; refused fail-closed.
     #[error(
-        "component imports unrecognised WASI interface `{wit_import}`; \
+        "component imports unrecognized WASI interface `{wit_import}`; \
          undeclared WASI is refused by default"
     )]
     UnknownWasi {

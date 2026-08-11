@@ -8,7 +8,7 @@ use clap::{CommandFactory, FromArgMatches, Parser};
 ///
 /// `<bin> [<wasm-path> [<manifest-path>]] [--engine-config <path>] [--pretty-logs]`
 ///
-/// Positional `<wasm-path>` synthesises a one-module engine config.
+/// Positional `<wasm-path>` synthesizes a one-module engine config.
 /// Production deployments pass `--engine-config` and declare modules in
 /// TOML.
 ///

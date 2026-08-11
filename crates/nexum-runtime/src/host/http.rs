@@ -490,7 +490,7 @@ mod tests {
     #[test]
     fn backslash_in_the_authority_fails_to_parse_rather_than_bypassing() {
         // Backslash-as-slash confusion is a known SSRF trick against
-        // parsers that normalise `\` to `/`. `http::Uri` does neither:
+        // parsers that normalize `\` to `/`. `http::Uri` does neither:
         // a backslash anywhere in the authority is rejected at parse
         // time. Checked against both entry points a backslash-bearing
         // authority could reach this gate through: the full-URI parser
@@ -519,11 +519,11 @@ mod tests {
     #[test]
     fn numeric_ip_encodings_never_normalise_to_the_dotted_form_an_allowlist_names() {
         // `host_allowed` is an exact/wildcard string match with no IP
-        // normalisation (see `admit`'s doc comment). Decimal, octal, and
+        // normalization (see `admit`'s doc comment). Decimal, octal, and
         // hex encodings of 127.0.0.1 are valid `http::Uri` hosts but are
         // different strings from "127.0.0.1", so none of them satisfy an
         // allowlist entry naming the dotted-quad form - locking in that
-        // a future refactor doesn't "helpfully" start normalising these
+        // a future refactor doesn't "helpfully" start normalizing these
         // and turn a same-string match into an equivalent-address match.
         for evil in [
             "2130706433",

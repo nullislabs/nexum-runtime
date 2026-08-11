@@ -79,6 +79,13 @@ It is not a migration log or a design discussion.
 
 ## House rules
 
+`CONTRIBUTING.md` carries the organization-wide standard and takes precedence.
+It mirrors nxm-rs/.github, which applies directly once this repository moves there.
+The rules below are the repository-specific additions.
+
+Write in Oxford English, which takes -ize endings: organize, recognize, serialize.
+`.claude/hooks/content-lint.sh` and the CI content job refuse an -ise spelling of a word that takes -ize.
+
 Do not use em-dashes in source, rustdoc, markdown, commit messages, or PR and issue bodies.
 Use an ASCII hyphen, use a colon, or write two sentences.
 `.claude/hooks/content-lint.sh` blocks an edit that adds an em-dash to a `.rs` or `.md` file.

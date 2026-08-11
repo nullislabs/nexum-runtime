@@ -9,7 +9,7 @@ use proc_macro::TokenStream;
 use quote::{ToTokens, quote};
 use syn::{ImplItem, ItemImpl};
 
-/// The handler names recognised on a `#[module]` impl. An `on_`-prefixed
+/// The handler names recognized on a `#[module]` impl. An `on_`-prefixed
 /// method outside this set is a compile error; an absent handler
 /// dispatches as a no-op.
 const HANDLERS: [&str; 5] = ["init", "on_block", "on_chain_logs", "on_tick", "on_custom"];
@@ -71,7 +71,7 @@ pub fn module(attr: TokenStream, item: TokenStream) -> TokenStream {
 
     // A typo'd handler (`on_blocks`, `on_chainlogs`, ...) would otherwise
     // compile as an ordinary helper while its event silently no-ops, so
-    // reserve the `on_` prefix for the recognised handler set.
+    // reserve the `on_` prefix for the recognized handler set.
     for item in &input.items {
         if let ImplItem::Fn(f) = item {
             let name = f.sig.ident.to_string();
@@ -79,7 +79,7 @@ pub fn module(attr: TokenStream, item: TokenStream) -> TokenStream {
                 return syn::Error::new_spanned(
                     &f.sig.ident,
                     format!(
-                        "`{name}` is not a recognised #[nexum_sdk::module] handler; expected one \
+                        "`{name}` is not a recognized #[nexum_sdk::module] handler; expected one \
                          of {HANDLERS:?} (rename helpers so they do not start with `on_`)"
                     ),
                 )
@@ -103,7 +103,7 @@ pub fn module(attr: TokenStream, item: TokenStream) -> TokenStream {
     if present.is_empty() {
         return syn::Error::new_spanned(
             self_ty,
-            "#[nexum_sdk::module] found no recognised handlers on this impl; define at least one \
+            "#[nexum_sdk::module] found no recognized handlers on this impl; define at least one \
              of `init`, `on_block`, `on_chain_logs`, `on_tick`, `on_custom`",
         )
         .to_compile_error()

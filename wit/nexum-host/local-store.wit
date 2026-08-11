@@ -23,7 +23,7 @@ interface local-store {
     /// transferring the value. On some backends this may be a scan.
     len: func(key: string) -> result<option<u64>, fault>;
 
-    /// Number of keys matching a prefix, without materialising the key
+    /// Number of keys matching a prefix, without materializing the key
     /// list. On some backends this may be a scan.
     count: func(prefix: string) -> result<u64, fault>;
 

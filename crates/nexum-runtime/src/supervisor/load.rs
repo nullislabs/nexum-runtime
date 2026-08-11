@@ -317,7 +317,7 @@ pub(super) async fn module<T: RuntimeTypes>(
     };
     let (run, mut store) = fresh_run_store(shared, &module_namespace, 0, &seed.spec, Role::Module)?;
     let (bindings, init) = instantiate_module(linker, &seed, &module_namespace, &mut store).await?;
-    // A failed `init` leaves guest state uninitialised, so the module loads dead.
+    // A failed `init` leaves guest state uninitialized, so the module loads dead.
     let init_succeeded = match init {
         Ok(()) => {
             info!(module = %module_namespace, "init succeeded");

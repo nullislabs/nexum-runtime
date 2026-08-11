@@ -91,7 +91,7 @@ enum WasiGate {
     Ambient,
     /// Usable only when the capability is declared.
     Gated(WasiCap),
-    /// Unrecognised `wasi:` interface: refused fail-closed.
+    /// Unrecognized `wasi:` interface: refused fail-closed.
     Unknown,
 }
 
@@ -107,7 +107,7 @@ fn classify_wasi(import_name: &str) -> WasiGate {
         .map_or(WasiGate::Unknown, |&cap| WasiGate::Gated(cap))
 }
 
-/// Capability namespaces recognised by enforcement: the core namespace plus
+/// Capability namespaces recognized by enforcement: the core namespace plus
 /// every registered extension.
 #[derive(Clone)]
 pub struct CapabilityRegistry {
@@ -149,7 +149,7 @@ impl CapabilityRegistry {
             || self.namespaces.iter().any(|ns| ns.ifaces.contains(&name))
     }
 
-    /// Comma-joined recognised capability names, for error messages.
+    /// Comma-joined recognized capability names, for error messages.
     pub fn known_names(&self) -> String {
         self.namespaces
             .iter()
@@ -283,7 +283,7 @@ mod tests {
 
     #[test]
     fn wit_import_to_cap_extension_needs_registration() {
-        // Core registry does not recognise an extension namespace.
+        // Core registry does not recognize an extension namespace.
         let core = CapabilityRegistry::core();
         assert_eq!(core.wit_import_to_cap("test:acme/acme-api@0.1.0"), None);
         // Once registered, it resolves.
@@ -444,7 +444,7 @@ mod tests {
             r.wit_import_to_cap("wasi:http/outgoing-handler@0.2.12"),
             Some("http")
         );
-        // A core-only interface is not a recognised provider capability.
+        // A core-only interface is not a recognized provider capability.
         assert_eq!(r.wit_import_to_cap("nexum:host/local-store@0.1.0"), None);
     }
 
@@ -541,7 +541,7 @@ mod tests {
 
     #[test]
     fn unknown_wasi_interface_is_refused_fail_closed() {
-        // Even with an unrelated gated cap declared, an unrecognised wasi:
+        // Even with an unrelated gated cap declared, an unrecognized wasi:
         // namespace is denied outright.
         let loaded = manifest_with_caps(&["wasi-sockets"]);
         let r = registry_with_ext();

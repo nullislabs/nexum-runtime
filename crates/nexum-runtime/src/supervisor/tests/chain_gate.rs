@@ -158,15 +158,15 @@ async fn a_validated_chain_log_filter_survives_to_the_collected_subscription() {
     assert_eq!(subs[0].module.as_str(), "example");
     assert_eq!(subs[0].chain.id(), 1);
     assert!(subs[0].cursor_key.is_none(), "resume defaults to off");
-    // alloy `Filter` exposes no getter; assert through its serialisation.
-    let serialised = serde_json::to_value(&subs[0].filter).unwrap().to_string();
+    // alloy `Filter` exposes no getter; assert through its serialization.
+    let serialized = serde_json::to_value(&subs[0].filter).unwrap().to_string();
     assert!(
-        serialised
+        serialized
             .to_lowercase()
             .contains(&address.to_lowercase()[2..]),
-        "{serialised}",
+        "{serialized}",
     );
-    assert!(serialised.contains(&topic[2..]), "{serialised}");
+    assert!(serialized.contains(&topic[2..]), "{serialized}");
 }
 
 #[tokio::test]

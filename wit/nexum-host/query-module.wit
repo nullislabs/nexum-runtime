@@ -4,7 +4,7 @@ package nexum:host@0.1.0;
 ///
 /// EXPERIMENTAL (0.2): the shape of this world is provisional and may
 /// change in a future minor release without a major bump. Hosts and SDKs
-/// should expect breakage here until the world is stabilised.
+/// should expect breakage here until the world is stabilized.
 ///
 /// A query module exposes a single pure `evaluate` entry point. It is given
 /// read-only access to the local store (for cached/derived state) and to

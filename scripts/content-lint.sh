@@ -36,6 +36,14 @@ DASHES='\x{2014}|\x{2013}'
 # A Conventional Commit subject, optional scope, optional breaking marker.
 SUBJECT='^(build|chore|ci|docs|feat|fix|perf|refactor|revert|style|test)(\([a-z0-9._/-]+\))?!?: .+'
 
+# Oxford spelling takes -ize, per the org CONTRIBUTING.md. Matched by stem
+# with a required suffix, so the nouns "synthesis" and "analysis" cannot hit,
+# and so prefixed and suffixed forms of a listed stem do. Words with no -ize
+# form (supervise, exercise, otherwise, promise, comprise) are absent from the
+# list by construction rather than excluded after the fact.
+IZE_STEMS='authoris|capitalis|categoris|centralis|customis|decentralis|deserialis|formalis|generalis|initialis|materialis|maximis|minimis|normalis|optimis|organis|prioritis|realis|recognis|sanitis|serialis|stabilis|standardis|summaris|synthesis|tokenis|utilis'
+ISE='('"$IZE_STEMS"')(e|es|ed|ing|ation|ations)\b'
+
 # Attribution trailers AGENTS.md forbids by name. Standard agent tooling adds
 # the first by default, so this is the check that keeps an unattended
 # contribution honest.
@@ -45,6 +53,15 @@ echo "content-lint: tracked files"
 hits=$(git grep -nIP "$DASHES" -- . || true)
 if [ -n "$hits" ]; then
     fail "em-dash or en-dash in tracked files:"
+    printf '%s\n' "$hits" | sed 's/^/    /' >&2
+fi
+
+# CONTRIBUTING.md states the rule, and stating it means quoting the spelling
+# it rejects. Same reason a message may quote a banned trailer inside a code
+# span: a rule that cannot be written down is unusable.
+hits=$(git grep -nIP "$ISE" -- . ':!CONTRIBUTING.md' || true)
+if [ -n "$hits" ]; then
+    fail "Oxford spelling takes -ize, not -ise:"
     printf '%s\n' "$hits" | sed 's/^/    /' >&2
 fi
 
@@ -65,6 +82,9 @@ if [ -n "${1:-}" ]; then
         if printf '%s' "$body" | grep -qiE "$FORBIDDEN"; then
             fail "$short message carries a forbidden attribution trailer"
         fi
+        if printf '%s' "$body" | grep -qP "$ISE"; then
+            fail "$short message uses -ise where Oxford spelling takes -ize"
+        fi
     done < <(git rev-list "$1")
 fi
 
@@ -76,6 +96,9 @@ if [ -n "${PR_BODY:-}" ]; then
     fi
     if printf '%s' "$prose" | grep -qiE "$FORBIDDEN"; then
         fail "pull-request body carries a forbidden attribution trailer"
+    fi
+    if printf '%s' "$prose" | grep -qP "$ISE"; then
+        fail "pull-request body uses -ise where Oxford spelling takes -ize"
     fi
 fi
 

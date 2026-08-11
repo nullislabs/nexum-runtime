@@ -15,9 +15,9 @@ fn alloy_filter_with_address_and_topic() {
     let addr = "0xC92E8bdf79f0507f65a392b0ab4667716BFE0110";
     let topic = "0x237e158222e3e6968b72b9db0d8043aacf074ad9f650f0d1606b4d82ee432c00";
     let filter = build_alloy_filter(Some(addr.parse().unwrap()), Some(topic.parse().unwrap()));
-    // alloy `Filter` exposes no getter; assert through its serialisation.
-    let serialised = serde_json::to_value(&filter).unwrap();
-    let addr_field = serialised
+    // alloy `Filter` exposes no getter; assert through its serialization.
+    let serialized = serde_json::to_value(&filter).unwrap();
+    let addr_field = serialized
         .get("address")
         .unwrap()
         .to_string()
@@ -28,11 +28,11 @@ fn alloy_filter_with_address_and_topic() {
 #[test]
 fn alloy_filter_no_address_no_topic() {
     let filter = build_alloy_filter(None, None);
-    let serialised = serde_json::to_value(&filter).unwrap();
+    let serialized = serde_json::to_value(&filter).unwrap();
     assert!(
-        serialised.get("address").is_none()
-            || serialised["address"].is_null()
-            || serialised["address"] == serde_json::json!([])
+        serialized.get("address").is_none()
+            || serialized["address"].is_null()
+            || serialized["address"] == serde_json::json!([])
     );
 }
 

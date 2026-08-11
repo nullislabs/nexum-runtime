@@ -43,12 +43,12 @@ pub enum LaunchRefusal {
     )]
     NothingToRun,
     #[error(
-        "all {modules} module(s) failed initialisation - check the logs above for \
+        "all {modules} module(s) failed initialization - check the logs above for \
          per-module errors and fix the wasm binary passed as an override"
     )]
     AllDeadOverride { modules: usize },
     #[error(
-        "all {modules} module(s) failed initialisation - check the logs above for \
+        "all {modules} module(s) failed initialization - check the logs above for \
          per-module errors and fix or remove the failing module from engine.toml"
     )]
     AllDeadConfigured { modules: usize },

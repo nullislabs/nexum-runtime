@@ -3,7 +3,7 @@ package nexum:host@0.1.0;
 interface remote-store {
     use types.{fault};
 
-    /// Upload raw data to the decentralised store.
+    /// Upload raw data to the decentralized store.
     /// Returns the 32-byte content reference (Swarm address).
     upload: func(data: list<u8>) -> result<list<u8>, fault>;
 
