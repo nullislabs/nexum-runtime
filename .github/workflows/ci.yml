@@ -52,6 +52,10 @@ jobs:
             range="$BASE_SHA..$HEAD_SHA"
           fi
           ./scripts/content-lint.sh "$range"
+      # The venue-agnostic invariant the nexum-runtime rustdoc claims. It reads
+      # text too, so it belongs in this toolchain-free job.
+      - name: Zero leak
+        run: ./scripts/zero-leak.sh
 
   fmt:
     name: rustfmt

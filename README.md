@@ -1,6 +1,6 @@
 # nexum-runtime
 
-Nexum is a WASM Component Model host runtime for web3 modules. It supervises guest components built against the `nexum:host` WIT world, giving each module a capability-gated view of the host: chain access over JSON-RPC, an allowlisted `wasi:http` outbound gate, a local key-value store, clocks, and structured logging, with fuel, memory, and epoch limits enforced per module.
+Nexum is a WASM Component Model host runtime for web3 modules. It supervises guest components built against the `nexum:host` WIT world, giving each module a capability-gated view of the host: chain access over JSON-RPC, an allowlisted `wasi:http` outbound gate, a local key-value store, clocks, and structured logging, with fuel and memory limits enforced per module.
 
 This repository is the leaf of the Nullis runtime stack: it carries no cross-repo dependencies. Downstream repositories (videre, shepherd) build on the SDK and runtime published here.
 
