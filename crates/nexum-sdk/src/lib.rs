@@ -28,6 +28,9 @@
 /// handlers. See [`nexum_module_macros::module`].
 pub use nexum_module_macros::module;
 
+/// Names `SolEvent` in the emitted parity check; `sol!` still needs a direct dep.
+pub use alloy_sol_types as sol_types;
+
 pub mod address;
 pub mod chain;
 pub mod config;

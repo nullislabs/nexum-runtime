@@ -1,0 +1,25 @@
+# topic-parity build fixture. Never launched: it exists so CI compiles the
+# `subscribes(...)` parity check the module macro emits. The two
+# event_signature values below are the topic-0 of the two `sol!` events in
+# src/lib.rs; edit either side alone and the build refuses.
+
+[module]
+name = "topic-parity"
+version = "0.1.0"
+
+[capabilities]
+required = ["logging"]
+optional = []
+
+[capabilities.http]
+allow = []
+
+[[subscription]]
+kind = "chain-log"
+chain_id = 1
+event_signature = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
+
+[[subscription]]
+kind = "chain-log"
+chain_id = 100
+event_signature = "0x8c5be1e5ebec7d5bd14f71427d1e84f3dd0314c0f7b2291e5b200ac8c7c3b925"

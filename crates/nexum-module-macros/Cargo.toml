@@ -13,7 +13,13 @@ proc-macro = true
 workspace = true
 
 [dependencies]
+# Typed `B256` topics from the manifest extraction, embedded into the
+# emitted parity check.
+alloy-primitives.workspace = true
 nexum-world = { path = "../nexum-world", features = ["macros"] }
 proc-macro2.workspace = true
 quote.workspace = true
 syn = { workspace = true, features = ["full"] }
+
+[dev-dependencies]
+tempfile.workspace = true

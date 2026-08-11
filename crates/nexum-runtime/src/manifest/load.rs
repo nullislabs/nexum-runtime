@@ -207,6 +207,63 @@ event_signature = "0x00000000000000000000000000000000000000000000000000000000dea
         }
     }
 
+    /// The macro-side topic extraction and the load-time parse read one
+    /// grammar: a drift lets a build-checked manifest fail at load, or vice
+    /// versa.
+    #[test]
+    fn world_topic_extraction_agrees_with_load() {
+        let toml = r#"
+[module]
+name = "watcher"
+
+[[subscription]]
+kind     = "block"
+chain_id = 1
+
+[[subscription]]
+kind     = "chain-log"
+chain_id = 1
+event_signature = "0xCF5F9DE2984132265203B5C335B25727702CA77262FF622E136BAA7362BF1DA9"
+
+[[subscription]]
+kind     = "chain-log"
+chain_id = 1
+event_signature = "0x0000000000000000000000000000000000000000000000000000000000000001"
+
+[[subscription]]
+kind     = "chain-log"
+chain_id = 100
+event_signature = "cf5f9de2984132265203b5c335b25727702ca77262ff622e136baa7362bf1da9"
+"#;
+        let manifest: Manifest = toml::from_str(toml).expect("parse");
+        // Distinct, not `dedup`: the repeat is non-adjacent, as it is on chain.
+        let mut loaded: Vec<alloy_primitives::B256> = Vec::new();
+        for sub in &manifest.subscriptions {
+            if let Subscription::ChainLog {
+                event_signature: Some(topic),
+                ..
+            } = sub
+                && !loaded.contains(topic)
+            {
+                loaded.push(*topic);
+            }
+        }
+        assert_eq!(
+            loaded.len(),
+            2,
+            "the fixture repeats a topic non-adjacently"
+        );
+        assert_eq!(
+            nexum_world::manifest_chain_log_topics(toml).expect("extract"),
+            loaded,
+        );
+
+        let bad = "[module]\nname = \"bad\"\n\n[[subscription]]\nkind = \"chain-log\"\n\
+                   chain_id = 1\nevent_signature = \"not-a-topic\"\n";
+        assert!(toml::from_str::<Manifest>(bad).is_err());
+        assert!(nexum_world::manifest_chain_log_topics(bad).is_err());
+    }
+
     #[test]
     fn load_parses_the_retired_log_kind_as_an_extension_kind() {
         // The chain-event kind is `chain-log`; a stale `kind = "log"`
