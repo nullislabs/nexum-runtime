@@ -193,6 +193,7 @@ mod tests {
             actual,
         };
         let msg = err.to_string();
+        // Operator wording pin.
         assert!(msg.contains("modules/example.wasm"), "{msg}");
         assert!(msg.contains(&declared.to_string()), "{msg}");
         assert!(msg.contains(&actual.to_string()), "{msg}");

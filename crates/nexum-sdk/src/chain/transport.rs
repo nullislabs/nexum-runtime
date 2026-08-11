@@ -124,7 +124,7 @@ mod tests {
     use std::sync::Arc;
 
     use alloy_json_rpc::{Id, Request, RequestPacket, ResponsePacket, ResponsePayload};
-    use alloy_transport::TransportError;
+    use alloy_transport::{TransportError, TransportErrorKind};
     use tower::Service;
 
     use super::HostTransport;
@@ -191,6 +191,7 @@ mod tests {
             panic!("expected failure, got {resp:?}");
         };
         assert_eq!(err.code, -32601);
+        // Operator wording pin.
         assert!(err.message.contains("eth_sendRawTransaction"));
     }
 
@@ -219,10 +220,15 @@ mod tests {
         let mut transport = HostTransport::new(stub, Chain::mainnet());
         let err = block_on(Service::call(&mut transport, single("eth_call")))
             .expect_err("fault propagates");
-        let TransportError::Transport(kind) = err else {
-            panic!("expected transport kind, got {err:?}");
+        let TransportError::Transport(TransportErrorKind::Custom(source)) = err else {
+            panic!("expected a custom transport kind, got {err:?}");
         };
-        assert!(kind.to_string().contains("timeout"));
+        // The wrapper is alloy's, the payload is ours: `custom` boxes the
+        // source unchanged, so assert the fault rather than its rendering.
+        assert!(matches!(
+            source.downcast_ref::<Fault>(),
+            Some(Fault::Timeout)
+        ));
     }
 
     #[test]
