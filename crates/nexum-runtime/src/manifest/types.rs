@@ -186,7 +186,7 @@ impl<'de> Deserialize<'de> for Subscription {
 pub struct ComponentSection {
     /// Instance identity. A service's name is also what a dependant
     /// writes, and both roles share one keccak local-store namespace, so
-    /// it is unique across `[[modules]]` and `[[adapters]]`.
+    /// it is unique across `[[modules]]` and `[[services]]`.
     #[serde(default)]
     pub name: String,
     #[allow(dead_code)] // Parsed but has no reader.

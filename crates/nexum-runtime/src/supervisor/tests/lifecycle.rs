@@ -491,7 +491,7 @@ async fn poison_pill_quarantines_module_after_threshold() {
 struct ScriptedKind(Arc<AtomicBool>);
 
 #[async_trait::async_trait]
-impl ProviderKind<CoreRuntime> for ScriptedKind {
+impl ServiceKind<CoreRuntime> for ScriptedKind {
     fn kind(&self) -> &'static str {
         "scripted-adapter"
     }
@@ -502,7 +502,7 @@ impl ProviderKind<CoreRuntime> for ScriptedKind {
 
     async fn install(
         &self,
-        _instance: ProviderInstance<'_, CoreRuntime>,
+        _instance: ServiceInstance<'_, CoreRuntime>,
         _service: &Arc<dyn HostService>,
     ) -> anyhow::Result<Installed> {
         Ok(if self.0.load(Ordering::SeqCst) {
@@ -538,7 +538,7 @@ impl Extension<CoreRuntime> for ScriptedExtension {
         Some(Arc::new(ScriptedService))
     }
 
-    fn provider(&self) -> Option<Box<dyn ProviderKind<CoreRuntime>>> {
+    fn provider(&self) -> Option<Box<dyn ServiceKind<CoreRuntime>>> {
         Some(Box::new(ScriptedKind(self.0.clone())))
     }
 }
@@ -656,7 +656,7 @@ const OUTER_TIMEOUT: Duration = Duration::from_secs(3_600);
 struct HangingKind;
 
 #[async_trait::async_trait]
-impl ProviderKind<CoreRuntime> for HangingKind {
+impl ServiceKind<CoreRuntime> for HangingKind {
     fn kind(&self) -> &'static str {
         "hanging-adapter"
     }
@@ -667,7 +667,7 @@ impl ProviderKind<CoreRuntime> for HangingKind {
 
     async fn install(
         &self,
-        _instance: ProviderInstance<'_, CoreRuntime>,
+        _instance: ServiceInstance<'_, CoreRuntime>,
         _service: &Arc<dyn HostService>,
     ) -> anyhow::Result<Installed> {
         std::future::pending().await
@@ -696,7 +696,7 @@ impl Extension<CoreRuntime> for HangingExtension {
         Some(Arc::new(ScriptedService))
     }
 
-    fn provider(&self) -> Option<Box<dyn ProviderKind<CoreRuntime>>> {
+    fn provider(&self) -> Option<Box<dyn ServiceKind<CoreRuntime>>> {
         Some(Box::new(HangingKind))
     }
 }

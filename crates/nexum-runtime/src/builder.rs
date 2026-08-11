@@ -39,7 +39,7 @@ pub enum LaunchRefusal {
     EventLoopGone,
     #[error(
         "no modules to run - set a module source or declare [[modules]] or \
-         [[adapters]] entries in engine.toml"
+         [[services]] entries in engine.toml"
     )]
     NothingToRun,
     #[error(
@@ -226,7 +226,7 @@ impl<T: RuntimeTypes> AssembledRuntime<T> {
                 clocks,
             )
             .await?
-        } else if !engine_cfg.modules.is_empty() || !engine_cfg.adapters.is_empty() {
+        } else if !engine_cfg.modules.is_empty() || !engine_cfg.services.is_empty() {
             Supervisor::boot(
                 &engine,
                 &linker,
@@ -244,7 +244,7 @@ impl<T: RuntimeTypes> AssembledRuntime<T> {
         let plan = supervisor.subscription_plan();
         info!(
             modules = supervisor.module_count(),
-            adapters = supervisor.adapter_count(),
+            services = supervisor.adapter_count(),
             alive,
             chains = plan.block_chains.len(),
             "supervisor ready"

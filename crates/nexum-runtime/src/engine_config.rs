@@ -148,7 +148,7 @@ pub struct EngineConfig {
     /// Provider components the supervisor boots alongside modules. Like a
     /// module, but the operator, not the author, scopes its transport here.
     #[serde(default)]
-    pub adapters: Vec<AdapterEntry>,
+    pub services: Vec<ServiceEntry>,
     /// True when [`load_or_default`] found no engine.toml.
     #[serde(skip)]
     pub defaulted: bool,
@@ -165,11 +165,11 @@ pub struct ModuleEntry {
     pub manifest: Option<std::path::PathBuf>,
 }
 
-/// One `[[adapters]]` table. `path`/`manifest` mirror [`ModuleEntry`].
+/// One `[[services]]` table. `path`/`manifest` mirror [`ModuleEntry`].
 /// `http_allow` is the operator's transport grant: an empty list denies all
 /// outbound HTTP.
 #[derive(Debug, Deserialize)]
-pub struct AdapterEntry {
+pub struct ServiceEntry {
     /// Path to the compiled `.wasm` adapter component.
     pub path: std::path::PathBuf,
     /// Path to the adapter's `component.toml`. Defaults to `<path-parent>/component.toml`.
@@ -1116,28 +1116,28 @@ window_secs  = 0
     fn adapters_parse_with_scoped_transport_grants() {
         let cfg: EngineConfig = toml::from_str(
             r#"
-[[adapters]]
+[[services]]
 path = "providers/acme/acme_provider.wasm"
 http_allow = ["api.acme.example", "*.acme.example"]
 
-[[adapters]]
-path = "adapters/bare/bare.wasm"
-manifest = "adapters/bare/component.toml"
+[[services]]
+path = "services/bare/bare.wasm"
+manifest = "services/bare/component.toml"
 "#,
         )
-        .expect("adapters parse");
-        assert_eq!(cfg.adapters.len(), 2);
-        let first = &cfg.adapters[0];
+        .expect("services parse");
+        assert_eq!(cfg.services.len(), 2);
+        let first = &cfg.services[0];
         assert_eq!(
             first.path,
             PathBuf::from("providers/acme/acme_provider.wasm")
         );
         assert!(first.manifest.is_none(), "manifest defaults to sibling");
         assert_eq!(first.http_allow, vec!["api.acme.example", "*.acme.example"]);
-        let second = &cfg.adapters[1];
+        let second = &cfg.services[1];
         assert_eq!(
             second.manifest.as_deref(),
-            Some(Path::new("adapters/bare/component.toml"))
+            Some(Path::new("services/bare/component.toml"))
         );
         assert!(
             second.http_allow.is_empty(),
@@ -1148,7 +1148,7 @@ manifest = "adapters/bare/component.toml"
     #[test]
     fn adapters_default_empty_when_absent() {
         let cfg = EngineConfig::default();
-        assert!(cfg.adapters.is_empty());
+        assert!(cfg.services.is_empty());
     }
 
     #[test]

@@ -5,22 +5,22 @@ use std::sync::Arc;
 
 use super::load::LoadRefusal;
 use crate::host::component::RuntimeTypes;
-use crate::host::extension::{Extension, HostService, HostServices, ProviderKind};
+use crate::host::extension::{Extension, HostService, HostServices, ServiceKind};
 use crate::manifest::{self, CapabilityRegistry};
 
 /// One registered provider kind paired with the service its installs bind to.
-pub(super) type ProviderRow<T> = (Box<dyn ProviderKind<T>>, Arc<dyn HostService>);
+pub(super) type ServiceRow<T> = (Box<dyn ServiceKind<T>>, Arc<dyn HostService>);
 
 /// Registered provider kinds, keyed by their manifest spelling.
-pub(super) type ProviderKinds<T> = BTreeMap<&'static str, ProviderRow<T>>;
+pub(super) type ServiceKinds<T> = BTreeMap<&'static str, ServiceRow<T>>;
 
 /// Refuses a duplicate spelling and a kind whose extension owns no service
 /// to install into.
 pub(super) fn provider_kinds<T: RuntimeTypes>(
     extensions: &[Arc<dyn Extension<T>>],
     services: &HostServices,
-) -> Result<ProviderKinds<T>, LoadRefusal> {
-    let mut kinds = ProviderKinds::new();
+) -> Result<ServiceKinds<T>, LoadRefusal> {
+    let mut kinds = ServiceKinds::new();
     for ext in extensions {
         let Some(provider) = ext.provider() else {
             continue;
@@ -40,8 +40,8 @@ pub(super) fn provider_kinds<T: RuntimeTypes>(
 
 /// Refuses a duplicate manifest spelling.
 fn register_kind<T: RuntimeTypes>(
-    kinds: &mut ProviderKinds<T>,
-    provider: Box<dyn ProviderKind<T>>,
+    kinds: &mut ServiceKinds<T>,
+    provider: Box<dyn ServiceKind<T>>,
     service: Arc<dyn HostService>,
 ) -> Result<(), LoadRefusal> {
     let kind = provider.kind();
@@ -51,7 +51,7 @@ fn register_kind<T: RuntimeTypes>(
     Ok(())
 }
 
-pub(super) fn registered_kinds<T: RuntimeTypes>(kinds: &ProviderKinds<T>) -> Vec<&'static str> {
+pub(super) fn registered_kinds<T: RuntimeTypes>(kinds: &ServiceKinds<T>) -> Vec<&'static str> {
     kinds.keys().copied().collect()
 }
 

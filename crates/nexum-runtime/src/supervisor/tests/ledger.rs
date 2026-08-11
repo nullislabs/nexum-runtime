@@ -121,15 +121,15 @@ fn claim_namespace_rejects_cross_role_duplicate_with_both_paths() {
     let err = claim_namespace(
         &mut ledger,
         "price-alert",
-        "adapter",
-        Path::new("adapters/impostor.wasm"),
+        "service",
+        Path::new("services/impostor.wasm"),
     )
     .expect_err("cross-role duplicate must be refused");
     assert!(
-        matches!(&err, BootRefusal::NamespaceClaimed { name, held_role: "module", held, role: "adapter", path }
+        matches!(&err, BootRefusal::NamespaceClaimed { name, held_role: "module", held, role: "service", path }
             if name == "price-alert"
                 && held.as_path() == Path::new("modules/price-alert.wasm")
-                && path.as_path() == Path::new("adapters/impostor.wasm")),
+                && path.as_path() == Path::new("services/impostor.wasm")),
         "the refusal names both claimants: {err}",
     );
 }
@@ -164,7 +164,7 @@ async fn boot_rejects_duplicate_names_across_and_within_roles() {
         .expect_refusal()
         .await
         .variant::<BootRefusal>(|e| {
-            matches!(e, BootRefusal::NamespaceClaimed { name, held_role: "adapter", held, role: "module", path }
+            matches!(e, BootRefusal::NamespaceClaimed { name, held_role: "service", held, role: "module", path }
                 if name == "dup"
                     && held.ends_with("missing-adapter.wasm")
                     && path.ends_with("missing-module.wasm"))

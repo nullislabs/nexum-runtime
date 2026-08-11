@@ -10,7 +10,7 @@ use tempfile::TempDir;
 
 use super::manifest::{ManifestSource, TestManifest};
 use super::{in_memory_logs, test_chain_configs};
-use crate::engine_config::{AdapterEntry, ChainConfig, EngineConfig, ModuleEntry, ModuleLimits};
+use crate::engine_config::{ChainConfig, EngineConfig, ModuleEntry, ModuleLimits, ServiceEntry};
 use crate::host::component::{Components, RuntimeTypes};
 use crate::host::extension::{Extension, attach_wall_clock};
 use crate::host::local_store_redb::LocalStore;
@@ -20,7 +20,7 @@ use crate::preset::CoreRuntime;
 use crate::supervisor::{Supervisor, WasiClockOverride, build_linker};
 use crate::test_utils::wasm::test_wasmtime_engine;
 
-/// One `[[modules]]` or `[[adapters]]` entry.
+/// One `[[modules]]` or `[[services]]` entry.
 pub struct Entry {
     wasm: Option<PathBuf>,
     manifest: ManifestSource,
@@ -43,7 +43,7 @@ impl Entry {
         self
     }
 
-    /// Operator HTTP grant; only an `[[adapters]]` entry carries one.
+    /// Operator HTTP grant; only an `[[services]]` entry carries one.
     pub fn http_allow(mut self, hosts: impl IntoIterator<Item = impl Into<String>>) -> Self {
         self.http_allow.extend(hosts.into_iter().map(Into::into));
         self
@@ -77,7 +77,7 @@ pub struct BootScenario<T: RuntimeTypes = CoreRuntime> {
     chains: HashMap<Chain, ChainConfig>,
     wasm: Option<PathBuf>,
     modules: Vec<Entry>,
-    adapters: Vec<Entry>,
+    services: Vec<Entry>,
     clocks: Option<WasiClockOverride>,
     require_digest: bool,
     defaulted: bool,
@@ -113,7 +113,7 @@ impl<T: RuntimeTypes> BootScenario<T> {
             chains: test_chain_configs(),
             wasm: None,
             modules: Vec::new(),
-            adapters: Vec::new(),
+            services: Vec::new(),
             clocks: None,
             require_digest: false,
             defaulted: false,
@@ -137,7 +137,7 @@ impl<T: RuntimeTypes> BootScenario<T> {
     }
 
     pub fn adapter(mut self, entry: impl Into<Entry>) -> Self {
-        self.adapters.push(entry.into());
+        self.services.push(entry.into());
         self
     }
 
@@ -244,9 +244,9 @@ impl<T: RuntimeTypes> BootScenario<T> {
             let (path, manifest, ..) = resolve("module", i, entry);
             config.modules.push(ModuleEntry { path, manifest });
         }
-        for (i, entry) in self.adapters.into_iter().enumerate() {
+        for (i, entry) in self.services.into_iter().enumerate() {
             let (path, manifest, http_allow) = resolve("adapter", i, entry);
-            config.adapters.push(AdapterEntry {
+            config.services.push(ServiceEntry {
                 path,
                 manifest,
                 http_allow,
@@ -666,13 +666,13 @@ mod tests {
             Path::new("other.wasm"),
             "a per-entry component overrides the scenario default",
         );
-        assert_eq!(config.adapters.len(), 1);
-        assert_eq!(config.adapters[0].http_allow, ["api.acme.example"]);
+        assert_eq!(config.services.len(), 1);
+        assert_eq!(config.services[0].http_allow, ["api.acme.example"]);
         for manifest in config
             .modules
             .iter()
             .map(|m| &m.manifest)
-            .chain(config.adapters.iter().map(|a| &a.manifest))
+            .chain(config.services.iter().map(|a| &a.manifest))
         {
             assert!(
                 manifest.as_deref().is_some_and(Path::is_file),

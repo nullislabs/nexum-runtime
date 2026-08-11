@@ -221,7 +221,7 @@ impl<T: RuntimeTypes> Sweepable<T> for LoadedModule<T> {
 }
 
 impl<T: RuntimeTypes> Sweepable<T> for LoadedProvider {
-    const ROLE: Role = Role::Adapter;
+    const ROLE: Role = Role::Service;
 
     fn name(&self) -> &ModuleId {
         &self.name
@@ -256,7 +256,7 @@ impl<T: RuntimeTypes> Sweepable<T> for LoadedProvider {
             &self.name,
             self.run.seq + 1,
             &self.seed.spec,
-            Role::Adapter,
+            Role::Service,
         )?;
         match install_provider(
             shared,
@@ -565,7 +565,7 @@ mod health_tests {
         let mut provider = Health::alive();
         provider.record_trap(t0, t0, policy(9, 600));
         provider.record_trap(t0 + secs(2), t0 + secs(2), policy(9, 600));
-        provider.restart_succeeded(Role::Adapter.resets_failure_count());
+        provider.restart_succeeded(Role::Service.resets_failure_count());
         assert!(provider.dispatchable());
         assert_eq!(provider.failure_count(), 0);
     }

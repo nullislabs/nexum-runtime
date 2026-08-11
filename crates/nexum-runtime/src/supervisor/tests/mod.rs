@@ -28,7 +28,7 @@ use super::*;
 use crate::bindings::nexum;
 use crate::digest::{ContentDigest, DigestMismatch};
 use crate::engine_config::ModuleLimits;
-use crate::host::extension::{HostService, Installed, ProviderInstance, ProviderKind};
+use crate::host::extension::{HostService, Installed, ServiceInstance, ServiceKind};
 use crate::host::logs::LogSource;
 use crate::host::provider_pool::ProviderPool;
 use crate::manifest::{self, CapabilityRegistry, ParseError, ResourceSection};
@@ -131,7 +131,7 @@ impl crate::host::extension::HostService for AcmeService {}
 struct AcmeKind;
 
 #[async_trait::async_trait]
-impl ProviderKind<crate::test_utils::MockTypes> for AcmeKind {
+impl ServiceKind<crate::test_utils::MockTypes> for AcmeKind {
     fn kind(&self) -> &'static str {
         "acme-adapter"
     }
@@ -145,7 +145,7 @@ impl ProviderKind<crate::test_utils::MockTypes> for AcmeKind {
 
     async fn install(
         &self,
-        _instance: ProviderInstance<'_, crate::test_utils::MockTypes>,
+        _instance: ServiceInstance<'_, crate::test_utils::MockTypes>,
         _service: &Arc<dyn HostService>,
     ) -> anyhow::Result<Installed> {
         Ok(Installed::Live)
@@ -177,7 +177,7 @@ impl Extension<crate::test_utils::MockTypes> for AcmeExtension {
         Some(Arc::new(AcmeService))
     }
 
-    fn provider(&self) -> Option<Box<dyn ProviderKind<crate::test_utils::MockTypes>>> {
+    fn provider(&self) -> Option<Box<dyn ServiceKind<crate::test_utils::MockTypes>>> {
         Some(Box::new(AcmeKind))
     }
 }
@@ -208,7 +208,7 @@ impl Extension<crate::test_utils::MockTypes> for ServicelessAcmeExtension {
         Ok(())
     }
 
-    fn provider(&self) -> Option<Box<dyn ProviderKind<crate::test_utils::MockTypes>>> {
+    fn provider(&self) -> Option<Box<dyn ServiceKind<crate::test_utils::MockTypes>>> {
         Some(Box::new(AcmeKind))
     }
 }

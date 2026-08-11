@@ -253,7 +253,7 @@ async fn boot_refuses_a_capsless_manifest_before_any_other_gate() {
 }
 
 /// A blank name is refused at parse for both roles. Two blank-named
-/// adapters refuse on the name, not as a second claim on a shared fallback
+/// services refuse on the name, not as a second claim on a shared fallback
 /// namespace, and no refusal reaches the component read.
 #[tokio::test]
 async fn boot_refuses_a_blank_manifest_name_for_both_roles() {

@@ -20,7 +20,7 @@ use crate::manifest::{self, CapabilityRegistry, LoadedManifest, ParseError, Subs
 pub(crate) enum BootRefusal {
     #[error(
         "name {name} is claimed twice: {held_role} {} and {role} {}; \
-         [component].name must be unique across [[modules]] and [[adapters]]",
+         [component].name must be unique across [[modules]] and [[services]]",
         held.display(),
         path.display()
     )]
@@ -207,7 +207,7 @@ pub(super) fn unconfigured_chain(
     chain_id: u64,
     chains: &ConfiguredChains,
 ) -> BootRefusal {
-    let noun = role.claim_role();
+    let noun = role.label();
     if chains.defaulted {
         return BootRefusal::UnconfiguredChainDefaulted {
             noun,
@@ -230,19 +230,19 @@ pub(super) struct Prepass {
     pub(super) module_manifests: Vec<LoadedManifest>,
 }
 
-/// Adapters first, then modules; every refusal lands before any compile.
+/// Services first, then modules; every refusal lands before any compile.
 pub(super) fn run(engine_cfg: &EngineConfig, registry: &CapabilityRegistry) -> Result<Prepass> {
     let provider_registry = CapabilityRegistry::provider();
     let mut ledger = NamespaceLedger::new();
     let configured_chains = ConfiguredChains::from_config(engine_cfg);
     let adapter_manifests = load_role_manifests(
         engine_cfg
-            .adapters
+            .services
             .iter()
             .map(|e| (&e.path, e.manifest.as_deref())),
         &provider_registry,
         RolePass {
-            role: Role::Adapter,
+            role: Role::Service,
             chains: &configured_chains,
         },
         &mut ledger,
@@ -279,10 +279,10 @@ fn load_role_manifests<'a>(
 ) -> Result<Vec<LoadedManifest>> {
     let mut manifests = Vec::new();
     for (path, explicit) in entries {
-        let loaded = load_required_manifest(path, explicit, registry, pass.role.manifest_role())
+        let loaded = load_required_manifest(path, explicit, registry, pass.role.label())
             .with_context(|| format!("{} {}", pass.role.load_context(), path.display()))?;
         let namespace = manifest_namespace(&loaded);
-        claim_namespace(ledger, &namespace, pass.role.claim_role(), path)?;
+        claim_namespace(ledger, &namespace, pass.role.label(), path)?;
         enforce_subscriptions(pass.role, &namespace, &loaded, pass.chains)
             .with_context(|| format!("{} {}", pass.role.load_context(), path.display()))?;
         manifests.push(loaded);
