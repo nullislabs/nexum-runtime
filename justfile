@@ -69,7 +69,7 @@ ci:
     ./scripts/content-lint.sh "main..HEAD"
     cargo fmt --all --check
     cargo clippy --workspace --all-targets --all-features -- -D warnings
-    cargo doc --workspace --no-deps
+    cargo doc --workspace --all-features --no-deps
     cargo build --release --target wasm32-wasip2 \
         -p example -p price-alert -p balance-tracker -p http-probe \
         -p clock-reader -p flaky-bomb -p fuel-bomb -p memory-bomb \
