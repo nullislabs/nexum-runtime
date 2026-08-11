@@ -10,7 +10,6 @@ version = "0.1.0"
 
 [capabilities]
 required = ["logging", "chain", "local-store"]
-optional = []
 
 [capabilities.http]
 allow = []
