@@ -11,7 +11,7 @@ use wasmtime::component::{Component, Linker};
 
 use super::Shared;
 use super::admission::{
-    ProviderRow, capability_registry, enforce_extension_sections, extension_subscription_vocabulary,
+    ServiceRow, capability_registry, enforce_extension_sections, extension_subscription_vocabulary,
 };
 use super::artifact::read_verified_component;
 use super::dispatch::with_dispatch_deadline;
@@ -25,10 +25,10 @@ use super::store::{
 use crate::bindings::nexum::host::types::Fault;
 use crate::bindings::{Config, EventModule};
 use crate::digest::ContentDigest;
-use crate::engine_config::{AdapterEntry, ModuleEntry, ModuleLimits};
+use crate::engine_config::{ModuleEntry, ModuleLimits, ServiceEntry};
 use crate::host::actor::Liveness;
 use crate::host::component::RuntimeTypes;
-use crate::host::extension::{Installed, ProviderInstance, ProviderManifest};
+use crate::host::extension::{Installed, ServiceInstance, ServiceManifest};
 use crate::host::logs::RunId;
 use crate::host::state::HostState;
 use crate::manifest::{self, CapabilityRegistry, ComponentKind, LoadedManifest, Subscription};
@@ -55,7 +55,7 @@ pub(crate) enum LoadRefusal {
         kind: &'static str,
     },
     #[error(
-        "{} declares the worker kind; an [[adapters]] entry requires a \
+        "{} declares the worker kind; an [[services]] entry requires a \
          component.toml declaring a registered provider kind ({})",
         path.display(),
         registered.join(", ")
@@ -111,8 +111,8 @@ impl Seed {
         sections: &'a manifest::ExtensionSections,
         store: HostStore<T>,
         liveness: Liveness,
-    ) -> ProviderInstance<'a, T> {
-        ProviderInstance {
+    ) -> ServiceInstance<'a, T> {
+        ServiceInstance {
             component: &self.artifact.component,
             linker,
             store,
@@ -238,7 +238,7 @@ pub(super) async fn instantiate_module<T: RuntimeTypes>(
 /// extension wiring), not only the guest call a module's bound covers.
 pub(super) async fn install_provider<T: RuntimeTypes>(
     shared: &Shared<T>,
-    row: &ProviderRow<T>,
+    row: &ServiceRow<T>,
     seed: &Seed,
     sections: &manifest::ExtensionSections,
     store: HostStore<T>,
@@ -262,7 +262,7 @@ pub(super) async fn module<T: RuntimeTypes>(
     loaded_manifest: LoadedManifest,
     limits_cfg: &ModuleLimits,
     require_component_digest: bool,
-    provider_manifests: &[ProviderManifest],
+    provider_manifests: &[ServiceManifest],
 ) -> Result<LoadedModule<T>> {
     let module_namespace: ModuleId = manifest_namespace(&loaded_manifest).into();
     let registry = capability_registry(&shared.extensions);
@@ -369,7 +369,7 @@ pub(super) async fn module<T: RuntimeTypes>(
 /// A failed `init` loads the provider dead and unroutable, permanently.
 pub(super) async fn provider<T: RuntimeTypes>(
     shared: &Shared<T>,
-    entry: &AdapterEntry,
+    entry: &ServiceEntry,
     loaded_manifest: LoadedManifest,
     limits_cfg: &ModuleLimits,
     require_component_digest: bool,
@@ -394,7 +394,7 @@ pub(super) async fn provider<T: RuntimeTypes>(
             // An unregistered kind refuses before compile.
             // A service's name is the service type, so the name selects
             // the row. A module declared as an adapter refuses before compile.
-            let row: &ProviderRow<T> = match loaded_manifest.manifest.component.kind {
+            let row: &ServiceRow<T> = match loaded_manifest.manifest.component.kind {
                 ComponentKind::Module => {
                     return Err(LoadRefusal::WorkerKindAdapter {
                         path: entry.path.clone(),
@@ -453,7 +453,7 @@ pub(super) async fn provider<T: RuntimeTypes>(
         event_deadline: limits_cfg.event_deadline(),
     };
     let liveness = Liveness::default();
-    let (run, store) = fresh_run_store(shared, &namespace, 0, &seed.spec, Role::Adapter)?;
+    let (run, store) = fresh_run_store(shared, &namespace, 0, &seed.spec, Role::Service)?;
     let installed = install_provider(shared, row, &seed, &sections, store, liveness.clone())
         .await
         .with_context(|| format!("install {}", entry.path.display()))?;

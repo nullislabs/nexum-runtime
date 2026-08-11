@@ -733,7 +733,7 @@ mod tests {
     }
 
     #[test]
-    fn full_declaration_emits_the_six_adapters_in_core_order() {
+    fn full_declaration_emits_every_adapter_in_core_order() {
         let declared: Vec<String> = CORE.iter().map(|c| c.name.as_str().to_owned()).collect();
         let world = synthesize(&declared, &[]).unwrap();
         assert_eq!(

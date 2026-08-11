@@ -47,7 +47,7 @@ pub trait Extension<T: RuntimeTypes>: Send + Sync + 'static {
     }
 
     /// Provider kind this extension installs.
-    fn provider(&self) -> Option<Box<dyn ProviderKind<T>>> {
+    fn provider(&self) -> Option<Box<dyn ServiceKind<T>>> {
         None
     }
 
@@ -70,7 +70,7 @@ pub trait Extension<T: RuntimeTypes>: Send + Sync + 'static {
         &self,
         worker: &str,
         sections: &ExtensionSections,
-        providers: &[ProviderManifest],
+        providers: &[ServiceManifest],
     ) -> anyhow::Result<()> {
         let _ = (worker, sections, providers);
         Ok(())
@@ -162,7 +162,7 @@ pub trait HostService: Any + Send + Sync + 'static {}
 /// A provider component kind; the host holds an instance behind the owning
 /// extension's serialized service.
 #[async_trait]
-pub trait ProviderKind<T: RuntimeTypes>: Send + Sync + 'static {
+pub trait ServiceKind<T: RuntimeTypes>: Send + Sync + 'static {
     /// Manifest kind this provider answers for.
     fn kind(&self) -> &'static str;
 
@@ -175,13 +175,13 @@ pub trait ProviderKind<T: RuntimeTypes>: Send + Sync + 'static {
     /// at its next await, so publish into `service` only after the last await.
     async fn install(
         &self,
-        instance: ProviderInstance<'_, T>,
+        instance: ServiceInstance<'_, T>,
         service: &Arc<dyn HostService>,
     ) -> anyhow::Result<Installed>;
 }
 
 /// One provider instance ready to install.
-pub struct ProviderInstance<'a, T: RuntimeTypes> {
+pub struct ServiceInstance<'a, T: RuntimeTypes> {
     /// Compiled provider component.
     pub component: &'a Component,
     /// Linker carrying the kind's imports plus the WASI base.
@@ -200,7 +200,7 @@ pub struct ProviderInstance<'a, T: RuntimeTypes> {
 
 /// One loaded provider as [`Extension::admit_worker`] sees it.
 #[derive(Clone, Debug)]
-pub struct ProviderManifest {
+pub struct ServiceManifest {
     /// The provider's namespace (its manifest name).
     pub name: String,
     /// Registered kind spelling.

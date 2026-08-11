@@ -69,7 +69,7 @@ async fn boot_single_refuses_a_subscription_on_an_unconfigured_chain() {
     .lacks("compile");
 }
 
-/// The gate covers `[[adapters]]` entries too: a provider manifest cannot
+/// The gate covers `[[services]]` entries too: a provider manifest cannot
 /// subscribe past the operator's `[chains]` set.
 #[tokio::test]
 async fn boot_refuses_an_adapter_subscription_on_an_unconfigured_chain() {
@@ -84,12 +84,12 @@ async fn boot_refuses_an_adapter_subscription_on_an_unconfigured_chain() {
         .expect_refusal()
         .await
         .variant::<BootRefusal>(|e| {
-            matches!(e, BootRefusal::UnconfiguredChain { noun: "adapter", name, chain_id: 424_242, .. }
+            matches!(e, BootRefusal::UnconfiguredChain { noun: "service", name, chain_id: 424_242, .. }
                 if name == "acme-adapter")
         })
         // Operator wording pin.
-        .names("load provider")
-        .names("adapter acme-adapter subscribes to chain 424242")
+        .names("load service")
+        .names("service acme-adapter subscribes to chain 424242")
         .names("[chains.424242]")
         .lacks("read component")
         .lacks("compile");

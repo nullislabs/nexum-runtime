@@ -26,11 +26,11 @@ use wasmtime::component::Linker;
 use crate::digest::DigestMismatch;
 use crate::engine_config::{EngineConfig, ModuleEntry, ModuleLimits};
 use crate::host::component::{Components, RuntimeTypes};
-use crate::host::extension::{Extension, HostServices, ProviderManifest};
+use crate::host::extension::{Extension, HostServices, ServiceManifest};
 use crate::host::state::HostState;
 use crate::manifest::CapabilityError;
 use crate::runtime::poison_policy::PoisonPolicy;
-use admission::{ProviderKinds, capability_registry, enforce_extension_uniqueness, provider_kinds};
+use admission::{ServiceKinds, capability_registry, enforce_extension_uniqueness, provider_kinds};
 use cursors::ChainLogCursors;
 use load::{LoadRefusal, LoadedModule, LoadedProvider};
 use prepass::{BootRefusal, enforce_subscriptions, load_required_manifest, manifest_namespace};
@@ -72,7 +72,7 @@ pub(super) struct Shared<T: RuntimeTypes> {
     pub(super) extensions: Vec<Arc<dyn Extension<T>>>,
     /// Built once; carried by every module store.
     pub(super) services: HostServices,
-    pub(super) kinds: ProviderKinds<T>,
+    pub(super) kinds: ServiceKinds<T>,
     /// Applied to every store; `None` leaves the ambient host clocks.
     pub(super) clocks: Option<WasiClockOverride>,
 }
@@ -93,9 +93,9 @@ impl<T: RuntimeTypes> Supervisor<T> {
             // Providers boot first, so every module store built after already
             // routes to the installed instances.
             let providers = load_role(
-                &engine_cfg.adapters,
+                &engine_cfg.services,
                 prepass.adapter_manifests,
-                Role::Adapter,
+                Role::Service,
                 |e| &e.path,
                 async |entry, manifest| {
                     load::provider(
@@ -158,7 +158,7 @@ impl<T: RuntimeTypes> Supervisor<T> {
                 &entry.path,
                 entry.manifest.as_deref(),
                 &registry,
-                Role::Module.manifest_role(),
+                Role::Module.label(),
             )?;
             enforce_subscriptions(
                 Role::Module,
@@ -257,7 +257,7 @@ fn wire_extensions<T: RuntimeTypes>(
     let kinds = if with_provider_kinds {
         provider_kinds(extensions, &services)?
     } else {
-        ProviderKinds::new()
+        ServiceKinds::new()
     };
     Ok(Shared {
         engine: engine.clone(),
@@ -289,10 +289,10 @@ async fn load_role<E, L>(
 }
 
 /// The providers' manifests as the worker install predicates see them.
-fn project_manifests(providers: &[LoadedProvider]) -> Vec<ProviderManifest> {
+fn project_manifests(providers: &[LoadedProvider]) -> Vec<ServiceManifest> {
     providers
         .iter()
-        .map(|p| ProviderManifest {
+        .map(|p| ServiceManifest {
             name: p.name.to_string(),
             kind: p.kind,
             sections: p.sections.clone(),
@@ -312,7 +312,7 @@ fn assemble<T: RuntimeTypes>(
     info!(
         loaded = modules.len(),
         alive,
-        adapters = providers.len(),
+        services = providers.len(),
         adapters_alive,
         "supervisor up"
     );

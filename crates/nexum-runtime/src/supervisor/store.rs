@@ -12,7 +12,7 @@ use super::role::Role;
 use crate::bindings::EventModule;
 use crate::engine_config::{ModuleLimits, OutboundHttpLimits};
 use crate::host::component::{RuntimeTypes, StateHandle, StateStore};
-use crate::host::extension::{Extension, HostServices, ProviderKind};
+use crate::host::extension::{Extension, HostServices, ServiceKind};
 use crate::host::http::HttpGate;
 use crate::host::logs::{LogSource, RunId, StdioStream};
 use crate::host::state::HostState;
@@ -125,7 +125,7 @@ fn build<T: RuntimeTypes>(
     // the registry that owns this store, and carrying it here would cycle.
     let services = match role {
         Role::Module => shared.services.clone(),
-        Role::Adapter => HostServices::default(),
+        Role::Service => HostServices::default(),
     };
     let namespace: &str = run.module.as_str();
     // Stdio is captured as tagged log records, stdin stays closed; the ctx
@@ -207,7 +207,7 @@ pub fn build_linker<T: RuntimeTypes>(
 /// fails to instantiate; extensions are never linked into providers.
 pub fn build_provider_linker<T: RuntimeTypes>(
     engine: &Engine,
-    kind: &dyn ProviderKind<T>,
+    kind: &dyn ServiceKind<T>,
 ) -> anyhow::Result<Linker<HostState<T>>> {
     let mut linker = Linker::<HostState<T>>::new(engine);
     kind.link(&mut linker)?;

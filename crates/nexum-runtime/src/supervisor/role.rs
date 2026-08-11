@@ -15,65 +15,52 @@ use crate::runtime::poison_policy::PoisonPolicy;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Role {
     Module,
-    Adapter,
+    Service,
 }
 
 impl Role {
+    /// One spelling per role, used for the metric label, the ledger claim
+    /// and the manifest-facing noun alike. These were three accessors
+    /// returning three words for one role before the vocabulary settled.
     pub(super) const fn label(self) -> &'static str {
         match self {
             Self::Module => "module",
-            Self::Adapter => "adapter",
-        }
-    }
-
-    /// The manifest-facing spelling: an adapter entry loads a provider manifest.
-    pub(super) const fn manifest_role(self) -> &'static str {
-        match self {
-            Self::Module => "module",
-            Self::Adapter => "provider",
-        }
-    }
-
-    /// The ledger spelling: `engine.toml` names the section `[[adapters]]`.
-    pub(super) const fn claim_role(self) -> &'static str {
-        match self {
-            Self::Module => "module",
-            Self::Adapter => "adapter",
+            Self::Service => "service",
         }
     }
 
     pub(super) const fn load_context(self) -> &'static str {
         match self {
             Self::Module => "load module",
-            Self::Adapter => "load provider",
+            Self::Service => "load service",
         }
     }
 
     pub(super) const fn errors_total(self) -> &'static str {
         match self {
             Self::Module => "nexum_runtime_module_errors_total",
-            Self::Adapter => "nexum_runtime_adapter_errors_total",
+            Self::Service => "nexum_runtime_service_errors_total",
         }
     }
 
     pub(super) const fn restarts_total(self) -> &'static str {
         match self {
             Self::Module => "nexum_runtime_module_restarts_total",
-            Self::Adapter => "nexum_runtime_adapter_restarts_total",
+            Self::Service => "nexum_runtime_service_restarts_total",
         }
     }
 
     pub(super) const fn poisoned_gauge(self) -> &'static str {
         match self {
             Self::Module => "nexum_runtime_module_poisoned",
-            Self::Adapter => "nexum_runtime_adapter_poisoned",
+            Self::Service => "nexum_runtime_service_poisoned",
         }
     }
 
-    /// A provider reinstall is a fresh instance, so its curve resets; a
+    /// A service reinstall is a fresh instance, so its curve resets; a
     /// module recovers in place and keeps climbing.
     pub(super) const fn resets_failure_count(self) -> bool {
-        matches!(self, Self::Adapter)
+        matches!(self, Self::Service)
     }
 }
 
@@ -92,7 +79,7 @@ pub(super) fn report_trap(
             backoff_ms = verdict.backoff.as_millis() as u64,
             "module trapped - marked dead; will restart after backoff",
         ),
-        Role::Adapter => warn!(
+        Role::Service => warn!(
             adapter = %name,
             failure_count = verdict.failure_count,
             backoff_ms = verdict.backoff.as_millis() as u64,
@@ -134,14 +121,14 @@ pub(super) fn report_poison(
             window_secs,
             "module poisoned - quarantined; remove from engine.toml + restart to clear",
         ),
-        (Role::Adapter, Some(last_error)) => warn!(
+        (Role::Service, Some(last_error)) => warn!(
             adapter = %name,
             recent_failures,
             window_secs,
             last_error,
             "adapter poisoned - quarantined; remove from engine.toml + restart to clear",
         ),
-        (Role::Adapter, None) => warn!(
+        (Role::Service, None) => warn!(
             adapter = %name,
             recent_failures,
             window_secs,
@@ -168,7 +155,7 @@ pub(super) fn report_restart_attempt(
             digest = %digest,
             "restart attempt",
         ),
-        Role::Adapter => info!(
+        Role::Service => info!(
             adapter = %name,
             failure_count,
             digest = %digest,
@@ -189,7 +176,7 @@ pub(super) fn report_restart_outcome(
 ) {
     match (role, outcome) {
         (Role::Module, Ok(())) => info!(module = %name, "restart succeeded"),
-        (Role::Adapter, Ok(())) => info!(adapter = %name, "adapter restart succeeded"),
+        (Role::Service, Ok(())) => info!(adapter = %name, "adapter restart succeeded"),
         (Role::Module, Err((deferral, e))) => {
             // A string field, not a `Display` one: it carries the full
             // context chain through the string visitor.
@@ -202,7 +189,7 @@ pub(super) fn report_restart_outcome(
                 "restart failed - will retry after backoff",
             );
         }
-        (Role::Adapter, Err((deferral, e))) => {
+        (Role::Service, Err((deferral, e))) => {
             let error = format!("{e:#}");
             error!(
                 adapter = %name,
