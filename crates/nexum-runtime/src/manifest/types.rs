@@ -254,6 +254,8 @@ pub struct Dependency {
 /// instantiate a module.
 #[derive(Debug)]
 pub struct LoadedManifest {
+    /// `[component].name` parsed into the namespace.
+    pub name: crate::module_id::ModuleId,
     pub manifest: Manifest,
     /// Hosts wasi:http outgoing requests may target. Each entry is
     /// either an exact hostname or a `*.suffix` wildcard.

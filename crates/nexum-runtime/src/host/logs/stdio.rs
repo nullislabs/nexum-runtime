@@ -178,7 +178,10 @@ mod tests {
         let pipeline = LogPipeline::new(store.clone());
         let writer = LineWriter {
             router: pipeline.router(),
-            run: RunId::new("m", 0),
+            run: RunId::new(
+                crate::module_id::ModuleId::parse("m").expect("valid module name"),
+                0,
+            ),
             source,
             buf: Vec::new(),
         };

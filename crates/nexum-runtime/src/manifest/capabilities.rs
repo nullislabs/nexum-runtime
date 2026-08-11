@@ -302,8 +302,13 @@ mod tests {
         assert_eq!(r.wit_import_to_cap("wasi:sockets/tcp@0.2.0"), None);
     }
 
+    fn test_module_id() -> crate::module_id::ModuleId {
+        crate::module_id::ModuleId::parse("test").expect("valid module name")
+    }
+
     fn manifest_with_caps(required: &[&str]) -> LoadedManifest {
         LoadedManifest {
+            name: test_module_id(),
             manifest: Manifest {
                 dependencies: Some(
                     required
@@ -321,6 +326,7 @@ mod tests {
 
     fn manifest_no_caps() -> LoadedManifest {
         LoadedManifest {
+            name: test_module_id(),
             manifest: Manifest::default(),
             http_allowlist: vec![],
             config: vec![],

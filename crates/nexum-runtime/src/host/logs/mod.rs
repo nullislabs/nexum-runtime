@@ -37,9 +37,9 @@ pub struct RunId {
 
 impl RunId {
     /// Mint a run for `module` at sequence `seq`.
-    pub fn new(module: impl Into<ModuleId>, seq: u64) -> Self {
+    pub fn new(module: ModuleId, seq: u64) -> Self {
         Self {
-            module: module.into(),
+            module,
             seq,
             started_at: SystemTime::now(),
         }
@@ -196,6 +196,10 @@ mod tests {
 
     use super::*;
 
+    fn test_module_id() -> ModuleId {
+        ModuleId::parse("m").expect("valid module name")
+    }
+
     /// Store that records appends so the fan-out test can inspect them.
     struct CountingStore {
         appended: Mutex<Vec<LogRecord>>,
@@ -220,7 +224,7 @@ mod tests {
         });
         let router = LogRouter::new(store.clone());
         router.record(LogRecord::now(
-            RunId::new("m", 0),
+            RunId::new(test_module_id(), 0),
             LogSource::HostInterface,
             Level::INFO,
             "hello".to_owned(),
@@ -238,7 +242,7 @@ mod tests {
             runs_retained: 4,
         };
         let pipeline = LogPipeline::in_memory(limits);
-        let run = RunId::new("m", 0);
+        let run = RunId::new(test_module_id(), 0);
         pipeline.router().record(LogRecord::now(
             run.clone(),
             LogSource::Stdout,

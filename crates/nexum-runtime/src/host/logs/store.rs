@@ -215,7 +215,7 @@ mod tests {
     }
 
     fn run(module: &str, seq: u64) -> RunId {
-        RunId::new(module, seq)
+        RunId::new(ModuleId::parse(module).expect("valid module name"), seq)
     }
 
     fn record(run: &RunId, message: &str) -> LogRecord {

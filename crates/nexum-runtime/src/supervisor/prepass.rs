@@ -13,6 +13,7 @@ use tracing::{info, warn};
 use super::role::Role;
 use crate::engine_config::EngineConfig;
 use crate::manifest::{self, CapabilityRegistry, LoadedManifest, ParseError, Subscription};
+use crate::module_id::ModuleId;
 
 /// Refusals before any compile; the wording is operator-pinned.
 #[derive(Debug, Error, IntoStaticStr)]
@@ -106,9 +107,9 @@ pub(super) fn claim_namespace(
     Ok(())
 }
 
-/// `[component].name`; manifest parse already refused a blank one.
-pub(super) fn manifest_namespace(loaded: &LoadedManifest) -> String {
-    loaded.manifest.component.name.clone()
+/// `[component].name`.
+pub(super) fn manifest_namespace(loaded: &LoadedManifest) -> ModuleId {
+    loaded.name.clone()
 }
 
 /// Missing or unresolved refuses the boot.
@@ -282,8 +283,8 @@ fn load_role_manifests<'a>(
         let loaded = load_required_manifest(path, explicit, registry, pass.role.label())
             .with_context(|| format!("{} {}", pass.role.load_context(), path.display()))?;
         let namespace = manifest_namespace(&loaded);
-        claim_namespace(ledger, &namespace, pass.role.label(), path)?;
-        enforce_subscriptions(pass.role, &namespace, &loaded, pass.chains)
+        claim_namespace(ledger, namespace.as_str(), pass.role.label(), path)?;
+        enforce_subscriptions(pass.role, namespace.as_str(), &loaded, pass.chains)
             .with_context(|| format!("{} {}", pass.role.load_context(), path.display()))?;
         manifests.push(loaded);
     }
