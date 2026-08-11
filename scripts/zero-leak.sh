@@ -1,29 +1,11 @@
 #!/usr/bin/env bash
-# Venue-agnostic gate. Runs identically in CI and under `just zero-leak`.
+# Enforces the settlement-domain-agnostic claim in the `nexum-runtime` crate
+# rustdoc: no domain symbol in the runtime crate or `wit/`, `nexum:host` stays
+# a leaf WIT package, and no crate edge leaves the repository. Reads text and
+# compiles nothing.
 #
-#   zero-leak.sh    check tracked files only
-#
-# The crate rustdoc of `nexum-runtime` claims the runtime is
-# settlement-domain-agnostic: no domain symbol or WIT reference, `nexum:host`
-# stays a leaf WIT package, and no crate edge reaches a domain crate. This
-# script is the enforcement that sentence names. It reads text and compiles
-# nothing, in the style of `content-lint.sh`.
-#
-# Three checks, one per clause:
-#
-#   1. No downstream domain namespace appears in `crates/nexum-runtime` or in
-#      `wit/`. `README.md` names videre and shepherd as the repositories that
-#      build on this one, so their names are the domain vocabulary a leak
-#      would carry.
-#   2. Every WIT file declares the `nexum:host` package and imports no other
-#      package. A leaf package resolves with no dependency on disk.
-#   3. No manifest in the workspace takes a git dependency, and no manifest
-#      path escapes the repository. Both are how an out-of-tree domain crate
-#      would become an edge of this graph.
-#
-# Nothing is compared against a committed baseline: a leak fails wherever it
-# appears, so a violation cannot become the baseline that permits the next
-# one.
+# No baseline file: a leak fails wherever it appears, so a violation cannot
+# become the baseline that permits the next one.
 set -euo pipefail
 
 root=$(git rev-parse --show-toplevel)
@@ -35,11 +17,10 @@ fail() {
     status=1
 }
 
-# The downstream repositories of the Nullis runtime stack, per README.md.
-# Their names stand for the settlement domain this crate must not know.
+# The downstream repositories, per README.md: their names are the domain
+# vocabulary a leak would carry.
 DOMAIN='videre|shepherd'
 
-# The one WIT package this repository owns.
 PACKAGE='nexum:host'
 
 echo "zero-leak: domain symbols in crates/nexum-runtime and wit"
@@ -55,8 +36,8 @@ while read -r wit; do
     if ! grep -qE "^package[[:space:]]+${PACKAGE}(@|;)" "$wit"; then
         fail "$wit does not declare the $PACKAGE package"
     fi
-    # A local `use types.{...}` names an interface in this package. A foreign
-    # import carries a package id, so it holds a colon before the interface.
+    # A foreign import carries a package id, so a colon precedes the
+    # interface; a local `use types.{...}` has none.
     foreign=$(grep -nE '^[[:space:]]*(use|include)[[:space:]]+[a-z0-9_-]+:' "$wit" || true)
     if [ -n "$foreign" ]; then
         fail "$wit imports a package outside $PACKAGE:"
