@@ -299,6 +299,7 @@ pub(super) async fn module<T: RuntimeTypes>(
     let spec = StoreSpec {
         http_allowlist: loaded_manifest.http_allowlist.clone(),
         http_limits: limits_cfg.http(),
+        http_permitted: limits_cfg.http_permitted_destinations(),
         // Event modules are unscoped for messaging; only providers carry a topic grant.
         messaging_topics: Vec::new(),
         memory_limit: memory,
@@ -433,6 +434,7 @@ pub(super) async fn provider<T: RuntimeTypes>(
     let spec = StoreSpec {
         http_allowlist: entry.http_allow.clone(),
         http_limits: limits_cfg.http(),
+        http_permitted: limits_cfg.http_permitted_destinations(),
         messaging_topics: entry.messaging_topics.clone(),
         memory_limit: limits_cfg.memory(),
         fuel: limits_cfg.fuel(),

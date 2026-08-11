@@ -2,9 +2,10 @@
 //! per-module `[capabilities.http].allow` list, clamps guest timeouts to the
 //! `[limits.http]` maxima, and bounds the exchange with a total deadline and
 //! response-body cap. Redirects are not followed; each hop re-enters the gate.
-//! Before connecting, a named target resolves and is refused if any answer is
-//! an address this host will not reach. That narrows DNS rebinding; it does
-//! not pin the connected address.
+//! Before connecting, the target is refused if it is, or resolves onto, an
+//! address this host will not reach. Only `[limits.http].permit_destinations`
+//! admits one. That narrows DNS rebinding; it does not pin the connected
+//! address.
 
 use std::future::Future;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
@@ -33,19 +34,24 @@ pub struct HttpGate {
     module: String,
     allowlist: Vec<String>,
     limits: OutboundHttpLimits,
+    /// Operator-permitted addresses that would otherwise be refused.
+    permitted: Vec<IpAddr>,
 }
 
 impl HttpGate {
-    /// Gate for `module` with its allowlist and outbound limits.
+    /// Gate for `module` with its allowlist, outbound limits, and the
+    /// operator's list of otherwise-refused addresses it may still reach.
     pub fn new(
         module: impl Into<String>,
         allowlist: Vec<String>,
         limits: OutboundHttpLimits,
+        permitted: Vec<IpAddr>,
     ) -> Self {
         Self {
             module: module.into(),
             allowlist,
             limits,
+            permitted,
         }
     }
 }
@@ -70,6 +76,7 @@ impl WasiHttpHooks for HttpGate {
             request,
             clamp(config, &self.limits),
             self.limits,
+            self.permitted.clone(),
         ))
     }
 }
@@ -93,12 +100,13 @@ fn send_with_limits(
     request: http::Request<HyperOutgoingBody>,
     config: OutgoingRequestConfig,
     limits: OutboundHttpLimits,
+    permitted: Vec<IpAddr>,
 ) -> HostFutureIncomingResponse {
     let handle = wasmtime_wasi::runtime::spawn(async move {
         let deadline = tokio::time::Instant::now() + limits.total_deadline;
         let uri = request.uri().clone();
         let sent = tokio::time::timeout_at(deadline, async move {
-            reject_prohibited_destination(&uri).await?;
+            reject_prohibited_destination(&uri, &permitted).await?;
             default_send_request_handler(request, config).await
         })
         .await;
@@ -193,7 +201,7 @@ impl Body for CappedBody {
 /// Allowlist decision for one request URI. Host-only, case-insensitive, exact
 /// or `*.suffix` per [`host_allowed`]; IPv6 literals stay bracketed.
 /// Name-based and pre-resolution, so it pins no address on its own.
-/// `reject_prohibited_destination` narrows the rebinding gap for a name.
+/// `reject_prohibited_destination` applies the address rules after it.
 fn admit(uri: &http::Uri, allowlist: &[String]) -> Result<(), ErrorCode> {
     let Some(host) = uri.host() else {
         return Err(ErrorCode::HttpRequestUriInvalid);
@@ -214,21 +222,29 @@ fn admit(uri: &http::Uri, allowlist: &[String]) -> Result<(), ErrorCode> {
 /// with the original hostname kept for TLS, and
 /// `default_send_request_handler` has no seam for it.
 ///
-/// An IP literal passes through unchecked, because the allowlist admits a
-/// literal only when an entry names it exactly. That entry is author-supplied
-/// (ADR-0001), so a module can still name a prohibited address directly. Only
-/// an operator-scoped denylist closes that.
-async fn reject_prohibited_destination(uri: &http::Uri) -> Result<(), ErrorCode> {
+/// A literal is checked the same way. The allowlist naming it is
+/// author-supplied (ADR-0001), so a module cannot reach a refused address by
+/// writing it out. Only `[limits.http].permit_destinations`, which the
+/// operator writes, admits one.
+async fn reject_prohibited_destination(
+    uri: &http::Uri,
+    permitted: &[IpAddr],
+) -> Result<(), ErrorCode> {
+    let refused = |ip: &IpAddr| is_prohibited(*ip) && !permitted.contains(ip);
     let Some(host) = uri.host() else {
         return Ok(()); // `admit` already rejects a hostless URI before this runs.
     };
-    if parse_ip_literal(host).is_some() {
-        return Ok(());
+    if let Some(ip) = parse_ip_literal(host) {
+        return if refused(&ip) {
+            Err(ErrorCode::DestinationIpProhibited)
+        } else {
+            Ok(())
+        };
     }
     let Ok(addrs) = lookup_host((host, 0)).await else {
         return Ok(());
     };
-    if addrs.map(|addr| addr.ip()).any(is_prohibited) {
+    if addrs.map(|addr| addr.ip()).any(|ip| refused(&ip)) {
         return Err(ErrorCode::DestinationIpProhibited);
     }
     Ok(())
@@ -245,7 +261,7 @@ fn parse_ip_literal(host: &str) -> Option<IpAddr> {
     }
 }
 
-/// True for an address a resolved *name* must not land on: loopback, private
+/// True for an address this host refuses by default: loopback, private
 /// (RFC 1918), link-local (RFC 3927 - this covers the 169.254.169.254 cloud
 /// metadata endpoint too, with no special case needed), carrier-grade NAT
 /// space, unique-local, multicast, and unspecified/broadcast. An IPv4-mapped
@@ -676,14 +692,57 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn reject_prohibited_destination_passes_through_an_allowlisted_ip_literal() {
-        // The literal itself is what the allowlist admitted; this check
-        // exists for names, not for a literal the operator wrote by hand.
+    async fn reject_prohibited_destination_refuses_a_literal_the_operator_did_not_permit() {
+        // The allowlist that named this literal is author-supplied, so
+        // naming it is a request and not a grant.
+        assert!(matches!(
+            reject_prohibited_destination(&uri("http://169.254.169.254:1/x"), &[]).await,
+            Err(ErrorCode::DestinationIpProhibited)
+        ));
+        assert!(matches!(
+            reject_prohibited_destination(&uri("http://127.0.0.1:1/x"), &[]).await,
+            Err(ErrorCode::DestinationIpProhibited)
+        ));
+    }
+
+    #[tokio::test]
+    async fn reject_prohibited_destination_admits_an_operator_permitted_literal() {
+        let permitted = [IpAddr::V4(Ipv4Addr::LOCALHOST)];
         assert!(
-            reject_prohibited_destination(&uri("http://127.0.0.1:1/x"))
+            reject_prohibited_destination(&uri("http://127.0.0.1:1/x"), &permitted)
                 .await
                 .is_ok()
         );
+        // Permitting one address does not permit its neighbours.
+        assert!(matches!(
+            reject_prohibited_destination(&uri("http://127.0.0.2:1/x"), &permitted).await,
+            Err(ErrorCode::DestinationIpProhibited)
+        ));
+    }
+
+    #[tokio::test]
+    async fn reject_prohibited_destination_admits_an_operator_permitted_name() {
+        // A name is admitted only when every address it resolves onto is
+        // permitted, so "localhost" needs both families listed: one bad
+        // answer among several is still a refusal.
+        let permitted = [
+            IpAddr::V4(Ipv4Addr::LOCALHOST),
+            IpAddr::V6(Ipv6Addr::LOCALHOST),
+        ];
+        assert!(
+            reject_prohibited_destination(&uri("http://localhost:1/x"), &permitted)
+                .await
+                .is_ok()
+        );
+        // Permitting only one family leaves the other refused.
+        assert!(matches!(
+            reject_prohibited_destination(
+                &uri("http://localhost:1/x"),
+                &[IpAddr::V6(Ipv6Addr::LOCALHOST)]
+            )
+            .await,
+            Err(ErrorCode::DestinationIpProhibited)
+        ));
     }
 
     #[tokio::test]
@@ -693,7 +752,7 @@ mod tests {
         // access - the same property the existing loopback test-server helpers
         // below rely on implicitly.
         assert!(matches!(
-            reject_prohibited_destination(&uri("http://localhost:1/x")).await,
+            reject_prohibited_destination(&uri("http://localhost:1/x"), &[]).await,
             Err(ErrorCode::DestinationIpProhibited)
         ));
     }
@@ -703,9 +762,10 @@ mod tests {
         // A name that cannot resolve is not itself a security denial: the
         // real send path resolves again and reports its own DNS error.
         assert!(
-            reject_prohibited_destination(&uri(
-                "http://this-name-does-not-resolve.invalid.test:1/x"
-            ))
+            reject_prohibited_destination(
+                &uri("http://this-name-does-not-resolve.invalid.test:1/x"),
+                &[],
+            )
             .await
             .is_ok()
         );
@@ -716,7 +776,12 @@ mod tests {
         // "localhost" passes the string-match allowlist exactly as any other
         // allowlisted name would - the rejection has to come from resolving
         // it, not from `admit`, which never sees an IP at all here.
-        let mut gate = HttpGate::new("test-module", allow(&["localhost"]), limits());
+        let mut gate = HttpGate::new(
+            "test-module",
+            allow(&["localhost"]),
+            limits(),
+            vec![IpAddr::V4(Ipv4Addr::LOCALHOST)],
+        );
         let pending = gate
             .send_request(request("http://localhost:1/x"), config())
             .expect("hostname is allowlisted, so admit() alone passes it");
@@ -748,7 +813,12 @@ mod tests {
 
     #[tokio::test]
     async fn send_request_denies_off_list_host_with_http_request_denied() {
-        let mut gate = HttpGate::new("test-module", allow(&["api.acme.example"]), limits());
+        let mut gate = HttpGate::new(
+            "test-module",
+            allow(&["api.acme.example"]),
+            limits(),
+            vec![IpAddr::V4(Ipv4Addr::LOCALHOST)],
+        );
         let Err(err) = gate.send_request(request("http://evil.example/x"), config()) else {
             panic!("off-list host must be denied");
         };
@@ -762,7 +832,12 @@ mod tests {
     async fn send_request_admits_listed_host() {
         // Nothing listens on 127.0.0.1:1; admission only hands the
         // request to the backend, so the returned future is pending.
-        let mut gate = HttpGate::new("test-module", allow(&["127.0.0.1"]), limits());
+        let mut gate = HttpGate::new(
+            "test-module",
+            allow(&["127.0.0.1"]),
+            limits(),
+            vec![IpAddr::V4(Ipv4Addr::LOCALHOST)],
+        );
         assert!(
             gate.send_request(request("http://127.0.0.1:1/x"), config())
                 .is_ok()
@@ -855,7 +930,12 @@ mod tests {
         addr: std::net::SocketAddr,
         limits: OutboundHttpLimits,
     ) -> Result<IncomingResponse, ErrorCode> {
-        let mut gate = HttpGate::new("test-module", allow(&["127.0.0.1"]), limits);
+        let mut gate = HttpGate::new(
+            "test-module",
+            allow(&["127.0.0.1"]),
+            limits,
+            vec![IpAddr::V4(Ipv4Addr::LOCALHOST)],
+        );
         let pending = gate
             .send_request(request(&format!("http://{addr}/x")), config_10s())
             .expect("listed host admitted");
