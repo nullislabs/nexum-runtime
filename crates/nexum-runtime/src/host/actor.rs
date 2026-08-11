@@ -1,6 +1,6 @@
 //! Supervised host-actor primitive: one component instance the host holds and
 //! others call. The store is refuelled before each guest call, traps project
-//! onto a typed fault, and an [`ActorSlot`] mutex serialises calls so one
+//! onto a typed fault, and an [`ActorSlot`] mutex serializes calls so one
 //! store never runs two at once.
 
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -12,7 +12,7 @@ use wasmtime::Store;
 use super::component::RuntimeTypes;
 use super::state::HostState;
 
-/// One supervised actor behind its serialising mutex; concurrent callers
+/// One supervised actor behind its serializing mutex; concurrent callers
 /// queue.
 pub type ActorSlot<A> = Arc<AsyncMutex<A>>;
 

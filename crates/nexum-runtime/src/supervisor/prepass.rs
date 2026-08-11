@@ -163,7 +163,7 @@ fn resolve_manifest_path(component: &Path, explicit: Option<&Path>) -> Option<Pa
 /// The operator's `[chains]` set from `engine.toml`.
 #[derive(Debug, Clone)]
 pub struct ConfiguredChains {
-    /// Numeric EIP-155 ids; named `[chains.*]` keys normalise to the same id.
+    /// Numeric EIP-155 ids; named `[chains.*]` keys normalize to the same id.
     ids: BTreeSet<u64>,
     /// True when the config is the built-in default (no engine.toml found).
     defaulted: bool,

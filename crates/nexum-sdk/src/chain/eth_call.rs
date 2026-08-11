@@ -3,7 +3,7 @@
 use alloy_primitives::Address;
 
 /// Build the JSON params array for `eth_call`: `[{to, data}, "latest"]`,
-/// ready to pass to `chain::request` without re-serialising.
+/// ready to pass to `chain::request` without re-serializing.
 pub fn eth_call_params(to: &Address, data: &[u8]) -> String {
     // Both fields are hex, which never needs JSON escaping, so the
     // array is written directly instead of via a serde_json DOM.

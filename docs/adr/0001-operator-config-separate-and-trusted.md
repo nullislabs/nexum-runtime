@@ -45,7 +45,7 @@ The engine applies one of three rules to each manifest value.
   It never widens one.
 - A capability or HTTP host is granted only if the operator also permits it.
 - A self-declared name or digest is evidence of intent.
-  It is not evidence of authorisation.
+  It is not evidence of authorization.
 
 The module author controls the content of `module.toml`.
 Any value the engine honours verbatim is therefore a value the module author controls.
@@ -67,7 +67,7 @@ It costs a host interface for the guest to read its grant, a fault case for call
   A missing `engine.toml` gives no chains and the default `state_dir`.
   Chain-backed capabilities then report `unsupported`.
 - The component digest in `[module]` proves that the artifact matches what the author published.
-  It does not prove that the operator authorised the artifact, because one party writes both the hash and the bytes it covers.
+  It does not prove that the operator authorized the artifact, because one party writes both the hash and the bytes it covers.
   An operator-side pin closes that gap.
 - An absent `[capabilities]` block grants nothing.
   The 0.1-compat fallback that treated every linked capability as required is removed.

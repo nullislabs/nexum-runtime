@@ -27,7 +27,7 @@ Per-call committed durability is the contract.
 
 Every write is fsync-durable when it returns `Ok`.
 Writes apply in program order, a module reads its own writes, and a trap freezes state at the last completed call and never rewinds it.
-Dispatch is serialised through a single actor, so no observer sees a torn mid-event state.
+Dispatch is serialized through a single actor, so no observer sees a torn mid-event state.
 
 Per-event atomicity is rejected in every form.
 

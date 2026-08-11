@@ -536,7 +536,7 @@ max_state_bytes    = 52428800
 
     #[test]
     fn load_rejects_a_blank_module_name() {
-        // A missing name deserialises to the empty string, so absence,
+        // A missing name deserializes to the empty string, so absence,
         // emptiness, and whitespace all hit the same refusal.
         let mut manifests = vec![
             "[dependencies]\n".to_owned(),

@@ -173,7 +173,7 @@ impl TestManifest {
                 .collect();
             root.insert("subscription".into(), subs.into());
         }
-        toml::to_string(&root).expect("serialise the test manifest")
+        toml::to_string(&root).expect("serialize the test manifest")
     }
 
     /// Write the manifest as `component.toml` under `dir` and return its path.
@@ -341,7 +341,7 @@ mod tests {
         );
     }
 
-    /// Pins the emitted text itself, so a change to the serialised shape
+    /// Pins the emitted text itself, so a change to the serialized shape
     /// shows up in review rather than hiding behind loader compatibility.
     #[test]
     fn to_toml_emits_the_exact_golden_text() {

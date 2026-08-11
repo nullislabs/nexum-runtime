@@ -1,5 +1,5 @@
 //! Generic engine launcher: parse the shared CLI, load the engine config,
-//! initialise tracing, and drive a [`Runtime`] preset until shutdown.
+//! initialize tracing, and drive a [`Runtime`] preset until shutdown.
 //!
 //! A binary is one line: `nexum_launch::run("nexum", CoreRuntime)`. The
 //! preset supplies the lattice, backends, extension list, and add-ons;
@@ -22,7 +22,7 @@ pub async fn run<R: Runtime>(name: &'static str, preset: R) -> anyhow::Result<()
     launch(name, preset, Cli::parse_as(name)).await
 }
 
-/// Load the config, initialise tracing, and run the preset until shutdown.
+/// Load the config, initialize tracing, and run the preset until shutdown.
 pub async fn launch<R: Runtime>(name: &str, preset: R, cli: Cli) -> anyhow::Result<()> {
     let mut engine_cfg = engine_config::load_or_default(cli.engine_config.as_deref())?;
     if let Some(n) = cli.log_backfill_concurrency {

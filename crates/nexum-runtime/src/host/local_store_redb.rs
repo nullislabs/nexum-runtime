@@ -65,7 +65,7 @@ pub struct ModuleStore {
 }
 
 impl LocalStore {
-    /// Open or create the redb file at `path`, initialising the shared table.
+    /// Open or create the redb file at `path`, initializing the shared table.
     pub fn open(path: impl AsRef<Path>) -> Result<Self, StorageError> {
         let db = Database::create(path).map_err(StorageError::Open)?;
         {
