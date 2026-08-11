@@ -557,6 +557,30 @@ max_state_bytes    = 52428800
     }
 
     #[test]
+    fn load_rejects_an_untrimmed_module_name() {
+        // Basic strings: `\t` and `\n` reach the parser as the whitespace.
+        for (written, parsed) in [
+            (r"cow ", "cow "),
+            (r" cow", " cow"),
+            (r" cow ", " cow "),
+            (r"cow\t", "cow\t"),
+            (r"\ncow", "\ncow"),
+        ] {
+            let manifest = format!("[component]\nname = \"{written}\"\n\n[dependencies]\n");
+            let err = load_inline(&manifest).unwrap_err();
+            assert!(
+                matches!(err, ParseError::UntrimmedModuleName(ref n) if n == parsed),
+                "expected untrimmed-name refusal for {written:?}, got {err:?}",
+            );
+        }
+        let err = load_inline("[component]\nname = 'cow '\n\n[dependencies]\n").unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "manifest: [component].name \"cow \" must not have leading or trailing whitespace",
+        );
+    }
+
+    #[test]
     fn load_accepts_plain_module_name() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("component.toml");

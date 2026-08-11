@@ -14,6 +14,8 @@ pub enum InvalidModuleName {
     Blank,
     #[error("[component].name {0:?} must not contain '/', '\\', or '..'")]
     UnsafePathComponent(String),
+    #[error("[component].name {0:?} must not have leading or trailing whitespace")]
+    Untrimmed(String),
 }
 
 /// The manifest namespace. `Arc`-backed so dispatch-path clones are
@@ -28,6 +30,11 @@ impl ModuleId {
     pub fn parse(name: &str) -> Result<Self, InvalidModuleName> {
         if name.trim().is_empty() {
             return Err(InvalidModuleName::Blank);
+        }
+        // Refuse, never trim: the name is the keccak local-store namespace, so
+        // a silent trim would move a component's state.
+        if name != name.trim() {
+            return Err(InvalidModuleName::Untrimmed(name.to_owned()));
         }
         if name.contains('/') || name.contains('\\') || name.contains("..") {
             return Err(InvalidModuleName::UnsafePathComponent(name.to_owned()));
@@ -93,6 +100,17 @@ mod tests {
             assert_eq!(
                 ModuleId::parse(bad),
                 Err(InvalidModuleName::UnsafePathComponent(bad.to_owned())),
+                "expected refusal for {bad:?}",
+            );
+        }
+    }
+
+    #[test]
+    fn parse_refuses_an_untrimmed_name() {
+        for bad in ["cow ", " cow", " cow ", "cow\t", "\ncow"] {
+            assert_eq!(
+                ModuleId::parse(bad),
+                Err(InvalidModuleName::Untrimmed(bad.to_owned())),
                 "expected refusal for {bad:?}",
             );
         }

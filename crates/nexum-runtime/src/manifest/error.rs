@@ -31,6 +31,9 @@ pub enum ParseError {
     /// `[component].name` is missing, empty, or whitespace-only.
     #[error("manifest: [component].name is missing or blank; declare a non-empty name")]
     BlankModuleName,
+    /// `[component].name` has leading or trailing whitespace.
+    #[error("manifest: [component].name {0:?} must not have leading or trailing whitespace")]
+    UntrimmedModuleName(String),
     /// No `[dependencies]` section; every manifest must declare one.
     #[error(
         "manifest: no [dependencies] section; dependencies are deny-by-default - \
@@ -58,6 +61,7 @@ impl From<InvalidModuleName> for ParseError {
         match err {
             InvalidModuleName::Blank => Self::BlankModuleName,
             InvalidModuleName::UnsafePathComponent(name) => Self::InvalidModuleName(name),
+            InvalidModuleName::Untrimmed(name) => Self::UntrimmedModuleName(name),
         }
     }
 }
