@@ -2,10 +2,9 @@
 //! per-module `[capabilities.http].allow` list, clamps guest timeouts to the
 //! `[limits.http]` maxima, and bounds the exchange with a total deadline and
 //! response-body cap. Redirects are not followed; each hop re-enters the gate.
-//! Immediately before connecting, [`reject_prohibited_destination`] resolves
-//! a *named* target and rejects a private/loopback/link-local/metadata-range
-//! answer - narrowing, not closing, the DNS-rebinding gap the allowlist alone
-//! leaves open. See that function's doc comment for what it does not cover.
+//! Before connecting, a named target resolves and is refused if any answer is
+//! an address this host will not reach. That narrows DNS rebinding; it does
+//! not pin the connected address.
 
 use std::future::Future;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
@@ -193,9 +192,8 @@ impl Body for CappedBody {
 
 /// Allowlist decision for one request URI. Host-only, case-insensitive, exact
 /// or `*.suffix` per [`host_allowed`]; IPv6 literals stay bracketed.
-/// Name-based and pre-resolution: on its own this still has no IP-pinning or
-/// DNS-rebinding defence. [`reject_prohibited_destination`], run separately
-/// just before the connection opens, narrows that gap for a *named* target.
+/// Name-based and pre-resolution, so it pins no address on its own.
+/// `reject_prohibited_destination` narrows the rebinding gap for a name.
 fn admit(uri: &http::Uri, allowlist: &[String]) -> Result<(), ErrorCode> {
     let Some(host) = uri.host() else {
         return Err(ErrorCode::HttpRequestUriInvalid);
@@ -207,29 +205,19 @@ fn admit(uri: &http::Uri, allowlist: &[String]) -> Result<(), ErrorCode> {
     }
 }
 
-/// Resolve a *named* target and reject it if any answer lands in an address
-/// range this host will not connect to. An IP literal in the URI is passed
-/// through untouched: `host_allowed` only ever admits a literal against an
-/// allowlist entry naming that exact literal (never a name, see
-/// `ipv4_literal_matches_only_when_listed`), so reaching it is the allowlist
-/// entry's own stated intent, not the DNS-rebinding shape this check exists
-/// for. An operator who wants a module to reach an internal service by a
-/// stable address should list that address as a literal rather than a name -
-/// this also means the target no longer depends on DNS at all for a
-/// security-relevant decision.
+/// Refuse a named target that resolves onto an address this host will not
+/// reach. A resolution failure is not a denial: the connection resolves again
+/// and reports its own error.
 ///
-/// This narrows, but does not close, the gap `admit` itself cannot: it is a
-/// second, independent resolution, not the connection itself. A rebind timed
-/// between this lookup and `default_send_request_handler`'s own, later
-/// resolution still slips through. Closing that fully would mean connecting
-/// to the exact address validated here while still presenting the original
-/// hostname for TLS SNI/cert validation - not reachable through
-/// `default_send_request_handler`'s fixed signature, which derives both the
-/// TCP-connect target and the TLS domain from one `host:port` authority
-/// string with no seam to pass a pre-resolved address through separately.
+/// Two gaps remain. The connection performs its own lookup, so an answer can
+/// change between the two. Closing that needs a pre-resolved connect address
+/// with the original hostname kept for TLS, and
+/// `default_send_request_handler` has no seam for it.
 ///
-/// A resolution failure here is not itself a denial: the real connection
-/// attempt resolves again and reports its own, more specific error.
+/// An IP literal passes through unchecked, because the allowlist admits a
+/// literal only when an entry names it exactly. That entry is author-supplied
+/// (ADR-0001), so a module can still name a prohibited address directly. Only
+/// an operator-scoped denylist closes that.
 async fn reject_prohibited_destination(uri: &http::Uri) -> Result<(), ErrorCode> {
     let Some(host) = uri.host() else {
         return Ok(()); // `admit` already rejects a hostless URI before this runs.
