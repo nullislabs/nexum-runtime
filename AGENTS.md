@@ -74,6 +74,10 @@ Read the relevant record before you change a seam it describes.
 A record states a decision, its invariants, and the alternatives that were rejected and why.
 It is not a migration log or a design discussion.
 
+## Unattended work
+
+`.claude/loop.md` carries the rules for an agent working an issue without a maintainer watching: what verifies a change, when to stop, which invariants encode a decision, and which work is never unattended.
+
 ## House rules
 
 Do not use em-dashes in source, rustdoc, markdown, commit messages, or PR and issue bodies.
