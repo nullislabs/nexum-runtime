@@ -227,6 +227,13 @@ pub fn downcast_service<S: HostService>(service: &Arc<dyn HostService>) -> Optio
     erased.downcast().ok()
 }
 
+/// Two wired extensions claim one service namespace.
+#[derive(Debug, thiserror::Error)]
+#[error("duplicate extension service namespace {namespace}")]
+pub struct DuplicateServiceNamespace {
+    pub namespace: &'static str,
+}
+
 /// Immutable per-namespace service map, built once at boot.
 #[derive(Clone, Default)]
 pub struct HostServices(Arc<BTreeMap<&'static str, Arc<dyn HostService>>>);
@@ -242,7 +249,7 @@ impl HostServices {
     /// duplicate.
     pub fn from_extensions<T: RuntimeTypes>(
         extensions: &[Arc<dyn Extension<T>>],
-    ) -> anyhow::Result<Self> {
+    ) -> Result<Self, DuplicateServiceNamespace> {
         let mut map = BTreeMap::new();
         for ext in extensions {
             let Some(service) = ext.service() else {
@@ -250,7 +257,7 @@ impl HostServices {
             };
             let namespace = ext.namespace();
             if map.insert(namespace, service).is_some() {
-                anyhow::bail!("duplicate extension service namespace {namespace}");
+                return Err(DuplicateServiceNamespace { namespace });
             }
         }
         Ok(Self(Arc::new(map)))
@@ -272,10 +279,10 @@ impl HostServices {
         self,
         namespace: &'static str,
         service: Arc<dyn HostService>,
-    ) -> anyhow::Result<Self> {
+    ) -> Result<Self, DuplicateServiceNamespace> {
         let mut map = Arc::unwrap_or_clone(self.0);
         if map.insert(namespace, service).is_some() {
-            anyhow::bail!("duplicate extension service namespace {namespace}");
+            return Err(DuplicateServiceNamespace { namespace });
         }
         Ok(Self(Arc::new(map)))
     }
