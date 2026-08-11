@@ -37,8 +37,9 @@ macro_rules! bind_host_via_wit_bindgen {
     // always-present `nexum:host/types`) plus one block per listed
     // capability.
     (caps: [$($cap:ident),* $(,)?]) => {
-        /// Wraps the module's per-cdylib wit-bindgen imports so a
-        /// module can hold a `&impl Host`.
+        /// Wraps the module's per-cdylib wit-bindgen imports. Carries a
+        /// trait impl for each declared capability, so a module binds the
+        /// seams it uses and not the composed `Host`.
         struct WitBindgenHost;
 
         /// Lift the wit-bindgen `types.fault` into the SDK's `Fault`.

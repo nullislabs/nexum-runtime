@@ -54,6 +54,23 @@ The hooks in `.claude/hooks/` support this loop.
 `nextest-on-stop.sh` runs nextest for the crates with uncommitted `.rs` changes at the end of a turn.
 Each hook runs only on a NixOS machine, and exits without work when `rustfmt`, `cargo`, or `cargo-nextest` is absent, so all stay silent outside the dev shell.
 
+## Module layout
+
+A module splits into two files.
+`logic.rs` holds pure logic that does not depend on wit-bindgen, and its unit tests run against `nexum_sdk_test::MockHost`.
+`lib.rs` holds the per-cdylib `wit_bindgen::generate!` glue, the generated host adapter, and the export dispatch.
+
+A logic function binds only the host seams it uses, for example `H: ChainHost + LocalStoreHost`.
+It does not bind the composed `Host` trait, which no capability-gated adapter can satisfy.
+See `docs/adr/0015-host-trait-surface.md`.
+
+## Decision records
+
+`docs/adr` holds the decisions that constrain later work, including the trust boundary between the operator config and the module manifest, and the local-store durability model.
+Read the relevant record before you change a seam it describes.
+A record states a decision, its invariants, and the alternatives that were rejected and why.
+It is not a migration log or a design discussion.
+
 ## House rules
 
 Do not use em-dashes in source, rustdoc, markdown, commit messages, or PR and issue bodies.
