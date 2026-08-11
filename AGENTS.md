@@ -79,9 +79,7 @@ It is not a migration log or a design discussion.
 
 ## House rules
 
-`CONTRIBUTING.md` carries the organization-wide standard and takes precedence.
-It mirrors nxm-rs/.github, which applies directly once this repository moves there.
-The rules below are the repository-specific additions.
+`CONTRIBUTING.md` carries the organization-wide standard and takes precedence; the rules below are additions to it.
 
 Write in Oxford English, which takes -ize endings: organize, recognize, serialize.
 `.claude/hooks/content-lint.sh` and the CI content job refuse an -ise spelling of a word that takes -ize.

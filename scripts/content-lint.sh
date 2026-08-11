@@ -36,11 +36,10 @@ DASHES='\x{2014}|\x{2013}'
 # A Conventional Commit subject, optional scope, optional breaking marker.
 SUBJECT='^(build|chore|ci|docs|feat|fix|perf|refactor|revert|style|test)(\([a-z0-9._/-]+\))?!?: .+'
 
-# Oxford spelling takes -ize, per the org CONTRIBUTING.md. Matched by stem
-# with a required suffix, so the nouns "synthesis" and "analysis" cannot hit,
-# and so prefixed and suffixed forms of a listed stem do. Words with no -ize
-# form (supervise, exercise, otherwise, promise, comprise) are absent from the
-# list by construction rather than excluded after the fact.
+# Oxford spelling takes -ize. Each stem requires a suffix, so the nouns
+# "synthesis" and "analysis" cannot match; words with no -ize form (supervise,
+# exercise, otherwise, promise) are absent by construction, not excluded after
+# the fact.
 IZE_STEMS='authoris|capitalis|categoris|centralis|customis|decentralis|deserialis|formalis|generalis|initialis|materialis|maximis|minimis|normalis|optimis|organis|prioritis|realis|recognis|sanitis|serialis|stabilis|standardis|summaris|synthesis|tokenis|utilis'
 ISE='('"$IZE_STEMS"')(e|es|ed|ing|ation|ations)\b'
 
@@ -56,9 +55,8 @@ if [ -n "$hits" ]; then
     printf '%s\n' "$hits" | sed 's/^/    /' >&2
 fi
 
-# CONTRIBUTING.md states the rule, and stating it means quoting the spelling
-# it rejects. Same reason a message may quote a banned trailer inside a code
-# span: a rule that cannot be written down is unusable.
+# CONTRIBUTING.md is exempt: stating the rule means quoting the spelling it
+# rejects.
 hits=$(git grep -nIP "$ISE" -- . ':!CONTRIBUTING.md' || true)
 if [ -n "$hits" ]; then
     fail "Oxford spelling takes -ize, not -ise:"

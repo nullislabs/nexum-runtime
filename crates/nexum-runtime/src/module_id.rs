@@ -60,5 +60,3 @@ mod tests {
         assert_eq!(&*label, id.as_str());
     }
 }
-
-// normalised value
