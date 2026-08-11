@@ -40,17 +40,6 @@ interface types {
         logs: list<chain-log>,
     }
 
-    /// A message delivered over the messaging interface. Defined here (rather
-    /// than only in `messaging.wit`) so the `event` variant can reference it
-    /// without a cross-interface use clause.
-    record message {
-        content-topic: string,
-        payload: list<u8>,
-        timestamp: u64,
-        /// Optional sender identity (protocol-dependent).
-        sender: option<list<u8>>,
-    }
-
     /// Fired by the host on a configured cadence. `fired-at` is the host's
     /// wall-clock time (ms since Unix epoch, UTC) at which the tick was
     /// generated.
@@ -75,7 +64,6 @@ interface types {
         block(block),
         chain-logs(chain-logs),
         tick(tick),
-        message(message),
         custom(custom-event),
     }
 

@@ -4,7 +4,7 @@
 //!
 //! Capability-selected: `caps: [...]` emits only the pieces backed by
 //! the listed capabilities (how `#[nexum_sdk::module]` invokes it); the
-//! zero-argument form emits the full six-interface set. Either way the
+//! zero-argument form emits the full core set. Either way the
 //! wit-bindgen output for the world must already be in scope, so
 //! selecting a capability the world does not import is a compile error.
 //! A domain SDK layers its own interfaces on the same `WitBindgenHost`,
@@ -30,7 +30,7 @@ macro_rules! bind_host_via_wit_bindgen {
     // full adapter.
     () => {
         $crate::bind_host_via_wit_bindgen!(
-            caps: [chain, identity, local_store, remote_store, messaging, logging]
+            caps: [chain, identity, local_store, remote_store, logging]
         );
     };
     // Capability-selected form: the base pieces (which need only the
@@ -105,18 +105,6 @@ macro_rules! bind_host_via_wit_bindgen {
             }
         }
 
-        /// Rebuild the SDK `Message` from the wit-bindgen `message`
-        /// record.
-        impl ::core::convert::From<nexum::host::types::Message> for $crate::host::Message {
-            fn from(message: nexum::host::types::Message) -> Self {
-                Self {
-                    content_topic: message.content_topic,
-                    payload: message.payload,
-                    timestamp: message.timestamp,
-                    sender: message.sender,
-                }
-            }
-        }
 
         $($crate::__bind_host_cap_via_wit_bindgen!($cap);)*
     };
@@ -294,36 +282,6 @@ macro_rules! __bind_host_cap_via_wit_bindgen {
                 let raw = nexum::host::remote_store::write_feed(topic.as_slice(), data)
                     .map_err($crate::host::Fault::from)?;
                 $crate::host::reference_from_wire(&raw)
-            }
-        }
-    };
-    (messaging) => {
-        impl $crate::host::MessagingHost for WitBindgenHost {
-            fn publish(
-                &self,
-                content_topic: &str,
-                payload: &[u8],
-            ) -> ::core::result::Result<(), $crate::host::Fault> {
-                nexum::host::messaging::publish(content_topic, payload)
-                    .map_err($crate::host::Fault::from)
-            }
-            fn query(
-                &self,
-                content_topic: &str,
-                start_time: ::core::option::Option<u64>,
-                end_time: ::core::option::Option<u64>,
-                limit: ::core::option::Option<u32>,
-            ) -> ::core::result::Result<::std::vec::Vec<$crate::host::Message>, $crate::host::Fault>
-            {
-                let messages =
-                    nexum::host::messaging::query(content_topic, start_time, end_time, limit)
-                        .map_err($crate::host::Fault::from)?;
-                ::core::result::Result::Ok(
-                    messages
-                        .into_iter()
-                        .map(::core::convert::Into::into)
-                        .collect(),
-                )
             }
         }
     };

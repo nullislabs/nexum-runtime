@@ -34,7 +34,6 @@ pub const CORE_NAMESPACE: NamespaceCaps = NamespaceCaps {
 /// `http` is gated by the registry, as in the core set.
 pub const PROVIDER_CAPABILITIES: &[&str] = &[
     nexum_world::Cap::Chain.as_str(),
-    nexum_world::Cap::Messaging.as_str(),
     nexum_world::Cap::Logging.as_str(),
 ];
 
@@ -424,7 +423,6 @@ mod tests {
         // manifest declaring them fails validation as unknown.
         let r = CapabilityRegistry::provider();
         assert!(r.is_known("chain"));
-        assert!(r.is_known("messaging"));
         assert!(r.is_known("logging"));
         assert!(r.is_known("http"));
         assert!(!r.is_known("local-store"));
@@ -436,10 +434,6 @@ mod tests {
     fn provider_registry_maps_scoped_imports_but_not_core_only() {
         let r = CapabilityRegistry::provider();
         assert_eq!(r.wit_import_to_cap("nexum:host/chain@0.1.0"), Some("chain"));
-        assert_eq!(
-            r.wit_import_to_cap("nexum:host/messaging@0.1.0"),
-            Some("messaging")
-        );
         assert_eq!(
             r.wit_import_to_cap("nexum:host/logging@0.1.0"),
             Some("logging")

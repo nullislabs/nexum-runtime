@@ -2,9 +2,9 @@
 //! helpers, so a module can test its logic without wit-bindgen,
 //! wasmtime, or a network round-trip.
 //!
-//! [`MockHost`] composes the six per-seam mocks ([`MockChain`],
+//! [`MockHost`] composes the per-seam mocks ([`MockChain`],
 //! [`MockIdentity`], [`MockLocalStore`], [`MockRemoteStore`],
-//! [`MockMessaging`], [`MockLogging`]); [`capture_tracing`] records
+//! [`MockLogging`]); [`capture_tracing`] records
 //! emitted `tracing` events.
 
 #![cfg_attr(not(test), warn(unused_crate_dependencies))]
@@ -19,8 +19,7 @@ use std::sync::{Arc, Mutex};
 
 use nexum_sdk::Level;
 use nexum_sdk::host::{
-    ChainError, ChainHost, Fault, IdentityHost, LocalStoreHost, LoggingHost, Message,
-    MessagingHost, RemoteStoreHost,
+    ChainError, ChainHost, Fault, IdentityHost, LocalStoreHost, LoggingHost, RemoteStoreHost,
 };
 use nexum_sdk::prelude::{Address, B256, Signature, keccak256};
 use tracing::field::{Field, Visit};
@@ -39,8 +38,6 @@ pub struct MockHost {
     pub store: MockLocalStore,
     /// `nexum:host/remote-store` mock.
     pub remote_store: MockRemoteStore,
-    /// `nexum:host/messaging` mock.
-    pub messaging: MockMessaging,
     /// `nexum:host/logging` mock.
     pub logging: MockLogging,
 }
@@ -107,22 +104,6 @@ impl RemoteStoreHost for MockHost {
     }
     fn write_feed(&self, topic: B256, data: &[u8]) -> Result<B256, Fault> {
         self.remote_store.write_feed(topic, data)
-    }
-}
-
-impl MessagingHost for MockHost {
-    fn publish(&self, content_topic: &str, payload: &[u8]) -> Result<(), Fault> {
-        self.messaging.publish(content_topic, payload)
-    }
-    fn query(
-        &self,
-        content_topic: &str,
-        start_time: Option<u64>,
-        end_time: Option<u64>,
-        limit: Option<u32>,
-    ) -> Result<Vec<Message>, Fault> {
-        self.messaging
-            .query(content_topic, start_time, end_time, limit)
     }
 }
 
@@ -280,152 +261,6 @@ impl IdentityHost for MockIdentity {
 
     fn sign_typed_data(&self, account: Address, typed_data: &str) -> Result<Signature, Fault> {
         self.dispatch(account, SignPayload::TypedData(typed_data.to_owned()))
-    }
-}
-
-/// One recorded [`MessagingHost::publish`] invocation.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct PublishRecord {
-    /// Content topic published to.
-    pub content_topic: String,
-    /// Payload bytes, verbatim.
-    pub payload: Vec<u8>,
-}
-
-/// In-memory [`MessagingHost`]: seeded messages answer queries, publishes
-/// are recorded, an optional scope mirrors the `messaging_topics` grant.
-/// Queries answer from seeds, never from what the guest published.
-#[derive(Default)]
-pub struct MockMessaging {
-    history: RefCell<Vec<Message>>,
-    published: RefCell<Vec<PublishRecord>>,
-    scope: RefCell<Option<Vec<String>>>,
-    faults: RefCell<Vec<(String, Fault)>>,
-}
-
-impl MockMessaging {
-    /// Seed one message into the queryable history.
-    pub fn seed(&self, message: Message) {
-        self.history.borrow_mut().push(message);
-    }
-
-    /// Seed a payload on `content_topic` at `timestamp` (ms since the
-    /// Unix epoch, UTC), no sender.
-    pub fn seed_payload(
-        &self,
-        content_topic: impl Into<String>,
-        payload: impl Into<Vec<u8>>,
-        timestamp: u64,
-    ) {
-        self.seed(Message {
-            content_topic: content_topic.into(),
-            payload: payload.into(),
-            timestamp,
-            sender: None,
-        });
-    }
-
-    /// Confine the mock to `topics`, mirroring the `messaging_topics`
-    /// grant: a topic is admitted if it equals an entry or descends from
-    /// one as a `/`-bounded prefix, else [`Fault::Denied`]. An empty
-    /// grant is unscoped.
-    pub fn scope_topics(&self, topics: impl IntoIterator<Item = impl Into<String>>) {
-        *self.scope.borrow_mut() = Some(topics.into_iter().map(Into::into).collect());
-    }
-
-    /// Inject a fault for any operation on a topic starting with
-    /// `prefix`; first registered match fires.
-    pub fn fail_on(&self, prefix: impl Into<String>, fault: Fault) {
-        self.faults.borrow_mut().push((prefix.into(), fault));
-    }
-
-    /// All publishes received, in arrival order.
-    pub fn published(&self) -> Vec<PublishRecord> {
-        self.published.borrow().clone()
-    }
-
-    /// Last publish received, if any.
-    pub fn last_published(&self) -> Option<PublishRecord> {
-        self.published.borrow().last().cloned()
-    }
-
-    /// Total publish count.
-    pub fn publish_count(&self) -> usize {
-        self.published.borrow().len()
-    }
-
-    fn admit(&self, content_topic: &str) -> Result<(), Fault> {
-        for (prefix, fault) in self.faults.borrow().iter() {
-            if content_topic.starts_with(prefix.as_str()) {
-                return Err(fault.clone());
-            }
-        }
-        if let Some(scope) = self.scope.borrow().as_ref()
-            && !topic_in_scope(content_topic, scope)
-        {
-            return Err(Fault::Denied(format!(
-                "MockMessaging: {content_topic} is outside the scoped topics"
-            )));
-        }
-        Ok(())
-    }
-}
-
-/// Grant matching: empty scope admits all; else a topic must equal an
-/// entry or descend from one as a `/`-bounded prefix.
-fn topic_in_scope(topic: &str, scope: &[String]) -> bool {
-    if scope.is_empty() {
-        return true;
-    }
-    scope.iter().any(|allowed| {
-        if topic == allowed {
-            return true;
-        }
-        let prefix = allowed.strip_suffix('/').unwrap_or(allowed);
-        topic
-            .strip_prefix(prefix)
-            .is_some_and(|rest| rest.starts_with('/'))
-    })
-}
-
-impl MessagingHost for MockMessaging {
-    fn publish(&self, content_topic: &str, payload: &[u8]) -> Result<(), Fault> {
-        self.admit(content_topic)?;
-        self.published.borrow_mut().push(PublishRecord {
-            content_topic: content_topic.to_owned(),
-            payload: payload.to_vec(),
-        });
-        Ok(())
-    }
-
-    /// Exact-topic seeds within the inclusive `start_time..=end_time`
-    /// window, in seed order; `limit` keeps the newest, the tail.
-    fn query(
-        &self,
-        content_topic: &str,
-        start_time: Option<u64>,
-        end_time: Option<u64>,
-        limit: Option<u32>,
-    ) -> Result<Vec<Message>, Fault> {
-        self.admit(content_topic)?;
-        let mut matches: Vec<Message> = self
-            .history
-            .borrow()
-            .iter()
-            .filter(|message| {
-                message.content_topic == content_topic
-                    && start_time.is_none_or(|start| message.timestamp >= start)
-                    && end_time.is_none_or(|end| message.timestamp <= end)
-            })
-            .cloned()
-            .collect();
-        if let Some(limit) = limit {
-            let keep = usize::try_from(limit).unwrap_or(usize::MAX);
-            if matches.len() > keep {
-                matches.drain(..matches.len() - keep);
-            }
-        }
-        Ok(matches)
     }
 }
 
@@ -1366,104 +1201,6 @@ mod tests {
     }
 
     #[test]
-    fn messaging_records_publishes_and_answers_from_seeds() {
-        let messaging = MockMessaging::default();
-        messaging.seed_payload("/acme/1/orders/proto", b"one".to_vec(), 10);
-        messaging.seed_payload("/acme/1/orders/proto", b"two".to_vec(), 20);
-        messaging.seed_payload("/acme/1/other/proto", b"noise".to_vec(), 15);
-
-        messaging.publish("/acme/1/orders/proto", b"out").unwrap();
-        assert_eq!(messaging.publish_count(), 1);
-        assert_eq!(
-            messaging.last_published().unwrap(),
-            PublishRecord {
-                content_topic: "/acme/1/orders/proto".to_owned(),
-                payload: b"out".to_vec(),
-            },
-        );
-
-        // Publishes never leak into query results.
-        let all = messaging
-            .query("/acme/1/orders/proto", None, None, None)
-            .unwrap();
-        assert_eq!(all.len(), 2);
-        assert_eq!(all[0].payload, b"one");
-        assert_eq!(all[1].payload, b"two");
-    }
-
-    #[test]
-    fn messaging_query_applies_bounds_and_limit() {
-        let messaging = MockMessaging::default();
-        for (payload, ts) in [(b"a", 10u64), (b"b", 20), (b"c", 30), (b"d", 40)] {
-            messaging.seed_payload("/t", payload.to_vec(), ts);
-        }
-
-        let window = messaging.query("/t", Some(20), Some(30), None).unwrap();
-        assert_eq!(window.len(), 2);
-        assert_eq!(window[0].payload, b"b");
-
-        // A limit keeps the newest matches: the tail of the window.
-        let limited = messaging.query("/t", None, None, Some(2)).unwrap();
-        assert_eq!(limited.len(), 2);
-        assert_eq!(limited[0].payload, b"c");
-        assert_eq!(limited[1].payload, b"d");
-    }
-
-    #[test]
-    fn messaging_scope_denies_off_grant_topics() {
-        let messaging = MockMessaging::default();
-        messaging.scope_topics(["/acme/1/orders/proto"]);
-
-        messaging.publish("/acme/1/orders/proto", b"ok").unwrap();
-        let err = messaging.publish("/other", b"no").unwrap_err();
-        assert!(matches!(err, Fault::Denied(_)));
-        let err = messaging.query("/other", None, None, None).unwrap_err();
-        assert!(matches!(err, Fault::Denied(_)));
-        // The refused publish was never recorded.
-        assert_eq!(messaging.publish_count(), 1);
-    }
-
-    #[test]
-    fn messaging_scope_matches_the_host_grant() {
-        // A prefix grant admits the family beneath it, bounded at `/`.
-        let messaging = MockMessaging::default();
-        messaging.scope_topics(["/nexum/1/"]);
-        messaging
-            .publish("/nexum/1/acme-orders/proto", b"x")
-            .unwrap();
-        messaging.publish("/nexum/1/twap/proto", b"x").unwrap();
-        let err = messaging.publish("/nexum/2/acme/proto", b"x").unwrap_err();
-        assert!(matches!(err, Fault::Denied(_)));
-
-        // No trailing slash still bounds on the separator: a grant never
-        // leaks into a longer sibling segment.
-        let messaging = MockMessaging::default();
-        messaging.scope_topics(["/nexum/1/acme"]);
-        messaging.publish("/nexum/1/acme", b"x").unwrap();
-        messaging.publish("/nexum/1/acme/orders", b"x").unwrap();
-        let err = messaging
-            .publish("/nexum/1/acme-orders/proto", b"x")
-            .unwrap_err();
-        assert!(matches!(err, Fault::Denied(_)));
-
-        // An empty grant is unscoped, the host's module default.
-        let messaging = MockMessaging::default();
-        messaging.scope_topics(Vec::<String>::new());
-        messaging.publish("/anywhere/at/all", b"x").unwrap();
-    }
-
-    #[test]
-    fn messaging_fault_injection_fires_by_prefix() {
-        let messaging = MockMessaging::default();
-        messaging.fail_on("/flaky", Fault::Timeout);
-        assert!(matches!(
-            messaging.publish("/flaky/topic", b"x").unwrap_err(),
-            Fault::Timeout,
-        ));
-        messaging.publish("/steady", b"x").unwrap();
-    }
-
-    #[test]
     fn remote_store_round_trips_content_addressed_blobs() {
         let store = MockRemoteStore::default();
         let reference = store.upload(b"chunk").unwrap();
@@ -1524,15 +1261,13 @@ mod tests {
         let host = MockHost::new();
         host.chain
             .respond_to("eth_blockNumber", "[]", Ok("\"0x1\"".into()));
-        host.messaging.seed_payload("/t", b"m".to_vec(), 1);
 
-        // Through the `Host` supertrait: all six seams on one value.
+        // Through the `Host` supertrait: every seam on one value.
         let _: &dyn nexum_sdk::host::Host = &host;
         host.set("key", b"val").unwrap();
         assert_eq!(host.get("key").unwrap().as_deref(), Some(&b"val"[..]));
         assert_eq!(host.request(1, "eth_blockNumber", "[]").unwrap(), "\"0x1\"");
         assert!(host.accounts().unwrap().is_empty());
-        assert_eq!(host.query("/t", None, None, None).unwrap().len(), 1);
         let reference = host.upload(b"blob").unwrap();
         assert_eq!(host.download(reference).unwrap(), b"blob");
         host.log(Level::INFO, "happy path");

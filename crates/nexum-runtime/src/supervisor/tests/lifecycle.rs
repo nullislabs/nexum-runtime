@@ -583,7 +583,6 @@ fn provider_at_run_zero(
                 http_allowlist: Vec::new(),
                 http_limits: limits.http(),
                 http_permitted: limits.http_permitted_destinations(),
-                messaging_topics: Vec::new(),
                 memory_limit: limits.memory(),
                 fuel: limits.fuel(),
                 chain_response_max_bytes: limits.chain_response_max_bytes(),

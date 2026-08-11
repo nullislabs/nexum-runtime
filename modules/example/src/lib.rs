@@ -56,14 +56,6 @@ impl ExampleModule {
         Ok(())
     }
 
-    fn on_message(msg: types::Message) -> Result<(), Fault> {
-        logging::log(
-            logging::Level::Info,
-            &format!("message on topic {}", msg.content_topic),
-        );
-        Ok(())
-    }
-
     fn on_custom(event: types::CustomEvent) -> Result<(), Fault> {
         logging::log(
             logging::Level::Info,

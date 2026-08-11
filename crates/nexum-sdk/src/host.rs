@@ -1,7 +1,7 @@
 //! Host traits, the seam between module logic and the wit-bindgen
 //! shims a module generates per-cdylib. Each trait mirrors one nexum
 //! host interface ([`ChainHost`], [`IdentityHost`], [`LocalStoreHost`],
-//! [`RemoteStoreHost`], [`MessagingHost`], [`LoggingHost`]); [`Host`]
+//! [`RemoteStoreHost`], [`LoggingHost`]); [`Host`]
 //! bundles all six.
 //!
 //! Module logic written against these traits runs host-free against
@@ -63,7 +63,7 @@ pub mod sealed {
 }
 
 impl<T> sealed::SealedHost for T where
-    T: ChainHost + IdentityHost + LocalStoreHost + RemoteStoreHost + MessagingHost + LoggingHost
+    T: ChainHost + IdentityHost + LocalStoreHost + RemoteStoreHost + LoggingHost
 {
 }
 
@@ -235,40 +235,6 @@ pub trait IdentityHost {
     fn sign_typed_data(&self, account: Address, typed_data: &str) -> Result<Signature, Fault>;
 }
 
-/// One delivered message, mirrored from `nexum:host/types.message` so
-/// the [`MessagingHost`] seam stays mockable without naming bindgen
-/// types.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct Message {
-    /// Content topic the message arrived on.
-    pub content_topic: String,
-    /// Opaque payload bytes.
-    pub payload: Vec<u8>,
-    /// Delivery timestamp, ms since the Unix epoch, UTC.
-    pub timestamp: u64,
-    /// Optional sender identity (protocol-dependent).
-    pub sender: Option<Vec<u8>>,
-}
-
-/// `nexum:host/messaging` - publish to and query content topics,
-/// confined to the component's `messaging_topics` grant; an off-scope
-/// topic fails as [`Fault::Denied`].
-pub trait MessagingHost {
-    /// Publish a payload to a content topic
-    /// (`/<app>/<version>/<topic>/<encoding>`).
-    fn publish(&self, content_topic: &str, payload: &[u8]) -> Result<(), Fault>;
-    /// Query historical messages on a topic, window bounded by the
-    /// optional `start_time` / `end_time` (ms since the Unix epoch,
-    /// UTC) and `limit`.
-    fn query(
-        &self,
-        content_topic: &str,
-        start_time: Option<u64>,
-        end_time: Option<u64>,
-        limit: Option<u32>,
-    ) -> Result<Vec<Message>, Fault>;
-}
-
 /// `nexum:host/remote-store` - content-addressed blobs and mutable
 /// feeds on the decentralized store.
 pub trait RemoteStoreHost {
@@ -317,19 +283,11 @@ pub fn reference_from_wire(raw: &[u8]) -> Result<B256, Fault> {
 /// run against `nexum_sdk_test::MockHost` in tests. Blanket-implemented
 /// for any type carrying all six; sealed, so that impl is the only one.
 pub trait Host:
-    sealed::SealedHost
-    + ChainHost
-    + IdentityHost
-    + LocalStoreHost
-    + RemoteStoreHost
-    + MessagingHost
-    + LoggingHost
+    sealed::SealedHost + ChainHost + IdentityHost + LocalStoreHost + RemoteStoreHost + LoggingHost
 {
 }
-impl<T> Host for T where
-    T: ChainHost + IdentityHost + LocalStoreHost + RemoteStoreHost + MessagingHost + LoggingHost
-{
-}
+impl<T> Host for T where T: ChainHost + IdentityHost + LocalStoreHost + RemoteStoreHost + LoggingHost
+{}
 
 #[cfg(test)]
 mod tests {

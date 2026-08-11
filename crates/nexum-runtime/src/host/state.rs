@@ -26,7 +26,6 @@ pub struct HostState<T: RuntimeTypes> {
     pub http_gate: HttpGate,
     /// Content topics this store may publish to; empty is unscoped. An
     /// out-of-scope publish is refused before the backend.
-    pub messaging_topics: Vec<String>,
     /// Identity of this store's run; tags every captured log record.
     pub run: RunId,
     /// Shared log pipeline the `nexum:host/logging` glue routes through.
