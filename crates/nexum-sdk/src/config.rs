@@ -5,10 +5,9 @@
 use alloy_primitives::{I256, U256};
 use thiserror::Error;
 
-/// Why a config lookup or parse failed. Modules wrap it into a
-/// [`Fault::InvalidInput`] at the boundary.
-///
-/// [`Fault::InvalidInput`]: crate::host::Fault::InvalidInput
+use crate::host::Fault;
+
+/// Why a config lookup or parse failed.
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum ConfigError {
@@ -34,6 +33,12 @@ pub enum ConfigError {
         /// Free-text range detail.
         detail: String,
     },
+}
+
+impl From<ConfigError> for Fault {
+    fn from(e: ConfigError) -> Self {
+        Fault::InvalidInput(e.to_string())
+    }
 }
 
 /// Look up a required entry; `Err(MissingKey)` if absent.
@@ -135,6 +140,15 @@ mod tests {
         let cfg = entries(&[("a", "1")]);
         let err = get_required(&cfg, "b").unwrap_err();
         assert!(matches!(err, ConfigError::MissingKey { ref key } if key == "b"));
+    }
+
+    #[test]
+    fn config_error_folds_into_an_invalid_input_fault() {
+        let fault = Fault::from(get_required(&entries(&[]), "threshold").unwrap_err());
+        let Fault::InvalidInput(message) = fault else {
+            panic!("expected invalid-input fault, got {fault:?}");
+        };
+        assert!(message.contains("threshold"));
     }
 
     #[test]

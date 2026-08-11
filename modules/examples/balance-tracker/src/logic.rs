@@ -5,7 +5,7 @@
 //! `nexum_sdk_test::MockHost`.
 
 use nexum_sdk::address::parse_address_list;
-use nexum_sdk::config::{self, ConfigError};
+use nexum_sdk::config;
 use nexum_sdk::host::{ChainHost, Fault, LocalStoreHost};
 use nexum_sdk::prelude::{Address, U256};
 
@@ -111,10 +111,9 @@ fn parse_u256_le(bytes: &[u8]) -> Option<U256> {
 
 /// Parse `module.toml::[config]` into a typed [`Settings`].
 pub fn parse_config(entries: &[(String, String)]) -> Result<Settings, Fault> {
-    let addresses_raw = config::get_required(entries, "addresses").map_err(config_err)?;
-    let change_threshold_raw =
-        config::get_required(entries, "change_threshold").map_err(config_err)?;
-    let addresses = parse_address_list(addresses_raw).map_err(|e| invalid_input(e.to_string()))?;
+    let addresses_raw = config::get_required(entries, "addresses")?;
+    let change_threshold_raw = config::get_required(entries, "change_threshold")?;
+    let addresses = parse_address_list(addresses_raw)?;
     let change_threshold = change_threshold_raw
         .parse::<U256>()
         .map_err(|e| invalid_input(format!("change_threshold: {e}")))?;
@@ -126,10 +125,6 @@ pub fn parse_config(entries: &[(String, String)]) -> Result<Settings, Fault> {
 
 fn invalid_input(message: impl Into<String>) -> Fault {
     Fault::InvalidInput(message.into())
-}
-
-fn config_err(e: ConfigError) -> Fault {
-    invalid_input(e.to_string())
 }
 
 #[cfg(test)]
@@ -223,6 +218,19 @@ mod tests {
             panic!("expected invalid-input fault, got {err:?}");
         };
         assert!(message.contains("change_threshold"));
+    }
+
+    #[test]
+    fn parse_config_rejects_a_malformed_address() {
+        let err = parse_config(&[
+            ("addresses".into(), "0xdeadbeef".into()),
+            ("change_threshold".into(), "1".into()),
+        ])
+        .unwrap_err();
+        let Fault::InvalidInput(message) = err else {
+            panic!("expected invalid-input fault, got {err:?}");
+        };
+        assert!(message.contains("0xdeadbeef"));
     }
 
     fn one_addr_settings(threshold_wei: u128) -> Settings {
