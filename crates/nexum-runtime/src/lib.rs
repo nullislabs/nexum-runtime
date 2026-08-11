@@ -3,7 +3,7 @@
 //!
 //! Settlement-domain-agnostic: no domain symbol or WIT reference, `nexum:host`
 //! stays a leaf WIT package, no crate edge reaches a domain crate. Enforced in
-//! CI by the zero-leak script under `scripts/`.
+//! CI by `scripts/zero-leak.sh`.
 
 #![cfg_attr(not(test), warn(unused_crate_dependencies))]
 

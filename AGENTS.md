@@ -4,7 +4,7 @@
 
 nexum-runtime is a WASM Component Model host runtime for web3 modules, and it supervises guest components built against the `nexum:host` WIT world.
 Each module gets a capability-gated view of the host: chain access over JSON-RPC, an allowlisted `wasi:http` outbound gate, a local key-value store, clocks, and structured logging.
-The host enforces fuel, memory, and epoch limits per module.
+The host enforces fuel and memory limits per module.
 
 The runtime is generic and venue-agnostic: it ships no venue and no domain payload, and `crates/nexum-cli` composes the core lattice and nothing else.
 A downstream layer adds its own capabilities through the extension seam in `crates/nexum-world`.

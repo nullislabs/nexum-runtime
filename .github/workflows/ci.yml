@@ -52,6 +52,10 @@ jobs:
             range="$BASE_SHA..$HEAD_SHA"
           fi
           ./scripts/content-lint.sh "$range"
+      # Reads text and compiles nothing, so it belongs in this toolchain-free
+      # job.
+      - name: Zero leak
+        run: ./scripts/zero-leak.sh
 
   fmt:
     name: rustfmt
