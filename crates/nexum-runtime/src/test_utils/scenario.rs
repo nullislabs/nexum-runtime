@@ -155,6 +155,17 @@ impl<T: RuntimeTypes> BootScenario<T> {
         self
     }
 
+    /// Operator-permitted destinations, as `[limits.http].permit_destinations`.
+    /// A test serving over loopback needs this: the address rules refuse
+    /// loopback by default and a module allowlist cannot widen them.
+    pub fn permit_destinations(
+        mut self,
+        addrs: impl IntoIterator<Item = std::net::IpAddr>,
+    ) -> Self {
+        self.limits.http.permit_destinations = addrs.into_iter().collect();
+        self
+    }
+
     /// Replace the `[chains]` set; defaults to [`test_chain_configs`].
     pub fn chains(mut self, chains: HashMap<Chain, ChainConfig>) -> Self {
         self.chains = chains;

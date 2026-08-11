@@ -180,6 +180,9 @@ async fn e2e_http_probe_allowlisted_fetch_and_denied_path() {
 
     let mut booted = BootScenario::new()
         .wasm(wasm)
+        // The mock server binds loopback, which the address rules refuse by
+        // default. Only the operator can admit it.
+        .permit_destinations([std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST)])
         .module(
             TestManifest::new("http-probe")
                 .cap("logging")
