@@ -300,8 +300,6 @@ pub(super) async fn module<T: RuntimeTypes>(
         http_allowlist: loaded_manifest.http_allowlist.clone(),
         http_limits: limits_cfg.http(),
         http_permitted: limits_cfg.http_permitted_destinations(),
-        // Event modules are unscoped for messaging; only providers carry a topic grant.
-        messaging_topics: Vec::new(),
         memory_limit: memory,
         fuel,
         chain_response_max_bytes: limits_cfg.chain_response_max_bytes(),
@@ -427,7 +425,6 @@ pub(super) async fn provider<T: RuntimeTypes>(
         fuel = limits_cfg.fuel(),
         memory_bytes = limits_cfg.memory(),
         http_allow = entry.http_allow.len(),
-        messaging_topics = entry.messaging_topics.len(),
         "applied provider resource limits and transport scope",
     );
 
@@ -435,7 +432,6 @@ pub(super) async fn provider<T: RuntimeTypes>(
         http_allowlist: entry.http_allow.clone(),
         http_limits: limits_cfg.http(),
         http_permitted: limits_cfg.http_permitted_destinations(),
-        messaging_topics: entry.messaging_topics.clone(),
         memory_limit: limits_cfg.memory(),
         fuel: limits_cfg.fuel(),
         chain_response_max_bytes: limits_cfg.chain_response_max_bytes(),

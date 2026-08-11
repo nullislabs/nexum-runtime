@@ -95,7 +95,6 @@ pub(super) struct StoreSpec {
     pub(super) http_limits: OutboundHttpLimits,
     /// Operator-permitted addresses that would otherwise be refused.
     pub(super) http_permitted: Vec<std::net::IpAddr>,
-    pub(super) messaging_topics: Vec<String>,
     pub(super) memory_limit: usize,
     pub(super) fuel: u64,
     pub(super) chain_response_max_bytes: usize,
@@ -171,7 +170,6 @@ fn build<T: RuntimeTypes>(
                 spec.http_limits,
                 spec.http_permitted.clone(),
             ),
-            messaging_topics: spec.messaging_topics.clone(),
             run,
             log_router: router,
             chain: shared.components.chain.clone(),

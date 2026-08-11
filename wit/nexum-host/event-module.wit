@@ -10,7 +10,6 @@ world event-module {
     import identity;
     import local-store;
     import remote-store;
-    import messaging;
     import logging;
 
     // Time, randomness, and outbound HTTP are WASI concerns, not

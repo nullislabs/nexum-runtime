@@ -12,20 +12,13 @@ use syn::{ImplItem, ItemImpl};
 /// The handler names recognised on a `#[module]` impl. An `on_`-prefixed
 /// method outside this set is a compile error; an absent handler
 /// dispatches as a no-op.
-const HANDLERS: [&str; 6] = [
-    "init",
-    "on_block",
-    "on_chain_logs",
-    "on_tick",
-    "on_message",
-    "on_custom",
-];
+const HANDLERS: [&str; 5] = ["init", "on_block", "on_chain_logs", "on_tick", "on_custom"];
 
 /// Generate the per-cdylib glue for a nexum module.
 ///
 /// Apply to an `impl` block whose associated functions are the event
 /// handlers (`init`, `on_block`, `on_chain_logs`, `on_tick`,
-/// `on_message`, `on_custom`); each takes its event's wit-bindgen
+/// `on_custom`); each takes its event's wit-bindgen
 /// payload and returns `Result<(), Fault>`, and `init` takes the config
 /// table. Undefined handlers dispatch as no-ops. Emits
 /// `wit_bindgen::generate!`, the host adapter, the `Guest` impl, and
@@ -111,7 +104,7 @@ pub fn module(attr: TokenStream, item: TokenStream) -> TokenStream {
         return syn::Error::new_spanned(
             self_ty,
             "#[nexum_sdk::module] found no recognised handlers on this impl; define at least one \
-             of `init`, `on_block`, `on_chain_logs`, `on_tick`, `on_message`, `on_custom`",
+             of `init`, `on_block`, `on_chain_logs`, `on_tick`, `on_custom`",
         )
         .to_compile_error()
         .into();
@@ -193,7 +186,6 @@ pub fn module(attr: TokenStream, item: TokenStream) -> TokenStream {
     let block_arm = arm("on_block", "Block");
     let logs_arm = arm("on_chain_logs", "ChainLogs");
     let tick_arm = arm("on_tick", "Tick");
-    let message_arm = arm("on_message", "Message");
     let custom_arm = arm("on_custom", "Custom");
 
     let anchors = rebuild_anchors(&anchors);
@@ -224,7 +216,6 @@ pub fn module(attr: TokenStream, item: TokenStream) -> TokenStream {
                     #block_arm
                     #logs_arm
                     #tick_arm
-                    #message_arm
                     #custom_arm
                 }
             }

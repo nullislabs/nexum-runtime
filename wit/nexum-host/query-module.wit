@@ -8,7 +8,7 @@ package nexum:host@0.1.0;
 ///
 /// A query module exposes a single pure `evaluate` entry point. It is given
 /// read-only access to the local store (for cached/derived state) and to
-/// logging; everything else (chain access, network, messaging, signing) is
+/// logging; everything else (chain access, network, signing) is
 /// deliberately excluded so the host can run queries inside a tight
 /// deterministic sandbox.
 world query-module {

@@ -29,8 +29,6 @@ pub enum Cap {
     LocalStore,
     /// `nexum:host/remote-store`.
     RemoteStore,
-    /// `nexum:host/messaging`.
-    Messaging,
     /// `nexum:host/logging`.
     Logging,
     /// Gates `wasi:http/*`; no world import.
@@ -199,12 +197,6 @@ pub const CORE: &[Capability] = &[
         import: Some("nexum:host/remote-store@0.1.0"),
         packages: &[],
         adapter: Some("remote_store"),
-    },
-    Capability {
-        name: Cap::Messaging,
-        import: Some("nexum:host/messaging@0.1.0"),
-        packages: &[],
-        adapter: Some("messaging"),
     },
     Capability {
         name: Cap::Logging,
@@ -680,7 +672,6 @@ mod tests {
                 Cap::Identity.as_str(),
                 Cap::LocalStore.as_str(),
                 Cap::RemoteStore.as_str(),
-                Cap::Messaging.as_str(),
                 Cap::Logging.as_str(),
             ],
         );
@@ -755,7 +746,6 @@ mod tests {
                 "identity",
                 "local_store",
                 "remote_store",
-                "messaging",
                 "logging",
             ],
         );
@@ -782,8 +772,16 @@ mod tests {
         assert_eq!(
             err,
             "unknown capability `telepathy` in module.toml [capabilities]; expected one of: \
-             chain, identity, local-store, remote-store, messaging, logging, http, acme"
+             chain, identity, local-store, remote-store, logging, http, acme"
         );
+    }
+
+    #[test]
+    fn messaging_is_no_longer_a_capability() {
+        // The seam is out of v1. A component still declaring it is refused
+        // as unknown rather than granted a stub that cannot work.
+        let err = synthesize(&["messaging".to_string()], &ext()).unwrap_err();
+        assert!(err.starts_with("unknown capability `messaging`"), "{err}");
     }
 
     #[test]

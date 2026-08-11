@@ -166,9 +166,8 @@ pub struct ModuleEntry {
 }
 
 /// One `[[adapters]]` table. `path`/`manifest` mirror [`ModuleEntry`].
-/// `http_allow` and `messaging_topics` are the operator's transport
-/// grant: an empty `http_allow` denies all outbound HTTP, an empty
-/// `messaging_topics` leaves messaging unscoped.
+/// `http_allow` is the operator's transport grant: an empty list denies all
+/// outbound HTTP.
 #[derive(Debug, Deserialize)]
 pub struct AdapterEntry {
     /// Path to the compiled `.wasm` adapter component.
@@ -179,9 +178,6 @@ pub struct AdapterEntry {
     /// Outbound HTTP host allowlist: exact hostname or `*.suffix` wildcard.
     #[serde(default)]
     pub http_allow: Vec<String>,
-    /// Messaging content topics this adapter may reach.
-    #[serde(default)]
-    pub messaging_topics: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1123,7 +1119,6 @@ window_secs  = 0
 [[adapters]]
 path = "providers/acme/acme_provider.wasm"
 http_allow = ["api.acme.example", "*.acme.example"]
-messaging_topics = ["/nexum/1/acme-orders/proto"]
 
 [[adapters]]
 path = "adapters/bare/bare.wasm"
@@ -1139,14 +1134,13 @@ manifest = "adapters/bare/module.toml"
         );
         assert!(first.manifest.is_none(), "manifest defaults to sibling");
         assert_eq!(first.http_allow, vec!["api.acme.example", "*.acme.example"]);
-        assert_eq!(first.messaging_topics, vec!["/nexum/1/acme-orders/proto"]);
         let second = &cfg.adapters[1];
         assert_eq!(
             second.manifest.as_deref(),
             Some(Path::new("adapters/bare/module.toml"))
         );
         assert!(
-            second.http_allow.is_empty() && second.messaging_topics.is_empty(),
+            second.http_allow.is_empty(),
             "unset scope grants default empty",
         );
     }

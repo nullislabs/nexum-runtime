@@ -25,7 +25,6 @@ pub struct Entry {
     wasm: Option<PathBuf>,
     manifest: ManifestSource,
     http_allow: Vec<String>,
-    messaging_topics: Vec<String>,
 }
 
 impl Entry {
@@ -35,7 +34,6 @@ impl Entry {
             wasm: None,
             manifest: manifest.into(),
             http_allow: Vec::new(),
-            messaging_topics: Vec::new(),
         }
     }
 
@@ -48,13 +46,6 @@ impl Entry {
     /// Operator HTTP grant; only an `[[adapters]]` entry carries one.
     pub fn http_allow(mut self, hosts: impl IntoIterator<Item = impl Into<String>>) -> Self {
         self.http_allow.extend(hosts.into_iter().map(Into::into));
-        self
-    }
-
-    /// Operator messaging grant; only an `[[adapters]]` entry carries one.
-    pub fn messaging_topics(mut self, topics: impl IntoIterator<Item = impl Into<String>>) -> Self {
-        self.messaging_topics
-            .extend(topics.into_iter().map(Into::into));
         self
     }
 }
@@ -238,7 +229,6 @@ impl<T: RuntimeTypes> BootScenario<T> {
                 entry.wasm.unwrap_or_else(|| default_wasm.clone()),
                 entry.manifest.resolve(&at),
                 entry.http_allow,
-                entry.messaging_topics,
             )
         };
 
@@ -255,12 +245,11 @@ impl<T: RuntimeTypes> BootScenario<T> {
             config.modules.push(ModuleEntry { path, manifest });
         }
         for (i, entry) in self.adapters.into_iter().enumerate() {
-            let (path, manifest, http_allow, messaging_topics) = resolve("adapter", i, entry);
+            let (path, manifest, http_allow) = resolve("adapter", i, entry);
             config.adapters.push(AdapterEntry {
                 path,
                 manifest,
                 http_allow,
-                messaging_topics,
             });
         }
         (
@@ -654,8 +643,7 @@ mod tests {
             .module(Entry::new(TestManifest::new("b").cap("logging")).wasm("other.wasm"))
             .adapter(
                 Entry::new(TestManifest::new("feed").kind("acme-feed"))
-                    .http_allow(["api.acme.example"])
-                    .messaging_topics(["/nexum/1/acme-orders/proto"]),
+                    .http_allow(["api.acme.example"]),
             );
         // Holding _launch keeps the manifest tempdir alive for the asserts.
         let (config, _launch) = scenario.split();
@@ -681,10 +669,6 @@ mod tests {
         );
         assert_eq!(config.adapters.len(), 1);
         assert_eq!(config.adapters[0].http_allow, ["api.acme.example"]);
-        assert_eq!(
-            config.adapters[0].messaging_topics,
-            ["/nexum/1/acme-orders/proto"],
-        );
         for manifest in config
             .modules
             .iter()

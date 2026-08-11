@@ -90,8 +90,7 @@ async fn boot_admits_a_registered_provider_kind_past_the_kind_gate() {
         .adapter(
             Entry::new(TestManifest::new("acme").kind("acme-adapter").cap("chain"))
                 .wasm(missing)
-                .http_allow(["api.acme.example"])
-                .messaging_topics(["/nexum/1/acme-orders/proto"]),
+                .http_allow(["api.acme.example"]),
         )
         .expect_refusal()
         .await
