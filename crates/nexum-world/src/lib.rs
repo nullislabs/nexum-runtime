@@ -440,9 +440,9 @@ pub fn find_extensions_manifest(start: &Path) -> Option<PathBuf> {
     None
 }
 
-/// The per-module world from the declared capability names (required
-/// and optional alike; optional imports still resolve, the host stubs
-/// them at load time). `extensions` rows emit after the core rows. An
+/// The per-module world from the declared capability names. A request is
+/// granted whole or the module refuses at boot, so every emitted import is
+/// one the module holds. `extensions` rows emit after the core rows. An
 /// unknown name is an error; an extension name that shadows a core row
 /// or another registration is an error.
 pub fn synthesize(declared: &[String], extensions: &[ExtensionRow]) -> Result<ModuleWorld, String> {
