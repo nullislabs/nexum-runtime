@@ -1,23 +1,18 @@
 # http-probe example module: on every matching block it fetches an
 # allowlisted URL over wasi:http and logs the status, then fetches an
 # off-list URL and verifies the host denies it before any connection.
-# Demonstrates `nexum_sdk::http::fetch` + `[capabilities.http].allow`.
+# Demonstrates `nexum_sdk::http::fetch` plus the http dependency hosts.
 
-[module]
+[component]
 name = "http-probe"
 version = "0.1.0"
 
-[capabilities]
-required = ["logging", "http"]
+[dependencies]
+logging = {}
+# Hosts this component may reach. Any other host is denied
+# before a connection is made.
+http = { hosts = ["api.cow.fi"] }
 
-[capabilities.http]
-# Hosts this module may fetch from. Any other host is denied with the
-# wasi:http HTTP-request-denied error code before a connection is made.
-allow = ["api.cow.fi"]
-
-# --- subscriptions ----------------------------------------------------
-
-# New blocks on Sepolia drive the probing cadence.
 [[subscription]]
 kind = "block"
 chain_id = 11155111

@@ -4,17 +4,14 @@
 # (non-eth_call), per-key `local-store` state, and "diff-against-last-
 # seen" patterns reusable across indexer modules.
 
-[module]
+[component]
 name = "balance-tracker"
 version = "0.1.0"
 
-[capabilities]
-required = ["logging", "chain", "local-store"]
-
-[capabilities.http]
-allow = []
-
-# --- subscriptions ----------------------------------------------------
+[dependencies]
+logging = {}
+chain = {}
+local-store = {}
 
 [[subscription]]
 kind = "block"

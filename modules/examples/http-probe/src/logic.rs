@@ -88,7 +88,7 @@ fn internal(message: String) -> Fault {
     Fault::Internal(message)
 }
 
-/// Parse `module.toml::[config]` into a typed [`Settings`].
+/// Parse `component.toml::[config]` into a typed [`Settings`].
 pub fn parse_config(entries: &[(String, String)]) -> Result<Settings, Fault> {
     let probe_url = config::get_required(entries, "probe_url")?;
     let denied_url = config::get_required(entries, "denied_url")?;

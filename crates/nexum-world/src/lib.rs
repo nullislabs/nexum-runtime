@@ -1,6 +1,6 @@
-//! Per-module world synthesis: turn a manifest's `[capabilities]`
-//! declarations into an inline WIT world whose imports are exactly the
-//! declared capability interfaces.
+//! Per-component world synthesis: turn a manifest's `[dependencies]`
+//! into an inline WIT world whose imports are exactly the declared
+//! capability interfaces.
 //!
 //! Invariant: the capability rows must agree with the runtime's
 //! capability registry on both names and WIT interfaces, since the
@@ -158,7 +158,7 @@ impl ChainMethod {
 
 /// One manifest capability and its world wiring.
 pub struct Capability {
-    /// The name declared under `[capabilities].required`.
+    /// The name declared as a `[dependencies]` key.
     pub name: Cap,
     /// The WIT import the declaration turns into; `None` for a
     /// capability with no world import (`http`).
@@ -246,7 +246,7 @@ pub const CORE_IFACES: [&str; core_iface_count()] = {
 /// never an adapter ident (adapter seams are core-only).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExtensionRow {
-    /// The name modules declare under `[capabilities]`.
+    /// The name a component declares as a `[dependencies]` key.
     pub name: String,
     /// The WIT import the declaration turns into.
     pub import: String,
@@ -268,72 +268,69 @@ pub struct ModuleWorld {
     pub adapters: Vec<&'static str>,
 }
 
-/// The declared capability names from `[capabilities].required` in the
-/// manifest text. A missing or malformed `[capabilities]` section is an
+/// The declared dependency names from `[dependencies]` in the manifest
+/// text. A missing or malformed `[dependencies]` table is an
 /// error.
 pub fn manifest_capabilities(text: &str) -> Result<Vec<String>, String> {
     let value: toml::Table = text
         .parse()
-        .map_err(|e| format!("module.toml is not valid TOML: {e}"))?;
-    let caps = value.get("capabilities").ok_or_else(|| {
-        "module.toml has no [capabilities] section; the module/adapter macro derives the \
-         component's WIT world from [capabilities].required, so declare it (an empty \
-         `required = []` is valid)"
-            .to_string()
-    })?;
-    let list = |key: &str| -> Result<Vec<String>, String> {
-        match caps.get(key) {
-            None => Ok(Vec::new()),
-            Some(v) => v
-                .as_array()
-                .ok_or_else(|| format!("[capabilities].{key} must be an array of strings"))?
-                .iter()
-                .map(|item| {
-                    item.as_str()
-                        .map(str::to_owned)
-                        .ok_or_else(|| format!("[capabilities].{key} must contain only strings"))
-                })
-                .collect(),
-        }
-    };
-    if caps.get("optional").is_some() {
+        .map_err(|e| format!("component.toml is not valid TOML: {e}"))?;
+    if value.get("capabilities").is_some() {
         return Err(
-            "[capabilities].optional is removed: a capability request is granted whole \
-                    or the component refuses at boot, so move the names to \
-                    [capabilities].required or delete them"
+            "[capabilities] is replaced by [dependencies]: each key names a host \
+                    capability or a service, and its table carries that dependency's \
+                    attributes (the http allowlist is now `http = {{ hosts = [...] }}`)"
                 .to_string(),
         );
     }
-    list("required")
+    let deps = value.get("dependencies").ok_or_else(|| {
+        "component.toml has no [dependencies] table; the macro derives the component's \
+         WIT world from it, so declare it (an empty table is valid)"
+            .to_string()
+    })?;
+    let table = deps
+        .as_table()
+        .ok_or_else(|| "[dependencies] must be a table".to_string())?;
+    for (name, spec) in table {
+        if !spec.is_table() {
+            return Err(format!(
+                "[dependencies].{name} must be a table; an empty one is `{name} = {{}}`"
+            ));
+        }
+    }
+    Ok(table.keys().cloned().collect())
 }
 
-/// The declared `[module] name` from the manifest text, the id the
-/// module registers under. Absent or non-string is an error.
+/// The declared `[component] name` from the manifest text. A service
+/// registers under it, so it is also what a dependant writes.
 pub fn manifest_name(text: &str) -> Result<String, String> {
     let value: toml::Table = text
         .parse()
-        .map_err(|e| format!("module.toml is not valid TOML: {e}"))?;
+        .map_err(|e| format!("component.toml is not valid TOML: {e}"))?;
     value
-        .get("module")
-        .and_then(|module| module.get("name"))
-        .ok_or_else(|| "[module].name is missing".to_string())?
+        .get("component")
+        .and_then(|component| component.get("name"))
+        .ok_or_else(|| "[component].name is missing".to_string())?
         .as_str()
         .map(str::to_owned)
-        .ok_or_else(|| "[module].name must be a string".to_string())
+        .ok_or_else(|| "[component].name must be a string".to_string())
 }
 
-/// The declared `[module] kind` from the manifest text; `None` when
-/// absent (the runtime defaults it to the worker).
+/// The declared `[component] kind` from the manifest text; `None` when
+/// absent (the runtime defaults it to a module).
 pub fn manifest_kind(text: &str) -> Result<Option<String>, String> {
     let value: toml::Table = text
         .parse()
-        .map_err(|e| format!("module.toml is not valid TOML: {e}"))?;
-    match value.get("module").and_then(|module| module.get("kind")) {
+        .map_err(|e| format!("component.toml is not valid TOML: {e}"))?;
+    match value
+        .get("component")
+        .and_then(|component| component.get("kind"))
+    {
         None => Ok(None),
         Some(kind) => kind
             .as_str()
             .map(|kind| Some(kind.to_owned()))
-            .ok_or_else(|| "[module].kind must be a string".to_string()),
+            .ok_or_else(|| "[component].kind must be a string".to_string()),
     }
 }
 
@@ -342,7 +339,7 @@ pub fn manifest_kind(text: &str) -> Result<Option<String>, String> {
 pub fn manifest_chain_log_topics(text: &str) -> Result<Vec<B256>, String> {
     let value: toml::Table = text
         .parse()
-        .map_err(|e| format!("module.toml is not valid TOML: {e}"))?;
+        .map_err(|e| format!("component.toml is not valid TOML: {e}"))?;
     let Some(subscriptions) = value.get("subscription") else {
         return Ok(Vec::new());
     };
@@ -469,7 +466,7 @@ pub fn synthesize(declared: &[String], extensions: &[ExtensionRow]) -> Result<Mo
                     .collect::<Vec<_>>()
                     .join(", ");
                 return Err(format!(
-                    "unknown capability `{name}` in module.toml [capabilities]; expected one of: \
+                    "unknown dependency `{name}` in component.toml [dependencies]; expected one of: \
                      {names}"
                 ));
             }
@@ -771,7 +768,7 @@ mod tests {
         // Operator-facing wording and order, pinned verbatim.
         assert_eq!(
             err,
-            "unknown capability `telepathy` in module.toml [capabilities]; expected one of: \
+            "unknown dependency `telepathy` in component.toml [dependencies]; expected one of: \
              chain, identity, local-store, remote-store, logging, http, acme"
         );
     }
@@ -781,7 +778,7 @@ mod tests {
         // The seam is out of v1. A component still declaring it is refused
         // as unknown rather than granted a stub that cannot work.
         let err = synthesize(&["messaging".to_string()], &ext()).unwrap_err();
-        assert!(err.starts_with("unknown capability `messaging`"), "{err}");
+        assert!(err.starts_with("unknown dependency `messaging`"), "{err}");
     }
 
     #[test]
@@ -829,51 +826,69 @@ import = "beta:ext/api@0.1.0"
     }
 
     #[test]
-    fn manifest_capabilities_reads_required() {
+    fn manifest_capabilities_reads_the_dependency_keys() {
         let caps = manifest_capabilities(
             r#"
-[capabilities]
-required = ["logging", "chain"]
+[component]
+name = "probe"
 
-[capabilities.http]
-allow = []
+[dependencies]
+logging = {}
+http = { hosts = ["api.acme.example"] }
 "#,
         )
         .unwrap();
-        assert_eq!(caps, vec!["logging", "chain"]);
+        // Keys come back sorted, since the table is a map and not a list.
+        assert_eq!(caps, vec!["http", "logging"]);
     }
 
     #[test]
-    fn manifest_capabilities_refuses_the_removed_optional_key() {
-        // The macro runs at build time, so an author who kept the key gets a
-        // compile error rather than a boot refusal.
+    fn manifest_capabilities_refuses_the_replaced_capabilities_section() {
+        // The macro runs at build time, so an author on the old shape gets a
+        // compile error naming the replacement rather than a boot refusal.
         let err = manifest_capabilities(
             r#"
 [capabilities]
 required = ["logging"]
-optional = ["remote-store"]
 "#,
         )
-        .expect_err("the removed key must refuse");
-        assert!(err.contains("[capabilities].optional is removed"), "{err}");
+        .expect_err("the replaced section must refuse");
+        assert!(
+            err.contains("[capabilities] is replaced by [dependencies]"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn manifest_capabilities_refuses_a_bare_dependency_name() {
+        // A list would lose the attribute table, so a non-table value is an
+        // error naming the empty-table spelling.
+        let err = manifest_capabilities(
+            r#"
+[dependencies]
+logging = "yes"
+"#,
+        )
+        .expect_err("a non-table dependency must refuse");
+        assert!(err.contains("must be a table"), "{err}");
     }
 
     #[test]
     fn manifest_kind_reads_the_module_kind() {
-        let kind = manifest_kind("[module]\nname = \"x\"\nkind = \"venue-adapter\"\n").unwrap();
+        let kind = manifest_kind("[component]\nname = \"x\"\nkind = \"venue-adapter\"\n").unwrap();
         assert_eq!(kind.as_deref(), Some("venue-adapter"));
     }
 
     #[test]
     fn manifest_without_a_kind_is_none() {
-        assert_eq!(manifest_kind("[module]\nname = \"x\"\n").unwrap(), None);
+        assert_eq!(manifest_kind("[component]\nname = \"x\"\n").unwrap(), None);
         assert_eq!(manifest_kind("").unwrap(), None);
     }
 
     #[test]
     fn manifest_with_a_non_string_kind_is_an_error() {
-        let err = manifest_kind("[module]\nkind = 3\n").unwrap_err();
-        assert!(err.contains("[module].kind must be a string"));
+        let err = manifest_kind("[component]\nkind = 3\n").unwrap_err();
+        assert!(err.contains("[component].kind must be a string"));
     }
 
     /// Pinned manifest grammar; the runtime's serde renames derive from it.
@@ -950,15 +965,9 @@ event_signature = "not-hex-but-not-ours"
     }
 
     #[test]
-    fn manifest_without_capabilities_section_is_an_error() {
-        let err = manifest_capabilities("[module]\nname = \"x\"\n").unwrap_err();
-        assert!(err.contains("[capabilities]"));
-    }
-
-    #[test]
-    fn manifest_with_non_string_capability_is_an_error() {
-        let err = manifest_capabilities("[capabilities]\nrequired = [1]\n").unwrap_err();
-        assert!(err.contains("only strings"));
+    fn manifest_without_a_dependency_table_is_an_error() {
+        let err = manifest_capabilities("[component]\nname = \"x\"\n").unwrap_err();
+        assert!(err.contains("[dependencies]"), "{err}");
     }
 
     #[test]

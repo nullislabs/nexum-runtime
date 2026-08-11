@@ -2,7 +2,7 @@
 //!
 //! `fetch` performs one synchronous request through the host's
 //! wasi:http outgoing handler. The host admits or denies each request
-//! against `[capabilities.http].allow` before connecting; a denial
+//! against the http dependency's `hosts` before connecting; a denial
 //! surfaces as [`FetchError::Denied`], distinct from a transport
 //! failure. Requests and responses are the [`http`] crate's
 //! `Request<Vec<u8>>` / `Response<Vec<u8>>`. The [`Fetch`] seam,
@@ -44,7 +44,7 @@ impl Default for FetchOptions {
 #[strum(serialize_all = "snake_case")]
 #[non_exhaustive]
 pub enum FetchError {
-    /// The `[capabilities.http].allow` list refused the request before
+    /// The http dependency's `hosts` list refused the request before
     /// any connection was made.
     #[error("denied by the module's http allowlist")]
     Denied,

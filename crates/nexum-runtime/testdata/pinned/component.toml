@@ -1,0 +1,7 @@
+# `digest` pins the sibling component.wat; re-pin with `sha256sum` after edits.
+
+[component]
+name = "pinned-wat"
+digest = "sha256:9e16f4d6bae777d6aa817a4ee1ad0d3ebf6fa1e757acabe432e989ec0f1b7a1e"
+
+[dependencies]

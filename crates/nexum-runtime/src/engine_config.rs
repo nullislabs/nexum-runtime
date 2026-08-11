@@ -1,6 +1,6 @@
 //! Engine-side runtime configuration (`engine.toml`): chain RPC
 //! endpoints, local-store location, and per-module resource limits.
-//! Distinct from a module's `module.toml` manifest.
+//! Distinct from a module's `component.toml` manifest.
 //!
 //! Load order: `--engine-config` path, else `engine.toml` in the cwd,
 //! else defaults (no chains, `state_dir = ./data`).
@@ -142,7 +142,7 @@ pub struct EngineConfig {
     #[serde(default)]
     pub extensions: HashMap<String, toml::Value>,
     /// Modules the supervisor boots; each resolves a
-    /// `(component.wasm, module.toml)` pair.
+    /// `(component.wasm, component.toml)` pair.
     #[serde(default)]
     pub modules: Vec<ModuleEntry>,
     /// Provider components the supervisor boots alongside modules. Like a
@@ -155,12 +155,12 @@ pub struct EngineConfig {
 }
 
 /// One `[[modules]]` table. `manifest` defaults to a sibling
-/// `module.toml`.
+/// `component.toml`.
 #[derive(Debug, Deserialize)]
 pub struct ModuleEntry {
     /// Path to the compiled `.wasm` component.
     pub path: std::path::PathBuf,
-    /// Path to the module's `module.toml`. Defaults to `<path-parent>/module.toml`.
+    /// Path to the module's `component.toml`. Defaults to `<path-parent>/component.toml`.
     #[serde(default)]
     pub manifest: Option<std::path::PathBuf>,
 }
@@ -172,7 +172,7 @@ pub struct ModuleEntry {
 pub struct AdapterEntry {
     /// Path to the compiled `.wasm` adapter component.
     pub path: std::path::PathBuf,
-    /// Path to the adapter's `module.toml`. Defaults to `<path-parent>/module.toml`.
+    /// Path to the adapter's `component.toml`. Defaults to `<path-parent>/component.toml`.
     #[serde(default)]
     pub manifest: Option<std::path::PathBuf>,
     /// Outbound HTTP host allowlist: exact hostname or `*.suffix` wildcard.
@@ -196,7 +196,7 @@ pub struct EngineSection {
     /// treated as `1`.
     #[serde(default = "default_log_backfill_concurrency")]
     pub log_backfill_concurrency: usize,
-    /// Refuse to boot any component without a `[module].component` pin; a
+    /// Refuse to boot any component without a `[component].digest` pin; a
     /// present pin is verified regardless.
     #[serde(default)]
     pub require_component_digest: bool,
@@ -1122,7 +1122,7 @@ http_allow = ["api.acme.example", "*.acme.example"]
 
 [[adapters]]
 path = "adapters/bare/bare.wasm"
-manifest = "adapters/bare/module.toml"
+manifest = "adapters/bare/component.toml"
 "#,
         )
         .expect("adapters parse");
@@ -1137,7 +1137,7 @@ manifest = "adapters/bare/module.toml"
         let second = &cfg.adapters[1];
         assert_eq!(
             second.manifest.as_deref(),
-            Some(Path::new("adapters/bare/module.toml"))
+            Some(Path::new("adapters/bare/component.toml"))
         );
         assert!(
             second.http_allow.is_empty(),

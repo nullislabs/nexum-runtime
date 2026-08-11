@@ -8,15 +8,13 @@
 # reinstantiates it on a fresh store, which fuel and epoch metering cannot
 # do because neither sees time spent in native host code.
 
-[module]
+[component]
 name = "slow-host"
 version = "0.1.0"
 
-[capabilities]
-required = ["logging", "chain"]
-
-[capabilities.http]
-allow = []
+[dependencies]
+logging = {}
+chain = {}
 
 [[subscription]]
 kind = "block"

@@ -1,9 +1,9 @@
-//! `module.toml` parser and capability enforcement.
+//! `component.toml` parser and capability enforcement.
 //!
 //! `load` parses and validates a manifest; `capabilities` cross-checks a
-//! component's WIT imports against its declared `[capabilities]`; `types`
+//! component's WIT imports against its declared `[dependencies]`; `types`
 //! holds the serde shapes and `LoadedManifest`; `error` the error types.
-//! A manifest with no `[capabilities]` section is refused at load.
+//! A manifest with no `[dependencies]` table is refused at load.
 
 mod capabilities;
 mod error;

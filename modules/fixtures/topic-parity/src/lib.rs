@@ -1,7 +1,7 @@
 //! # topic-parity (build fixture)
 //!
 //! Compile-only: `subscribes(...)` names the events below, so the macro
-//! emits the const parity check against `module.toml`. A drift on either
+//! emits the const parity check against `component.toml`. A drift on either
 //! side fails this crate's build.
 
 #![cfg_attr(not(test), warn(unused_crate_dependencies))]

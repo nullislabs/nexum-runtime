@@ -13,29 +13,37 @@ pub enum ParseError {
     /// Manifest file was not valid TOML.
     #[error("manifest: parse: {0}")]
     Toml(#[from] toml::de::Error),
-    /// A declared capability the engine does not recognise.
-    #[error("manifest: unknown capability {name:?} in [capabilities] (known: {known})")]
+    /// A dependency the engine does not recognise as a host capability
+    /// or a registered service.
+    #[error("manifest: unknown dependency {name:?} in [dependencies] (known: {known})")]
     UnknownCapability {
         /// The unrecognised name.
         name: String,
         /// Comma-joined recognised capability names.
         known: String,
     },
-    /// `[module].name` contains `/`, `\`, or `..`, so it could escape the
-    /// state directory.
-    #[error("manifest: [module].name {0:?} must not contain '/', '\\', or '..'")]
+    /// `[component].name` contains `/`, `\`, or `..`, so it could escape
+    /// the state directory.
+    #[error("manifest: [component].name {0:?} must not contain '/', '\\', or '..'")]
     InvalidModuleName(String),
-    /// `[module].name` is missing, empty, or whitespace-only.
-    #[error("manifest: [module].name is missing or blank; declare a non-empty name")]
+    /// `[component].name` is missing, empty, or whitespace-only.
+    #[error("manifest: [component].name is missing or blank; declare a non-empty name")]
     BlankModuleName,
-    /// No `[capabilities]` section; every manifest must declare one.
+    /// No `[dependencies]` section; every manifest must declare one.
     #[error(
-        "manifest: no [capabilities] section; capabilities are deny-by-default - \
-         declare an explicit [capabilities] block (an empty `required = []` \
-         grants nothing)"
+        "manifest: no [dependencies] section; dependencies are deny-by-default - \
+         declare an explicit [dependencies] table (an empty one grants nothing)"
     )]
     MissingCapabilities,
-    #[error("manifest: [module].component {value:?} is not a valid digest: {source}")]
+    /// An attribute placed on a dependency that does not take it.
+    #[error("manifest: [dependencies].{dependency} does not take `{attribute}`")]
+    MisplacedDependencyAttribute {
+        /// The dependency carrying the attribute.
+        dependency: String,
+        /// The attribute name.
+        attribute: &'static str,
+    },
+    #[error("manifest: [component].digest {value:?} is not a valid digest: {source}")]
     InvalidComponentDigest {
         value: String,
         #[source]
@@ -47,7 +55,7 @@ pub enum ParseError {
 #[derive(Debug, Error)]
 #[error(
     "component imports `{capability}` ({wit_import}) but it is not listed in \
-     [capabilities].required"
+     [dependencies]"
 )]
 pub struct CapabilityViolation {
     /// Capability name.
@@ -61,7 +69,7 @@ pub struct CapabilityViolation {
 #[strum(serialize_all = "snake_case")]
 #[non_exhaustive]
 pub enum CapabilityError {
-    /// A gated import was not declared in `[capabilities]`.
+    /// A gated import was not declared in `[dependencies]`.
     #[error(transparent)]
     Undeclared(#[from] CapabilityViolation),
     /// An unrecognised `wasi:` interface was imported; refused fail-closed.

@@ -3,15 +3,13 @@
 # Drives the supervisor's exponential-backoff restart policy through
 # its full lifecycle.
 
-[module]
+[component]
 name = "flaky-bomb"
 version = "0.1.0"
 
-[capabilities]
-required = ["logging", "local-store"]
-
-[capabilities.http]
-allow = []
+[dependencies]
+logging = {}
+local-store = {}
 
 [[subscription]]
 kind = "block"

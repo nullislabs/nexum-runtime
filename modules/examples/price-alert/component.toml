@@ -3,21 +3,14 @@
 # threshold. Demonstrates `chain::request` + ABI decode via
 # `alloy_sol_types` + config-driven module behaviour.
 
-[module]
+[component]
 name = "price-alert"
 version = "0.1.0"
 
-[capabilities]
-required = ["logging", "chain"]
+[dependencies]
+logging = {}
+chain = {}
 
-[capabilities.http]
-# All chain traffic flows through the `chain` capability (host's
-# pinned alloy provider). No direct `http` calls.
-allow = []
-
-# --- subscriptions ----------------------------------------------------
-
-# New blocks on Sepolia drive the polling cadence.
 [[subscription]]
 kind = "block"
 chain_id = 11155111

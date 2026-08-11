@@ -3,15 +3,12 @@
 # event_signature values below are the topic-0 of the two `sol!` events in
 # src/lib.rs; edit either side alone and the build refuses.
 
-[module]
+[component]
 name = "topic-parity"
 version = "0.1.0"
 
-[capabilities]
-required = ["logging"]
-
-[capabilities.http]
-allow = []
+[dependencies]
+logging = {}
 
 [[subscription]]
 kind = "chain-log"

@@ -25,7 +25,7 @@ pub struct Cli {
     /// a one-module engine config when no `--engine-config` is given.
     pub wasm: Option<PathBuf>,
 
-    /// Optional manifest path; defaults to a mandatory `module.toml`
+    /// Optional manifest path; defaults to a mandatory `component.toml`
     /// sibling of the wasm.
     pub manifest: Option<PathBuf>,
 

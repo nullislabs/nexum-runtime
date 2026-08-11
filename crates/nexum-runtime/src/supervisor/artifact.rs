@@ -45,7 +45,7 @@ pub(super) fn read_verified_component(
         None => warn!(
             component = %path.display(),
             digest = %actual,
-            "no [module].component digest - loading unverified",
+            "no [component].digest digest - loading unverified",
         ),
     }
     let component = CodeBuilder::new(engine)
