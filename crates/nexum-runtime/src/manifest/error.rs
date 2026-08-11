@@ -53,7 +53,6 @@ pub enum ParseError {
     },
 }
 
-/// Reports a refused `[component].name` in the manifest vocabulary.
 impl From<InvalidModuleName> for ParseError {
     fn from(err: InvalidModuleName) -> Self {
         match err {

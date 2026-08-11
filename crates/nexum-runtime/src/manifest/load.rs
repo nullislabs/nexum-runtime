@@ -16,8 +16,7 @@ pub fn load(path: &Path, registry: &CapabilityRegistry) -> Result<LoadedManifest
     let raw = std::fs::read_to_string(path)?;
     let manifest: Manifest = toml::from_str(&raw)?;
 
-    // The one producer of a `ModuleId`: the name reaches the filesystem as a
-    // state-directory namespace, so it is parsed, never validated in passing.
+    // The only producer of a `ModuleId`.
     let name = ModuleId::parse(&manifest.component.name)?;
 
     let component_digest = manifest

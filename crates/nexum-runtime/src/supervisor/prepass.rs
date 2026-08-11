@@ -107,7 +107,7 @@ pub(super) fn claim_namespace(
     Ok(())
 }
 
-/// `[component].name`; manifest parse already refused an unsafe one.
+/// `[component].name`.
 pub(super) fn manifest_namespace(loaded: &LoadedManifest) -> ModuleId {
     loaded.name.clone()
 }

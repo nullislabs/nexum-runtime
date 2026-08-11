@@ -10,10 +10,8 @@ use thiserror::Error;
 #[derive(Clone, Debug, Eq, Error, PartialEq)]
 #[non_exhaustive]
 pub enum InvalidModuleName {
-    /// The name is empty or whitespace-only.
     #[error("[component].name is missing or blank; declare a non-empty name")]
     Blank,
-    /// The name is not a single safe path component.
     #[error("[component].name {0:?} must not contain '/', '\\', or '..'")]
     UnsafePathComponent(String),
 }
@@ -21,15 +19,12 @@ pub enum InvalidModuleName {
 /// The manifest namespace. `Arc`-backed so dispatch-path clones are
 /// refcount bumps; `Display` is the bare namespace.
 ///
-/// [`ModuleId::parse`] is the only constructor, so a value of this type is
-/// always a non-blank single path component. The name becomes a
+/// [`ModuleId::parse`] is the only constructor: the name becomes a
 /// state-directory namespace, and an unchecked one could escape it.
 #[derive(Clone, Debug, Display, Eq, Hash, PartialEq)]
 pub struct ModuleId(Arc<str>);
 
 impl ModuleId {
-    /// Parse `name` into a namespace, refusing a blank name and a name that
-    /// carries `/`, `\`, or `..`.
     pub fn parse(name: &str) -> Result<Self, InvalidModuleName> {
         if name.trim().is_empty() {
             return Err(InvalidModuleName::Blank);
