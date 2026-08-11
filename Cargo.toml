@@ -19,7 +19,6 @@ members = [
     "modules/fixtures/panic-bomb",
     "modules/fixtures/slow-host",
     "modules/fixtures/topic-parity",
-    "tools/load-gen",
 ]
 resolver = "2"
 
@@ -83,8 +82,7 @@ auto_impl = "1"
 # syntax. Available workspace-wide; not pulled in by default.
 derive_more = { version = "2", default-features = false, features = ["full"] }
 
-# CLI parser. Used by every binary crate (engine, load-gen) via the
-# derive macro.
+# CLI parser. Used by every binary crate (engine) via the derive macro.
 clap = { version = "4", features = ["derive"] }
 
 # alloy stack. Engine uses the full provider/transport surface;
