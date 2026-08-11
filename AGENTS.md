@@ -25,7 +25,6 @@ The videre and shepherd repositories build on the SDK and the runtime published 
 - `crates/nexum-world` - per-module WIT world synthesis, the core capability table, and the extension registry.
 - `modules/example` - the minimal reference module, with balance-tracker, http-probe, and price-alert under `modules/examples/`.
 - `modules/fixtures/` - adversarial fixtures: clock-reader, flaky-bomb, fuel-bomb, memory-bomb, panic-bomb, and slow-host.
-- `tools/load-gen` - the load generator for soak runs.
 - `wit/nexum-host` - the `nexum:host` WIT package.
 
 ## Build, test, lint

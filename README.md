@@ -17,7 +17,6 @@ This repository is the leaf of the Nullis runtime stack: it carries no cross-rep
 - `modules/example` - minimal reference module.
 - `modules/examples/` - example modules (balance-tracker, http-probe, price-alert).
 - `modules/fixtures/` - adversarial test fixtures (clock-reader, flaky-bomb, fuel-bomb, memory-bomb, panic-bomb, slow-host).
-- `tools/load-gen` - load generator for soak runs.
 - `wit/nexum-host` - the `nexum:host` WIT package.
 
 ## Development
