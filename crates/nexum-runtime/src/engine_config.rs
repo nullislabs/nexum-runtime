@@ -320,9 +320,6 @@ const DEFAULT_LOG_BYTES_PER_RUN: usize = 256 * 1024;
 /// Default past runs retained per module (16).
 const DEFAULT_LOG_RUNS_RETAINED: usize = 16;
 
-/// Default provider status polling cadence (5 s).
-const DEFAULT_STATUS_POLL_INTERVAL: Duration = Duration::from_secs(5);
-
 /// Saturate a millisecond knob into [1 ms, 24 h].
 fn clamp_http_ms(ms: u64) -> Duration {
     Duration::from_millis(ms.clamp(1, HTTP_LIMIT_MS_MAX))
@@ -357,9 +354,6 @@ pub struct ModuleLimits {
     /// Per-caller provider submission quota.
     #[serde(default)]
     pub quota: QuotaLimitsSection,
-    /// Provider status polling cadence.
-    #[serde(default)]
-    pub status_poll: StatusPollSection,
     /// Status-watch set bounds.
     #[serde(default)]
     pub watch: WatchLimitsSection,
@@ -480,14 +474,6 @@ impl ModuleLimits {
         )
     }
 
-    /// Resolved status-poll cadence; a zero interval saturates up to 1 ms.
-    pub fn status_poll_interval(&self) -> Duration {
-        self.status_poll
-            .interval_ms
-            .map(|ms| Duration::from_millis(ms.max(1)))
-            .unwrap_or(DEFAULT_STATUS_POLL_INTERVAL)
-    }
-
     /// Resolved per-caller submission quota; a zero `max_charges` is
     /// saturated up to 1 by the consuming service.
     pub fn quota(&self) -> SubmitQuota {
@@ -606,16 +592,6 @@ pub struct QuotaLimitsSection {
     pub max_charges: Option<u32>,
     /// Sliding window the charges are counted across, in seconds.
     pub window_secs: Option<u64>,
-}
-
-/// `[limits.status_poll]` provider status polling cadence: how often the
-/// consuming service polls each provider's `status` export for the
-/// receipts it watches. Optional; a zero saturates up to 1 ms.
-#[derive(Debug, Default, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct StatusPollSection {
-    /// Milliseconds between status poll sweeps.
-    pub interval_ms: Option<u64>,
 }
 
 /// `[limits.watch]` status-watch set bounds. All optional; degenerate

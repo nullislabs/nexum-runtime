@@ -97,12 +97,6 @@ impl TestRuntimeBuilder {
         &self.chain
     }
 
-    /// Register an extra chain id; chain 1 is always registered.
-    pub fn with_chain(mut self, chain_id: u64) -> Self {
-        self.chains.push(Chain::from_id(chain_id));
-        self
-    }
-
     /// The mock state store; the launched handle shares this instance.
     pub fn store(&self) -> &MockStateStore {
         &self.store
