@@ -17,6 +17,4 @@ nexum-launch = { path = "../nexum-launch" }
 nexum-runtime = { path = "../nexum-runtime" }
 
 anyhow.workspace = true
-# `#[tokio::main]` over the multi-threaded scheduler is the whole of this
-# binary; every other runtime surface is reached through `nexum-runtime`.
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
