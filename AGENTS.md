@@ -45,6 +45,9 @@ just lint    # cargo clippy --workspace --all-targets --all-features -- -D warni
 just ci      # the full CI series: fmt, clippy, doc, wasms, nextest, doctests
 ```
 
+Build the guest wasms before the suite: the end-to-end and fixture tests load them from `target/wasm32-wasip2/release`, and a missing artifact fails the test rather than skipping it.
+Set `NEXUM_ALLOW_MISSING_WASM=1` to skip every wasm-dependent test instead, which is opt-in because a skipped run reports the same counts as a real one.
+
 Run tests with `cargo nextest run`, not `cargo test`.
 nextest does not run doctests, so run `cargo test --doc --workspace --all-features` as well.
 Run `just fmt` and `just lint` before each commit, because CI fails on any rustfmt or clippy warning.
