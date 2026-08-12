@@ -1,37 +1,30 @@
-//! Cross-checks tying the [`nexum_world::CORE`] capability table to the
-//! two surfaces it claims to describe: the `wit/nexum-host/` package and
-//! the SDK's `bind_host_via_wit_bindgen!` macro.
+//! Ties [`nexum_world::CORE`] to the two surfaces it describes in string
+//! literals: the `wit/nexum-host/` package and the SDK bind macro.
+//! Nothing else resolves those literals at host-build time, so a rename
+//! on either side would otherwise surface only in a guest build.
 //!
-//! The table carries WIT import ids and bind-macro idents as string
-//! literals that nothing else resolves at host-build time, so a rename
-//! on either far side would otherwise surface only in a guest build.
-//! These tests parse the WIT with the same `wit-parser` version
-//! wasmtime v46 embeds, so the check agrees with the parser the runtime
-//! actually runs.
+//! Pinned to the `wit-parser` wasmtime v46 embeds, so the check cannot
+//! disagree with the parser the runtime runs.
 
 use std::collections::BTreeSet;
 use std::path::Path;
 
 use nexum_world::CORE;
 
-/// The repository's `wit/nexum-host` package directory, resolved from
-/// this crate's manifest directory so the test is cwd-independent.
+/// Resolved from the manifest dir so the test is cwd-independent.
 fn nexum_host_wit_dir() -> std::path::PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../wit/nexum-host")
 }
 
-/// The SDK macro source carrying the bind list and the per-capability
-/// arms, read as text: the idents are `macro_rules!` matcher literals,
-/// so text is the only host-side surface they have.
+/// Read as text: the idents are `macro_rules!` matcher literals, so text
+/// is the only host-side surface they have.
 fn sdk_macro_source() -> String {
     let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../nexum-sdk/src/wit_bindgen_macro.rs");
     std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()))
 }
 
-/// Every `import` literal in `CORE` resolves to a named interface in
-/// the parsed `nexum:host` package, and every import-bearing row was
-/// actually checked. A WIT interface rename now fails here, in a host
-/// test, rather than in the next guest build.
+/// A WIT interface rename fails here rather than in the next guest build.
+/// Also asserts a non-zero check count, so an empty parse cannot pass.
 #[test]
 fn core_imports_resolve_against_the_wit_tree() {
     let mut resolve = wit_parser::Resolve::new();
@@ -76,10 +69,8 @@ fn core_imports_resolve_against_the_wit_tree() {
     );
 }
 
-/// The `adapter` idents in `CORE` are exactly the arms
-/// `bind_host_via_wit_bindgen!` accepts, and exactly the blanket list
-/// its zero-argument form expands to. A capability with no matching
-/// bind arm, or an arm no capability reaches, fails here.
+/// A capability with no bind arm, or an arm no capability reaches,
+/// fails here. Checks both the arms and the blanket list.
 #[test]
 fn core_adapters_equal_the_sdk_bind_macro_arms() {
     let source = sdk_macro_source();
@@ -99,9 +90,7 @@ fn core_adapters_equal_the_sdk_bind_macro_arms() {
     );
 }
 
-/// The idents of the `(ident) => {` arms inside
-/// `__bind_host_cap_via_wit_bindgen!`, the per-capability dispatch the
-/// bind macro accepts.
+/// The `(ident) => {` arms of `__bind_host_cap_via_wit_bindgen!`.
 fn macro_arm_idents(source: &str) -> BTreeSet<&str> {
     let mut arms = BTreeSet::new();
     let mut in_macro = false;
@@ -133,9 +122,8 @@ fn macro_arm_idents(source: &str) -> BTreeSet<&str> {
     arms
 }
 
-/// The capability list the zero-argument `bind_host_via_wit_bindgen!()`
-/// form expands to: the sole non-comment `caps: [...]` occurrence whose
-/// brackets carry plain idents rather than a `$cap` matcher.
+/// The blanket list: the one non-comment `caps: [...]` carrying plain
+/// idents rather than a `$cap` matcher.
 fn blanket_caps_list(source: &str) -> Vec<String> {
     let mut lists = Vec::new();
     for line in source.lines() {
@@ -175,8 +163,7 @@ fn blanket_caps_list(source: &str) -> Vec<String> {
     lists.pop().unwrap()
 }
 
-/// Whether `s` is a plain snake_case ident, the only shape a bind-macro
-/// capability takes.
+/// Plain snake_case, the only shape a bind-macro capability takes.
 fn is_ident(s: &str) -> bool {
     !s.is_empty()
         && s.chars()
