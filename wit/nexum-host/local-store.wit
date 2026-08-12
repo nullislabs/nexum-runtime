@@ -1,5 +1,16 @@
 package nexum:host@0.1.0;
 
+/// A durable key-value store, scoped to the calling module.
+///
+/// The contract is namespace isolation. Each module operates in its own
+/// namespace, and every function in this interface reads and writes that
+/// namespace alone. Two modules that use the same key string see disjoint
+/// data. A module cannot read, enumerate, or modify another module's
+/// entries, and no key a module supplies can reach outside its own
+/// namespace.
+///
+/// How the host separates namespaces is an implementation detail, not part
+/// of this contract. A guest must not depend on any particular scheme.
 interface local-store {
     use types.{fault};
 
