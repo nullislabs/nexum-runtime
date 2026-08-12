@@ -1,0 +1,36 @@
+# Workspace clippy configuration.
+#
+# One architectural rule lives here: `nexum-tasks` is the only crate that
+# spawns raw tokio tasks, and every other crate routes tasks through its
+# `TaskExecutor`. The entries below ban the tokio free spawn functions
+# workspace-wide, and `just lint` runs clippy under `-D warnings`, so a
+# stray raw spawn is a build failure.
+#
+# `nexum-tasks` itself needs no `#[allow]`: it never calls a free spawn
+# function. It captures a `tokio::runtime::Handle` in
+# `crates/nexum-tasks/src/manager.rs` and spawns through that handle.
+#
+# Deliberately not banned:
+#
+# - `tokio::runtime::Handle::spawn` and `Handle::spawn_blocking`: these are
+#   the spawn path inside `nexum-tasks`. Banning them would force
+#   `#[allow(clippy::disallowed_methods)]` at each site there, and an
+#   `#[allow]` is a pattern that gets copied. A bypass written as
+#   `Handle::current().spawn(...)` is conspicuous in review; a bare
+#   `tokio::spawn` is not.
+# - `tokio::task::JoinSet::spawn` and its variants: `JoinSet::spawn` also
+#   spawns on the ambient runtime, but a `JoinSet` must be constructed and
+#   held, which is visible in review, and no crate in this workspace uses
+#   one today. Add entries here if one appears outside `nexum-tasks`.
+# - `tokio::task::Builder`: gated behind the `tokio_unstable` cfg, which
+#   this workspace does not set, so it does not compile here.
+#
+# `disallowed-methods` matches resolved paths, so a renamed import
+# (`use tokio::spawn as go;`) is still caught.
+
+disallowed-methods = [
+    { path = "tokio::spawn", reason = "raw spawning belongs to nexum-tasks: use TaskExecutor::spawn" },
+    { path = "tokio::task::spawn", reason = "raw spawning belongs to nexum-tasks: use TaskExecutor::spawn" },
+    { path = "tokio::task::spawn_blocking", reason = "raw spawning belongs to nexum-tasks: use TaskExecutor::spawn_blocking" },
+    { path = "tokio::task::spawn_local", reason = "raw spawning belongs to nexum-tasks: use TaskExecutor::spawn, and note the engine has no LocalSet" },
+]

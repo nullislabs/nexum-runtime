@@ -28,7 +28,10 @@ derive_more.workspace = true
 # `strum::IntoStaticStr`: the snake_case variant name is the tracing
 # `source` field (`LogSource`) and the boot-refusal `error_kind` label.
 strum.workspace = true
-# No `rt`: spawning belongs to `nexum-tasks`.
+# No `rt` in this list: spawning belongs to `nexum-tasks`. Feature
+# unification still pulls `rt` in through `nexum-tasks`, so omitting it
+# here narrows intent but enforces nothing; the raw-spawn ban in the
+# root `clippy.toml` is what enforces the rule.
 tokio = { workspace = true, features = [
     "io-util",
     "macros",
