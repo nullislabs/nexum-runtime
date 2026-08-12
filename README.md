@@ -38,10 +38,10 @@ Without Nix, any Rust 1.94+ toolchain with the `wasm32-wasip2` target, `cargo-ne
 just run           # builds the example module and runs the engine with it
 ```
 
-The engine takes a component wasm and its `component.toml` (capabilities + config).
+The engine takes a component wasm and its `component.toml` (dependencies + config).
 The manifest is mandatory: pass its path, or ship a `component.toml` next to the wasm.
 Every manifest must declare a `[dependencies]` table; an empty one grants nothing.
-Every manifest must also declare a `[module].name` that is not blank.
+Every manifest must also declare a `[component].name` that is not blank.
 The engine uses the name as the state namespace, and it refuses a missing, empty, or whitespace-only name.
 
 ```sh
@@ -61,7 +61,7 @@ The example module declares no subscriptions, so `just run` needs no `engine.tom
 
 ## Component integrity
 
-A manifest may pin its artifact with `component = "sha256:<64 hex chars>"` in `[module]` (one `sha256sum` of the `.wasm`).
+A manifest may pin its artifact with `digest = "sha256:<64 hex chars>"` in `[component]` (one `sha256sum` of the `.wasm`).
 A present pin is strictly verified against the loaded bytes before compilation; a mismatch or a malformed pin refuses the boot.
 An absent pin loads with a warning that logs the computed digest; set `require_component_digest = true` under `[engine]` in `engine.toml` to make an absent pin a boot error.
 The default sibling `component.toml` lives in the same trust domain as the artifact, so an author-side pin closes accidental drift only.
