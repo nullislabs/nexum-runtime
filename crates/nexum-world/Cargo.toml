@@ -26,9 +26,4 @@ toml.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
-# Cross-checks `CORE` against `wit/nexum-host/`. Pinned to the exact
-# version wasmtime v46.0.1 embeds, so the test parses the WIT with the
-# same parser the runtime does. Not hoisted: the pin is local to this
-# test and must move in lockstep with the wasmtime major, not with the
-# workspace.
-wit-parser = "=0.251.0"
+wit-parser = { workspace = true }

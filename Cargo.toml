@@ -139,6 +139,9 @@ wasmtime-wasi = "46"
 # rustls outgoing backend (`default-send-request`) the engine fronts
 # with its per-module allowlist gate.
 wasmtime-wasi-http = "46"
+# Pinned to the exact wit-parser version wasmtime v46.0.1 embeds, so the
+# WIT cross-check test parses with the same parser the runtime does.
+wit-parser = "=0.251.0"
 
 # Manifest parsing.
 toml = "1"
