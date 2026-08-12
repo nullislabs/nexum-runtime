@@ -1,45 +1,14 @@
-# Workspace clippy configuration.
+# Two gaps this ban does not cover, both deliberate:
 #
-# One architectural rule lives here: raw tokio spawning belongs to
-# `nexum-tasks`, and other crates route work through its `TaskExecutor`.
-# The entries below ban the tokio free spawn functions workspace-wide, and
-# `just lint` runs clippy under `-D warnings`, so a stray raw spawn written
-# in this workspace is a build failure. A spawn that happens inside a
-# dependency is not caught: see `wasmtime_wasi::runtime::spawn` below.
-#
-# `nexum-tasks` itself needs no `#[allow]`: it never calls a free spawn
-# function. It captures a `tokio::runtime::Handle` in
-# `crates/nexum-tasks/src/manager.rs` and spawns through that handle.
-#
-# Deliberately not banned:
-#
-# - `tokio::runtime::Handle::spawn` and `Handle::spawn_blocking`: these are
-#   the spawn path inside `nexum-tasks`. Banning them would force
-#   `#[allow(clippy::disallowed_methods)]` at each site there, and an
-#   `#[allow]` is a pattern that gets copied. A bypass written as
-#   `Handle::current().spawn(...)` is conspicuous in review; a bare
-#   `tokio::spawn` is not.
-# - `tokio::task::JoinSet::spawn` and its variants: `JoinSet::spawn` also
-#   spawns on the ambient runtime, but a `JoinSet` must be constructed and
-#   held, which is visible in review, and no crate in this workspace uses
-#   one today. Add entries here if one appears outside `nexum-tasks`.
-# - `tokio::task::Builder`: gated behind the `tokio_unstable` cfg, which
-#   this workspace does not set, so it does not compile here.
-# - `wasmtime_wasi::runtime::spawn`: `send_with_limits` in
-#   `crates/nexum-runtime/src/host/http.rs` calls it twice, for the deadline
-#   race and for the hyper connection driver. In wasmtime-wasi 46.0.1 it is
-#   `with_ambient_tokio_runtime(|| tokio::task::spawn(f))`, so those two
-#   tasks are raw tokio tasks that no `TaskExecutor` owns, and clippy passes
-#   on them because the banned call sits inside the dependency. wasmtime
-#   wants the `AbortOnDropJoinHandle` it returns, so moving that path onto
-#   `TaskExecutor` is a change of its own and not a lint fix.
-#
-# `disallowed-methods` matches resolved paths, so a renamed import
-# (`use tokio::spawn as go;`) is still caught.
+# - `Handle::spawn`, which is the path `nexum-tasks` itself uses. Banning it
+#   would need an `#[allow]` there, and an `#[allow]` gets copied.
+# - `wasmtime_wasi::runtime::spawn`, which is `tokio::task::spawn` inside the
+#   dependency, so clippy never sees it. `send_with_limits` in
+#   `crates/nexum-runtime/src/host/http.rs` spawns two tasks that way.
 
 disallowed-methods = [
     { path = "tokio::spawn", reason = "raw spawning belongs to nexum-tasks: use TaskExecutor::spawn" },
     { path = "tokio::task::spawn", reason = "raw spawning belongs to nexum-tasks: use TaskExecutor::spawn" },
     { path = "tokio::task::spawn_blocking", reason = "raw spawning belongs to nexum-tasks: use TaskExecutor::spawn_blocking" },
-    { path = "tokio::task::spawn_local", reason = "raw spawning belongs to nexum-tasks: use TaskExecutor::spawn, and note the engine has no LocalSet" },
+    { path = "tokio::task::spawn_local", reason = "raw spawning belongs to nexum-tasks: use TaskExecutor::spawn" },
 ]
