@@ -1,6 +1,6 @@
 //! Pre-built guest wasm locators and the test wasmtime engine.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// Workspace root: the topmost ancestor with a `Cargo.toml`.
 pub fn workspace_root() -> PathBuf {
@@ -13,9 +13,29 @@ pub fn workspace_root() -> PathBuf {
         .to_path_buf()
 }
 
+/// Cargo's target directory, derived from this test binary's own location
+/// rather than assumed to be `<workspace>/target`.
+///
+/// `CARGO_TARGET_DIR`, `--target-dir` and `build.target-dir` all move it, and
+/// none is visible here. The binary sits under the real one, so its ancestors
+/// are the answer. Depth varies: `<target>/<profile>/deps` normally,
+/// `<target>/<triple>/<profile>/deps` under `--target`.
+pub fn target_dir() -> PathBuf {
+    let fallback = || workspace_root().join("target");
+    let Ok(exe) = std::env::current_exe() else {
+        return fallback();
+    };
+    exe.ancestors()
+        .find(|dir| dir.join(WASM_TARGET).is_dir())
+        .map(Path::to_path_buf)
+        .unwrap_or_else(fallback)
+}
+
+const WASM_TARGET: &str = "wasm32-wasip2";
+
 pub fn module_wasm(module: &str) -> PathBuf {
     let artifact = module.replace('-', "_");
-    workspace_root().join(format!("target/wasm32-wasip2/release/{artifact}.wasm"))
+    target_dir().join(format!("{WASM_TARGET}/release/{artifact}.wasm"))
 }
 
 /// Environment opt-out for a run without the guest wasms built.
@@ -71,11 +91,11 @@ mod tests {
     fn module_wasm_maps_hyphens_and_appends_the_wasm_suffix() {
         let path = module_wasm("price-alert");
         assert!(
-            path.ends_with("target/wasm32-wasip2/release/price_alert.wasm"),
+            path.ends_with("wasm32-wasip2/release/price_alert.wasm"),
             "unexpected artifact path: {}",
             path.display(),
         );
-        assert!(path.starts_with(workspace_root()));
+        assert!(path.starts_with(target_dir()));
     }
 
     #[test]
