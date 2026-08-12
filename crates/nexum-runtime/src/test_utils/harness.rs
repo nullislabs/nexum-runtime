@@ -9,7 +9,9 @@
 //! [`store`](TestRuntime::store) and [`logs`](TestRuntime::logs). Events
 //! dispatch on the spawned event-loop task, so
 //! [`wait_for_log`](TestRuntime::wait_for_log) polls for an observable
-//! effect.
+//! effect. [`TestRuntimeBuilder::boot_supervisor`] instead hands back the
+//! booted [`Supervisor`](crate::supervisor::Supervisor) over the same mocks
+//! for direct dispatch, with no event loop.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -21,10 +23,11 @@ use alloy_rpc_types_eth::{Header, Log};
 use super::clock::ManualClock;
 use super::manifest::ManifestSource;
 use super::rpc::FakeNode;
+use super::scenario::{BootScenario, Booted, Entry};
 use super::{HARNESS_POLL_INTERVAL, MockStateStore, MockTypes, Prebuilt};
 use crate::builder::{RuntimeBuilder, RuntimeHandle};
 use crate::engine_config::{EngineConfig, ModuleLimits};
-use crate::host::component::ComponentsBuilder;
+use crate::host::component::{Components, ComponentsBuilder};
 use crate::host::extension::Extension;
 use crate::host::logs::{LogPipeline, LogRecord};
 
@@ -142,6 +145,29 @@ impl TestRuntimeBuilder {
             _tmp: tmp,
         })
     }
+
+    /// Boots through the real admission path over the builder's mocks and
+    /// returns the supervisor, without the event loop
+    /// [`launch`](Self::launch) spawns.
+    ///
+    /// Consumes the builder, so clone the [`chain`](Self::chain),
+    /// [`store`](Self::store) and [`clock`](Self::clock) handles first if
+    /// you still need to drive the mocks.
+    pub async fn boot_supervisor(self) -> anyhow::Result<Booted<MockTypes>> {
+        let pool = self.chain.pool(&self.chains, HARNESS_POLL_INTERVAL);
+        BootScenario::over(Components {
+            chain: pool,
+            store: self.store,
+            logs: super::in_memory_logs(),
+        })
+        .wasm(self.wasm)
+        .module(Entry::new(self.manifest))
+        .extensions(self.extensions)
+        .limits(self.limits)
+        .clock(self.clock.as_override())
+        .boot()
+        .await
+    }
 }
 
 /// A launched in-process runtime over the mock assembly; dropping it fires
@@ -234,13 +260,10 @@ mod tests {
     use super::*;
     use crate::host::extension::Extension;
     use crate::manifest::NamespaceCaps;
-    use crate::test_utils::{TestManifest, example_wasm_or_skip, module_wasm_or_skip};
+    use crate::test_utils::{TestManifest, example_wasm_or_skip, manifest, module_wasm_or_skip};
 
     fn example_block_manifest() -> String {
-        TestManifest::new("example")
-            .cap("logging")
-            .block_sub(1)
-            .to_toml()
+        manifest("example").cap("logging").block_sub(1).to_toml()
     }
 
     /// A block manifest plus a `[component].digest` pin of the wasm's bytes.
@@ -248,7 +271,7 @@ mod tests {
         let digest = crate::digest::ContentDigest::of_bytes(
             &std::fs::read(wasm).expect("read module wasm for pinning"),
         );
-        TestManifest::new(name)
+        manifest(name)
             .cap("logging")
             .component_digest(digest.to_string())
             .block_sub(chain_id)
@@ -256,9 +279,8 @@ mod tests {
     }
 
     fn price_alert_manifest() -> String {
-        TestManifest::new("price-alert")
-            .cap("logging")
-            .cap("chain")
+        manifest("price-alert")
+            .require(["logging", "chain"])
             .block_sub(1)
             .config(
                 "oracle_address",
@@ -785,5 +807,89 @@ mod tests {
 
         rt.shutdown();
         rt.wait().await.expect("clean shutdown");
+    }
+
+    /// [`TestRuntimeBuilder::boot_supervisor`] reaches services, the alive
+    /// count and dispatch without a boot entry or an event loop.
+    #[tokio::test]
+    async fn boot_supervisor_exposes_the_booted_supervisor() {
+        let Some(wasm) = example_wasm_or_skip() else {
+            return;
+        };
+
+        let mut booted = TestRuntime::builder(wasm)
+            .manifest_inline(example_block_manifest())
+            .boot_supervisor()
+            .await
+            .expect("boot the example module to a supervisor");
+
+        assert_eq!(booted.supervisor.module_count(), 1);
+        assert_eq!(booted.supervisor.alive_count(), 1);
+        let _services = booted.supervisor.services();
+
+        assert_eq!(
+            booted.dispatch_block_on(1).await,
+            1,
+            "the direct dispatch reaches the one booted module",
+        );
+        assert!(
+            booted
+                .records("example")
+                .iter()
+                .any(|record| record.message.contains("block 19000000")),
+            "the dispatched block's log line lands without an event loop",
+        );
+    }
+
+    /// A cloned [`FakeNode`] still serves and records after the boot
+    /// consumes the builder.
+    #[tokio::test]
+    async fn boot_supervisor_serves_chain_requests_from_the_builder_mocks() {
+        use crate::host::component::ChainMethod;
+
+        let Some(wasm) = module_wasm_or_skip("price-alert") else {
+            return;
+        };
+
+        /// One 32-byte ABI word as zero-padded hex.
+        fn word(v: u128) -> String {
+            format!("{v:064x}")
+        }
+        // latestRoundData() with answer = 3000 * 10^8, above the manifest's
+        // 2500.00 threshold, so the module logs TRIGGERED.
+        let result = format!(
+            "\"0x{}{}{}{}{}\"",
+            word(1),
+            word(300_000_000_000),
+            word(0),
+            word(0),
+            word(1),
+        );
+
+        let builder = TestRuntime::builder(wasm).manifest_inline(price_alert_manifest());
+        builder.chain().on_method(ChainMethod::EthCall, result);
+        // The boot consumes the builder; the cloned handle shares the node.
+        let chain = builder.chain().clone();
+
+        let mut booted = builder
+            .boot_supervisor()
+            .await
+            .expect("boot price-alert to a supervisor");
+
+        assert_eq!(booted.dispatch_block_on(1).await, 1);
+        assert!(
+            booted
+                .records("price-alert")
+                .iter()
+                .any(|record| record.message.contains("TRIGGERED")),
+            "the programmed oracle answer reached the module",
+        );
+        assert!(
+            chain
+                .recorded_requests()
+                .iter()
+                .any(|request| request.method == "eth_call"),
+            "the module's eth_call reached the fake node through the retained handle",
+        );
     }
 }

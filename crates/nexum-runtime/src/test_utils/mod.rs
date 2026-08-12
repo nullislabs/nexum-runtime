@@ -40,7 +40,7 @@ pub mod wasm;
 
 pub use builders::Prebuilt;
 pub use harness::{TestRuntime, TestRuntimeBuilder};
-pub use manifest::{ManifestSource, TestManifest};
+pub use manifest::{ManifestSource, TestManifest, manifest};
 pub use scenario::{BootScenario, Booted, Entry, Refusal};
 pub use store::{MockStateHandle, MockStateStore};
 pub use types::MockTypes;

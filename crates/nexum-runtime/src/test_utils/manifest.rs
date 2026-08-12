@@ -34,6 +34,11 @@ impl From<TestManifest> for ManifestSource {
     }
 }
 
+/// Sugar over [`TestManifest::new`] for `manifest(name).require([..])`.
+pub fn manifest(name: impl Into<String>) -> TestManifest {
+    TestManifest::new(name)
+}
+
 /// Builder for positive-path manifest TOML.
 #[derive(Debug, Clone)]
 pub struct TestManifest {
@@ -74,6 +79,12 @@ impl TestManifest {
     /// Append a `[dependencies]` key; the table is emitted even when empty.
     pub fn cap(mut self, cap: impl Into<String>) -> Self {
         self.caps.push(cap.into());
+        self
+    }
+
+    /// Several `[dependencies]` keys at once; each lands as one [`cap`](Self::cap).
+    pub fn require(mut self, caps: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        self.caps.extend(caps.into_iter().map(Into::into));
         self
     }
 
@@ -339,6 +350,24 @@ mod tests {
                 if kind == "acme-status" && filters.get("scope").is_some_and(|v| v == "primary")),
             "attribute filters ride the same table: {subs:?}",
         );
+    }
+
+    /// The fluent entry point is pure sugar: `manifest(name).require([..])`
+    /// emits byte-identical TOML to the explicit `new` and `cap` chain.
+    #[test]
+    fn manifest_and_require_are_sugar_over_new_and_cap() {
+        let sugar = manifest("example")
+            .require(["logging", "chain"])
+            .block_sub(1)
+            .chain_log_sub(100)
+            .to_toml();
+        let explicit = TestManifest::new("example")
+            .cap("logging")
+            .cap("chain")
+            .block_sub(1)
+            .chain_log_sub(100)
+            .to_toml();
+        assert_eq!(sugar, explicit);
     }
 
     /// Pins the emitted text itself, so a change to the serialized shape
