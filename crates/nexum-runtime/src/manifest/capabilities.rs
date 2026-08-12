@@ -50,7 +50,7 @@ pub const PROVIDER_NAMESPACE: NamespaceCaps = NamespaceCaps {
 const WASI_HTTP_PREFIX: &str = "wasi:http/";
 
 /// Capability name a module declares to import any `wasi:http/*`
-/// interface; the per-module `[capabilities.http].allow` list scopes it.
+/// interface; the per-module `[dependencies.http].hosts` list scopes it.
 const HTTP_CAPABILITY: &str = nexum_world::Cap::Http.as_str();
 
 /// Gated WASI capability names; declaring one grants the matching `wasi:`

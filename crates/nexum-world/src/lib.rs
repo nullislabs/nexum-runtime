@@ -85,8 +85,7 @@ pub enum FaultLabel {
 /// The permitted JSON-RPC read surface as a closed type; the single
 /// source the guest allowlist and host dispatch table emit from.
 /// Signing and state-mutating methods have no variant, so cannot cross
-/// the WIT edge. This is the structural ceiling; an operator allowlist
-/// narrows within it, never widens it.
+/// the WIT edge.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, EnumString, IntoStaticStr)]
 #[non_exhaustive]
 pub enum ChainMethod {
