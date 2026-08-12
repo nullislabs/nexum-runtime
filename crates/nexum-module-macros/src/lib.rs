@@ -2,7 +2,7 @@
 //!
 //! [`module`] turns an `impl` block of named handlers into a complete
 //! per-cdylib module. Reach it through `nexum_sdk::module`, not this
-//! crate directly; the venue-side macros live in `videre-macros`.
+//! crate directly; a downstream layer supplies its own venue-side macros.
 
 use alloy_primitives::B256;
 use proc_macro::TokenStream;

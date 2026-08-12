@@ -1,4 +1,4 @@
-//! # example (reference Shepherd module)
+//! # example (reference module)
 //!
 //! Minimal reference module: one handler per event, each logging a
 //! one-line summary. The smallest demonstration of

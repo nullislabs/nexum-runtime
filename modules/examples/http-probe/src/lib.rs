@@ -1,4 +1,4 @@
-//! # http-probe (example Shepherd module)
+//! # http-probe (example module)
 //!
 //! On each matching block fetches the allowlisted `[config].probe_url`
 //! over wasi:http and logs its status, then fetches `[config].denied_url`

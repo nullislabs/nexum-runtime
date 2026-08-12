@@ -1,4 +1,4 @@
-//! # price-alert (example Shepherd module)
+//! # price-alert (example module)
 //!
 //! Polls a Chainlink oracle on each block and warns when the price
 //! crosses a `[config]`-supplied threshold on the configured side.
