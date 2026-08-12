@@ -1,0 +1,290 @@
+# Production deployment
+
+Operator handbook for running the `nexum` engine in production: systemd unit, state backup, and observability wiring.
+The engine is the bare binary from `crates/nexum-cli`.
+A downstream composition root that registers extensions runs the same way, under its own binary name.
+
+## 1. Pre-flight
+
+- The engine built in release: `cargo build -p nexum-cli --release` gives `target/release/nexum`.
+- Every component `.wasm` artifact present on a path the service user can read.
+- An `engine.toml` with `state_dir` on a persistent path (never `/tmp`), `log_level = "info"`, `[engine.metrics] enabled = true` with `bind_addr = "127.0.0.1:9100"`, one `[chains.<id>]` per subscribed chain with a paid RPC URL, one `[[modules]]` per module, and one `[[services]]` per service component.
+- `require_component_digest = true` under `[engine]`, with every manifest carrying a `[component].digest` pin.
+- The `state_dir` exists and is writable by the service user.
+- A Prometheus instance scraping `/metrics` (section 6) with the alert rules in section 7.
+- A log aggregator ingesting the engine's JSON stdout (section 5).
+
+`engine.toml` substitutes `${VAR_NAME}` from the environment before it parses the TOML, so an RPC URL with a key in it stays out of the file.
+A missing variable is a fatal boot error that names the variable.
+
+## 2. systemd unit
+
+`/etc/systemd/system/nexum.service`:
+
+```ini
+[Unit]
+Description=Nexum WASM component runtime
+Documentation=https://github.com/nullislabs/nexum-runtime
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=nexum
+Group=nexum
+WorkingDirectory=/opt/nexum
+ExecStart=/opt/nexum/bin/nexum --engine-config /etc/nexum/engine.toml
+
+# SIGINT/SIGTERM ends the event loop between dispatches: it drains the
+# in-flight dispatch, commits its cursor, and exits 0. The internal drain
+# deadline is 10s and is not configurable; 30s leaves headroom.
+KillSignal=SIGINT
+TimeoutStopSec=30s
+
+# Hardening.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ReadWritePaths=/var/lib/nexum
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+LockPersonality=true
+MemoryDenyWriteExecute=false   # wasmtime JIT needs writable-executable pages
+
+# The supervisor restarts trapped components itself; this restarts the host
+# process on a non-zero exit. RestartSec avoids a fast loop on config errors.
+Restart=on-failure
+RestartSec=5s
+
+# Defence in depth on top of the per-component wasmtime caps.
+LimitNOFILE=65536
+MemoryMax=2G
+CPUQuota=200%
+
+Environment=RUST_BACKTRACE=1
+# RUST_LOG overrides engine.toml log_level; leave it unset so the config
+# is the single auditable source.
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Bring it up:
+
+```bash
+sudo useradd -r -s /usr/sbin/nologin -d /var/lib/nexum nexum
+sudo install -d -o nexum -g nexum /var/lib/nexum
+sudo install -d -o nexum -g nexum /opt/nexum/bin
+sudo install -m 0755 -o nexum -g nexum target/release/nexum /opt/nexum/bin/
+sudo install -d /etc/nexum
+sudo install -m 0644 engine.toml /etc/nexum/
+sudo systemctl daemon-reload
+sudo systemctl enable --now nexum
+```
+
+Tail the logs:
+
+```bash
+journalctl -u nexum -f --output=json | jq '.MESSAGE | fromjson?'
+```
+
+The repository ships no container image and no compose file.
+
+## 3. State backup (redb)
+
+The local store is a single redb file at `<state_dir>/local-store.redb`, and `state_dir` defaults to `./data` beside the working directory.
+Every component holds a `keccak256(name)` prefix inside that one file, so one file is the whole engine's state.
+Losing it forces a from-scratch resync as each component rediscovers its state.
+
+Durability is per host call, not per event.
+Each write is its own fsynced transaction, so a returned `ok` is durable, and a trap or a crash freezes state at the last completed call.
+The `apply` batch verb is the only atomic multi-write unit.
+See [ADR-0014](adr/0014-local-store-durability-model.md).
+
+Cold backup, which is the one to use before an upgrade.
+The engine writes to redb only during a dispatch, and the graceful shutdown drains the in-flight dispatch, so a stopped file is quiescent:
+
+```bash
+sudo systemctl stop nexum
+sudo cp /var/lib/nexum/local-store.redb \
+    /backup/nexum-$(date -u +%Y%m%dT%H%M%SZ).redb
+sudo systemctl start nexum
+```
+
+Live copy.
+A plain `cp` under a live writer can capture an in-flight commit, so pause the process first:
+
+```bash
+kill -STOP <pid>
+cp /var/lib/nexum/local-store.redb /backup/...
+kill -CONT <pid>
+```
+
+The pause window is sub-second on a small store, and the WS connections survive it.
+Restore by stopping the engine, copying the snapshot back, and restarting.
+If a restored file does not open, roll forward from the previous snapshot, or start with an empty `state_dir` and accept the resync.
+
+## 4. Cursors the runtime writes
+
+The runtime writes two kinds of key inside each component's own namespace, both after a successful dispatch and both best-effort:
+
+- `last_dispatched_block:<chain_id>`, a u64 little-endian progress marker for block dispatch.
+- `chainlog_cursor:<hex>`, the resume cursor for a `resume = true` chain-log subscription.
+  The engine reads it once at boot, re-opens at that block, and backfills the gap on reconnect, capped by `max_lookback`.
+  A reorg retraction pulls the cursor back.
+
+Every other key in a component's namespace is the component's own.
+
+## 5. Logs
+
+The engine emits JSON `tracing` events on stdout, one flat object per line.
+`--pretty-logs` switches to the human format.
+Every event carries `timestamp`, `level`, `target` (the crate and module path), and `message`.
+A guest log line is mirrored into host tracing at the guest's own level with `module`, `run`, and `source` fields, and guest stdout and stderr are captured line by line.
+Production should not see `ERROR` from `nexum_runtime::*`.
+
+`RUST_LOG` wins over `[engine] log_level`, which is itself a full `EnvFilter` directive rather than a bare level.
+Leave `RUST_LOG` unset in the unit so the config file is the single auditable source.
+
+Aggregate stdout into your log stack.
+A journald source that parses the JSON `message` field and routes on `level` is the usual pattern.
+
+## 6. Metrics
+
+`/metrics` binds when `[engine.metrics] enabled = true`.
+Always bind loopback and never `0.0.0.0`: Prometheus scrapes over the loopback or the container network.
+The bare `nexum` binary registers the exporter itself, through the `CoreRuntime` preset.
+With `enabled = false` the recorder is still installed, so call sites stay live, but no listener binds and no sample is readable.
+
+| Metric | Type | Labels | Meaning |
+|---|---|---|---|
+| `nexum_runtime_boot_refusals_total` | counter | `error_kind` | Boot refusals by error kind. |
+| `nexum_runtime_event_latency_seconds` | histogram | `module`, `event_kind` | Wall-clock seconds to dispatch one event. |
+| `nexum_runtime_dispatch_dropped_total` | counter | `module`, `event_kind` | Events dropped by the per-component dispatch rate limit (`[limits.dispatch]`, default `burst = 256` and `refill_per_sec = 128`). |
+| `nexum_runtime_module_errors_total` | counter | `module`, `error_kind` | Module faults and traps. `error_kind = "trap"` is a wasmtime trap; other values are fault labels. |
+| `nexum_runtime_module_restarts_total` | counter | `module` | Module restart attempts. |
+| `nexum_runtime_module_poisoned` | gauge | `module` | `1` once a module crosses `[limits.poison]` (default 5 failures in 600 s). Stays `1` until the process restarts. |
+| `nexum_runtime_service_errors_total` | counter | `service`, `error_kind` | Service faults and traps. |
+| `nexum_runtime_service_restarts_total` | counter | `service` | Service reinstall attempts. |
+| `nexum_runtime_service_poisoned` | gauge | `service` | `1` once a service is quarantined. |
+| `nexum_runtime_chain_request_total` | counter | `chain_id`, `method`, `outcome` | Every `chain::request`. A method outside the read surface is counted as `method="<denied>"` with `outcome="err"`. The `outcome="err"` rate is the RPC-degraded signal. |
+| `nexum_runtime_chain_response_capped_total` | counter | `chain_id`, `method` | Responses rejected for exceeding `[limits.chain] response_body_max_bytes` (default 1 MiB). |
+| `nexum_runtime_stream_reconnects_total` | counter | `kind`, `chain_id`, `module` | Stream reconnects. `kind="block"` is per chain; `kind="chain-log"` also carries `module`. |
+
+`crates/nexum-runtime/src/metrics.rs` is the single source of the name set, and a test refuses any emitted name the table does not carry.
+
+Prometheus scrape:
+
+```yaml
+scrape_configs:
+  - job_name: nexum
+    scrape_interval: 15s
+    static_configs:
+      - targets: ["127.0.0.1:9100"]
+```
+
+## 7. Alerting
+
+`prometheus-rules.yml`:
+
+```yaml
+groups:
+  - name: nexum
+    interval: 30s
+    rules:
+      - alert: NexumComponentPoisoned
+        expr: nexum_runtime_module_poisoned > 0 or nexum_runtime_service_poisoned > 0
+        for: 1m
+        labels: { severity: page }
+        annotations:
+          summary: "Nexum {{ $labels.module }}{{ $labels.service }} is poisoned"
+
+      - alert: NexumModuleTraps
+        expr: rate(nexum_runtime_module_errors_total{error_kind="trap"}[5m]) > 0
+        for: 5m
+        labels: { severity: ticket }
+        annotations:
+          summary: "Nexum module {{ $labels.module }} trapping"
+
+      - alert: NexumRpcErrorRate
+        expr: |
+          sum by (chain_id) (rate(nexum_runtime_chain_request_total{outcome="err"}[5m]))
+            / sum by (chain_id) (rate(nexum_runtime_chain_request_total[5m])) > 0.05
+        for: 10m
+        labels: { severity: ticket }
+        annotations:
+          summary: "Nexum RPC error rate above 5% on chain {{ $labels.chain_id }}"
+
+      - alert: NexumReconnectStorm
+        expr: rate(nexum_runtime_stream_reconnects_total[5m]) > 0.1
+        for: 5m
+        labels: { severity: ticket }
+        annotations:
+          summary: "Nexum WS reconnecting frequently"
+
+      - alert: NexumDispatchLatency
+        expr: |
+          histogram_quantile(0.95,
+            sum by (module, le) (rate(nexum_runtime_event_latency_seconds_bucket[10m]))) > 5
+        for: 15m
+        labels: { severity: ticket }
+        annotations:
+          summary: "Nexum module {{ $labels.module }} p95 latency above 5s"
+
+      - alert: NexumDown
+        expr: up{job="nexum"} == 0
+        for: 2m
+        labels: { severity: page }
+        annotations:
+          summary: "Nexum is down (metrics scrape failing)"
+```
+
+`page` wakes on-call for a poisoned component or a down engine; `ticket` routes during business hours.
+
+## 8. RPC selection
+
+The engine opens one provider per `[chains.<id>]` entry at boot, and a failure there is fatal.
+Public nodes throttle `eth_subscribe` and `eth_call`, so production needs a paid endpoint.
+Prefer `wss://` where it is offered: a WebSocket pushes new heads through `eth_subscribe(newHeads)`, while an HTTP URL polls at the chain's average block time.
+Both work; push is lower latency.
+An `http(s)://` URL is not dialled at boot, so a bad HTTP endpoint surfaces on first use rather than at start.
+
+Every provider carries a retry layer (10 attempts, 300 ms base backoff).
+A `request_timeout_secs` under `[chains.<id>]` bounds one request and defaults to 30 s.
+A batch dispatches its entries sequentially, each with the full timeout, so its worst case is the entry count times that timeout.
+`nexum_runtime_chain_request_total{outcome="err"}` is the degradation signal.
+
+Resource ceilings live in `engine.toml` `[limits]` and apply to every component.
+A `[component.resources]` field in a manifest narrows a ceiling for one component and can never widen it.
+A component that consistently traps on fuel exhaustion is a bug, not a tuning miss.
+
+## 9. Runbook
+
+Tail one component:
+
+```bash
+journalctl -u nexum -f --output=json \
+  | jq 'select(.MESSAGE | fromjson? | .fields.module == "twap-monitor")'
+```
+
+Recover a poisoned component: fix the underlying bug, rebuild the artifact, update the `[component].digest` pin, then `sudo systemctl restart nexum`.
+The failure ring is in memory and clears at boot.
+The engine reads `[[modules]]` and `[[services]]` at boot only, and it detects no artifact change while running, so adding, changing, or removing a component means editing `engine.toml` and restarting.
+A logging-level change also needs a restart.
+
+## 10. Pre-upgrade
+
+- Read the changelog for breaking config or manifest changes.
+- Cold-backup the local store (section 3).
+- Stage the new binary, run it once against the production `engine.toml`, and confirm it boots before you stop it.
+- Swap the binary and `sudo systemctl restart nexum`.
+- Watch `journalctl -u nexum -f` for new ERROR and WARN lines for at least 5 minutes.
+
+## References
+
+- [ADR-0001](adr/0001-operator-config-separate-and-trusted.md): the operator config is separate and trusted.
+- [ADR-0003](adr/0003-local-store-namespacing.md): local-store namespacing.
+- [ADR-0014](adr/0014-local-store-durability-model.md): the local-store durability model.
+- [ADR-0016](adr/0016-component-vocabulary.md): the `[component]` and `[dependencies]` vocabulary.
+- [Component lifecycle, event system, and packaging](02-modules-events-packaging.md).
