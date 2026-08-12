@@ -3,6 +3,7 @@
 use std::sync::Arc;
 
 use anyhow::{Result, anyhow};
+use tracing::warn;
 use wasmtime::component::{HasSelf, Linker, ResourceTable};
 use wasmtime::{Engine, Store};
 use wasmtime_wasi::{HostMonotonicClock, HostWallClock, WasiCtxBuilder};
@@ -79,12 +80,36 @@ pub(super) struct ResolvedLimits {
     pub(super) state_bytes: u64,
 }
 
-/// Unset `[module.resources]` fields keep the engine `[limits]` default.
+/// Unset `[module.resources]` fields keep the engine `[limits]` default; a
+/// set field narrows and never widens.
+///
+/// The manifest is author-supplied, so the engine value is a ceiling rather
+/// than a default. See `docs/adr/0001-operator-config-separate-and-trusted.md`.
 pub(super) fn resolve_module_limits(res: &ResourceSection, cfg: &ModuleLimits) -> ResolvedLimits {
     ResolvedLimits {
-        fuel: res.max_fuel_per_event.unwrap_or(cfg.fuel()),
-        memory: res.max_memory_bytes.unwrap_or(cfg.memory()),
-        state_bytes: res.max_state_bytes.unwrap_or(cfg.state_bytes()),
+        fuel: clamp("max_fuel_per_event", res.max_fuel_per_event, cfg.fuel()),
+        memory: clamp("max_memory_bytes", res.max_memory_bytes, cfg.memory()),
+        state_bytes: clamp("max_state_bytes", res.max_state_bytes, cfg.state_bytes()),
+    }
+}
+
+/// The engine value unless the manifest asks for less. A request above the
+/// ceiling is capped and logged: handing back a smaller budget than the
+/// manifest declares would otherwise look like the module misbehaving.
+fn clamp<T: Ord + std::fmt::Display>(field: &str, requested: Option<T>, ceiling: T) -> T {
+    match requested {
+        Some(value) if value > ceiling => {
+            warn!(
+                target: "manifest",
+                field,
+                requested = %value,
+                ceiling = %ceiling,
+                "[component.resources] exceeds the engine ceiling; using the ceiling",
+            );
+            ceiling
+        }
+        Some(value) => value,
+        None => ceiling,
     }
 }
 
