@@ -219,7 +219,9 @@ impl<T: RuntimeTypes> Supervisor<T> {
             .await
             .unwrap_or_else(|exceeded| Err(wasmtime::Error::from(exceeded)));
         // One post-call sample: the trap instant is start plus elapsed, not
-        // the pre-dispatch `now`.
+        // the pre-dispatch `now`. This is the same clock the lifecycle
+        // reads, so under `start_paused` the latency histogram records the
+        // virtual elapsed time: do not assert on it from a paused test.
         let elapsed = start.elapsed();
         let latency_ms = elapsed.as_millis() as u64;
         match outcome {
