@@ -1,7 +1,9 @@
 //! Restart, backoff, and poison machinery for modules and providers.
 
 use std::collections::VecDeque;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+
+use tokio::time::Instant;
 
 use anyhow::{Result, anyhow};
 

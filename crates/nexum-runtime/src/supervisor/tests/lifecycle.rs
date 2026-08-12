@@ -1,7 +1,7 @@
 //! Lifecycle: init failure, traps, restart backoff, and poison quarantine.
 
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Instant;
+use tokio::time::Instant;
 
 use super::*;
 use crate::supervisor::lifecycle::sweep;
@@ -369,7 +369,7 @@ async fn resource_limit_dead_bomb_does_not_starve_healthy_module() {
 }
 
 /// Real wall-clock; `fail_first_n = 1` keeps it under 2 s.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn restart_flaky_module_recovers_after_backoff() {
     let Some(wasm) = module_wasm_or_skip("flaky-bomb") else {
         return;
@@ -404,7 +404,7 @@ async fn restart_flaky_module_recovers_after_backoff() {
     );
     assert_eq!(booted.supervisor.alive_count(), 0);
 
-    // Wait out the 1 s backoff plus a fudge for scheduler jitter.
+    // Past the 1 s backoff; the paused clock makes this instant.
     tokio::time::sleep(Duration::from_millis(1100)).await;
 
     // Now eligible; fail_first_n=1 was satisfied on dispatch 1, so this
@@ -422,7 +422,7 @@ async fn restart_flaky_module_recovers_after_backoff() {
 
 /// Tight policy (3 failures / 60 s) inside ~4 s of wall clock. The 1.2 s
 /// probe pins the asymmetry: a module restart keeps the count, so trap 2 earns 2 s.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn poison_pill_quarantines_module_after_threshold() {
     let Some(wasm) = module_wasm_or_skip("fuel-bomb") else {
         return;
@@ -603,6 +603,25 @@ fn provider_at_run_zero(
     }
 }
 
+/// The death instant is stamped from the same clock the sweep reads, so a
+/// paused test can elapse a backoff without real time. With `std::time`
+/// here the stamp would ignore the pause and the delta would be ~0.
+#[tokio::test(start_paused = true)]
+async fn a_death_is_stamped_on_the_paused_clock() {
+    let started = Instant::now();
+    let liveness = crate::host::actor::Liveness::default();
+
+    tokio::time::advance(Duration::from_secs(30)).await;
+    liveness.mark_dead();
+
+    let died_at = liveness.dead_since().expect("marked dead");
+    assert_eq!(
+        died_at - started,
+        Duration::from_secs(30),
+        "mark_dead must read the paused clock, not the host clock",
+    );
+}
+
 /// A dead reinstall defers with run, liveness, and failure curve untouched,
 /// so the next attempt reuses the sequence rather than burning it.
 #[tokio::test]
@@ -716,7 +735,7 @@ async fn a_hanging_provider_install_fails_by_deadline() {
     provider.liveness.mark_dead();
     let died_at = provider.liveness.dead_since().expect("marked dead");
     let now = died_at + Duration::from_secs(5);
-    let started = tokio::time::Instant::now();
+    let started = Instant::now();
     // Paused time auto-advances only through timers; an unwrapped hung
     // install would ride this outer timeout instead of its own deadline.
     tokio::time::timeout(
@@ -761,7 +780,7 @@ async fn a_hanging_provider_install_refuses_the_boot_by_deadline() {
     let wasm = scenario.dir().join("hanging.wasm");
     std::fs::write(&wasm, b"(component)").expect("write component");
 
-    let started = tokio::time::Instant::now();
+    let started = Instant::now();
     let refusal = tokio::time::timeout(
         OUTER_TIMEOUT,
         scenario

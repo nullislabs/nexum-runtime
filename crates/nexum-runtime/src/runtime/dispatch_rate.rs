@@ -3,7 +3,7 @@
 //! starts (fuel/memory/poison cap what one costs); per-module, so a flood
 //! cannot starve other modules. Pure with injected time.
 
-use std::time::Instant;
+use tokio::time::Instant;
 
 /// Token-bucket thresholds from `[limits.dispatch]`, else
 /// [`DispatchRatePolicy::default`].
