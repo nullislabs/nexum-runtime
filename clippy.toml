@@ -1,0 +1,14 @@
+# Two gaps this ban does not cover, both deliberate:
+#
+# - `Handle::spawn`, which is the path `nexum-tasks` itself uses. Banning it
+#   would need an `#[allow]` there, and an `#[allow]` gets copied.
+# - `wasmtime_wasi::runtime::spawn`, which is `tokio::task::spawn` inside the
+#   dependency, so clippy never sees it. `send_with_limits` in
+#   `crates/nexum-runtime/src/host/http.rs` spawns two tasks that way.
+
+disallowed-methods = [
+    { path = "tokio::spawn", reason = "raw spawning belongs to nexum-tasks: use TaskExecutor::spawn" },
+    { path = "tokio::task::spawn", reason = "raw spawning belongs to nexum-tasks: use TaskExecutor::spawn" },
+    { path = "tokio::task::spawn_blocking", reason = "raw spawning belongs to nexum-tasks: use TaskExecutor::spawn_blocking" },
+    { path = "tokio::task::spawn_local", reason = "raw spawning belongs to nexum-tasks: use TaskExecutor::spawn" },
+]

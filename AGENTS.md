@@ -22,6 +22,7 @@ The videre and shepherd repositories build on the SDK and the runtime published 
 - `crates/nexum-sdk-test` - in-memory host mocks and assertion helpers for module unit tests.
 - `crates/nexum-module-macros` - the `#[module]` proc-macro, reached through `nexum_sdk::module`.
 - `crates/nexum-tasks` - task lifecycle and graceful shutdown, and the only crate that spawns raw `tokio` tasks.
+  The root `clippy.toml` bans the `tokio` free spawn functions; it cannot see spawns inside a dependency.
 - `crates/nexum-world` - per-module WIT world synthesis, the core capability table, and the extension registry.
 - `modules/example` - the minimal reference module, with balance-tracker, http-probe, and price-alert under `modules/examples/`.
 - `modules/fixtures/` - adversarial fixtures: clock-reader, flaky-bomb, fuel-bomb, memory-bomb, panic-bomb, and slow-host.
