@@ -34,8 +34,7 @@ impl From<TestManifest> for ManifestSource {
     }
 }
 
-/// Start a [`TestManifest`] for `name`; sugar over [`TestManifest::new`]
-/// for the fluent `manifest(name).require([..])` shape.
+/// Sugar over [`TestManifest::new`] for `manifest(name).require([..])`.
 pub fn manifest(name: impl Into<String>) -> TestManifest {
     TestManifest::new(name)
 }
@@ -83,8 +82,7 @@ impl TestManifest {
         self
     }
 
-    /// Append several `[dependencies]` keys at once; each entry lands as one
-    /// [`cap`](Self::cap).
+    /// Several `[dependencies]` keys at once; each lands as one [`cap`](Self::cap).
     pub fn require(mut self, caps: impl IntoIterator<Item = impl Into<String>>) -> Self {
         self.caps.extend(caps.into_iter().map(Into::into));
         self

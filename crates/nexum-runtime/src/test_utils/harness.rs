@@ -146,18 +146,13 @@ impl TestRuntimeBuilder {
         })
     }
 
-    /// Boot the module through the real
-    /// [`Supervisor`](crate::supervisor::Supervisor) admission path over the
-    /// builder's mock backends and hand back the booted supervisor, never
-    /// spawning the event loop.
+    /// Boots through the real admission path over the builder's mocks and
+    /// returns the supervisor, without the event loop
+    /// [`launch`](Self::launch) spawns.
     ///
-    /// Where [`launch`](Self::launch) drives dispatch from a spawned event
-    /// loop, the returned [`Booted`] reaches
-    /// [`services`](crate::supervisor::Supervisor::services), the alive
-    /// count, and the dispatch calls directly through its `supervisor`
-    /// field. The builder is consumed, so clone the [`chain`](Self::chain),
-    /// [`store`](Self::store) and [`clock`](Self::clock) handles first to
-    /// keep driving the mocks afterwards; all three are shared handles.
+    /// Consumes the builder, so clone the [`chain`](Self::chain),
+    /// [`store`](Self::store) and [`clock`](Self::clock) handles first if
+    /// you still need to drive the mocks.
     pub async fn boot_supervisor(self) -> anyhow::Result<Booted<MockTypes>> {
         let pool = self.chain.pool(&self.chains, HARNESS_POLL_INTERVAL);
         BootScenario::over(Components {
@@ -814,9 +809,8 @@ mod tests {
         rt.wait().await.expect("clean shutdown");
     }
 
-    /// [`TestRuntimeBuilder::boot_supervisor`] hands back the booted
-    /// supervisor: services, the alive count, and dispatch are reachable
-    /// without spawning the event loop or calling a boot entry directly.
+    /// [`TestRuntimeBuilder::boot_supervisor`] reaches services, the alive
+    /// count and dispatch without a boot entry or an event loop.
     #[tokio::test]
     async fn boot_supervisor_exposes_the_booted_supervisor() {
         let Some(wasm) = example_wasm_or_skip() else {
@@ -847,9 +841,8 @@ mod tests {
         );
     }
 
-    /// The builder's mock handles keep serving a supervisor boot: a cloned
-    /// [`FakeNode`] answers the module's `eth_call` issued from a direct
-    /// dispatch and records the request.
+    /// A cloned [`FakeNode`] still serves and records after the boot
+    /// consumes the builder.
     #[tokio::test]
     async fn boot_supervisor_serves_chain_requests_from_the_builder_mocks() {
         use crate::host::component::ChainMethod;
