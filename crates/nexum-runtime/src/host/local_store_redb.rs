@@ -1,9 +1,15 @@
 //! `nexum:host/local-store` backend: a single redb file under
 //! `EngineConfig.engine.state_dir`.
 //!
-//! Every key is prefixed host-side by `keccak256(module_name)`, so modules
-//! sharing a key string see disjoint data and cannot forge into another's
-//! range.
+//! The contract is namespace isolation. Each module reads and writes only
+//! its own namespace: two modules that use the same key string see disjoint
+//! data, and no key a module supplies can read, list, or modify another
+//! module's entries.
+//!
+//! Implementation note: this backend currently separates namespaces by
+//! prefixing every stored key host-side with `keccak256(module_name)`
+//! ([`LocalStore::module`]). The scheme is internal to the host. It is not
+//! part of the contract, and a guest must not depend on it.
 
 #![allow(clippy::result_large_err)]
 
