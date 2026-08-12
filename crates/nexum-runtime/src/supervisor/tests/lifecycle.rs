@@ -4,6 +4,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
 use super::*;
+use crate::runtime::supervisor_clock::SupervisorClock;
 use crate::supervisor::lifecycle::sweep;
 
 /// price-alert's `[config]`; `not-a-number` makes `init` reject the
@@ -418,6 +419,50 @@ async fn restart_flaky_module_recovers_after_backoff() {
 
     // Dispatch 4: steady-state, no backoff in play.
     assert_eq!(booted.dispatch_block_on(1).await, 1);
+}
+
+/// The clock seam: a pinned [`SupervisorClock`] holds the module in backoff
+/// however long the test runs, and one exact `advance` makes the restart
+/// due. No sleeps, no jitter fudge.
+#[tokio::test]
+async fn a_manual_supervisor_clock_drives_the_restart_backoff() {
+    let Some(wasm) = module_wasm_or_skip("flaky-bomb") else {
+        return;
+    };
+    let clock = SupervisorClock::manual();
+    let mut booted = BootScenario::new()
+        .wasm(wasm)
+        .module(
+            TestManifest::new("flaky-bomb")
+                .cap("logging")
+                .cap("local-store")
+                .block_sub(1)
+                .config("fail_first_n", "1"),
+        )
+        .supervisor_clock(clock.clone())
+        .boot()
+        .await
+        .expect("boot");
+    assert_eq!(booted.supervisor.alive_count(), 1);
+
+    // Trap 1: dead with a 1 s backoff on the pinned timeline.
+    assert_eq!(booted.dispatch_block_on(1).await, 0);
+    assert_eq!(booted.supervisor.alive_count(), 0);
+
+    // The pinned clock never moves on its own: still in backoff, no matter
+    // how much real time the dispatches above took.
+    assert_eq!(booted.dispatch_block_on(1).await, 0);
+    assert_eq!(booted.supervisor.alive_count(), 0);
+
+    // Advancing exactly the 1 s backoff makes the restart due; fail_first_n
+    // was satisfied by trap 1, so the revived module accepts.
+    clock.advance(Duration::from_secs(1));
+    assert_eq!(
+        booted.dispatch_block_on(1).await,
+        1,
+        "the advanced clock made the restart due",
+    );
+    assert_eq!(booted.supervisor.alive_count(), 1);
 }
 
 /// Tight policy (3 failures / 60 s) inside ~4 s of wall clock. The 1.2 s

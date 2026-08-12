@@ -5,3 +5,4 @@ pub mod dispatch_rate;
 pub mod event_loop;
 pub mod poison_policy;
 pub mod restart_policy;
+pub mod supervisor_clock;

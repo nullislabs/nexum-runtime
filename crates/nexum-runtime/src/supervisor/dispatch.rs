@@ -32,7 +32,7 @@ impl<T: RuntimeTypes> Supervisor<T> {
         let chain_id = chain.id();
         let block_number = block.number;
         let event = nexum::host::types::Event::Block(block);
-        let now = Instant::now();
+        let now = self.clock.now();
         self.sweep_all(now).await;
 
         let mut dispatched = 0;
@@ -74,7 +74,7 @@ impl<T: RuntimeTypes> Supervisor<T> {
         log: alloy_rpc_types_eth::Log,
         cursor_key: Option<&str>,
     ) -> bool {
-        let now = Instant::now();
+        let now = self.clock.now();
         sweep(&self.shared, &mut self.providers, self.policy, now).await;
         let Some(idx) = self.modules.iter().position(|m| m.name == *module_name) else {
             warn!(module = %module_name, "no such module - dropping chain-log");
@@ -128,7 +128,7 @@ impl<T: RuntimeTypes> Supervisor<T> {
 
     /// The restart sweep runs first; returns the number of modules invoked.
     pub async fn dispatch_extension_event(&mut self, event: ExtensionEvent) -> usize {
-        let now = Instant::now();
+        let now = self.clock.now();
         self.sweep_all(now).await;
 
         let candidate_indices: Vec<usize> = (0..self.modules.len())
@@ -205,7 +205,7 @@ impl<T: RuntimeTypes> Supervisor<T> {
             );
             return DispatchOutcome::FuelSetFailed;
         }
-        let start = Instant::now();
+        let start = self.clock.now();
         // A deadline hit is fatal like a trap: cancellation leaves the store
         // unusable, so the trap arm must mark the module dead.
         let deadline = module.seed.event_deadline;
@@ -218,7 +218,7 @@ impl<T: RuntimeTypes> Supervisor<T> {
             .unwrap_or_else(|exceeded| Err(wasmtime::Error::from(exceeded)));
         // One post-call sample: the trap instant is start plus elapsed, not
         // the pre-dispatch `now`.
-        let elapsed = start.elapsed();
+        let elapsed = self.clock.now().duration_since(start);
         let latency_ms = elapsed.as_millis() as u64;
         match outcome {
             Ok(Ok(())) => {

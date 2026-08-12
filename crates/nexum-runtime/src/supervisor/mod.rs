@@ -30,6 +30,7 @@ use crate::host::extension::{Extension, HostServices, ServiceManifest};
 use crate::host::state::HostState;
 use crate::manifest::CapabilityError;
 use crate::runtime::poison_policy::PoisonPolicy;
+use crate::runtime::supervisor_clock::SupervisorClock;
 use admission::{ServiceKinds, capability_registry, enforce_extension_uniqueness, provider_kinds};
 use cursors::ChainLogCursors;
 use load::{LoadRefusal, LoadedModule, LoadedProvider};
@@ -45,6 +46,8 @@ pub struct Supervisor<T: RuntimeTypes> {
     policy: PoisonPolicy,
     /// In-memory mirror of the persisted chain-log cursors.
     chain_log_cursors: ChainLogCursors,
+    /// Instant source for the sweeps, backoff, and poison window.
+    clock: SupervisorClock,
 }
 
 /// Boot inputs derived from [`EngineConfig`], bundled once at the call site.
@@ -182,6 +185,7 @@ impl<T: RuntimeTypes> Supervisor<T> {
                 providers: Vec::new(),
                 policy: env.limits.poison(),
                 chain_log_cursors: ChainLogCursors::default(),
+                clock: SupervisorClock::default(),
             })
         }
         .await;
@@ -214,6 +218,13 @@ impl<T: RuntimeTypes> Supervisor<T> {
 
     pub fn services(&self) -> &HostServices {
         &self.shared.services
+    }
+
+    /// Replace the instant source, host-backed by default. Install before
+    /// the first dispatch: already-recorded backoff and poison-window
+    /// instants stay on the old timeline.
+    pub fn set_clock(&mut self, clock: SupervisorClock) {
+        self.clock = clock;
     }
 }
 
@@ -322,6 +333,7 @@ fn assemble<T: RuntimeTypes>(
         providers,
         policy,
         chain_log_cursors: ChainLogCursors::default(),
+        clock: SupervisorClock::default(),
     }
 }
 

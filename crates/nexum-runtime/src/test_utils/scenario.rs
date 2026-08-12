@@ -17,6 +17,7 @@ use crate::host::local_store_redb::LocalStore;
 use crate::host::logs::{LogPipeline, LogRecord};
 use crate::host::provider_pool::ProviderPool;
 use crate::preset::CoreRuntime;
+use crate::runtime::supervisor_clock::SupervisorClock;
 use crate::supervisor::{Supervisor, WasiClockOverride, build_linker};
 use crate::test_utils::wasm::test_wasmtime_engine;
 
@@ -79,6 +80,7 @@ pub struct BootScenario<T: RuntimeTypes = CoreRuntime> {
     modules: Vec<Entry>,
     services: Vec<Entry>,
     clocks: Option<WasiClockOverride>,
+    supervisor_clock: Option<SupervisorClock>,
     require_digest: bool,
     defaulted: bool,
 }
@@ -115,6 +117,7 @@ impl<T: RuntimeTypes> BootScenario<T> {
             modules: Vec::new(),
             services: Vec::new(),
             clocks: None,
+            supervisor_clock: None,
             require_digest: false,
             defaulted: false,
         }
@@ -191,12 +194,19 @@ impl<T: RuntimeTypes> BootScenario<T> {
         self
     }
 
+    /// The supervisor's own `now()` source: poison window, restart backoff,
+    /// dispatch latency. Guest time stays with [`clock`](Self::clock).
+    pub fn supervisor_clock(mut self, clock: SupervisorClock) -> Self {
+        self.supervisor_clock = Some(clock);
+        self
+    }
+
     pub async fn boot(self) -> anyhow::Result<Booted<T>> {
         let (config, launch) = self.split();
         let engine = test_wasmtime_engine();
         attach_wall_clock(&launch.extensions, launch.clocks.as_ref());
         let linker = build_linker::<T>(&engine, &launch.extensions)?;
-        let supervisor = Supervisor::boot(
+        let mut supervisor = Supervisor::boot(
             &engine,
             &linker,
             &config,
@@ -205,6 +215,11 @@ impl<T: RuntimeTypes> BootScenario<T> {
             launch.clocks,
         )
         .await?;
+        // Installed before any dispatch samples an instant, so the whole
+        // timeline is the injected one.
+        if let Some(clock) = launch.supervisor_clock {
+            supervisor.set_clock(clock);
+        }
         Ok(Booted {
             supervisor,
             logs: launch.components.logs,
@@ -259,6 +274,7 @@ impl<T: RuntimeTypes> BootScenario<T> {
                 components: self.components,
                 extensions: self.extensions,
                 clocks: self.clocks,
+                supervisor_clock: self.supervisor_clock,
             },
         )
     }
@@ -269,6 +285,7 @@ struct Launch<T: RuntimeTypes> {
     components: Components<T>,
     extensions: Vec<Arc<dyn Extension<T>>>,
     clocks: Option<WasiClockOverride>,
+    supervisor_clock: Option<SupervisorClock>,
 }
 
 impl Default for BootScenario<CoreRuntime> {
