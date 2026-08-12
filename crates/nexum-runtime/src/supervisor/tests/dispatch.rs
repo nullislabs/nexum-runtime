@@ -26,6 +26,53 @@ fn manifest_resource_overrides_take_effect_and_are_field_local() {
     assert_eq!(resolved.state_bytes, 2048);
 }
 
+/// The manifest is author-supplied, so a field above the engine ceiling is
+/// capped rather than granted. Each field is raised alone, so a clamp that
+/// only covered one of the three would fail here.
+#[test]
+fn manifest_resources_cannot_widen_the_engine_ceiling() {
+    let cfg = ModuleLimits::default();
+
+    let fuel_grab = ResourceSection {
+        max_fuel_per_event: Some(u64::MAX),
+        ..ResourceSection::default()
+    };
+    assert_eq!(resolve_module_limits(&fuel_grab, &cfg).fuel, cfg.fuel());
+
+    let memory_grab = ResourceSection {
+        max_memory_bytes: Some(usize::MAX),
+        ..ResourceSection::default()
+    };
+    assert_eq!(
+        resolve_module_limits(&memory_grab, &cfg).memory,
+        cfg.memory()
+    );
+
+    let state_grab = ResourceSection {
+        max_state_bytes: Some(u64::MAX),
+        ..ResourceSection::default()
+    };
+    assert_eq!(
+        resolve_module_limits(&state_grab, &cfg).state_bytes,
+        cfg.state_bytes(),
+    );
+}
+
+/// Clamping must not cost a module the narrower budget it asked for.
+#[test]
+fn a_narrower_manifest_value_still_wins() {
+    let cfg = ModuleLimits::default();
+    let res = ResourceSection {
+        max_memory_bytes: Some(cfg.memory() / 2),
+        max_fuel_per_event: Some(cfg.fuel() / 2),
+        max_state_bytes: Some(cfg.state_bytes() / 2),
+    };
+    let resolved = resolve_module_limits(&res, &cfg);
+    assert_eq!(resolved.fuel, cfg.fuel() / 2);
+    assert_eq!(resolved.memory, cfg.memory() / 2);
+    assert_eq!(resolved.state_bytes, cfg.state_bytes() / 2);
+}
+
 /// An over-long future is dropped at the deadline, not awaited out.
 #[tokio::test]
 async fn dispatch_deadline_interrupts_a_sleeping_host_call() {

@@ -222,6 +222,9 @@ pub enum ComponentKind {
 
 /// `[module.resources]` overrides; each unset field keeps the engine
 /// `[limits]` default.
+///
+/// A set field narrows and never widens: this manifest is author-supplied,
+/// so the engine `[limits]` value is a ceiling. A field above it is capped.
 #[derive(Debug, Deserialize, Default)]
 pub struct ResourceSection {
     /// Linear-memory cap, in bytes.
