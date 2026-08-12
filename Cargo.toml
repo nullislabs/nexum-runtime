@@ -183,6 +183,8 @@ tempfile = "3"
 wiremock = "0.6"
 proptest = "1"
 tower = "0.5"
+# Compile-fail harness pinning proc-macro rejection diagnostics.
+trybuild = "1"
 
 # Workspace-standard lint set. New crates inherit via
 # `[lints] workspace = true` in their package manifest. `unsafe_code`

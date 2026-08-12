@@ -1,0 +1,5 @@
+error: #[nexum_sdk::module] must be applied to an inherent impl of a named type
+ --> tests/ui/unnamed_self_type.rs:8:6
+  |
+8 | impl &Alerts {
+  |      ^^^^^^^
