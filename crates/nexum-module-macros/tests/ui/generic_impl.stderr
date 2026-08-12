@@ -1,0 +1,5 @@
+error: #[nexum_sdk::module] must be applied to a non-generic impl
+ --> tests/ui/generic_impl.rs:9:5
+  |
+9 | impl<T> Alerts<T> {
+  |     ^^^

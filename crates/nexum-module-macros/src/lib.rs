@@ -43,7 +43,7 @@ pub fn module(attr: TokenStream, item: TokenStream) -> TokenStream {
 
     let input = syn::parse_macro_input!(item as ItemImpl);
 
-    let self_ty = &input.self_ty;
+    let self_ty: &syn::Type = &input.self_ty;
     if !nexum_world::is_plain_type(self_ty) {
         return syn::Error::new_spanned(
             self_ty,
@@ -148,45 +148,14 @@ pub fn module(attr: TokenStream, item: TokenStream) -> TokenStream {
         }
     };
     let inline_world = &module_world.wit;
-    let adapter_caps: Vec<syn::Ident> = module_world
-        .adapters
-        .iter()
-        .map(|cap| syn::Ident::new(cap, proc_macro2::Span::call_site()))
-        .collect();
+    let adapter_bind = adapter_bind(&module_world.adapters);
 
-    // `init` is a required export; when the handler is absent the config
-    // is bound but unused, so drop it to keep the module warning-clean.
-    let init_impl = if has("init") {
-        quote! {
-            fn init(
-                config: ::std::vec::Vec<(::std::string::String, ::std::string::String)>,
-            ) -> ::core::result::Result<(), Fault> {
-                <#self_ty>::init(config)
-            }
-        }
-    } else {
-        quote! {
-            fn init(
-                _config: ::std::vec::Vec<(::std::string::String, ::std::string::String)>,
-            ) -> ::core::result::Result<(), Fault> {
-                ::core::result::Result::Ok(())
-            }
-        }
-    };
+    let init_impl = init_export(self_ty, has("init"));
 
-    let arm = |handler: &str, variant| -> proc_macro2::TokenStream {
-        let variant = syn::Ident::new(variant, proc_macro2::Span::call_site());
-        if has(handler) {
-            let call = syn::Ident::new(handler, proc_macro2::Span::call_site());
-            quote! { nexum::host::types::Event::#variant(payload) => <#self_ty>::#call(payload), }
-        } else {
-            quote! { nexum::host::types::Event::#variant(_) => ::core::result::Result::Ok(()), }
-        }
-    };
-    let block_arm = arm("on_block", "Block");
-    let logs_arm = arm("on_chain_logs", "ChainLogs");
-    let tick_arm = arm("on_tick", "Tick");
-    let custom_arm = arm("on_custom", "Custom");
+    let block_arm = dispatch_arm(self_ty, &present, "on_block", "Block");
+    let logs_arm = dispatch_arm(self_ty, &present, "on_chain_logs", "ChainLogs");
+    let tick_arm = dispatch_arm(self_ty, &present, "on_tick", "Tick");
+    let custom_arm = dispatch_arm(self_ty, &present, "on_custom", "Custom");
 
     let anchors = rebuild_anchors(&anchors);
     quote! {
@@ -199,7 +168,7 @@ pub fn module(attr: TokenStream, item: TokenStream) -> TokenStream {
             generate_all,
         });
 
-        ::nexum_sdk::bind_host_via_wit_bindgen!(caps: [#(#adapter_caps),*]);
+        #adapter_bind
 
         #parity
 
@@ -389,6 +358,57 @@ fn topic_parity_check(events: &[syn::Path], topics: &[B256]) -> proc_macro2::Tok
     }
 }
 
+/// The host-adapter binding: `bind_host_via_wit_bindgen!` over the
+/// world's adapter capability list, so an undeclared capability's
+/// adapter is never emitted.
+fn adapter_bind(adapters: &[&str]) -> proc_macro2::TokenStream {
+    let caps: Vec<syn::Ident> = adapters
+        .iter()
+        .map(|cap| syn::Ident::new(cap, proc_macro2::Span::call_site()))
+        .collect();
+    quote! { ::nexum_sdk::bind_host_via_wit_bindgen!(caps: [#(#caps),*]); }
+}
+
+/// The `init` export. `init` is required by the world; when the impl
+/// defines no handler the config is bound but unused, so drop it to
+/// keep the module warning-clean.
+fn init_export(self_ty: &syn::Type, has_init: bool) -> proc_macro2::TokenStream {
+    if has_init {
+        quote! {
+            fn init(
+                config: ::std::vec::Vec<(::std::string::String, ::std::string::String)>,
+            ) -> ::core::result::Result<(), Fault> {
+                <#self_ty>::init(config)
+            }
+        }
+    } else {
+        quote! {
+            fn init(
+                _config: ::std::vec::Vec<(::std::string::String, ::std::string::String)>,
+            ) -> ::core::result::Result<(), Fault> {
+                ::core::result::Result::Ok(())
+            }
+        }
+    }
+}
+
+/// One `match` arm of the `on_event` dispatch: a present handler is
+/// called with its payload, and an absent one dispatches as a no-op.
+fn dispatch_arm(
+    self_ty: &syn::Type,
+    present: &[&str],
+    handler: &str,
+    variant: &str,
+) -> proc_macro2::TokenStream {
+    let variant = syn::Ident::new(variant, proc_macro2::Span::call_site());
+    if present.contains(&handler) {
+        let call = syn::Ident::new(handler, proc_macro2::Span::call_site());
+        quote! { nexum::host::types::Event::#variant(payload) => <#self_ty>::#call(payload), }
+    } else {
+        quote! { nexum::host::types::Event::#variant(_) => ::core::result::Result::Ok(()), }
+    }
+}
+
 /// Cargo reruns a build on an `include_bytes!` target's mtime, which is the
 /// only thing making a manifest edit retrigger expansion.
 fn rebuild_anchors(anchors: &[String]) -> proc_macro2::TokenStream {
@@ -438,6 +458,87 @@ mod tests {
         let err = parse_args(quote! { subscribes(Foo), extra }).err().unwrap();
         // Foreign syn::Error; pins our macro message.
         assert!(err.to_string().contains("unexpected tokens"), "{err}");
+    }
+
+    /// `to_string` with quote's token spacing stripped, so an assertion
+    /// reads as the emitted source does.
+    fn flat(tokens: proc_macro2::TokenStream) -> String {
+        tokens.to_string().replace(' ', "")
+    }
+
+    #[test]
+    fn present_handler_arm_calls_the_impl() {
+        let ty: syn::Type = syn::parse_quote!(Watcher);
+        let arm = flat(dispatch_arm(&ty, &["on_block"], "on_block", "Block"));
+        assert_eq!(
+            arm,
+            "nexum::host::types::Event::Block(payload)=><Watcher>::on_block(payload),",
+        );
+    }
+
+    #[test]
+    fn absent_handler_arm_is_a_no_op() {
+        let ty: syn::Type = syn::parse_quote!(Watcher);
+        let arm = flat(dispatch_arm(&ty, &["on_block"], "on_tick", "Tick"));
+        assert_eq!(
+            arm,
+            "nexum::host::types::Event::Tick(_)=>::core::result::Result::Ok(()),",
+        );
+    }
+
+    /// Every handler dispatches on its own event variant: a payload can
+    /// never reach another handler's arm.
+    #[test]
+    fn each_handler_binds_its_own_variant() {
+        let ty: syn::Type = syn::parse_quote!(Watcher);
+        let pairs = [
+            ("on_block", "Block"),
+            ("on_chain_logs", "ChainLogs"),
+            ("on_tick", "Tick"),
+            ("on_custom", "Custom"),
+        ];
+        let all: Vec<&str> = pairs.iter().map(|(h, _)| *h).collect();
+        for (handler, variant) in pairs {
+            let arm = flat(dispatch_arm(&ty, &all, handler, variant));
+            assert!(arm.contains(&format!("Event::{variant}(payload)")), "{arm}");
+            assert!(
+                arm.contains(&format!("<Watcher>::{handler}(payload)")),
+                "{arm}"
+            );
+        }
+    }
+
+    #[test]
+    fn defined_init_export_forwards_the_config() {
+        let ty: syn::Type = syn::parse_quote!(Watcher);
+        let emitted = flat(init_export(&ty, true));
+        assert!(emitted.contains("<Watcher>::init(config)"), "{emitted}");
+    }
+
+    #[test]
+    fn absent_init_export_is_a_no_op() {
+        let ty: syn::Type = syn::parse_quote!(Watcher);
+        let emitted = flat(init_export(&ty, false));
+        assert!(emitted.contains("_config"), "{emitted}");
+        assert!(
+            emitted.contains("::core::result::Result::Ok(())"),
+            "{emitted}",
+        );
+        assert!(!emitted.contains("Watcher>::init"), "{emitted}");
+    }
+
+    /// An accepted manifest's declared capabilities come out as the caps
+    /// list of the emitted adapter binding, and nothing else does.
+    #[test]
+    fn declared_capabilities_become_bound_adapters() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(dir.path().join("component.toml"), MANIFEST).expect("write manifest");
+        let facts = derive_manifest_facts(dir.path(), false).expect("facts");
+        let emitted = flat(adapter_bind(&facts.world.adapters));
+        assert_eq!(
+            emitted,
+            "::nexum_sdk::bind_host_via_wit_bindgen!(caps:[logging]);",
+        );
     }
 
     #[test]

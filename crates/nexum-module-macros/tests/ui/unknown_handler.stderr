@@ -1,0 +1,5 @@
+error: `on_blocks` is not a recognized #[nexum_sdk::module] handler; expected one of ["init", "on_block", "on_chain_logs", "on_tick", "on_custom"] (rename helpers so they do not start with `on_`)
+  --> tests/ui/unknown_handler.rs:10:8
+   |
+10 |     fn on_blocks(_payload: u64) -> Result<(), ()> {
+   |        ^^^^^^^^^

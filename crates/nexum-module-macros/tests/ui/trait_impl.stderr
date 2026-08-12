@@ -1,0 +1,5 @@
+error: #[nexum_sdk::module] must be applied to an inherent impl, not a trait impl
+  --> tests/ui/trait_impl.rs:11:6
+   |
+11 | impl Handler for Alerts {}
+   |      ^^^^^^^

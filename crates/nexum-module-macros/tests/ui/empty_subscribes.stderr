@@ -1,0 +1,5 @@
+error: `subscribes(...)` must name at least one event type
+ --> tests/ui/empty_subscribes.rs:8:10
+  |
+8 | #[module(subscribes())]
+  |          ^^^^^^^^^^

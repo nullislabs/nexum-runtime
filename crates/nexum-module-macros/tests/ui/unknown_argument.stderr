@@ -1,0 +1,5 @@
+error: #[nexum_sdk::module] takes no arguments except `subscribes(EventType, ...)`
+ --> tests/ui/unknown_argument.rs:7:10
+  |
+7 | #[module(emits(Transfer))]
+  |          ^^^^^
