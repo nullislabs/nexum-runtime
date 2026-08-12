@@ -358,9 +358,8 @@ fn topic_parity_check(events: &[syn::Path], topics: &[B256]) -> proc_macro2::Tok
     }
 }
 
-/// The host-adapter binding: `bind_host_via_wit_bindgen!` over the
-/// world's adapter capability list, so an undeclared capability's
-/// adapter is never emitted.
+/// Binds only the world's declared adapters, so an undeclared
+/// capability's adapter is never emitted.
 fn adapter_bind(adapters: &[&str]) -> proc_macro2::TokenStream {
     let caps: Vec<syn::Ident> = adapters
         .iter()
@@ -369,9 +368,8 @@ fn adapter_bind(adapters: &[&str]) -> proc_macro2::TokenStream {
     quote! { ::nexum_sdk::bind_host_via_wit_bindgen!(caps: [#(#caps),*]); }
 }
 
-/// The `init` export. `init` is required by the world; when the impl
-/// defines no handler the config is bound but unused, so drop it to
-/// keep the module warning-clean.
+/// `init` is required by the world, so it is emitted even with no
+/// handler; the config binding is dropped then to stay warning-clean.
 fn init_export(self_ty: &syn::Type, has_init: bool) -> proc_macro2::TokenStream {
     if has_init {
         quote! {
@@ -392,8 +390,7 @@ fn init_export(self_ty: &syn::Type, has_init: bool) -> proc_macro2::TokenStream 
     }
 }
 
-/// One `match` arm of the `on_event` dispatch: a present handler is
-/// called with its payload, and an absent one dispatches as a no-op.
+/// One `on_event` arm; an absent handler dispatches as a no-op.
 fn dispatch_arm(
     self_ty: &syn::Type,
     present: &[&str],
@@ -460,8 +457,7 @@ mod tests {
         assert!(err.to_string().contains("unexpected tokens"), "{err}");
     }
 
-    /// `to_string` with quote's token spacing stripped, so an assertion
-    /// reads as the emitted source does.
+    /// Strips quote's token spacing so an assertion reads as source.
     fn flat(tokens: proc_macro2::TokenStream) -> String {
         tokens.to_string().replace(' ', "")
     }
