@@ -1,4 +1,4 @@
-//! # balance-tracker (example Shepherd module)
+//! # balance-tracker (example module)
 //!
 //! On each block reads `eth_getBalance` for every `[config].addresses`
 //! entry, persists the last value under `balance:{addr}`, and warns

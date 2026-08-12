@@ -23,10 +23,13 @@ DOMAIN='videre|shepherd'
 
 PACKAGE='nexum:host'
 
-echo "zero-leak: domain symbols in crates/nexum-runtime and wit"
-hits=$(git grep -nIiE "$DOMAIN" -- crates/nexum-runtime wit || true)
+# Every crate and every module, not just the runtime crate: a published
+# example naming a downstream is the same category error as the engine
+# doing it, and `description` reaches crates.io.
+echo "zero-leak: domain symbols in crates, modules and wit"
+hits=$(git grep -nIiE "$DOMAIN" -- crates modules wit || true)
 if [ -n "$hits" ]; then
-    fail "domain symbol or WIT reference in the runtime crate:"
+    fail "domain symbol or WIT reference in a first-party source:"
     printf '%s\n' "$hits" | sed 's/^/    /' >&2
 fi
 
