@@ -1,7 +1,9 @@
 //! Load one module or provider: admission, verified compile, instantiation, `init`.
 
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
+use std::time::Duration;
+
+use tokio::time::Instant;
 
 use anyhow::{Context, Error, Result};
 use strum::IntoStaticStr;

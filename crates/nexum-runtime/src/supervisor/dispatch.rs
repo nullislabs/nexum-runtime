@@ -1,7 +1,9 @@
 //! Event dispatch: rate limit, refuel, invoke `on_event` under the
 //! wall-clock deadline, and record the outcome.
 
-use std::time::{Duration, Instant};
+use std::time::Duration;
+
+use tokio::time::Instant;
 
 use alloy_chains::Chain;
 use tracing::{debug, error, warn};

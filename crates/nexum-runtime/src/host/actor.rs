@@ -4,7 +4,7 @@
 //! store never runs two at once.
 
 use std::sync::{Arc, Mutex, MutexGuard};
-use std::time::Instant;
+use tokio::time::Instant;
 
 use tokio::sync::Mutex as AsyncMutex;
 use wasmtime::Store;
@@ -28,8 +28,9 @@ impl Liveness {
         self.lock().is_none()
     }
 
-    /// When the component died, while it is dead.
-    pub fn dead_since(&self) -> Option<Instant> {
+    /// When the component died, while it is dead. Supervisor-only: the
+    /// instant is `tokio::time::Instant`, which must not cross the crate edge.
+    pub(crate) fn dead_since(&self) -> Option<Instant> {
         *self.lock()
     }
 
@@ -41,8 +42,9 @@ impl Liveness {
         }
     }
 
-    /// Mark the component alive again after a restart.
-    pub fn mark_alive(&self) {
+    /// Mark the component alive again after a restart. Supervisor-only:
+    /// an extension reports a trap with [`mark_dead`](Self::mark_dead).
+    pub(crate) fn mark_alive(&self) {
         *self.lock() = None;
     }
 

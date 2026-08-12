@@ -137,7 +137,7 @@ fn event_deadline_resolves_override_default_and_floor() {
 
 /// The `slow-host` fixture parks its first `chain::request` an hour past a
 /// 1 s deadline, one-shot, so the module recovers after the backoff.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn dispatch_deadline_cuts_off_a_blocked_host_call_and_recovers() {
     use std::time::Instant;
 
@@ -291,7 +291,7 @@ async fn dispatch_rate_limit_throttles_a_flood_without_starving_others() {
 
 /// fuel-bomb (always-traps) on chain 1, example (healthy) on chain 100: the
 /// example keeps dispatching throughout the bomb's quarantine.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn multi_chain_poisoned_module_does_not_affect_other_chains() {
     let Some(bomb_wasm) = module_wasm_or_skip("fuel-bomb") else {
         return;
@@ -335,7 +335,7 @@ async fn multi_chain_poisoned_module_does_not_affect_other_chains() {
         "the example receives chain-100 blocks",
     );
 
-    // Wait out the bomb's backoff so trap #2 can land.
+    // Past the bomb's backoff so trap #2 can land.
     tokio::time::sleep(Duration::from_millis(1_100)).await;
     booted.dispatch_block_on(1).await;
     assert_eq!(
