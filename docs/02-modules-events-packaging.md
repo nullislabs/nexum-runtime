@@ -154,7 +154,7 @@ A successful dispatch resets the module's failure count.
 ### Key lifecycle properties
 
 - **State survives a restart.**
-  The redb local store is external to the WASM instance, and each component keeps a keccak-namespaced prefix of it.
+  The redb local store is external to the WASM instance, and each component sees its own isolated namespace of it.
   A restarted component picks up where it left off.
 - **Memory does not survive a restart.**
   Each restart builds a fresh `Store`: clean linear memory, no stale pointers.

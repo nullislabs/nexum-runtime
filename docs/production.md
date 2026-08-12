@@ -94,7 +94,7 @@ The repository ships no container image and no compose file.
 ## 3. State backup (redb)
 
 The local store is a single redb file at `<state_dir>/local-store.redb`, and `state_dir` defaults to `./data` beside the working directory.
-Every component holds a `keccak256(name)` prefix inside that one file, so one file is the whole engine's state.
+Every component's isolated namespace lives inside that one file, so one file is the whole engine's state.
 Losing it forces a from-scratch resync as each component rediscovers its state.
 
 Durability is per host call, not per event.
