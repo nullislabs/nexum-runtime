@@ -76,11 +76,11 @@ async fn e2e_block_subscription_dispatched() {
     );
 }
 
-/// A provider manifest declaring `logging` clears both halves of the gate:
+/// A service manifest declaring `logging` clears both halves of the gate:
 /// the declaration is known at manifest load and covers the component's
 /// logging import at enforcement.
 #[tokio::test]
-async fn e2e_provider_declaring_logging_boots() {
+async fn e2e_service_declaring_logging_boots() {
     let Some(wasm) = example_wasm_or_skip() else {
         return;
     };
@@ -96,18 +96,18 @@ async fn e2e_provider_declaring_logging_boots() {
         )
         .boot()
         .await
-        .expect("a provider declaring logging boots");
+        .expect("a service declaring logging boots");
     assert_eq!(booted.supervisor.adapter_count(), 1);
 }
 
 /// The operator's `[[services]]` `http_allow` grant, wildcard
-/// classification intact, is what a booted provider's store spec carries.
-/// A provider cannot import `nexum:host`, so no guest fixture can fetch on
+/// classification intact, is what a booted service's store spec carries.
+/// A service cannot import `nexum:host`, so no guest fixture can fetch on
 /// this path; the spec is the deepest observable link, and the gate built
 /// from a spec is proved live by
 /// `e2e_http_probe_allowlisted_fetch_and_denied_path`.
 #[tokio::test]
-async fn e2e_service_http_allow_reaches_the_provider_store_spec() {
+async fn e2e_service_http_allow_reaches_the_service_store_spec() {
     use crate::host_pattern::HostPattern;
 
     let Some(wasm) = example_wasm_or_skip() else {
@@ -126,10 +126,10 @@ async fn e2e_service_http_allow_reaches_the_provider_store_spec() {
         )
         .boot()
         .await
-        .expect("a provider with an operator transport grant boots");
+        .expect("a service with an operator transport grant boots");
     assert_eq!(booted.supervisor.adapter_count(), 1);
     assert_eq!(
-        booted.supervisor.providers[0].seed.spec.http_allowlist,
+        booted.supervisor.services[0].seed.spec.http_allowlist,
         [
             HostPattern::from("api.acme.example"),
             HostPattern::from("*.acme.example"),

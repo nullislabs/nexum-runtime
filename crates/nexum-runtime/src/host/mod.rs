@@ -3,7 +3,7 @@
 //!
 //! [`provider_pool`] and [`local_store_redb`] are the capability backends;
 //! [`component`] is the backend-trait seam; [`extension`] wires in domain
-//! extensions; [`actor`] supervises provider instances; [`http`] gates
+//! extensions; [`actor`] supervises service instances; [`http`] gates
 //! outgoing wasi:http; [`logs`] is the module-log pipeline; [`error`] projects
 //! backend errors into the WIT `chain-error` / `Fault` shapes.
 

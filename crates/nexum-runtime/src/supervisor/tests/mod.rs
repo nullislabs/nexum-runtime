@@ -124,7 +124,7 @@ async fn try_boot_single(
     (dir, result)
 }
 
-/// A stub extension registering the `acme-adapter` provider kind behind a
+/// A stub extension registering the `acme-adapter` service kind behind a
 /// unit service, for the boot-gate tests.
 struct AcmeService;
 impl crate::host::extension::HostService for AcmeService {}
@@ -178,7 +178,7 @@ impl Extension<crate::test_utils::MockTypes> for AcmeExtension {
         Some(Arc::new(AcmeService))
     }
 
-    fn provider(&self) -> Option<Box<dyn ServiceKind<crate::test_utils::MockTypes>>> {
+    fn service_kind(&self) -> Option<Box<dyn ServiceKind<crate::test_utils::MockTypes>>> {
         Some(Box::new(AcmeKind))
     }
 }
@@ -209,7 +209,7 @@ impl Extension<crate::test_utils::MockTypes> for ServicelessAcmeExtension {
         Ok(())
     }
 
-    fn provider(&self) -> Option<Box<dyn ServiceKind<crate::test_utils::MockTypes>>> {
+    fn service_kind(&self) -> Option<Box<dyn ServiceKind<crate::test_utils::MockTypes>>> {
         Some(Box::new(AcmeKind))
     }
 }

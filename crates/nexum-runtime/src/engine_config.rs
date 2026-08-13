@@ -45,7 +45,7 @@ pub const DEFAULT_QUOTA_MAX_CHARGES: u32 = 256;
 pub const DEFAULT_QUOTA_WINDOW: Duration = Duration::from_secs(60);
 /// Default cap on receipts under status watch at once.
 pub const DEFAULT_WATCH_MAX_ENTRIES: NonZeroUsize = nz_usize(1024);
-/// Default base window a healthy provider refreshes within; the give-up
+/// Default base window a healthy venue refreshes within; the give-up
 /// deadline is the derived `grace`, not this directly.
 pub const DEFAULT_WATCH_EXPIRY: Duration = Duration::from_secs(86_400);
 /// Derived grace defaults to this many `expiry` windows.
@@ -64,7 +64,7 @@ const fn derive_grace(expiry: Duration) -> Duration {
     Duration::from_secs(capped)
 }
 
-/// Per-caller submission quota toward providers. A submission and a
+/// Per-caller submission quota toward the venue. A submission and a
 /// charged decode failure each consume one unit; the window slides.
 /// Resolved from `[limits.quota]`.
 #[derive(Debug, Clone, Copy)]
@@ -91,16 +91,16 @@ impl Default for SubmitQuota {
     }
 }
 
-/// Bounds on a provider status-watch set: `max_entries` caps the
+/// Bounds on the venue status-watch set: `max_entries` caps the
 /// per-cadence poll fan-out, `grace` is the give-up deadline, `expiry`
 /// the base window it derives from. Resolved from `[limits.watch]`.
 #[derive(Debug, Clone, Copy)]
 pub struct WatchLimit {
     /// Maximum receipts under status watch at once.
     pub max_entries: NonZeroUsize,
-    /// Base window a healthy provider refreshes the deadline within.
+    /// Base window a healthy venue refreshes the deadline within.
     pub expiry: Duration,
-    /// Give-up deadline: how long a watch survives an unreachable provider
+    /// Give-up deadline: how long a watch survives an unreachable venue
     /// before unreported eviction. A reachable poll resets it; a resolve
     /// failure or errored poll rides out against it. Derived unless set.
     pub grace: Duration,
@@ -541,7 +541,7 @@ pub struct ModuleLimits {
     /// Poison-pill quarantine thresholds.
     #[serde(default)]
     pub poison: PoisonLimitsSection,
-    /// Per-caller provider submission quota.
+    /// Per-caller venue submission quota.
     #[serde(default)]
     pub quota: QuotaLimitsSection,
     /// Status-watch set bounds.
@@ -577,7 +577,7 @@ pub struct ResolvedModuleLimits {
     pub logs: LogRetentionLimits,
     /// Poison-pill quarantine thresholds.
     pub poison: PoisonPolicy,
-    /// Per-caller provider submission quota.
+    /// Per-caller venue submission quota.
     pub quota: SubmitQuota,
     /// Status-watch set bounds.
     pub watch: WatchLimit,
@@ -1718,7 +1718,7 @@ window_secs  = 60
         let cfg: EngineConfig = toml::from_str(
             r#"
 [[services]]
-path = "providers/acme/acme_provider.wasm"
+path = "services/acme/acme_service.wasm"
 http_allow = ["api.acme.example", "*.acme.example"]
 
 [[services]]
@@ -1729,10 +1729,7 @@ manifest = "services/bare/component.toml"
         .expect("services parse");
         assert_eq!(cfg.services.len(), 2);
         let first = &cfg.services[0];
-        assert_eq!(
-            first.path,
-            PathBuf::from("providers/acme/acme_provider.wasm")
-        );
+        assert_eq!(first.path, PathBuf::from("services/acme/acme_service.wasm"));
         assert!(first.manifest.is_none(), "manifest defaults to sibling");
         assert_eq!(
             first.http_allow,

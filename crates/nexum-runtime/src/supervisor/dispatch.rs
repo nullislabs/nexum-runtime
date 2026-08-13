@@ -21,10 +21,10 @@ use crate::manifest::Subscription;
 use crate::module_id::ModuleId;
 
 impl<T: RuntimeTypes> Supervisor<T> {
-    /// Providers revive before modules: a module revived first would re-run
-    /// `init` against possibly-dead providers.
+    /// Services revive before modules: a module revived first would re-run
+    /// `init` against possibly-dead services.
     async fn sweep_all(&mut self, now: Instant) {
-        sweep(&self.shared, &mut self.providers, self.policy, now).await;
+        sweep(&self.shared, &mut self.services, self.policy, now).await;
         sweep(&self.shared, &mut self.modules, self.policy, now).await;
     }
 
@@ -77,7 +77,7 @@ impl<T: RuntimeTypes> Supervisor<T> {
         cursor_key: Option<&str>,
     ) -> bool {
         let now = Instant::now();
-        sweep(&self.shared, &mut self.providers, self.policy, now).await;
+        sweep(&self.shared, &mut self.services, self.policy, now).await;
         let Some(idx) = self.modules.iter().position(|m| m.name == *module_name) else {
             warn!(module = %module_name, "no such module - dropping chain-log");
             return false;

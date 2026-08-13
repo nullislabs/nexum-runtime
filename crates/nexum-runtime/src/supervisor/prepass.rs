@@ -269,7 +269,7 @@ pub(super) fn run(
     engine_cfg: &EngineConfig,
     registry: &CapabilityRegistry,
 ) -> Result<Prepass, Refusal> {
-    let provider_registry = CapabilityRegistry::provider();
+    let service_registry = CapabilityRegistry::service();
     let mut ledger = NamespaceLedger::new();
     let configured_chains = ConfiguredChains::from_config(engine_cfg);
     let adapter_manifests = load_role_manifests(
@@ -277,7 +277,7 @@ pub(super) fn run(
             .services
             .iter()
             .map(|e| (&e.path, e.manifest.as_deref())),
-        &provider_registry,
+        &service_registry,
         RolePass {
             role: Role::Service,
             chains: &configured_chains,

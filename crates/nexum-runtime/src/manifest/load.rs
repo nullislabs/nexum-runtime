@@ -520,7 +520,7 @@ name = "plain"
         let loaded = validate(
             r#"
 [component]
-name = "acme-provider"
+name = "acme-service"
 kind = "service"
 
 [dependencies]
@@ -529,7 +529,7 @@ kind = "service"
         .expect("parse");
         assert_eq!(loaded.kind, ComponentKind::Service);
         // A service's name is the service type, so the name selects the row.
-        assert_eq!(loaded.name.as_str(), "acme-provider");
+        assert_eq!(loaded.name.as_str(), "acme-service");
     }
 
     /// `Display` is the manifest spelling for both kinds.
@@ -541,7 +541,7 @@ kind = "service"
     }
 
     /// The kind is a closed role now, so an invented spelling refuses at
-    /// load instead of surviving to boot as a provider name.
+    /// load instead of surviving to boot as a service name.
     #[test]
     fn component_kind_refuses_an_unknown_spelling() {
         let err = validate(

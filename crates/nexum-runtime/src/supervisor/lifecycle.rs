@@ -1,4 +1,4 @@
-//! Restart, backoff, and poison machinery for modules and providers.
+//! Restart, backoff, and poison machinery for modules and services.
 
 use std::collections::VecDeque;
 use std::time::Duration;
@@ -8,7 +8,7 @@ use tokio::time::Instant;
 use anyhow::{Result, anyhow};
 
 use super::Shared;
-use super::load::{LoadedModule, LoadedProvider, install_provider, instantiate_module};
+use super::load::{LoadedModule, LoadedService, install_service, instantiate_module};
 use super::role::{Role, report_restart_attempt, report_restart_outcome, report_trap};
 use super::store::{build_linker, fresh_run_store};
 use crate::digest::ContentDigest;
@@ -90,7 +90,7 @@ impl Health {
         self.failure_count
     }
 
-    /// Backoff counts from `died_at`, not `now`: a provider's death can
+    /// Backoff counts from `died_at`, not `now`: a service's death can
     /// predate the sweep that notices it.
     pub(super) fn record_trap(
         &mut self,
@@ -222,7 +222,7 @@ impl<T: RuntimeTypes> Sweepable<T> for LoadedModule<T> {
     }
 }
 
-impl<T: RuntimeTypes> Sweepable<T> for LoadedProvider {
+impl<T: RuntimeTypes> Sweepable<T> for LoadedService {
     const ROLE: Role = Role::Service;
 
     fn name(&self) -> &ModuleId {
@@ -244,7 +244,7 @@ impl<T: RuntimeTypes> Sweepable<T> for LoadedProvider {
     /// The shared liveness reports deaths the dispatch path cannot see;
     /// the health gate records each one exactly once.
     fn detect_death(&self) -> Option<Instant> {
-        provider_death(&self.health, &self.liveness)
+        service_death(&self.health, &self.liveness)
     }
 
     /// Run and liveness commit only on a live install.
@@ -252,7 +252,7 @@ impl<T: RuntimeTypes> Sweepable<T> for LoadedProvider {
         let row = shared
             .kinds
             .get(self.kind)
-            .ok_or_else(|| anyhow!("provider kind {} is not registered", self.kind))?;
+            .ok_or_else(|| anyhow!("service kind {} is not registered", self.kind))?;
         let (run, store) = fresh_run_store(
             shared,
             &self.name,
@@ -260,7 +260,7 @@ impl<T: RuntimeTypes> Sweepable<T> for LoadedProvider {
             &self.seed.spec,
             Role::Service,
         )?;
-        match install_provider(
+        match install_service(
             shared,
             row,
             &self.seed,
@@ -280,9 +280,9 @@ impl<T: RuntimeTypes> Sweepable<T> for LoadedProvider {
     }
 }
 
-/// A provider's unrecorded death: liveness dead while health still says alive,
+/// A service's unrecorded death: liveness dead while health still says alive,
 /// timed from the death instant rather than the sweep that noticed it.
-fn provider_death(health: &Health, liveness: &Liveness) -> Option<Instant> {
+fn service_death(health: &Health, liveness: &Liveness) -> Option<Instant> {
     if !health.dispatchable() {
         return None;
     }
@@ -521,14 +521,14 @@ mod health_tests {
     }
 
     #[test]
-    fn a_provider_death_is_recorded_from_the_death_instant() {
+    fn a_service_death_is_recorded_from_the_death_instant() {
         let liveness = Liveness::default();
         liveness.mark_dead();
         let died_at = liveness.dead_since().expect("marked dead");
         // Five seconds is well past the one-second backoff the first trap earns.
         let sweep = died_at + secs(5);
         let mut health = Health::alive();
-        let died = provider_death(&health, &liveness).expect("an unrecorded death is a trap");
+        let died = service_death(&health, &liveness).expect("an unrecorded death is a trap");
         let verdict = health.record_trap(died, sweep, policy(5, 600));
         assert_eq!(verdict.failure_count, 1);
         assert_eq!(verdict.backoff, secs(1));
@@ -539,26 +539,26 @@ mod health_tests {
     }
 
     #[test]
-    fn a_provider_death_is_recorded_once() {
+    fn a_service_death_is_recorded_once() {
         let liveness = Liveness::default();
         let mut health = Health::alive();
         let now = Instant::now();
         assert!(
-            provider_death(&health, &liveness).is_none(),
-            "a live provider has nothing to record",
+            service_death(&health, &liveness).is_none(),
+            "a live service has nothing to record",
         );
         liveness.mark_dead();
-        let died = provider_death(&health, &liveness).expect("marked dead");
+        let died = service_death(&health, &liveness).expect("marked dead");
         health.record_trap(died, now, policy(5, 600));
         assert!(
-            provider_death(&health, &liveness).is_none(),
+            service_death(&health, &liveness).is_none(),
             "the liveness stays dead until the reinstall, so the gate is health",
         );
         assert_eq!(health.failure_count(), 1);
     }
 
     #[test]
-    fn a_module_restart_keeps_the_curve_and_a_provider_restart_resets_it() {
+    fn a_module_restart_keeps_the_curve_and_a_service_restart_resets_it() {
         let t0 = Instant::now();
         let mut module = Health::alive();
         module.record_trap(t0, t0, policy(9, 600));
@@ -567,11 +567,11 @@ mod health_tests {
         assert!(module.dispatchable());
         assert_eq!(module.failure_count(), 2);
 
-        let mut provider = Health::alive();
-        provider.record_trap(t0, t0, policy(9, 600));
-        provider.record_trap(t0 + secs(2), t0 + secs(2), policy(9, 600));
-        provider.restart_succeeded(Role::Service.resets_failure_count());
-        assert!(provider.dispatchable());
-        assert_eq!(provider.failure_count(), 0);
+        let mut service = Health::alive();
+        service.record_trap(t0, t0, policy(9, 600));
+        service.record_trap(t0 + secs(2), t0 + secs(2), policy(9, 600));
+        service.restart_succeeded(Role::Service.resets_failure_count());
+        assert!(service.dispatchable());
+        assert_eq!(service.failure_count(), 0);
     }
 }

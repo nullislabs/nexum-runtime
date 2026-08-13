@@ -177,7 +177,7 @@ mod tests {
     #[test]
     fn signing_methods_are_denied() {
         // The signing-adjacent surface must map to a `Denied` fault,
-        // not reach the provider.
+        // not reach the upstream RPC node.
         for m in [
             "eth_sign",
             "eth_sendTransaction",

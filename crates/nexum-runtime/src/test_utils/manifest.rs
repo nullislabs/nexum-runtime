@@ -272,7 +272,7 @@ mod tests {
         const DIGEST: &str =
             "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
         let loaded = load_core(
-            &TestManifest::new("price-provider")
+            &TestManifest::new("price-service")
                 .kind("service")
                 .component_digest(DIGEST)
                 .cap("logging")
@@ -281,7 +281,7 @@ mod tests {
         );
 
         assert_eq!(loaded.kind, ComponentKind::Service);
-        assert_eq!(loaded.name.as_str(), "price-provider");
+        assert_eq!(loaded.name.as_str(), "price-service");
         assert_eq!(
             loaded.component_digest.expect("digest parsed").to_string(),
             DIGEST,

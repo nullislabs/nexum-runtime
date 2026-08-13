@@ -1,4 +1,4 @@
-//! Module and provider identity.
+//! Module and service identity.
 
 use std::borrow::Borrow;
 use std::sync::Arc;

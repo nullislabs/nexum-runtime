@@ -69,7 +69,7 @@ async fn boot_single_refuses_a_subscription_on_an_unconfigured_chain() {
     .lacks("compile");
 }
 
-/// The gate covers `[[services]]` entries too: a provider manifest cannot
+/// The gate covers `[[services]]` entries too: a service manifest cannot
 /// subscribe past the operator's `[chains]` set.
 #[tokio::test]
 async fn boot_refuses_an_adapter_subscription_on_an_unconfigured_chain() {

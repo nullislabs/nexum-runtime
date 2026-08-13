@@ -186,7 +186,7 @@ pub struct AssembledRuntime<T: RuntimeTypes> {
     /// Shared backends threaded into every module store.
     pub components: Components<T>,
     /// Extensions: namespaces, capabilities, linker hooks, services, and
-    /// provider kinds.
+    /// service kinds.
     pub extensions: Vec<Arc<dyn Extension<T>>>,
     /// Cross-cutting facilities installed before the engine boots.
     pub add_ons: AddOns,

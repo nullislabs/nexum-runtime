@@ -48,7 +48,7 @@ fn a_boot_refusal_increments_the_counter_under_its_parse_class() {
 /// Rejected before instantiation, naming the registered kinds; a manifest
 /// without a kind defaults to an event-module.
 #[tokio::test]
-async fn boot_rejects_provider_whose_manifest_is_an_event_module() {
+async fn boot_rejects_service_whose_manifest_is_an_event_module() {
     BootScenario::over(mock_components())
         .extensions(acme_extensions())
         .adapter(TestManifest::new("acme").kind("module"))
@@ -62,7 +62,7 @@ async fn boot_rejects_provider_whose_manifest_is_an_event_module() {
 
 /// The refusal names the registered kinds.
 #[tokio::test]
-async fn boot_rejects_an_unregistered_provider_kind() {
+async fn boot_rejects_an_unregistered_service_kind() {
     BootScenario::over(mock_components())
         .extensions(acme_extensions())
         .adapter(TestManifest::new("gadget").kind("service"))
@@ -73,14 +73,14 @@ async fn boot_rejects_an_unregistered_provider_kind() {
                 if kind == "gadget" && registered == &["acme-adapter"])
         })
         // Operator wording pin.
-        .names("unregistered provider kind gadget")
+        .names("unregistered service kind gadget")
         .names("acme-adapter");
 }
 
 /// A registered kind clears the discriminator; boot reaches the component
 /// read step.
 #[tokio::test]
-async fn boot_admits_a_registered_provider_kind_past_the_kind_gate() {
+async fn boot_admits_a_registered_service_kind_past_the_kind_gate() {
     let scenario = BootScenario::over(mock_components()).extensions(acme_extensions());
     let missing = scenario.dir().join("missing-acme.wasm");
     scenario
@@ -102,10 +102,10 @@ async fn boot_admits_a_registered_provider_kind_past_the_kind_gate() {
         .lacks("requires a component.toml");
 }
 
-/// The multi-entry path wires provider kinds, so a serviceless kind refuses
+/// The multi-entry path wires service kinds, so a serviceless kind refuses
 /// the boot before any entry loads.
 #[tokio::test]
-async fn boot_refuses_a_provider_kind_without_a_host_service() {
+async fn boot_refuses_a_service_kind_without_a_host_service() {
     BootScenario::over(mock_components())
         .extensions(serviceless_acme_extensions())
         .expect_refusal()
@@ -120,13 +120,13 @@ async fn boot_refuses_a_provider_kind_without_a_host_service() {
             )
         })
         // Operator wording pin.
-        .names("extension acme registers provider kind acme-adapter without a host service");
+        .names("extension acme registers service kind acme-adapter without a host service");
 }
 
-/// Provider kinds come only from `engine.toml`, so single boot skips the
+/// Service kinds come only from `engine.toml`, so single boot skips the
 /// service gate and the first refusal is the missing manifest.
 #[tokio::test]
-async fn boot_single_skips_the_provider_kind_service_gate() {
+async fn boot_single_skips_the_service_kind_service_gate() {
     let extensions = serviceless_acme_extensions();
     let engine = test_wasmtime_engine();
     let linker = crate::supervisor::build_linker(&engine, &extensions).expect("build_linker");
@@ -216,12 +216,12 @@ async fn boot_refuses_a_nonexistent_explicit_manifest_path() {
 #[tokio::test]
 async fn boot_refuses_a_capsless_manifest_before_any_other_gate() {
     // Raw TOML: the textual absence of [dependencies] is the fixture.
-    let provider = "[component]\nname = \"acme-adapter\"\nkind = \"service\"\n\n\
-                    [venue]\nbody_version = 2\n\n\
-                    [[subscription]]\nkind = \"acme-status\"\n";
+    let service = "[component]\nname = \"acme-adapter\"\nkind = \"service\"\n\n\
+                   [venue]\nbody_version = 2\n\n\
+                   [[subscription]]\nkind = \"acme-status\"\n";
     BootScenario::over(mock_components())
         .extensions(acme_extensions())
-        .adapter(Entry::new(provider.to_owned()).http_allow(["api.acme.example"]))
+        .adapter(Entry::new(service.to_owned()).http_allow(["api.acme.example"]))
         .expect_refusal()
         .await
         .variant::<BootRefusal>(|e| {
@@ -303,10 +303,10 @@ async fn boot_denies_an_undeclared_chain_import_for_balance_tracker() {
 }
 
 /// The example component's only gated import is `logging`, so the refusal
-/// is deterministic; the provider path holds the import to the declaration
+/// is deterministic; the service path holds the import to the declaration
 /// just as the module path does.
 #[tokio::test]
-async fn boot_denies_an_undeclared_logging_import_for_a_provider() {
+async fn boot_denies_an_undeclared_logging_import_for_a_service() {
     let Some(wasm) = example_wasm_or_skip() else {
         return;
     };

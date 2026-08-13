@@ -14,7 +14,7 @@ mod subscriptions;
 
 pub use load::LoadRefusal;
 pub use prepass::{BootRefusal, ConfiguredChains};
-pub use store::{WasiClockOverride, build_linker, build_provider_linker};
+pub use store::{WasiClockOverride, build_linker, build_service_linker};
 pub use subscriptions::{ChainLogSub, SubscriptionPlan, Viability};
 
 use std::sync::Arc;
@@ -29,17 +29,17 @@ use crate::host::extension::{Extension, HostServices, ServiceManifest};
 use crate::host::state::HostState;
 use crate::refusal::{Refusal, RefusalContext as _};
 use crate::runtime::poison_policy::PoisonPolicy;
-use admission::{ServiceKinds, capability_registry, enforce_extension_uniqueness, provider_kinds};
+use admission::{ServiceKinds, capability_registry, enforce_extension_uniqueness, service_kinds};
 use cursors::ChainLogCursors;
-use load::{LoadedModule, LoadedProvider};
+use load::{LoadedModule, LoadedService};
 use prepass::{enforce_subscriptions, load_required_manifest, manifest_namespace};
 use role::Role;
 
-/// Owns every loaded module and provider and exposes the dispatch surface.
+/// Owns every loaded module and service and exposes the dispatch surface.
 pub struct Supervisor<T: RuntimeTypes> {
     shared: Shared<T>,
     modules: Vec<LoadedModule<T>>,
-    providers: Vec<LoadedProvider>,
+    services: Vec<LoadedService>,
     /// Poison-pill thresholds resolved from `[limits.poison]` at boot.
     policy: PoisonPolicy,
     /// In-memory mirror of the persisted chain-log cursors.
@@ -97,15 +97,15 @@ impl<T: RuntimeTypes> Supervisor<T> {
             let shared = wire_extensions(engine, components, extensions, clocks, true)?;
             let registry = capability_registry(&shared.extensions);
             let prepass = prepass::run(engine_cfg, &registry)?;
-            // Providers boot first, so every module store built after already
+            // Services boot first, so every module store built after already
             // routes to the installed instances.
-            let providers = load_role(
+            let services = load_role(
                 &engine_cfg.services,
                 prepass.adapter_manifests,
                 Role::Service,
                 |e| &e.path,
                 async |entry, manifest| {
-                    load::provider(
+                    load::service(
                         &shared,
                         entry,
                         manifest,
@@ -116,7 +116,7 @@ impl<T: RuntimeTypes> Supervisor<T> {
                 },
             )
             .await?;
-            let provider_manifests = project_manifests(&providers);
+            let service_manifests = project_manifests(&services);
             let modules = load_role(
                 &engine_cfg.modules,
                 prepass.module_manifests,
@@ -130,7 +130,7 @@ impl<T: RuntimeTypes> Supervisor<T> {
                         manifest,
                         &engine_cfg.limits,
                         engine_cfg.engine.require_component_digest,
-                        &provider_manifests,
+                        &service_manifests,
                     )
                     .await
                 },
@@ -139,7 +139,7 @@ impl<T: RuntimeTypes> Supervisor<T> {
             Ok(assemble(
                 shared,
                 modules,
-                providers,
+                services,
                 engine_cfg.limits.poison,
             ))
         }
@@ -158,7 +158,7 @@ impl<T: RuntimeTypes> Supervisor<T> {
         clocks: Option<WasiClockOverride>,
     ) -> Result<Self, Refusal> {
         let booted: Result<Self, Refusal> = async {
-            // Provider kinds come only from `engine.toml`, so none register here.
+            // Service kinds come only from `engine.toml`, so none register here.
             let shared = wire_extensions(engine, components, extensions, clocks, false)?;
             let registry = capability_registry(&shared.extensions);
             let loaded_manifest = load_required_manifest(
@@ -186,7 +186,7 @@ impl<T: RuntimeTypes> Supervisor<T> {
             Ok(Self {
                 shared,
                 modules: vec![loaded],
-                providers: Vec::new(),
+                services: Vec::new(),
                 policy: env.limits.poison,
                 chain_log_cursors: ChainLogCursors::default(),
             })
@@ -202,7 +202,7 @@ impl<T: RuntimeTypes> Supervisor<T> {
 
     /// Alive or not.
     pub fn adapter_count(&self) -> usize {
-        self.providers.len()
+        self.services.len()
     }
 
     /// Excludes init-failed (permanent) and in-backoff modules.
@@ -239,20 +239,20 @@ pub(crate) fn count_boot_refusal(refusal: &Refusal) {
 }
 
 /// The resulting [`Shared`] is the one wiring every later phase reads.
-/// `with_provider_kinds: false` skips [`provider_kinds`], which refuses a serviceless kind.
+/// `with_service_kinds: false` skips [`service_kinds`], which refuses a serviceless kind.
 fn wire_extensions<T: RuntimeTypes>(
     engine: &Engine,
     components: &Components<T>,
     extensions: &[Arc<dyn Extension<T>>],
     clocks: Option<WasiClockOverride>,
-    with_provider_kinds: bool,
+    with_service_kinds: bool,
 ) -> Result<Shared<T>, Refusal> {
     enforce_extension_uniqueness(extensions)?;
     // A duplicate service namespace is an embedder wiring bug, not an
     // operator refusal, so it stays untyped and uncounted.
     let services = HostServices::from_extensions(extensions).map_err(anyhow::Error::new)?;
-    let kinds = if with_provider_kinds {
-        provider_kinds(extensions, &services)?
+    let kinds = if with_service_kinds {
+        service_kinds(extensions, &services)?
     } else {
         ServiceKinds::new()
     };
@@ -285,9 +285,9 @@ async fn load_role<E, L>(
     Ok(out)
 }
 
-/// The providers' manifests as the worker install predicates see them.
-fn project_manifests(providers: &[LoadedProvider]) -> Vec<ServiceManifest> {
-    providers
+/// The services' manifests as the worker install predicates see them.
+fn project_manifests(services: &[LoadedService]) -> Vec<ServiceManifest> {
+    services
         .iter()
         .map(|p| ServiceManifest {
             name: p.name.to_string(),
@@ -301,22 +301,22 @@ fn project_manifests(providers: &[LoadedProvider]) -> Vec<ServiceManifest> {
 fn assemble<T: RuntimeTypes>(
     shared: Shared<T>,
     modules: Vec<LoadedModule<T>>,
-    providers: Vec<LoadedProvider>,
+    services: Vec<LoadedService>,
     policy: PoisonPolicy,
 ) -> Supervisor<T> {
     let alive = modules.iter().filter(|m| m.health.dispatchable()).count();
-    let adapters_alive = providers.iter().filter(|p| p.health.dispatchable()).count();
+    let adapters_alive = services.iter().filter(|s| s.health.dispatchable()).count();
     info!(
         loaded = modules.len(),
         alive,
-        services = providers.len(),
+        services = services.len(),
         adapters_alive,
         "supervisor up"
     );
     Supervisor {
         shared,
         modules,
-        providers,
+        services,
         policy,
         chain_log_cursors: ChainLogCursors::default(),
     }

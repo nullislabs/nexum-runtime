@@ -30,19 +30,19 @@ pub const CORE_NAMESPACE: NamespaceCaps = NamespaceCaps {
     ifaces: CORE_CAPABILITIES,
 };
 
-/// Interfaces a provider world links: the scoped transport plus `logging`.
+/// Interfaces a service world links: the scoped transport plus `logging`.
 /// `http` is gated by the registry, as in the core set.
-pub const PROVIDER_CAPABILITIES: &[&str] = &[
+pub const SERVICE_CAPABILITIES: &[&str] = &[
     nexum_world::Cap::Chain.as_str(),
     nexum_world::Cap::Logging.as_str(),
 ];
 
-/// The provider namespace: `nexum:host/` scoped to the transport
-/// interfaces, so a provider declaring a core-only interface (e.g.
+/// The service namespace: `nexum:host/` scoped to the transport
+/// interfaces, so a service declaring a core-only interface (e.g.
 /// `local-store`) is rejected as unknown.
-pub const PROVIDER_NAMESPACE: NamespaceCaps = NamespaceCaps {
+pub const SERVICE_NAMESPACE: NamespaceCaps = NamespaceCaps {
     prefix: "nexum:host/",
-    ifaces: PROVIDER_CAPABILITIES,
+    ifaces: SERVICE_CAPABILITIES,
 };
 
 /// Import prefix of the `wasi:http` package; every interface under it is
@@ -99,12 +99,12 @@ impl CapabilityRegistry {
         }
     }
 
-    /// The registry a provider validates against: the scoped transport plus
-    /// `logging` and `http`. A provider manifest declaring a core-only
+    /// The registry a service validates against: the scoped transport plus
+    /// `logging` and `http`. A service manifest declaring a core-only
     /// capability (e.g. `local-store`) fails as unknown.
-    pub fn provider() -> Self {
+    pub fn service() -> Self {
         Self {
-            namespaces: vec![PROVIDER_NAMESPACE],
+            namespaces: vec![SERVICE_NAMESPACE],
         }
     }
 
@@ -380,11 +380,11 @@ mod tests {
     }
 
     #[test]
-    fn provider_registry_knows_the_scoped_set_and_no_core_only_caps() {
+    fn service_registry_knows_the_scoped_set_and_no_core_only_caps() {
         // The scoped transport plus logging and http are known; the
-        // core-only interfaces a provider must not reach are not, so a
+        // core-only interfaces a service must not reach are not, so a
         // manifest declaring them fails validation as unknown.
-        let r = CapabilityRegistry::provider();
+        let r = CapabilityRegistry::service();
         assert!(r.is_known("chain"));
         assert!(r.is_known("logging"));
         assert!(r.is_known("http"));
@@ -394,8 +394,8 @@ mod tests {
     }
 
     #[test]
-    fn provider_registry_maps_scoped_imports_but_not_core_only() {
-        let r = CapabilityRegistry::provider();
+    fn service_registry_maps_scoped_imports_but_not_core_only() {
+        let r = CapabilityRegistry::service();
         assert_eq!(r.wit_import_to_cap("nexum:host/chain@0.1.0"), Some("chain"));
         assert_eq!(
             r.wit_import_to_cap("nexum:host/logging@0.1.0"),
@@ -405,14 +405,14 @@ mod tests {
             r.wit_import_to_cap("wasi:http/outgoing-handler@0.2.12"),
             Some("http")
         );
-        // A core-only interface is not a recognized provider capability.
+        // A core-only interface is not a recognized service capability.
         assert_eq!(r.wit_import_to_cap("nexum:host/local-store@0.1.0"), None);
     }
 
     #[test]
-    fn provider_enforce_refuses_an_undeclared_logging_import() {
+    fn service_enforce_refuses_an_undeclared_logging_import() {
         let loaded = manifest_with_caps(&["chain"]);
-        let r = CapabilityRegistry::provider();
+        let r = CapabilityRegistry::service();
         let err = enforce_capabilities(&loaded, ["nexum:host/logging@0.1.0"].into_iter(), &r)
             .unwrap_err();
         let CapabilityError::Undeclared(v) = err else {
@@ -423,19 +423,19 @@ mod tests {
     }
 
     #[test]
-    fn provider_enforce_admits_a_declared_logging_import() {
+    fn service_enforce_admits_a_declared_logging_import() {
         let loaded = manifest_with_caps(&["logging"]);
-        let r = CapabilityRegistry::provider();
+        let r = CapabilityRegistry::service();
         assert!(
             enforce_capabilities(&loaded, ["nexum:host/logging@0.1.0"].into_iter(), &r).is_ok()
         );
     }
 
     #[test]
-    fn provider_manifest_declaring_a_core_only_cap_is_unknown() {
-        // The load path validates declared names against the registry; an
-        // provider declaring `local-store` must surface as unknown.
-        let r = CapabilityRegistry::provider();
+    fn service_manifest_declaring_a_core_only_cap_is_unknown() {
+        // The load path validates declared names against the registry; a
+        // service declaring `local-store` must surface as unknown.
+        let r = CapabilityRegistry::service();
         assert!(!r.is_known("local-store"));
         assert!(r.known_names().split(", ").all(|n| n != "local-store"));
     }

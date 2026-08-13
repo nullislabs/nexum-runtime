@@ -18,8 +18,8 @@ Its members:
 - `attach_clock(Arc<dyn HostWallClock>)`: receives the effective host wall clock once per launch, before `link`.
   The clock is the WASI override's wall clock when a test sets one, else the real host clock, so extension time and guest time share one source.
 - `service() -> Option<Arc<dyn HostService>>`: a type-erased service published under the namespace on the shared `HostServices` map and downcast at the call site.
-- `provider() -> Option<Box<dyn ServiceKind<T>>>`: a service component kind the extension installs.
-- `manifest_sections`, `admit_provider`, `admit_worker`: the non-core manifest sections it claims and its install-time predicates over them.
+- `service_kind() -> Option<Box<dyn ServiceKind<T>>>`: a service component kind the extension installs.
+- `manifest_sections`, `admit_service`, `admit_worker`: the non-core manifest sections it claims and its install-time predicates over them.
   An `Err` refuses the install fail-fast.
 - `subscriptions`, `events`: the manifest subscription kinds it emits and the event sources it opens once the engine is booted.
 

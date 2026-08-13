@@ -39,7 +39,7 @@ pub struct HostState<T: RuntimeTypes> {
     pub chain_response_max_bytes: usize,
     /// `local-store` backend: per-module handle with keccak256 prefix.
     pub store: Handle<T>,
-    /// Extension-owned host services, keyed by namespace; a provider store
+    /// Extension-owned host services, keyed by namespace; a service store
     /// carries an empty map.
     pub services: HostServices,
 }

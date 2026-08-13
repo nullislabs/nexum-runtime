@@ -161,7 +161,7 @@ fn build<T: RuntimeTypes>(
     run: RunId,
     role: Role,
 ) -> Result<HostStore<T>> {
-    // A provider store carries an empty service map: the shared map holds
+    // A service store carries an empty service map: the shared map holds
     // the registry that owns this store, and carrying it here would cycle.
     let services = match role {
         Role::Module => shared.services.clone(),
@@ -214,7 +214,7 @@ fn build<T: RuntimeTypes>(
             log_router: router,
             chain: shared.components.chain.clone(),
             chain_response_max_bytes: spec.chain_response_max_bytes,
-            // Provider guests never reach this: `build_provider_linker`
+            // Service guests never reach this: `build_service_linker`
             // links only `kind.link` plus WASI.
             store: module_store,
             services,
@@ -243,9 +243,9 @@ pub fn build_linker<T: RuntimeTypes>(
     Ok(linker)
 }
 
-/// Core `nexum:host` interfaces are withheld, so a provider importing one
-/// fails to instantiate; extensions are never linked into providers.
-pub fn build_provider_linker<T: RuntimeTypes>(
+/// Core `nexum:host` interfaces are withheld, so a service importing one
+/// fails to instantiate; extensions are never linked into services.
+pub fn build_service_linker<T: RuntimeTypes>(
     engine: &Engine,
     kind: &dyn ServiceKind<T>,
 ) -> anyhow::Result<Linker<HostState<T>>> {

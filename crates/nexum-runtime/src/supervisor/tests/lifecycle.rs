@@ -486,7 +486,7 @@ async fn poison_pill_quarantines_module_after_threshold() {
     assert_eq!(booted.supervisor.poisoned_count(), 1);
 }
 
-/// A provider kind whose `install` outcome the test flips, so one sweep
+/// A service kind whose `install` outcome the test flips, so one sweep
 /// sees a dead reinstall and the next a live one.
 struct ScriptedKind(Arc<AtomicBool>);
 
@@ -538,7 +538,7 @@ impl Extension<CoreRuntime> for ScriptedExtension {
         Some(Arc::new(ScriptedService))
     }
 
-    fn provider(&self) -> Option<Box<dyn ServiceKind<CoreRuntime>>> {
+    fn service_kind(&self) -> Option<Box<dyn ServiceKind<CoreRuntime>>> {
         Some(Box::new(ScriptedKind(self.0.clone())))
     }
 }
@@ -551,8 +551,7 @@ fn kind_shared(
     let (dir, store) = temp_local_store();
     let extensions = vec![extension];
     let services = HostServices::from_extensions(&extensions).expect("services");
-    let kinds =
-        crate::supervisor::admission::provider_kinds(&extensions, &services).expect("kinds");
+    let kinds = crate::supervisor::admission::service_kinds(&extensions, &services).expect("kinds");
     let shared = Shared {
         engine: test_wasmtime_engine(),
         components: test_components(store),
@@ -564,15 +563,15 @@ fn kind_shared(
     (dir, shared)
 }
 
-/// A booted provider at run 0. The component is an empty valid one: the
+/// A booted service at run 0. The component is an empty valid one: the
 /// test kinds never instantiate it.
-fn provider_at_run_zero(
+fn service_at_run_zero(
     engine: &wasmtime::Engine,
     kind: &'static str,
-) -> crate::supervisor::load::LoadedProvider {
+) -> crate::supervisor::load::LoadedService {
     const EMPTY_COMPONENT: &[u8] = b"(component)";
     let limits = ResolvedModuleLimits::default();
-    crate::supervisor::load::LoadedProvider {
+    crate::supervisor::load::LoadedService {
         name: crate::module_id::ModuleId::parse("scripted").expect("valid module name"),
         kind,
         sections: manifest::ExtensionSections::default(),
@@ -625,10 +624,10 @@ async fn a_death_is_stamped_on_the_paused_clock() {
 /// A dead reinstall defers with run, liveness, and failure curve untouched,
 /// so the next attempt reuses the sequence rather than burning it.
 #[tokio::test]
-async fn a_dead_provider_reinstall_defers_without_committing_a_run() {
+async fn a_dead_service_reinstall_defers_without_committing_a_run() {
     let live = Arc::new(AtomicBool::new(false));
     let (_dir, shared) = kind_shared(Arc::new(ScriptedExtension(live.clone())));
-    let mut provider = provider_at_run_zero(&shared.engine, "scripted-adapter");
+    let mut service = service_at_run_zero(&shared.engine, "scripted-adapter");
     let policy = crate::runtime::poison_policy::PoisonPolicy::new(
         std::num::NonZeroU32::new(9).unwrap(),
         Duration::from_secs(600),
@@ -636,34 +635,34 @@ async fn a_dead_provider_reinstall_defers_without_committing_a_run() {
 
     // The actor trapped: the sweep discovers the death through the shared
     // liveness and counts the 1 s backoff from the death instant.
-    provider.liveness.mark_dead();
-    let died_at = provider.liveness.dead_since().expect("marked dead");
+    service.liveness.mark_dead();
+    let died_at = service.liveness.dead_since().expect("marked dead");
     let first = died_at + Duration::from_secs(5);
-    sweep(&shared, std::slice::from_mut(&mut provider), policy, first).await;
+    sweep(&shared, std::slice::from_mut(&mut service), policy, first).await;
 
-    assert_eq!(provider.run.seq, 0, "a dead reinstall commits no run");
+    assert_eq!(service.run.seq, 0, "a dead reinstall commits no run");
     assert!(
-        !provider.liveness.is_alive(),
+        !service.liveness.is_alive(),
         "a dead reinstall leaves the liveness dead",
     );
     assert_eq!(
-        provider.health.failure_count(),
+        service.health.failure_count(),
         2,
         "one recorded trap plus one deferred restart",
     );
 
     live.store(true, Ordering::SeqCst);
     let second = first + Duration::from_secs(10);
-    sweep(&shared, std::slice::from_mut(&mut provider), policy, second).await;
+    sweep(&shared, std::slice::from_mut(&mut service), policy, second).await;
 
     assert_eq!(
-        provider.run.seq, 1,
+        service.run.seq, 1,
         "the live reinstall commits the successor the failed attempt minted",
     );
-    assert!(provider.liveness.is_alive());
-    assert!(provider.health.dispatchable());
+    assert!(service.liveness.is_alive());
+    assert!(service.health.dispatchable());
     assert_eq!(
-        provider.health.failure_count(),
+        service.health.failure_count(),
         0,
         "a reinstall is a fresh instance, so the curve resets",
     );
@@ -677,7 +676,7 @@ const INSTALL_DEADLINE: Duration = Duration::from_secs(7);
 /// one rides this instead and fails the test.
 const OUTER_TIMEOUT: Duration = Duration::from_secs(3_600);
 
-/// A provider kind whose `install` never returns, for the deadline gate.
+/// A service kind whose `install` never returns, for the deadline gate.
 struct HangingKind;
 
 #[async_trait::async_trait]
@@ -721,7 +720,7 @@ impl Extension<CoreRuntime> for HangingExtension {
         Some(Arc::new(ScriptedService))
     }
 
-    fn provider(&self) -> Option<Box<dyn ServiceKind<CoreRuntime>>> {
+    fn service_kind(&self) -> Option<Box<dyn ServiceKind<CoreRuntime>>> {
         Some(Box::new(HangingKind))
     }
 }
@@ -729,24 +728,24 @@ impl Extension<CoreRuntime> for HangingExtension {
 /// A hung `install` fails by the dispatch deadline and defers, instead of
 /// parking the sweep (and with it all dispatch) forever.
 #[tokio::test(start_paused = true)]
-async fn a_hanging_provider_install_fails_by_deadline() {
+async fn a_hanging_service_install_fails_by_deadline() {
     let (_dir, shared) = kind_shared(Arc::new(HangingExtension));
-    let mut provider = provider_at_run_zero(&shared.engine, "hanging-adapter");
-    provider.seed.event_deadline = INSTALL_DEADLINE;
+    let mut service = service_at_run_zero(&shared.engine, "hanging-adapter");
+    service.seed.event_deadline = INSTALL_DEADLINE;
     let policy = crate::runtime::poison_policy::PoisonPolicy::new(
         std::num::NonZeroU32::new(9).unwrap(),
         Duration::from_secs(600),
     );
 
-    provider.liveness.mark_dead();
-    let died_at = provider.liveness.dead_since().expect("marked dead");
+    service.liveness.mark_dead();
+    let died_at = service.liveness.dead_since().expect("marked dead");
     let now = died_at + Duration::from_secs(5);
     let started = Instant::now();
     // Paused time auto-advances only through timers; an unwrapped hung
     // install would ride this outer timeout instead of its own deadline.
     tokio::time::timeout(
         OUTER_TIMEOUT,
-        sweep(&shared, std::slice::from_mut(&mut provider), policy, now),
+        sweep(&shared, std::slice::from_mut(&mut service), policy, now),
     )
     .await
     .expect("sweep completed: the install deadline bounded the hung install");
@@ -756,26 +755,26 @@ async fn a_hanging_provider_install_fails_by_deadline() {
         INSTALL_DEADLINE,
         "the install rode the seed's deadline, not another timer",
     );
-    assert_eq!(provider.run.seq, 0, "a timed-out install commits no run");
+    assert_eq!(service.run.seq, 0, "a timed-out install commits no run");
     assert!(
-        !provider.liveness.is_alive(),
+        !service.liveness.is_alive(),
         "a timed-out install leaves the liveness dead",
     );
     assert_eq!(
-        provider.health.failure_count(),
+        service.health.failure_count(),
         2,
         "one recorded trap plus one deferred restart",
     );
     assert!(
-        provider.health.due_restart(now + Duration::from_secs(60)),
-        "a deadline hit defers rather than killing the provider permanently",
+        service.health.due_restart(now + Duration::from_secs(60)),
+        "a deadline hit defers rather than killing the service permanently",
     );
 }
 
 /// The boot call site carries the same bound: a hung `install` refuses the
 /// boot instead of parking the launch forever.
 #[tokio::test(start_paused = true)]
-async fn a_hanging_provider_install_refuses_the_boot_by_deadline() {
+async fn a_hanging_service_install_refuses_the_boot_by_deadline() {
     let extension: Arc<dyn Extension<CoreRuntime>> = Arc::new(HangingExtension);
     let scenario = BootScenario::new()
         .extensions([extension])

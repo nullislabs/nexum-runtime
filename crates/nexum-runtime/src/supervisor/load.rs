@@ -1,4 +1,4 @@
-//! Load one module or provider: admission, verified compile, instantiation, `init`.
+//! Load one module or service: admission, verified compile, instantiation, `init`.
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -21,7 +21,7 @@ use super::lifecycle::Health;
 use super::prepass::manifest_namespace;
 use super::role::Role;
 use super::store::{
-    HostStore, ResolvedLimits, StoreSpec, build_provider_linker, fresh_run_store,
+    HostStore, ResolvedLimits, StoreSpec, build_service_linker, fresh_run_store,
     resolve_module_limits,
 };
 use crate::bindings::nexum::host::types::Fault;
@@ -77,14 +77,14 @@ pub enum LoadRefusal {
     },
     /// An embedder wiring bug: the kind selects the installing extension,
     /// so two registrants are ambiguous.
-    #[error("provider kind {kind} is registered twice")]
+    #[error("service kind {kind} is registered twice")]
     KindRegisteredTwice {
         /// The doubly registered kind.
         kind: &'static str,
     },
-    /// A provider kind whose extension owns no host service to install
+    /// A service kind whose extension owns no host service to install
     /// into.
-    #[error("extension {namespace} registers provider kind {kind} without a host service")]
+    #[error("extension {namespace} registers service kind {kind} without a host service")]
     ServicelessKind {
         /// The registering extension's namespace.
         namespace: &'static str,
@@ -95,7 +95,7 @@ pub enum LoadRefusal {
     /// wrong.
     #[error(
         "{} declares the worker kind; an [[services]] entry requires a \
-         component.toml declaring a registered provider kind ({})",
+         component.toml declaring a registered service kind ({})",
         path.display(),
         registered.join(", ")
     )]
@@ -108,7 +108,7 @@ pub enum LoadRefusal {
     /// The manifest name selects the kind, so the fix is the name or the
     /// unwired extension.
     #[error(
-        "{} declares unregistered provider kind {kind}; registered kinds: {}",
+        "{} declares unregistered service kind {kind}; registered kinds: {}",
         path.display(),
         registered.join(", ")
     )]
@@ -198,8 +198,8 @@ pub(super) struct LoadedModule<T: RuntimeTypes> {
     pub(super) health: Health,
 }
 
-pub(super) struct LoadedProvider {
-    /// The provider's namespace: its manifest name.
+pub(super) struct LoadedService {
+    /// The service's namespace: its manifest name.
     pub(super) name: ModuleId,
     pub(super) kind: &'static str,
     pub(super) sections: manifest::ExtensionSections,
@@ -290,7 +290,7 @@ pub(super) async fn instantiate_module<T: RuntimeTypes>(
 /// verdict carries no error, its meaning stays with the caller.
 /// `event_deadline` bounds the whole install (instantiation, guest `init`,
 /// extension wiring), not only the guest call a module's bound covers.
-pub(super) async fn install_provider<T: RuntimeTypes>(
+pub(super) async fn install_service<T: RuntimeTypes>(
     shared: &Shared<T>,
     row: &ServiceRow<T>,
     seed: &Seed,
@@ -299,13 +299,13 @@ pub(super) async fn install_provider<T: RuntimeTypes>(
     liveness: Liveness,
 ) -> Result<Installed> {
     let (kind, service) = row;
-    let linker = build_provider_linker::<T>(&shared.engine, kind.as_ref())?;
+    let linker = build_service_linker::<T>(&shared.engine, kind.as_ref())?;
     with_dispatch_deadline(
         seed.event_deadline,
         kind.install(seed.instance(&linker, sections, store, liveness), service),
     )
     .await
-    .with_context(|| format!("provider kind {} did not install in time", kind.kind()))?
+    .with_context(|| format!("service kind {} did not install in time", kind.kind()))?
 }
 
 /// A failed `init` loads the module dead; the dispatcher skips it.
@@ -316,7 +316,7 @@ pub(super) async fn module<T: RuntimeTypes>(
     loaded_manifest: LoadedManifest,
     limits_cfg: &ResolvedModuleLimits,
     require_component_digest: bool,
-    provider_manifests: &[ServiceManifest],
+    service_manifests: &[ServiceManifest],
 ) -> Result<LoadedModule<T>, Refusal> {
     let module_namespace: ModuleId = manifest_namespace(&loaded_manifest);
     let registry = capability_registry(&shared.extensions);
@@ -330,7 +330,7 @@ pub(super) async fn module<T: RuntimeTypes>(
         require_component_digest,
         || {
             for ext in &shared.extensions {
-                ext.admit_worker(module_namespace.as_str(), sections, provider_manifests)
+                ext.admit_worker(module_namespace.as_str(), sections, service_manifests)
                     .with_refusal_context(|| {
                         format!("install refused for {}", entry.path.display())
                     })?;
@@ -422,18 +422,18 @@ pub(super) async fn module<T: RuntimeTypes>(
     })
 }
 
-/// A failed `init` loads the provider dead and unroutable, permanently.
-pub(super) async fn provider<T: RuntimeTypes>(
+/// A failed `init` loads the service dead and unroutable, permanently.
+pub(super) async fn service<T: RuntimeTypes>(
     shared: &Shared<T>,
     entry: &ServiceEntry,
     loaded_manifest: LoadedManifest,
     limits_cfg: &ResolvedModuleLimits,
     require_component_digest: bool,
-) -> Result<LoadedProvider, Refusal> {
+) -> Result<LoadedService, Refusal> {
     let namespace: ModuleId = manifest_namespace(&loaded_manifest);
     // A core-only declaration fails at manifest load; an undeclared gated
     // import fails after compile; the linker withholds the core interfaces.
-    let registry = CapabilityRegistry::provider();
+    let registry = CapabilityRegistry::service();
     let sections = loaded_manifest.extensions.clone();
     let (row, component, digest) = admit_and_verify(
         shared,
@@ -444,7 +444,7 @@ pub(super) async fn provider<T: RuntimeTypes>(
         require_component_digest,
         || {
             for ext in &shared.extensions {
-                ext.admit_provider(namespace.as_str(), &sections)
+                ext.admit_service(namespace.as_str(), &sections)
                     .with_refusal_context(|| {
                         format!("install refused for {}", entry.path.display())
                     })?;
@@ -475,7 +475,7 @@ pub(super) async fn provider<T: RuntimeTypes>(
             info!(
                 component = %entry.path.display(),
                 kind = row.0.kind(),
-                "compiling provider component",
+                "compiling service component",
             );
             Ok(row)
         },
@@ -483,12 +483,12 @@ pub(super) async fn provider<T: RuntimeTypes>(
     let kind = row.0.as_ref();
 
     info!(
-        provider = %namespace,
+        service = %namespace,
         kind = kind.kind(),
         fuel = limits_cfg.fuel_per_event.get(),
         memory_bytes = limits_cfg.memory_bytes.get(),
         http_allow = entry.http_allow.len(),
-        "applied provider resource limits and transport scope",
+        "applied service resource limits and transport scope",
     );
 
     let spec = StoreSpec {
@@ -512,14 +512,14 @@ pub(super) async fn provider<T: RuntimeTypes>(
     };
     let liveness = Liveness::default();
     let (run, store) = fresh_run_store(shared, &namespace, 0, &seed.spec, Role::Service)?;
-    let installed = install_provider(shared, row, &seed, &sections, store, liveness.clone())
+    let installed = install_service(shared, row, &seed, &sections, store, liveness.clone())
         .await
         .with_refusal_context(|| format!("install {}", entry.path.display()))?;
     // A dead install at boot is permanent; the liveness records it for the sweep.
     if installed == Installed::Dead {
         liveness.mark_dead();
     }
-    Ok(LoadedProvider {
+    Ok(LoadedService {
         name: namespace,
         kind: kind.kind(),
         sections,

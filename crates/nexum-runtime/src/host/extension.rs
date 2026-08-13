@@ -1,5 +1,5 @@
 //! Extension seam: what one extension contributes to the host (namespace,
-//! capabilities, linker hook, optional service, provider kind, event sources,
+//! capabilities, linker hook, optional service, service kind, event sources,
 //! and manifest-section install predicates).
 
 use std::any::Any;
@@ -46,8 +46,8 @@ pub trait Extension<T: RuntimeTypes>: Send + Sync + 'static {
         None
     }
 
-    /// Provider kind this extension installs.
-    fn provider(&self) -> Option<Box<dyn ServiceKind<T>>> {
+    /// Service kind this extension installs.
+    fn service_kind(&self) -> Option<Box<dyn ServiceKind<T>>> {
         None
     }
 
@@ -57,22 +57,22 @@ pub trait Extension<T: RuntimeTypes>: Send + Sync + 'static {
         &[]
     }
 
-    /// Admit one provider at install over its manifest sections; `Err`
+    /// Admit one service at install over its manifest sections; `Err`
     /// refuses fail-fast.
-    fn admit_provider(&self, provider: &str, sections: &ExtensionSections) -> anyhow::Result<()> {
-        let _ = (provider, sections);
+    fn admit_service(&self, service: &str, sections: &ExtensionSections) -> anyhow::Result<()> {
+        let _ = (service, sections);
         Ok(())
     }
 
-    /// Admit one worker at install over its and the loaded providers'
+    /// Admit one worker at install over its and the loaded services'
     /// sections; `Err` refuses fail-fast.
     fn admit_worker(
         &self,
         worker: &str,
         sections: &ExtensionSections,
-        providers: &[ServiceManifest],
+        services: &[ServiceManifest],
     ) -> anyhow::Result<()> {
-        let _ = (worker, sections, providers);
+        let _ = (worker, sections, services);
         Ok(())
     }
 
@@ -159,17 +159,17 @@ impl<'a> EventSources<'a> {
 /// Type-erased host service an extension owns, downcast at the call site.
 pub trait HostService: Any + Send + Sync + 'static {}
 
-/// A provider component kind; the host holds an instance behind the owning
+/// A service component kind; the host holds an instance behind the owning
 /// extension's serialized service.
 #[async_trait]
 pub trait ServiceKind<T: RuntimeTypes>: Send + Sync + 'static {
-    /// Manifest kind this provider answers for.
+    /// Manifest kind this service answers for.
     fn kind(&self) -> &'static str;
 
-    /// Adds the provider's imports to a provider linker.
+    /// Adds the service's imports to a service linker.
     fn link(&self, linker: &mut Linker<HostState<T>>) -> anyhow::Result<()>;
 
-    /// Instantiate and install one provider; [`Installed::Dead`] is a failed
+    /// Instantiate and install one service; [`Installed::Dead`] is a failed
     /// guest `init`, `Err` a boot error.
     /// The host bounds this call by the dispatch deadline and drops the future
     /// at its next await, so publish into `service` only after the last await.
@@ -180,9 +180,9 @@ pub trait ServiceKind<T: RuntimeTypes>: Send + Sync + 'static {
     ) -> anyhow::Result<Installed>;
 }
 
-/// One provider instance ready to install.
+/// One service instance ready to install.
 pub struct ServiceInstance<'a, T: RuntimeTypes> {
-    /// Compiled provider component.
+    /// Compiled service component.
     pub component: &'a Component,
     /// Linker carrying the kind's imports plus the WASI base.
     pub linker: &'a Linker<HostState<T>>,
@@ -190,7 +190,7 @@ pub struct ServiceInstance<'a, T: RuntimeTypes> {
     pub store: Store<HostState<T>>,
     /// Manifest `[config]` handed to the guest `init`.
     pub config: Vec<(String, String)>,
-    /// The provider's extension-owned manifest sections.
+    /// The service's extension-owned manifest sections.
     pub sections: &'a ExtensionSections,
     /// Fuel budget applied before each routed guest call.
     pub fuel_per_call: u64,
@@ -198,20 +198,20 @@ pub struct ServiceInstance<'a, T: RuntimeTypes> {
     pub liveness: Liveness,
 }
 
-/// One loaded provider as [`Extension::admit_worker`] sees it.
+/// One loaded service as [`Extension::admit_worker`] sees it.
 #[derive(Clone, Debug)]
 pub struct ServiceManifest {
-    /// The provider's namespace (its manifest name).
+    /// The service's namespace (its manifest name).
     pub name: String,
     /// Registered kind spelling.
     pub kind: &'static str,
-    /// The provider's extension-owned manifest sections.
+    /// The service's extension-owned manifest sections.
     pub sections: ExtensionSections,
-    /// sha256 of the loaded provider artifact.
+    /// sha256 of the loaded service artifact.
     pub component_digest: crate::digest::ContentDigest,
 }
 
-/// Outcome of one provider install.
+/// Outcome of one service install.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Installed {
     /// `init` succeeded; the instance is installed and routable.

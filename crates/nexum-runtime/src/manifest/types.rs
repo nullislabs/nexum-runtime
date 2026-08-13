@@ -227,7 +227,7 @@ pub enum ComponentKind {
 
 impl ComponentKind {
     /// The manifest spelling; the kind is a closed role, so an invented
-    /// spelling refuses rather than surviving to boot as a provider name.
+    /// spelling refuses rather than surviving to boot as a service name.
     fn from_manifest(kind: Option<&str>) -> Result<Self, ParseError> {
         match kind {
             None => Ok(Self::Module),
