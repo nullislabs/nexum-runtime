@@ -69,6 +69,41 @@ fn core_imports_resolve_against_the_wit_tree() {
     );
 }
 
+/// `FaultLabel` against the parsed `types.fault` cases: same names,
+/// same order, same count. A stale label with no WIT case (or the
+/// reverse) fails here; the exhaustive matches over the generated
+/// enums catch additions but not removals.
+#[test]
+fn fault_labels_mirror_the_wit_fault_cases() {
+    use strum::VariantNames as _;
+
+    let mut resolve = wit_parser::Resolve::new();
+    let dir = nexum_host_wit_dir();
+    resolve
+        .push_dir(&dir)
+        .unwrap_or_else(|e| panic!("cannot parse {}: {e:?}", dir.display()));
+
+    let (_, types_iface) = resolve
+        .interfaces
+        .iter()
+        .find(|(id, _)| resolve.id_of(*id).as_deref() == Some("nexum:host/types@0.1.0"))
+        .expect("nexum:host/types@0.1.0 is not an interface in the WIT tree");
+    let fault_id = types_iface
+        .types
+        .get("fault")
+        .expect("`types` declares no `fault` type");
+    let wit_parser::TypeDefKind::Variant(fault) = &resolve.types[*fault_id].kind else {
+        panic!("`fault` is not a variant");
+    };
+
+    let wit_cases: Vec<String> = fault
+        .cases
+        .iter()
+        .map(|case| case.name.replace('-', "_"))
+        .collect();
+    assert_eq!(wit_cases, nexum_world::FaultLabel::VARIANTS);
+}
+
 /// A capability with no bind arm, or an arm no capability reaches,
 /// fails here. Checks both the arms and the blanket list.
 #[test]
