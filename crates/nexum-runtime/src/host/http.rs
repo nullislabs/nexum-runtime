@@ -27,12 +27,12 @@ use wasmtime_wasi_http::p2::{
 use super::component::RuntimeTypes;
 use super::state::HostState;
 use crate::engine_config::OutboundHttpLimits;
-use crate::manifest::host_allowed;
+use crate::host_pattern::{HostPattern, host_allowed};
 
 /// Per-module outbound HTTP policy.
 pub struct HttpGate {
     module: String,
-    allowlist: Vec<String>,
+    allowlist: Vec<HostPattern>,
     limits: OutboundHttpLimits,
     /// Operator-permitted addresses that would otherwise be refused.
     permitted: Vec<IpAddr>,
@@ -43,7 +43,7 @@ impl HttpGate {
     /// operator's list of otherwise-refused addresses it may still reach.
     pub fn new(
         module: impl Into<String>,
-        allowlist: Vec<String>,
+        allowlist: Vec<HostPattern>,
         limits: OutboundHttpLimits,
         permitted: Vec<IpAddr>,
     ) -> Self {
@@ -202,7 +202,7 @@ impl Body for CappedBody {
 /// or `*.suffix` per [`host_allowed`]; IPv6 literals stay bracketed.
 /// Name-based and pre-resolution, so it pins no address on its own.
 /// `reject_prohibited_destination` applies the address rules after it.
-fn admit(uri: &http::Uri, allowlist: &[String]) -> Result<(), ErrorCode> {
+fn admit(uri: &http::Uri, allowlist: &[HostPattern]) -> Result<(), ErrorCode> {
     let Some(host) = uri.host() else {
         return Err(ErrorCode::HttpRequestUriInvalid);
     };
@@ -336,8 +336,8 @@ mod tests {
         s.parse().expect("test URI parses")
     }
 
-    fn allow(entries: &[&str]) -> Vec<String> {
-        entries.iter().map(|s| s.to_string()).collect()
+    fn allow(entries: &[&str]) -> Vec<HostPattern> {
+        entries.iter().copied().map(HostPattern::from).collect()
     }
 
     /// Generous limits so a test trips only the one it tightens.

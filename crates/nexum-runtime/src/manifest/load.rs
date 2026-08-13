@@ -1,5 +1,4 @@
-//! Parse and validate `component.toml`, plus the host-matching helper the
-//! wasi:http gate uses to enforce the http dependency's `hosts`.
+//! Parse and validate `component.toml`.
 
 use std::path::Path;
 
@@ -41,25 +40,14 @@ pub fn load(path: &Path, registry: &CapabilityRegistry) -> Result<LoadedManifest
         info!(target: "manifest", dependencies = %names.join(", "), "dependencies");
     }
     if !loaded.http_allowlist.is_empty() {
-        info!(target: "manifest", hosts = %loaded.http_allowlist.join(", "), "http hosts");
+        let hosts: Vec<String> = loaded
+            .http_allowlist
+            .iter()
+            .map(ToString::to_string)
+            .collect();
+        info!(target: "manifest", hosts = %hosts.join(", "), "http hosts");
     }
     Ok(loaded)
-}
-
-/// Whether `host` matches any allowlist pattern: exact, or a `*.suffix`
-/// wildcard matching any subdomain of `suffix` but not `suffix` itself.
-/// Case-insensitive and host-only (no scheme or port; IPv6 literals keep
-/// their brackets).
-pub fn host_allowed(host: &str, allowlist: &[String]) -> bool {
-    let host = host.to_ascii_lowercase();
-    allowlist.iter().any(|pat| {
-        let pat = pat.to_ascii_lowercase();
-        if let Some(suffix) = pat.strip_prefix("*.") {
-            host.ends_with(&format!(".{suffix}"))
-        } else {
-            host == pat
-        }
-    })
 }
 
 #[cfg(test)]
@@ -756,35 +744,5 @@ max_state_bytes    = 52428800
             .expect("valid digest loads");
         let digest = loaded.component_digest.expect("digest parsed");
         assert_eq!(digest.to_string(), pin);
-    }
-
-    #[test]
-    fn host_allowed_exact_and_wildcard() {
-        let allow = vec!["api.acme.example".to_string(), "*.discord.com".to_string()];
-        assert!(host_allowed("api.acme.example", &allow));
-        assert!(!host_allowed("evil.api.acme.example", &allow));
-        assert!(host_allowed("foo.discord.com", &allow));
-        assert!(host_allowed("a.b.discord.com", &allow));
-        assert!(!host_allowed("discord.com", &allow));
-        assert!(!host_allowed("nope.example", &allow));
-    }
-
-    #[test]
-    fn host_allowed_is_case_insensitive_both_ways() {
-        let upper = vec!["API.ACME.EXAMPLE".to_string()];
-        let lower = vec!["api.acme.example".to_string()];
-        assert!(host_allowed("api.acme.example", &upper));
-        assert!(host_allowed("Api.Acme.Example", &lower));
-    }
-
-    #[test]
-    fn host_allowed_matches_hosts_not_authorities() {
-        // Entries are bare hosts; a port or userinfo in a pattern can
-        // never match a host string.
-        let allow = vec![
-            "api.acme.example:8443".to_string(),
-            "u@api.acme.example".to_string(),
-        ];
-        assert!(!host_allowed("api.acme.example", &allow));
     }
 }

@@ -16,6 +16,7 @@ use crate::host::extension::{Extension, attach_wall_clock};
 use crate::host::local_store_redb::LocalStore;
 use crate::host::logs::{LogPipeline, LogRecord};
 use crate::host::provider_pool::ProviderPool;
+use crate::host_pattern::HostPattern;
 use crate::preset::CoreRuntime;
 use crate::supervisor::{Supervisor, WasiClockOverride, build_linker};
 use crate::test_utils::wasm::test_wasmtime_engine;
@@ -24,7 +25,7 @@ use crate::test_utils::wasm::test_wasmtime_engine;
 pub struct Entry {
     wasm: Option<PathBuf>,
     manifest: ManifestSource,
-    http_allow: Vec<String>,
+    http_allow: Vec<HostPattern>,
 }
 
 impl Entry {
@@ -44,7 +45,7 @@ impl Entry {
     }
 
     /// Operator HTTP grant; only an `[[services]]` entry carries one.
-    pub fn http_allow(mut self, hosts: impl IntoIterator<Item = impl Into<String>>) -> Self {
+    pub fn http_allow(mut self, hosts: impl IntoIterator<Item = impl Into<HostPattern>>) -> Self {
         self.http_allow.extend(hosts.into_iter().map(Into::into));
         self
     }
@@ -677,7 +678,10 @@ mod tests {
             "a per-entry component overrides the scenario default",
         );
         assert_eq!(config.services.len(), 1);
-        assert_eq!(config.services[0].http_allow, ["api.acme.example"]);
+        assert_eq!(
+            config.services[0].http_allow,
+            [HostPattern::from("api.acme.example")]
+        );
         for manifest in config
             .modules
             .iter()

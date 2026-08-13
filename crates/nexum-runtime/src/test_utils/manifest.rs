@@ -312,7 +312,13 @@ mod tests {
                 .http_allow("*.acme.example"),
         );
 
-        assert_eq!(loaded.http_allowlist, ["127.0.0.1", "*.acme.example"]);
+        assert_eq!(
+            loaded.http_allowlist,
+            [
+                crate::host_pattern::HostPattern::from("127.0.0.1"),
+                crate::host_pattern::HostPattern::from("*.acme.example"),
+            ]
+        );
         assert_eq!(
             loaded
                 .dependencies
