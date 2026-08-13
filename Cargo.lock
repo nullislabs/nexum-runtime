@@ -3389,6 +3389,7 @@ dependencies = [
  "strum",
  "syn 2.0.118",
  "tempfile",
+ "thiserror 2.0.18",
  "toml 1.1.2+spec-1.1.0",
  "wit-parser 0.251.0",
 ]

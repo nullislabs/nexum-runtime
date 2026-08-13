@@ -114,6 +114,7 @@ pub fn module(attr: TokenStream, item: TokenStream) -> TokenStream {
     let has = |name: &str| present.contains(&name);
 
     let facts = match nexum_world::manifest_dir()
+        .map_err(|e| e.to_string())
         .and_then(|dir| derive_manifest_facts(&dir, !args.subscribes.is_empty()))
     {
         Ok(facts) => facts,
