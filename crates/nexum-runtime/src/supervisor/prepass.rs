@@ -22,7 +22,8 @@ use crate::refusal::{Refusal, RefusalContext as _};
 #[strum(serialize_all = "snake_case")]
 #[non_exhaustive]
 pub enum BootRefusal {
-    /// A second claimant on a `[component].name`.
+    /// Both roles derive one keccak local-store namespace from the name,
+    /// so a second claimant would alias the first one's state.
     #[error(
         "name {name} is claimed twice: {held_role} {} and {role} {}; \
          [component].name must be unique across [[modules]] and [[services]]",
@@ -45,7 +46,8 @@ pub enum BootRefusal {
     /// counter label.
     #[error(transparent)]
     Manifest(#[from] ParseError),
-    /// An explicit manifest path with nothing at it.
+    /// Only an explicit path lands here; sibling discovery that finds
+    /// nothing is [`Self::ManifestMissing`].
     #[error(
         "manifest {} not found for component {}",
         manifest.display(),
@@ -68,8 +70,8 @@ pub enum BootRefusal {
         /// The component without a manifest.
         component: PathBuf,
     },
-    /// A chain subscription while running on defaults, with no
-    /// engine.toml at all.
+    /// [`Self::UnconfiguredChain`] for a run on defaults: the fix is
+    /// creating engine.toml, not editing it.
     #[error(
         "{noun} {name} subscribes to chain {chain_id} but no engine.toml was found \
          (running on defaults, no chains configured); create engine.toml with a \
@@ -83,7 +85,8 @@ pub enum BootRefusal {
         /// The chain the subscription names.
         chain_id: u64,
     },
-    /// A chain subscription outside the operator's `[chains]` set.
+    /// Chain access is an operator grant, so a manifest subscription
+    /// cannot widen the `[chains]` set from its side of the boundary.
     #[error(
         "{noun} {name} subscribes to chain {chain_id} but engine.toml declares no \
          [chains.{chain_id}] entry; configured chains: {}",

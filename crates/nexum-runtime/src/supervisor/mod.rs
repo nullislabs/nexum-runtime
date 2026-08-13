@@ -228,9 +228,10 @@ impl<T: RuntimeTypes> Supervisor<T> {
     }
 }
 
-/// Counts a refusal under its [`Refusal::error_kind`] label; an untyped
-/// failure carries no label and goes uncounted.
-fn count_boot_refusal(refusal: &Refusal) {
+/// Counts a refusal under its [`Refusal::error_kind`] label; a refusal
+/// without a label goes uncounted. The launcher's refusal sites in
+/// `builder` call it too, so a launch refusal counts like a boot one.
+pub(crate) fn count_boot_refusal(refusal: &Refusal) {
     let Some(kind) = refusal.error_kind() else {
         return;
     };

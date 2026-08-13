@@ -28,6 +28,7 @@ use crate::host::extension::{self, EventSources, Extension};
 use crate::host::logs::LogPipeline;
 use crate::host::provider_pool::ProviderPool;
 use crate::preset::Runtime;
+use crate::refusal::Refusal;
 use crate::runtime::event_loop;
 pub use crate::supervisor::WasiClockOverride;
 use crate::supervisor::{self, Supervisor, Viability};
@@ -157,8 +158,18 @@ impl RuntimeHandle {
 fn finish_wait(joined: Option<TaskExit>) -> anyhow::Result<()> {
     match joined {
         Some(_) => Ok(()),
-        None => Err(LaunchRefusal::EventLoopGone.into()),
+        None => Err(refuse_launch(LaunchRefusal::EventLoopGone)),
     }
+}
+
+/// Count the refusal under its `error_kind`, then hand it to the `anyhow`
+/// caller as a [`Refusal`] value an embedder can downcast and match on.
+/// [`Refusal::error_kind`] withholds the label from the wait-time
+/// [`LaunchRefusal::EventLoopGone`], so that one counts nothing.
+fn refuse_launch(refusal: LaunchRefusal) -> anyhow::Error {
+    let refusal = Refusal::from(refusal);
+    supervisor::count_boot_refusal(&refusal);
+    refusal.into()
 }
 
 /// The wasmtime config every engine, launch and test alike, is built from.
@@ -256,7 +267,7 @@ impl<T: RuntimeTypes> AssembledRuntime<T> {
             )
             .await?
         } else {
-            return Err(LaunchRefusal::NothingToRun.into());
+            return Err(refuse_launch(LaunchRefusal::NothingToRun));
         };
 
         let alive = supervisor.alive_count();
@@ -270,11 +281,11 @@ impl<T: RuntimeTypes> AssembledRuntime<T> {
         );
         if alive == 0 {
             let modules = supervisor.module_count();
-            return Err(if wasm_override {
-                LaunchRefusal::AllDeadOverride { modules }.into()
+            return Err(refuse_launch(if wasm_override {
+                LaunchRefusal::AllDeadOverride { modules }
             } else {
-                LaunchRefusal::AllDeadConfigured { modules }.into()
-            });
+                LaunchRefusal::AllDeadConfigured { modules }
+            }));
         }
 
         // The OS signal listener: SIGINT/SIGTERM ends it, and its end (or
@@ -320,7 +331,7 @@ impl<T: RuntimeTypes> AssembledRuntime<T> {
         }
 
         match plan.viability(extension_streams.len()) {
-            Viability::DeadHoldSubs => return Err(LaunchRefusal::DeadHoldSubs.into()),
+            Viability::DeadHoldSubs => return Err(refuse_launch(LaunchRefusal::DeadHoldSubs)),
             Viability::Nothing => {
                 // Nothing to drive: return a handle whose event loop is
                 // already complete so `wait` resolves immediately.
@@ -720,6 +731,40 @@ mod tests {
             Err(err) => err,
         };
         Refusal::from(err).variant::<LaunchRefusal>(|e| matches!(e, LaunchRefusal::NothingToRun));
+    }
+
+    /// Every launch refusal site routes through [`refuse_launch`], so this
+    /// pins the emitted name, the label key, and the increment for the
+    /// launch classes; the wait-time event-loop failure counts nothing.
+    #[test]
+    fn launch_refusals_count_under_the_boot_refusal_counter() {
+        use metrics_util::debugging::DebugValue;
+
+        use crate::test_utils::metrics_capture::{capture_metrics, samples_named};
+
+        let (err, samples) = capture_metrics(|| refuse_launch(LaunchRefusal::NothingToRun));
+        let hits = samples_named(&samples, "nexum_runtime_boot_refusals_total");
+        assert_eq!(hits.len(), 1, "one series: {samples:?}");
+        assert!(
+            hits[0].has_label("error_kind", "nothing_to_run"),
+            "{:?}",
+            hits[0].labels,
+        );
+        assert!(
+            matches!(hits[0].value, DebugValue::Counter(1)),
+            "{:?}",
+            hits[0].value,
+        );
+        assert!(
+            err.downcast_ref::<crate::refusal::Refusal>().is_some(),
+            "the anyhow root is the Refusal value an embedder matches on",
+        );
+
+        let (_, samples) = capture_metrics(|| refuse_launch(LaunchRefusal::EventLoopGone));
+        assert!(
+            samples_named(&samples, "nexum_runtime_boot_refusals_total").is_empty(),
+            "a wait-time failure is not a boot refusal: {samples:?}",
+        );
     }
 
     /// Counts linker hook runs.

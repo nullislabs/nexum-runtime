@@ -45,7 +45,8 @@ use crate::runtime::dispatch_rate::TokenBucket;
 #[strum(serialize_all = "snake_case")]
 #[non_exhaustive]
 pub enum LoadRefusal {
-    /// A manifest section no wired extension claims.
+    /// Either a typo in the section key or the claiming extension is not
+    /// wired into this composition.
     #[error("{owner} declares manifest section [{section}]; no wired extension claims it")]
     SectionUnclaimed {
         /// The declaring component's namespace.
@@ -53,25 +54,29 @@ pub enum LoadRefusal {
         /// The unclaimed section key.
         section: String,
     },
-    /// Two wired extensions claim one namespace.
+    /// An embedder wiring bug: namespaces key the host service map, so a
+    /// duplicate would shadow one extension's service.
     #[error("extension namespace {namespace} is claimed twice")]
     ExtensionNamespaceClaimed {
         /// The doubly claimed namespace.
         namespace: &'static str,
     },
-    /// Two wired extensions claim one subscription kind.
+    /// An embedder wiring bug: a subscription kind's events must have one
+    /// owning extension.
     #[error("subscription kind {kind} is claimed twice")]
     SubscriptionKindClaimed {
         /// The doubly claimed kind.
         kind: &'static str,
     },
-    /// Two wired extensions claim one manifest section.
+    /// An embedder wiring bug: a section's install predicate must have
+    /// one owning extension.
     #[error("manifest section [{section}] is claimed twice")]
     SectionClaimed {
         /// The doubly claimed section key.
         section: &'static str,
     },
-    /// Two extensions register one provider kind.
+    /// An embedder wiring bug: the kind selects the installing extension,
+    /// so two registrants are ambiguous.
     #[error("provider kind {kind} is registered twice")]
     KindRegisteredTwice {
         /// The doubly registered kind.
@@ -86,7 +91,8 @@ pub enum LoadRefusal {
         /// The serviceless kind.
         kind: &'static str,
     },
-    /// A `[[services]]` entry whose manifest declares the worker kind.
+    /// The entry belongs under `[[modules]]`, or its manifest kind is
+    /// wrong.
     #[error(
         "{} declares the worker kind; an [[services]] entry requires a \
          component.toml declaring a registered provider kind ({})",
@@ -99,7 +105,8 @@ pub enum LoadRefusal {
         /// The kinds a `[[services]]` entry may declare.
         registered: Vec<&'static str>,
     },
-    /// A provider kind no wired extension registered.
+    /// The manifest name selects the kind, so the fix is the name or the
+    /// unwired extension.
     #[error(
         "{} declares unregistered provider kind {kind}; registered kinds: {}",
         path.display(),
@@ -113,7 +120,8 @@ pub enum LoadRefusal {
         /// The kinds a `[[services]]` entry may declare.
         registered: Vec<&'static str>,
     },
-    /// A subscription kind no wired extension declares.
+    /// Either a typo in the subscription kind or its extension is not
+    /// wired into this composition.
     #[error(
         "module {module} subscribes to unknown event kind {kind}; no wired extension declares it"
     )]
@@ -123,7 +131,8 @@ pub enum LoadRefusal {
         /// The unknown kind.
         kind: String,
     },
-    /// No digest pin while `[engine] require_component_digest` is set.
+    /// Enforced before compile, so unverified bytes never reach the
+    /// compiler.
     #[error(
         "no [component].digest digest for {} and [engine] require_component_digest is set; \
          pin the artifact's sha256 in its component.toml",
