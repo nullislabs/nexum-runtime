@@ -52,8 +52,8 @@ pub fn module(attr: TokenStream, item: TokenStream) -> TokenStream {
     }
 }
 
-/// The fallible body of [`module`]; every refusal is a [`MacroError`]
-/// the entry point renders once.
+/// Fallible body of [`module`]: one conversion to `syn::Error` at the
+/// entry point, not at each failure.
 fn expand(args: ModuleArgs, input: ItemImpl) -> Result<proc_macro2::TokenStream, MacroError> {
     let self_ty: &syn::Type = &input.self_ty;
     if !nexum_world::is_plain_type(self_ty) {
@@ -161,132 +161,72 @@ fn expand(args: ModuleArgs, input: ItemImpl) -> Result<proc_macro2::TokenStream,
     })
 }
 
-/// A refusal from the macro's own rules. `Display` is the module-author
-/// contract: the entry point renders it verbatim as the compile error,
-/// so each variant's wording is pinned by test. Spanned variants carry
-/// the span, or the tokens the diagnostic underlines, so conversion
-/// reproduces today's placement.
+/// `Display` is the module-author contract: the entry point renders it
+/// verbatim as the compile error. Variants carry the tokens the
+/// diagnostic underlines, not just a span, so multi-token underlines
+/// survive the conversion.
 #[derive(Debug, thiserror::Error)]
 enum MacroError {
-    /// The attribute's arguments start with something other than an
-    /// identifier.
     #[error("expected `subscribes(EventType, ...)` or no arguments")]
-    NonIdentArgument {
-        /// The offending token.
-        span: proc_macro2::Span,
-    },
-    /// The attribute names an argument other than `subscribes`.
+    NonIdentArgument { span: proc_macro2::Span },
     #[error("#[nexum_sdk::module] takes no arguments except `subscribes(EventType, ...)`")]
-    UnknownArgument {
-        /// The argument's name token.
-        span: proc_macro2::Span,
-    },
-    /// Tokens follow the closing parenthesis of `subscribes(...)`.
+    UnknownArgument { span: proc_macro2::Span },
     #[error("unexpected tokens after `subscribes(...)`")]
-    TrailingTokens {
-        /// The first trailing token.
-        span: proc_macro2::Span,
-    },
-    /// `subscribes()` names no event type.
+    TrailingTokens { span: proc_macro2::Span },
     #[error("`subscribes(...)` must name at least one event type")]
-    EmptySubscribes {
-        /// The `subscribes` identifier.
-        span: proc_macro2::Span,
-    },
-    /// The arguments broke syn's own grammar (an unbalanced list, a
-    /// malformed path); the diagnostic is syn's, passed through intact.
+    EmptySubscribes { span: proc_macro2::Span },
     #[error(transparent)]
     MalformedArgs(syn::Error),
-    /// The impl's self type is not a plain named type.
     #[error("#[nexum_sdk::module] must be applied to an inherent impl of a named type")]
-    UnnamedSelfType {
-        /// The self type's tokens.
-        self_ty: proc_macro2::TokenStream,
-    },
-    /// The attribute sits on a trait impl.
+    UnnamedSelfType { self_ty: proc_macro2::TokenStream },
     #[error("#[nexum_sdk::module] must be applied to an inherent impl, not a trait impl")]
     TraitImpl {
-        /// The trait path's tokens.
         trait_path: proc_macro2::TokenStream,
     },
-    /// The impl is generic.
     #[error("#[nexum_sdk::module] must be applied to a non-generic impl")]
-    GenericImpl {
-        /// The generics' tokens.
-        generics: proc_macro2::TokenStream,
-    },
-    /// An `on_`-prefixed method outside the recognized handler set.
+    GenericImpl { generics: proc_macro2::TokenStream },
     #[error(
         "`{}` is not a recognized #[nexum_sdk::module] handler; expected one \
          of {:?} (rename helpers so they do not start with `on_`)",
         .ident,
         HANDLERS
     )]
-    UnknownHandler {
-        /// The method's name token.
-        ident: proc_macro2::TokenStream,
-    },
-    /// No recognized handler on the impl.
+    UnknownHandler { ident: proc_macro2::TokenStream },
     #[error(
         "#[nexum_sdk::module] found no recognized handlers on this impl; define at least one \
          of `init`, `on_block`, `on_chain_logs`, `on_tick`, `on_custom`"
     )]
-    NoHandlers {
-        /// The self type's tokens.
-        self_ty: proc_macro2::TokenStream,
-    },
-    /// No `CARGO_MANIFEST_DIR`, so there is no crate root to read.
+    NoHandlers { self_ty: proc_macro2::TokenStream },
     #[error("{source}")]
-    NoManifestDir {
-        /// The refusal from `nexum_world::manifest_dir`.
-        source: nexum_world::WorldError,
-    },
-    /// The crate's `component.toml` could not be read.
+    NoManifestDir { source: nexum_world::WorldError },
     #[error(
         "could not read {path} ({source}); #[nexum_sdk::module] derives the component's WIT \
          world from the manifest's [dependencies] table, so the manifest must sit next to \
          Cargo.toml"
     )]
     ManifestUnreadable {
-        /// The manifest path.
         path: String,
-        /// The read failure.
         source: std::io::Error,
     },
-    /// A manifest rule refused by nexum-world, prefixed with the
-    /// offending manifest's path.
     #[error("{path}: {source}")]
     Manifest {
-        /// The manifest path.
         path: String,
-        /// The refused rule, boxed to keep the enum under clippy's
-        /// `result_large_err` limit.
+        // The refused rule, boxed to keep the enum under clippy's
+        // `result_large_err` limit.
         source: Box<nexum_world::WorldError>,
     },
-    /// The `extensions.toml` registry could not be read.
     #[error("could not read {path}: {source}")]
     RegistryUnreadable {
-        /// The registry path.
         path: String,
-        /// The read failure.
         source: std::io::Error,
     },
-    /// The declared capabilities' WIT packages could not be resolved.
     #[error("{source}")]
-    WitResolution {
-        /// The refusal from `nexum_world::manifest_wit_packages`.
-        source: nexum_world::WorldError,
-    },
-    /// `subscribes(...)` names events, but the manifest declares no
-    /// chain-log subscription.
+    WitResolution { source: nexum_world::WorldError },
     #[error(
         "`subscribes(...)` names events, but {path} declares no chain-log subscription with \
          an `event_signature`; add the subscription or drop the argument"
     )]
-    SubscribesWithoutChainLog {
-        /// The manifest path.
-        path: String,
-    },
+    SubscribesWithoutChainLog { path: String },
 }
 
 impl MacroError {
@@ -324,9 +264,8 @@ struct ModuleArgs {
     subscribes: Vec<syn::Path>,
 }
 
-/// Parse the attribute arguments. The macro's own rules refuse with a
-/// [`MacroError`]; a failure of syn's own grammar passes through as
-/// [`MacroError::MalformedArgs`].
+/// Syn's own grammar failures pass through as
+/// [`MacroError::MalformedArgs`] rather than becoming our variants.
 fn parse_args(tokens: proc_macro2::TokenStream) -> Result<ModuleArgs, MacroError> {
     match syn::parse::Parser::parse2(parse_args_inner, tokens) {
         Ok(parsed) => parsed,
