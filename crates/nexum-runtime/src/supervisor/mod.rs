@@ -24,7 +24,7 @@ use wasmtime::Engine;
 use wasmtime::component::Linker;
 
 use crate::digest::DigestMismatch;
-use crate::engine_config::{EngineConfig, ModuleEntry, ModuleLimits};
+use crate::engine_config::{EngineConfig, ModuleEntry, ResolvedModuleLimits};
 use crate::host::component::{Components, RuntimeTypes};
 use crate::host::extension::{Extension, HostServices, ServiceManifest};
 use crate::host::state::HostState;
@@ -50,7 +50,7 @@ pub struct Supervisor<T: RuntimeTypes> {
 /// Boot inputs derived from [`EngineConfig`], bundled once at the call site.
 pub struct BootEnv<'a> {
     /// The engine ceiling a manifest may narrow but never widen.
-    pub limits: &'a ModuleLimits,
+    pub limits: &'a ResolvedModuleLimits,
     /// Chains with an `engine.toml` entry; a subscription elsewhere refuses.
     pub configured_chains: ConfiguredChains,
     /// Refuse a component whose manifest declares no digest.
@@ -141,7 +141,7 @@ impl<T: RuntimeTypes> Supervisor<T> {
                 shared,
                 modules,
                 providers,
-                engine_cfg.limits.poison(),
+                engine_cfg.limits.poison,
             ))
         }
         .await;
@@ -188,7 +188,7 @@ impl<T: RuntimeTypes> Supervisor<T> {
                 shared,
                 modules: vec![loaded],
                 providers: Vec::new(),
-                policy: env.limits.poison(),
+                policy: env.limits.poison,
                 chain_log_cursors: ChainLogCursors::default(),
             })
         }

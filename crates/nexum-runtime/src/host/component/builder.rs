@@ -79,7 +79,7 @@ impl ComponentBuilder for LogPipelineBuilder {
     type Output = LogPipeline;
 
     async fn build(self, ctx: &BuilderContext<'_>) -> anyhow::Result<LogPipeline> {
-        Ok(LogPipeline::in_memory(ctx.config.limits.logs()))
+        Ok(LogPipeline::in_memory(ctx.config.limits.logs))
     }
 }
 
@@ -195,7 +195,7 @@ mod tests {
             executor: &executor,
         };
 
-        let custom = LogPipeline::in_memory(config.limits.logs());
+        let custom = LogPipeline::in_memory(config.limits.logs);
         let components = ComponentsBuilder::new(ProviderPoolBuilder, LocalStoreBuilder)
             .with_logs(crate::test_utils::Prebuilt(custom.clone()))
             .build::<CoreRuntime>(&ctx)

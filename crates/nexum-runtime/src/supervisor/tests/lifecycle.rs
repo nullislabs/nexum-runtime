@@ -571,7 +571,7 @@ fn provider_at_run_zero(
     kind: &'static str,
 ) -> crate::supervisor::load::LoadedProvider {
     const EMPTY_COMPONENT: &[u8] = b"(component)";
-    let limits = ModuleLimits::default();
+    let limits = ResolvedModuleLimits::default();
     crate::supervisor::load::LoadedProvider {
         name: crate::module_id::ModuleId::parse("scripted").expect("valid module name"),
         kind,
@@ -585,14 +585,14 @@ fn provider_at_run_zero(
             },
             spec: crate::supervisor::store::StoreSpec {
                 http_allowlist: Vec::new(),
-                http_limits: limits.http(),
-                http_permitted: limits.http_permitted_destinations(),
-                memory_limit: limits.memory(),
-                fuel: limits.fuel(),
-                chain_response_max_bytes: limits.chain_response_max_bytes(),
-                state_quota: limits.state_bytes(),
+                http_limits: limits.http,
+                http_permitted: limits.http_permit_destinations.clone(),
+                memory_limit: limits.memory_bytes.get(),
+                fuel: limits.fuel_per_event.get(),
+                chain_response_max_bytes: limits.chain_response_max_bytes.get(),
+                state_quota: limits.state_bytes,
             },
-            event_deadline: limits.event_deadline(),
+            event_deadline: limits.event_deadline,
         },
         liveness: crate::host::actor::Liveness::default(),
         run: crate::host::logs::RunId::new(

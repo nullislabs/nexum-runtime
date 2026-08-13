@@ -138,7 +138,7 @@ async fn boot_single_skips_the_provider_kind_service_gate() {
         path: dir.path().join("missing.wasm"),
         manifest: None,
     };
-    let limits = ModuleLimits::default();
+    let limits = ResolvedModuleLimits::default();
     let env = BootEnv {
         limits: &limits,
         configured_chains: test_chains(),

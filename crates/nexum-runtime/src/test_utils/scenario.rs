@@ -240,7 +240,10 @@ impl<T: RuntimeTypes> BootScenario<T> {
         };
 
         let mut config = EngineConfig {
-            limits: self.limits,
+            limits: self
+                .limits
+                .try_into()
+                .expect("scenario [limits] must carry no zero"),
             chains: self.chains,
             ..Default::default()
         };
@@ -658,7 +661,7 @@ mod tests {
         // Holding _launch keeps the manifest tempdir alive for the asserts.
         let (config, _launch) = scenario.split();
 
-        assert_eq!(config.limits.poison().max_failures, 3);
+        assert_eq!(config.limits.poison.max_failures, 3);
         let ids = |chains: &HashMap<Chain, ChainConfig>| {
             chains
                 .keys()

@@ -931,7 +931,7 @@ mod tests {
             executor: &executor,
         };
 
-        let custom = LogPipeline::in_memory(config.limits.logs());
+        let custom = LogPipeline::in_memory(config.limits.logs);
         let components = PrebuiltLogsPreset {
             logs: custom.clone(),
         }
@@ -974,7 +974,7 @@ mod tests {
         type Output = LogPipeline;
         async fn build(self, ctx: &BuilderContext<'_>) -> anyhow::Result<LogPipeline> {
             self.0.fetch_add(1, Ordering::SeqCst);
-            Ok(LogPipeline::in_memory(ctx.config.limits.logs()))
+            Ok(LogPipeline::in_memory(ctx.config.limits.logs))
         }
     }
 
@@ -1018,7 +1018,7 @@ mod tests {
         let mut config = EngineConfig::default();
         config.engine.state_dir = dir.path().join("state");
 
-        let custom = LogPipeline::in_memory(config.limits.logs());
+        let custom = LogPipeline::in_memory(config.limits.logs);
         let mut handle = RuntimeBuilder::new(&config)
             .with_runtime(NoAddOnCore)
             .with_module_source(Some(wasm), Some(manifest))
@@ -1213,7 +1213,7 @@ mod tests {
     }
 
     fn test_logs() -> LogPipeline {
-        LogPipeline::in_memory(EngineConfig::default().limits.logs())
+        LogPipeline::in_memory(EngineConfig::default().limits.logs)
     }
 
     /// A cleanly completing event loop resolves `wait` to `Ok`.

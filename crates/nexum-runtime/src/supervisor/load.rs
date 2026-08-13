@@ -27,7 +27,7 @@ use super::store::{
 use crate::bindings::nexum::host::types::Fault;
 use crate::bindings::{Config, EventModule};
 use crate::digest::ContentDigest;
-use crate::engine_config::{ModuleEntry, ModuleLimits, ServiceEntry};
+use crate::engine_config::{ModuleEntry, ResolvedModuleLimits, ServiceEntry};
 use crate::host::actor::Liveness;
 use crate::host::component::RuntimeTypes;
 use crate::host::extension::{Installed, ServiceInstance, ServiceManifest};
@@ -258,7 +258,7 @@ pub(super) async fn module<T: RuntimeTypes>(
     linker: &Linker<HostState<T>>,
     entry: &ModuleEntry,
     loaded_manifest: LoadedManifest,
-    limits_cfg: &ModuleLimits,
+    limits_cfg: &ResolvedModuleLimits,
     require_component_digest: bool,
     provider_manifests: &[ServiceManifest],
 ) -> Result<LoadedModule<T>> {
@@ -296,11 +296,11 @@ pub(super) async fn module<T: RuntimeTypes>(
     );
     let spec = StoreSpec {
         http_allowlist: loaded_manifest.http_allowlist.clone(),
-        http_limits: limits_cfg.http(),
-        http_permitted: limits_cfg.http_permitted_destinations(),
+        http_limits: limits_cfg.http,
+        http_permitted: limits_cfg.http_permit_destinations.clone(),
         memory_limit: memory,
         fuel,
-        chain_response_max_bytes: limits_cfg.chain_response_max_bytes(),
+        chain_response_max_bytes: limits_cfg.chain_response_max_bytes.get(),
         state_quota: state_bytes,
     };
     let config = default_init_config(&loaded_manifest.config, module_namespace.as_str());
@@ -311,7 +311,7 @@ pub(super) async fn module<T: RuntimeTypes>(
             init_config: config,
         },
         spec,
-        event_deadline: limits_cfg.event_deadline(),
+        event_deadline: limits_cfg.event_deadline,
     };
     let (run, mut store) = fresh_run_store(shared, &module_namespace, 0, &seed.spec, Role::Module)?;
     let (bindings, init) = instantiate_module(linker, &seed, &module_namespace, &mut store).await?;
@@ -356,7 +356,7 @@ pub(super) async fn module<T: RuntimeTypes>(
             bindings,
             store,
             run,
-            dispatch_bucket: TokenBucket::new(limits_cfg.dispatch_rate(), Instant::now()),
+            dispatch_bucket: TokenBucket::new(limits_cfg.dispatch, Instant::now()),
         },
         seed,
         subscriptions: loaded_manifest.subscriptions.clone(),
@@ -369,7 +369,7 @@ pub(super) async fn provider<T: RuntimeTypes>(
     shared: &Shared<T>,
     entry: &ServiceEntry,
     loaded_manifest: LoadedManifest,
-    limits_cfg: &ModuleLimits,
+    limits_cfg: &ResolvedModuleLimits,
     require_component_digest: bool,
 ) -> Result<LoadedProvider> {
     let namespace: ModuleId = manifest_namespace(&loaded_manifest);
@@ -425,20 +425,20 @@ pub(super) async fn provider<T: RuntimeTypes>(
     info!(
         provider = %namespace,
         kind = kind.kind(),
-        fuel = limits_cfg.fuel(),
-        memory_bytes = limits_cfg.memory(),
+        fuel = limits_cfg.fuel_per_event.get(),
+        memory_bytes = limits_cfg.memory_bytes.get(),
         http_allow = entry.http_allow.len(),
         "applied provider resource limits and transport scope",
     );
 
     let spec = StoreSpec {
         http_allowlist: entry.http_allow.clone(),
-        http_limits: limits_cfg.http(),
-        http_permitted: limits_cfg.http_permitted_destinations(),
-        memory_limit: limits_cfg.memory(),
-        fuel: limits_cfg.fuel(),
-        chain_response_max_bytes: limits_cfg.chain_response_max_bytes(),
-        state_quota: limits_cfg.state_bytes(),
+        http_limits: limits_cfg.http,
+        http_permitted: limits_cfg.http_permit_destinations.clone(),
+        memory_limit: limits_cfg.memory_bytes.get(),
+        fuel: limits_cfg.fuel_per_event.get(),
+        chain_response_max_bytes: limits_cfg.chain_response_max_bytes.get(),
+        state_quota: limits_cfg.state_bytes,
     };
     let config = default_init_config(&loaded_manifest.config, namespace.as_str());
     let seed = Seed {
@@ -448,7 +448,7 @@ pub(super) async fn provider<T: RuntimeTypes>(
             init_config: config,
         },
         spec,
-        event_deadline: limits_cfg.event_deadline(),
+        event_deadline: limits_cfg.event_deadline,
     };
     let liveness = Liveness::default();
     let (run, store) = fresh_run_store(shared, &namespace, 0, &seed.spec, Role::Service)?;

@@ -11,7 +11,7 @@ use wasmtime_wasi::{HostMonotonicClock, HostWallClock, WasiCtxBuilder};
 use super::Shared;
 use super::role::Role;
 use crate::bindings::EventModule;
-use crate::engine_config::{ModuleLimits, OutboundHttpLimits};
+use crate::engine_config::{OutboundHttpLimits, ResolvedModuleLimits};
 use crate::host::component::{RuntimeTypes, StateHandle, StateStore};
 use crate::host::extension::{Extension, HostServices, ServiceKind};
 use crate::host::http::HttpGate;
@@ -89,11 +89,22 @@ pub(super) struct ResolvedLimits {
 ///
 /// The manifest is author-supplied, so the engine value is a ceiling rather
 /// than a default. See `docs/adr/0001-operator-config-separate-and-trusted.md`.
-pub(super) fn resolve_module_limits(res: &ResourceSection, cfg: &ModuleLimits) -> ResolvedLimits {
+pub(super) fn resolve_module_limits(
+    res: &ResourceSection,
+    cfg: &ResolvedModuleLimits,
+) -> ResolvedLimits {
     ResolvedLimits {
-        fuel: clamp("max_fuel_per_event", res.max_fuel_per_event, cfg.fuel()),
-        memory: clamp("max_memory_bytes", res.max_memory_bytes, cfg.memory()),
-        state_bytes: clamp("max_state_bytes", res.max_state_bytes, cfg.state_bytes()),
+        fuel: clamp(
+            "max_fuel_per_event",
+            res.max_fuel_per_event,
+            cfg.fuel_per_event.get(),
+        ),
+        memory: clamp(
+            "max_memory_bytes",
+            res.max_memory_bytes,
+            cfg.memory_bytes.get(),
+        ),
+        state_bytes: clamp("max_state_bytes", res.max_state_bytes, cfg.state_bytes),
     }
 }
 
