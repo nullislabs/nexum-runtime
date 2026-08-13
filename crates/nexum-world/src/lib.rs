@@ -44,6 +44,62 @@ impl Cap {
     }
 }
 
+/// Gates host linking only: these emit no world import, so [`synthesize`]
+/// does not accept them.
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Eq,
+    PartialEq,
+    Hash,
+    Display,
+    EnumString,
+    IntoStaticStr,
+    VariantNames,
+    strum::VariantArray,
+)]
+#[non_exhaustive]
+pub enum WasiCap {
+    /// Gates `wasi:sockets/*`.
+    #[strum(serialize = "wasi-sockets")]
+    Sockets,
+    /// Gates `wasi:filesystem/*`.
+    #[strum(serialize = "wasi-filesystem")]
+    Filesystem,
+}
+
+impl WasiCap {
+    /// Every variant, in declaration order.
+    pub const ALL: &'static [Self] = <Self as strum::VariantArray>::VARIANTS;
+
+    /// The declared name.
+    pub fn as_str(self) -> &'static str {
+        self.into()
+    }
+
+    /// The `wasi:` interface prefix this capability gates.
+    pub const fn gated_prefix(self) -> &'static str {
+        match self {
+            Self::Sockets => "wasi:sockets/",
+            Self::Filesystem => "wasi:filesystem/",
+        }
+    }
+}
+
+/// [`Cap::Http`] then the [`WasiCap`] names, in declaration order. A
+/// registry recognizes these without registration.
+pub const WASI_GATES: [&str; 1 + WasiCap::VARIANTS.len()] = {
+    let mut out = [""; 1 + WasiCap::VARIANTS.len()];
+    out[0] = Cap::Http.as_str();
+    let mut i = 0;
+    while i < WasiCap::VARIANTS.len() {
+        out[i + 1] = WasiCap::VARIANTS[i];
+        i += 1;
+    }
+    out
+};
+
 /// A core `[[subscription]] kind`. A kind with no variant here is
 /// extension-owned, so the set is the runtime's core/extension split.
 #[derive(
@@ -768,7 +824,6 @@ mod tests {
         assert!(!CORE_IFACES.contains(&Cap::Http.as_str()));
     }
 
-    /// Pin the const accessor and the derived conversions to one vocabulary.
     #[test]
     fn cap_accessor_agrees_with_the_derived_vocabulary() {
         let names: Vec<&str> = CORE.iter().map(|c| c.name.as_str()).collect();
@@ -778,6 +833,33 @@ mod tests {
             assert_eq!(cap.as_str(), *name);
             assert_eq!(<&'static str>::from(cap), *name);
             assert_eq!(cap.to_string(), *name);
+        }
+    }
+
+    #[test]
+    fn wasi_cap_accessor_agrees_with_the_derived_vocabulary() {
+        let names: Vec<&str> = WasiCap::ALL.iter().map(|c| c.as_str()).collect();
+        assert_eq!(names, WasiCap::VARIANTS);
+        for name in WasiCap::VARIANTS {
+            let cap = name.parse::<WasiCap>().unwrap();
+            assert_eq!(cap.as_str(), *name);
+            assert_eq!(<&'static str>::from(cap), *name);
+            assert_eq!(cap.to_string(), *name);
+        }
+    }
+
+    /// Pinned name set and order; the runtime's `known_names` wording
+    /// depends on it.
+    #[test]
+    fn wasi_gates_are_http_then_the_gated_wasi_names() {
+        assert_eq!(WASI_GATES, ["http", "wasi-sockets", "wasi-filesystem"]);
+    }
+
+    #[test]
+    fn each_gated_prefix_matches_its_capability_name() {
+        for cap in WasiCap::ALL {
+            let group = cap.as_str().strip_prefix("wasi-").unwrap();
+            assert_eq!(cap.gated_prefix(), format!("wasi:{group}/"));
         }
     }
 
