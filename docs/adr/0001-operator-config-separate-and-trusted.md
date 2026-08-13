@@ -65,7 +65,8 @@ It costs a host interface for the guest to read its grant, a fault case for call
 
 - A deployment needs both files.
   A missing `engine.toml` gives no chains and the default `state_dir`.
-  Chain-backed capabilities then report `unsupported`.
+  The engine then refuses at boot every module that subscribes to a chain.
+  A `chain.request` to an unconfigured chain returns an `unsupported` fault.
 - The component digest in `[module]` proves that the artifact matches what the author published.
   It does not prove that the operator authorized the artifact, because one party writes both the hash and the bytes it covers.
   An operator-side pin closes that gap.
