@@ -166,11 +166,7 @@ fn admit_and_verify<T: RuntimeTypes, R>(
     require_component_digest: bool,
     admit: impl FnOnce() -> Result<R>,
 ) -> Result<(R, Component, ContentDigest)> {
-    enforce_extension_sections(
-        owner,
-        &loaded_manifest.manifest.extensions,
-        &shared.extensions,
-    )?;
+    enforce_extension_sections(owner, &loaded_manifest.extensions, &shared.extensions)?;
     let admitted = admit()?;
     let (component, digest) = read_verified_component(
         &shared.engine,
@@ -268,7 +264,7 @@ pub(super) async fn module<T: RuntimeTypes>(
 ) -> Result<LoadedModule<T>> {
     let module_namespace: ModuleId = manifest_namespace(&loaded_manifest);
     let registry = capability_registry(&shared.extensions);
-    let sections = &loaded_manifest.manifest.extensions;
+    let sections = &loaded_manifest.extensions;
     let ((), component, digest) = admit_and_verify(
         shared,
         module_namespace.as_str(),
@@ -290,7 +286,7 @@ pub(super) async fn module<T: RuntimeTypes>(
         fuel,
         memory,
         state_bytes,
-    } = resolve_module_limits(&loaded_manifest.manifest.component.resources, limits_cfg);
+    } = resolve_module_limits(&loaded_manifest.resources, limits_cfg);
     info!(
         module = %module_namespace,
         fuel,
@@ -337,7 +333,7 @@ pub(super) async fn module<T: RuntimeTypes>(
     };
     // Unserviceable subscriptions warn; an undeclared extension kind refuses.
     let extension_kinds = extension_subscription_vocabulary(&shared.extensions);
-    for sub in &loaded_manifest.manifest.subscriptions {
+    for sub in &loaded_manifest.subscriptions {
         match sub {
             Subscription::Cron { .. } => warn!(
                 module = %module_namespace,
@@ -363,7 +359,7 @@ pub(super) async fn module<T: RuntimeTypes>(
             dispatch_bucket: TokenBucket::new(limits_cfg.dispatch_rate(), Instant::now()),
         },
         seed,
-        subscriptions: loaded_manifest.manifest.subscriptions.clone(),
+        subscriptions: loaded_manifest.subscriptions.clone(),
         health: Health::from_init(init_succeeded),
     })
 }
@@ -380,7 +376,7 @@ pub(super) async fn provider<T: RuntimeTypes>(
     // A core-only declaration fails at manifest load; an undeclared gated
     // import fails after compile; the linker withholds the core interfaces.
     let registry = CapabilityRegistry::provider();
-    let sections = loaded_manifest.manifest.extensions.clone();
+    let sections = loaded_manifest.extensions.clone();
     let (row, component, digest) = admit_and_verify(
         shared,
         namespace.as_str(),
@@ -396,7 +392,7 @@ pub(super) async fn provider<T: RuntimeTypes>(
             // An unregistered kind refuses before compile.
             // A service's name is the service type, so the name selects
             // the row. A module declared as an adapter refuses before compile.
-            let row: &ServiceRow<T> = match loaded_manifest.manifest.component.kind {
+            let row: &ServiceRow<T> = match loaded_manifest.kind {
                 ComponentKind::Module => {
                     return Err(LoadRefusal::WorkerKindAdapter {
                         path: entry.path.clone(),
@@ -405,7 +401,7 @@ pub(super) async fn provider<T: RuntimeTypes>(
                     .into());
                 }
                 ComponentKind::Service => {
-                    let name = loaded_manifest.manifest.component.name.as_str();
+                    let name = loaded_manifest.name.as_str();
                     shared
                         .kinds
                         .get(name)

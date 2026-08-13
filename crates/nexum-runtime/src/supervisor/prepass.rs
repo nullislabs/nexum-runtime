@@ -192,7 +192,7 @@ pub(super) fn enforce_subscriptions(
     loaded: &LoadedManifest,
     chains: &ConfiguredChains,
 ) -> Result<(), BootRefusal> {
-    for sub in &loaded.manifest.subscriptions {
+    for sub in &loaded.subscriptions {
         let (Subscription::Block { chain_id } | Subscription::ChainLog { chain_id, .. }) = sub
         else {
             continue;

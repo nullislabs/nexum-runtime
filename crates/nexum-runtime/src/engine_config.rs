@@ -122,38 +122,88 @@ pub enum EngineConfigError {
     /// `${VAR}` env-var substitution failed (missing, malformed, or unclosed).
     #[error("engine config env-var substitution failed: {0}")]
     Substitute(#[from] EnvVarError),
+    /// A `[chains.<key>]` key that is neither a numeric chain id nor a
+    /// known chain name.
+    #[error("engine config: [chains] key {key:?} is not a chain id or known chain name")]
+    InvalidChainKey {
+        /// The key as written.
+        key: String,
+    },
 }
 
-/// Engine-side configuration loaded from `engine.toml`.
+/// Engine-side configuration loaded from `engine.toml`. Deserialization
+/// goes through a raw shape whose `TryFrom` conversion validates the
+/// `[chains]` keys, so this type never carries an unvalidated key.
 #[derive(Debug, Default, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[serde(try_from = "RawEngineConfig")]
 pub struct EngineConfig {
     /// Process-wide settings: state directory, log level, metrics.
-    #[serde(default)]
     pub engine: EngineSection,
     /// Per-module wasmtime resource limits, applied uniformly.
-    #[serde(default)]
     pub limits: ModuleLimits,
     /// Per-chain RPC config keyed by EIP-155 chain id. Numeric
     /// (`[chains.11155111]`) and named (`[chains.sepolia]`) keys both
-    /// parse via `Chain`'s `FromStr`.
-    #[serde(default)]
+    /// validate via `Chain`'s `FromStr` after the TOML parse.
     pub chains: HashMap<Chain, ChainConfig>,
     /// Opaque `[extensions.<name>]` tables; the engine never interprets
     /// these, each extension parses its own at the composition root.
-    #[serde(default)]
     pub extensions: HashMap<String, toml::Value>,
     /// Modules the supervisor boots; each resolves a
     /// `(component.wasm, component.toml)` pair.
-    #[serde(default)]
     pub modules: Vec<ModuleEntry>,
     /// Service components the supervisor boots alongside modules. Like a
     /// module, but the operator, not the author, scopes its transport here.
-    #[serde(default)]
     pub services: Vec<ServiceEntry>,
     /// True when [`load_or_default`] found no engine.toml.
-    #[serde(skip)]
     pub defaulted: bool,
+}
+
+/// Raw deserialized engine config; the `[chains]` keys stay as written
+/// until the `TryFrom` conversion into [`EngineConfig`] validates them.
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawEngineConfig {
+    #[serde(default)]
+    engine: EngineSection,
+    #[serde(default)]
+    limits: ModuleLimits,
+    #[serde(default)]
+    chains: HashMap<String, ChainConfig>,
+    #[serde(default)]
+    extensions: HashMap<String, toml::Value>,
+    #[serde(default)]
+    modules: Vec<ModuleEntry>,
+    #[serde(default)]
+    services: Vec<ServiceEntry>,
+}
+
+impl TryFrom<RawEngineConfig> for EngineConfig {
+    type Error = EngineConfigError;
+
+    /// The value check serde defers: parse each raw `[chains]` key into a
+    /// [`Chain`], typed refusal instead of a serde string. The derived
+    /// `Deserialize` runs this too, so the public `toml::from_str` path
+    /// cannot yield an unvalidated config.
+    fn try_from(raw: RawEngineConfig) -> Result<Self, EngineConfigError> {
+        let mut chains = HashMap::with_capacity(raw.chains.len());
+        for (key, cfg) in raw.chains {
+            match key.parse::<Chain>() {
+                Ok(chain) => {
+                    chains.insert(chain, cfg);
+                }
+                Err(_) => return Err(EngineConfigError::InvalidChainKey { key }),
+            }
+        }
+        Ok(Self {
+            engine: raw.engine,
+            limits: raw.limits,
+            chains,
+            extensions: raw.extensions,
+            modules: raw.modules,
+            services: raw.services,
+            defaulted: false,
+        })
+    }
 }
 
 /// One `[[modules]]` table. `manifest` defaults to a sibling
@@ -673,7 +723,10 @@ pub fn load_or_default(path: Option<&Path>) -> Result<EngineConfig, EngineConfig
     // variable name, not a downstream "invalid URI" several layers
     // deep.
     let substituted = substitute_env_vars(&raw)?;
-    let cfg: EngineConfig = toml::from_str(&substituted)?;
+    // Parse the raw shape, then convert, so a bad `[chains]` key surfaces
+    // as the typed `InvalidChainKey` rather than erased into a serde
+    // string by the derived `Deserialize`.
+    let cfg = EngineConfig::try_from(toml::from_str::<RawEngineConfig>(&substituted)?)?;
     info!(
         path = %path.display(),
         chains = cfg.chains.len(),
@@ -825,10 +878,10 @@ mod tests {
 
     #[test]
     fn named_chain_key_round_trips_to_the_chain() {
-        // A named TOML key must deserialize to the same `Chain` the
-        // numeric id would, because `toml` forwards the key string to
+        // A named TOML key must validate to the same `Chain` the numeric
+        // id would, because the conversion forwards the key string to
         // `Chain`'s `FromStr`.
-        let cfg: EngineConfig = toml::from_str(
+        let cfg = toml::from_str::<EngineConfig>(
             r#"
 [chains.sepolia]
 rpc_url = "wss://example.test/sepolia"
@@ -867,17 +920,22 @@ request_timeout_secs = 0
     }
 
     #[test]
-    fn invalid_chain_key_surfaces_a_toml_error() {
+    fn invalid_chain_key_surfaces_a_typed_refusal() {
         // A key that is neither a numeric id nor a known chain name must
-        // fail the parse (a `Toml` error variant), not silently drop.
-        let err = toml::from_str::<EngineConfig>(
-            r#"
-[chains.bogus]
-rpc_url = "wss://example.test/x"
-"#,
-        )
-        .expect_err("bogus chain key must not parse");
-        // Foreign toml::de::Error; pins that it names the offending key.
+        // fail validation with a variant carrying the key, not silently
+        // drop and not hide inside a serde string.
+        const BOGUS: &str = "[chains.bogus]\nrpc_url = \"wss://example.test/x\"\n";
+        let raw = toml::from_str::<RawEngineConfig>(BOGUS)
+            .expect("the raw parse only decides the TOML is well formed");
+        let err = EngineConfig::try_from(raw).expect_err("bogus chain key must not validate");
+        assert!(
+            matches!(err, EngineConfigError::InvalidChainKey { ref key } if key == "bogus"),
+            "{err:?}",
+        );
+        // The public `Deserialize` path runs the same conversion, so the
+        // refusal survives (as a serde string) and nothing drops silently.
+        let err = toml::from_str::<EngineConfig>(BOGUS)
+            .expect_err("the derived Deserialize must refuse too");
         assert!(err.to_string().contains("bogus"), "{err}");
     }
 

@@ -1,28 +1,34 @@
-//! Serde shapes: `Manifest`, its sections, and `LoadedManifest`.
+//! Raw serde shapes (`Manifest` and its sections) and the validated
+//! `LoadedManifest` they convert into. Deserialization only decides that
+//! the TOML is well formed; `TryFrom<Manifest>` runs every value check
+//! and returns a typed [`ParseError`].
 
 use std::collections::BTreeMap;
 
 use alloy_primitives::{Address, B256};
 use serde::Deserialize;
-use serde::de::Error as _;
+
+use super::error::ParseError;
 
 /// Core capability names: the `nexum:host` interfaces linked into every
 /// module. `http` is gated separately (it gates `wasi:http/*`), and
 /// extensions register their own namespaces.
 pub const CORE_CAPABILITIES: &[&str] = &nexum_world::CORE_IFACES;
 
+/// Raw deserialized manifest; every value stays as written until the
+/// `TryFrom<Manifest>` conversion into [`LoadedManifest`] validates it.
 #[derive(Debug, Deserialize, Default)]
-pub struct Manifest {
+pub(crate) struct Manifest {
     #[serde(default)]
     pub component: ComponentSection,
     #[serde(default)]
     pub dependencies: Option<DependencySection>,
     #[serde(default)]
     pub config: toml::Table,
-    /// Event subscriptions wired before `_init`. `block` and `chain-log`
-    /// are dispatched; `cron` is parsed and ignored.
+    /// `[[subscription]]` tables as written; parsed by the validation
+    /// pass.
     #[serde(default, rename = "subscription")]
-    pub subscriptions: Vec<Subscription>,
+    pub subscriptions: Vec<toml::Table>,
     /// Extension-owned sections (every non-core top-level key), parsed
     /// opaquely and routed to the wired extensions; a section no extension
     /// claims is refused at boot.
@@ -81,8 +87,8 @@ pub enum Subscription {
     },
 }
 
-/// Core subscription kinds parsed by shape; others fall through to
-/// [`Subscription::Extension`].
+/// Core subscription kinds shaped by serde; the hex fields stay raw
+/// strings until the [`Subscription`] conversion validates them.
 // `kebab-case` reproduces `nexum_world::SubscriptionKind`, which gates this.
 #[derive(Deserialize)]
 #[serde(tag = "kind", rename_all = "kebab-case")]
@@ -92,10 +98,10 @@ enum CoreSubscription {
     },
     ChainLog {
         chain_id: u64,
-        #[serde(default, deserialize_with = "chain_log_address")]
-        address: Option<Address>,
-        #[serde(default, deserialize_with = "chain_log_topic")]
-        event_signature: Option<B256>,
+        #[serde(default)]
+        address: Option<String>,
+        #[serde(default)]
+        event_signature: Option<String>,
         #[serde(default)]
         resume: bool,
         #[serde(default)]
@@ -106,32 +112,12 @@ enum CoreSubscription {
     },
 }
 
-fn chain_log_address<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<Address>, D::Error> {
-    // Pinned operator wording.
-    hex_field(d, "invalid chain-log address")
-}
+impl TryFrom<CoreSubscription> for Subscription {
+    type Error = ParseError;
 
-fn chain_log_topic<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<B256>, D::Error> {
-    // Pinned operator wording.
-    hex_field(d, "invalid topic")
-}
-
-/// Refusal lands at manifest load; `label` carries the pinned wording.
-fn hex_field<'de, D, T>(d: D, label: &str) -> Result<Option<T>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-    T: std::str::FromStr,
-    T::Err: std::fmt::Display,
-{
-    let raw = String::deserialize(d)?;
-    raw.parse()
-        .map(Some)
-        .map_err(|e| D::Error::custom(format!("{label} {raw:?}: {e}")))
-}
-
-impl From<CoreSubscription> for Subscription {
-    fn from(sub: CoreSubscription) -> Self {
-        match sub {
+    /// Validates the hex filters; the wording is operator-pinned.
+    fn try_from(sub: CoreSubscription) -> Result<Self, ParseError> {
+        Ok(match sub {
             CoreSubscription::Block { chain_id } => Self::Block { chain_id },
             CoreSubscription::ChainLog {
                 chain_id,
@@ -141,49 +127,67 @@ impl From<CoreSubscription> for Subscription {
                 max_lookback,
             } => Self::ChainLog {
                 chain_id,
-                address,
-                event_signature,
+                address: address
+                    .map(|raw| {
+                        raw.parse::<Address>().map_err(|source| {
+                            ParseError::InvalidChainLogAddress { value: raw, source }
+                        })
+                    })
+                    .transpose()?,
+                event_signature: event_signature
+                    .map(|raw| {
+                        raw.parse::<B256>()
+                            .map_err(|source| ParseError::InvalidChainLogTopic {
+                                value: raw,
+                                source,
+                            })
+                    })
+                    .transpose()?,
                 resume,
                 max_lookback,
             },
             CoreSubscription::Cron { schedule } => Self::Cron { schedule },
-        }
+        })
     }
 }
 
-impl<'de> Deserialize<'de> for Subscription {
-    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let table = toml::Table::deserialize(deserializer)?;
+impl Subscription {
+    /// The kind dispatch: a core kind must match its shape, an unknown
+    /// kind becomes [`Subscription::Extension`] with string filters.
+    /// `index` is the table's 1-based position; a refusal carries it
+    /// because the parsed tables have no source spans.
+    fn from_table(index: usize, table: toml::Table) -> Result<Self, ParseError> {
         let Some(kind) = table.get("kind").and_then(toml::Value::as_str) else {
-            return Err(D::Error::missing_field("kind"));
+            return Err(ParseError::MissingSubscriptionKind { index });
         };
-        match kind.parse::<nexum_world::SubscriptionKind>() {
-            Ok(_) => toml::Value::Table(table.clone())
-                .try_into::<CoreSubscription>()
-                .map(Into::into)
-                .map_err(D::Error::custom),
-            Err(_) => {
-                let kind = kind.to_owned();
-                let mut filters = BTreeMap::new();
-                for (key, value) in table {
-                    if key == "kind" {
-                        continue;
-                    }
-                    let Some(value) = value.as_str() else {
-                        return Err(D::Error::custom(format!(
-                            "subscription filter `{key}` must be a string"
-                        )));
-                    };
-                    filters.insert(key, value.to_owned());
+        if kind.parse::<nexum_world::SubscriptionKind>().is_err() {
+            let kind = kind.to_owned();
+            let mut filters = BTreeMap::new();
+            for (key, value) in table {
+                if key == "kind" {
+                    continue;
                 }
-                Ok(Self::Extension { kind, filters })
+                let toml::Value::String(value) = value else {
+                    return Err(ParseError::NonStringSubscriptionFilter { key });
+                };
+                filters.insert(key, value);
             }
+            return Ok(Self::Extension { kind, filters });
         }
+        let kind = kind.to_owned();
+        toml::Value::Table(table)
+            .try_into::<CoreSubscription>()
+            .map_err(|source| ParseError::InvalidSubscription {
+                index,
+                kind,
+                source,
+            })?
+            .try_into()
     }
 }
 
 #[derive(Debug, Deserialize, Default)]
-pub struct ComponentSection {
+pub(crate) struct ComponentSection {
     /// Instance identity. A service's name is also what a dependant
     /// writes, and both roles share one keccak local-store namespace, so
     /// it is unique across `[[modules]]` and `[[services]]`.
@@ -196,9 +200,9 @@ pub struct ComponentSection {
     /// bytes before compile.
     #[serde(default)]
     pub digest: Option<String>,
-    /// What this component is; defaults to a module.
+    /// What this component is, as written; absent defaults to a module.
     #[serde(default)]
-    pub kind: ComponentKind,
+    pub kind: Option<String>,
     /// Per-component resource requests; each unset field inherits the
     /// engine `[limits]` default and never widens it.
     #[serde(default)]
@@ -208,16 +212,29 @@ pub struct ComponentSection {
 /// What a component is. A module consumes; a service also registers its
 /// name for other components to depend on, so a service's name is the
 /// service type an extension declares.
-#[derive(Debug, Deserialize, Default, Clone, Copy, PartialEq, Eq, Hash, derive_more::Display)]
-#[serde(rename_all = "kebab-case")]
+// strum derives parse and render from one variant list, so the accepted
+// spellings cannot drift from `Display` when a variant is added.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash, strum::Display, strum::EnumString)]
+#[strum(serialize_all = "kebab-case")]
 pub enum ComponentKind {
     /// Consumes host capabilities and services; registers nothing.
     #[default]
-    #[display("module")]
     Module,
     /// Also registers its name for other components to depend on.
-    #[display("service")]
     Service,
+}
+
+impl ComponentKind {
+    /// The manifest spelling; the kind is a closed role, so an invented
+    /// spelling refuses rather than surviving to boot as a provider name.
+    fn from_manifest(kind: Option<&str>) -> Result<Self, ParseError> {
+        match kind {
+            None => Ok(Self::Module),
+            Some(kind) => kind.parse().map_err(|_| ParseError::UnknownComponentKind {
+                kind: kind.to_owned(),
+            }),
+        }
+    }
 }
 
 /// `[module.resources]` overrides; each unset field keeps the engine
@@ -253,13 +270,20 @@ pub struct Dependency {
     pub hosts: Vec<String>,
 }
 
-/// Loaded + validated manifest, plus the data the engine needs to
-/// instantiate a module.
+/// Validated manifest: every value check has run, so each field carries
+/// its typed form.
 #[derive(Debug)]
 pub struct LoadedManifest {
     /// `[component].name` parsed into the namespace.
     pub name: crate::module_id::ModuleId,
-    pub manifest: Manifest,
+    /// `[component].kind`.
+    pub kind: ComponentKind,
+    /// `[component].digest` parsed to its typed digest.
+    pub component_digest: Option<crate::digest::ContentDigest>,
+    /// `[component.resources]` overrides.
+    pub resources: ResourceSection,
+    /// `[dependencies]`; presence is validated, an absent table refuses.
+    pub dependencies: DependencySection,
     /// Hosts wasi:http outgoing requests may target. Each entry is
     /// either an exact hostname or a `*.suffix` wildcard.
     pub http_allowlist: Vec<String>,
@@ -267,6 +291,72 @@ pub struct LoadedManifest {
     /// module's `init`. Scalars become their text form; arrays and tables
     /// their TOML representation.
     pub config: Vec<(String, String)>,
-    /// `[component].digest` parsed to its typed digest.
-    pub component_digest: Option<crate::digest::ContentDigest>,
+    /// Parsed `[[subscription]]` tables.
+    pub subscriptions: Vec<Subscription>,
+    /// Extension-owned sections.
+    pub extensions: ExtensionSections,
+}
+
+impl TryFrom<Manifest> for LoadedManifest {
+    type Error = ParseError;
+
+    /// Every context-free value check, in order: name, kind, digest,
+    /// subscriptions, then `[dependencies]` presence. The registry
+    /// cross-check and the `hosts` placement check stay in `load`, which
+    /// holds the registry and refuses an unknown name first.
+    fn try_from(manifest: Manifest) -> Result<Self, ParseError> {
+        // The only producer of a `ModuleId`.
+        let name = crate::module_id::ModuleId::parse(&manifest.component.name)?;
+        let kind = ComponentKind::from_manifest(manifest.component.kind.as_deref())?;
+        let component_digest = manifest
+            .component
+            .digest
+            .as_deref()
+            .map(str::parse)
+            .transpose()
+            .map_err(|source| ParseError::InvalidComponentDigest {
+                value: manifest.component.digest.clone().unwrap_or_default(),
+                source,
+            })?;
+        let subscriptions = manifest
+            .subscriptions
+            .into_iter()
+            .zip(1..)
+            .map(|(table, index)| Subscription::from_table(index, table))
+            .collect::<Result<Vec<_>, _>>()?;
+        let dependencies = manifest
+            .dependencies
+            .ok_or(ParseError::MissingCapabilities)?;
+        let http_allowlist = dependencies
+            .get(nexum_world::Cap::Http.as_str())
+            .map(|dep| dep.hosts.clone())
+            .unwrap_or_default();
+        let config = manifest
+            .config
+            .iter()
+            .map(|(k, v)| (k.clone(), stringify_toml_value(v)))
+            .collect();
+        Ok(Self {
+            name,
+            kind,
+            component_digest,
+            resources: manifest.component.resources,
+            dependencies,
+            http_allowlist,
+            config,
+            subscriptions,
+            extensions: manifest.extensions,
+        })
+    }
+}
+
+fn stringify_toml_value(v: &toml::Value) -> String {
+    match v {
+        toml::Value::String(s) => s.clone(),
+        toml::Value::Integer(i) => i.to_string(),
+        toml::Value::Float(f) => f.to_string(),
+        toml::Value::Boolean(b) => b.to_string(),
+        toml::Value::Datetime(d) => d.to_string(),
+        toml::Value::Array(_) | toml::Value::Table(_) => v.to_string(),
+    }
 }
