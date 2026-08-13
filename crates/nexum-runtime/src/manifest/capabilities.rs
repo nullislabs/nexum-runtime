@@ -9,7 +9,7 @@
 
 use std::collections::HashSet;
 
-use strum::VariantNames;
+use nexum_world::WasiCap;
 
 use super::error::{CapabilityError, CapabilityViolation};
 use super::types::{CORE_CAPABILITIES, LoadedManifest};
@@ -52,35 +52,6 @@ const WASI_HTTP_PREFIX: &str = "wasi:http/";
 /// Capability name a module declares to import any `wasi:http/*`
 /// interface; the per-module `[dependencies.http].hosts` list scopes it.
 const HTTP_CAPABILITY: &str = nexum_world::Cap::Http.as_str();
-
-/// Gated WASI capability names; declaring one grants the matching `wasi:`
-/// interface group. See [`classify_wasi`].
-const WASI_CAPABILITIES: &[&str] = WasiCap::VARIANTS;
-
-/// A gated WASI capability; the single source of the `wasi-*` name set.
-#[derive(Clone, Copy, strum::IntoStaticStr, strum::VariantNames, strum::VariantArray)]
-enum WasiCap {
-    #[strum(serialize = "wasi-sockets")]
-    Sockets,
-    #[strum(serialize = "wasi-filesystem")]
-    Filesystem,
-}
-
-impl WasiCap {
-    const ALL: &'static [Self] = <Self as strum::VariantArray>::VARIANTS;
-
-    fn as_str(self) -> &'static str {
-        self.into()
-    }
-
-    /// The `wasi:` interface prefix this capability gates.
-    const fn gated_prefix(self) -> &'static str {
-        match self {
-            Self::Sockets => "wasi:sockets/",
-            Self::Filesystem => "wasi:filesystem/",
-        }
-    }
-}
 
 /// Always-linked `wasi:` prefixes: io, clocks, random, stdio/exit/terminal.
 const AMBIENT_WASI_PREFIXES: &[&str] = &["wasi:io/", "wasi:clocks/", "wasi:random/", "wasi:cli/"];
@@ -142,20 +113,20 @@ impl CapabilityRegistry {
         self.namespaces.push(ns);
     }
 
-    /// Whether `name` is a capability under any registered namespace.
+    /// Whether `name` is a capability under any registered namespace or a
+    /// `wasi:` gate name.
     pub fn is_known(&self, name: &str) -> bool {
-        name == HTTP_CAPABILITY
-            || WASI_CAPABILITIES.contains(&name)
+        nexum_world::WASI_GATES.contains(&name)
             || self.namespaces.iter().any(|ns| ns.ifaces.contains(&name))
     }
 
-    /// Comma-joined recognized capability names, for error messages.
+    /// Comma-joined recognized capability names, for error messages: the
+    /// registered namespaces, then [`nexum_world::WASI_GATES`].
     pub fn known_names(&self) -> String {
         self.namespaces
             .iter()
             .flat_map(|ns| ns.ifaces.iter().copied())
-            .chain(std::iter::once(HTTP_CAPABILITY))
-            .chain(WASI_CAPABILITIES.iter().copied())
+            .chain(nexum_world::WASI_GATES)
             .collect::<Vec<_>>()
             .join(", ")
     }
@@ -552,6 +523,28 @@ mod tests {
             enforce_capabilities(&declared, ["wasi:sockets/tcp@0.2.6"].into_iter(), &r).is_ok()
         );
         assert!(enforce_capabilities(&none, ["wasi:filesystem/types"].into_iter(), &r).is_err());
+    }
+
+    /// `classify_wasi` tests the ambient list before the gated prefixes,
+    /// and the two lists live in different crates: an overlap would let
+    /// the ambient side silently win and admit a gated interface group
+    /// with no declaration.
+    #[test]
+    fn ambient_and_gated_prefixes_are_disjoint() {
+        for cap in WasiCap::ALL {
+            let gated = cap.gated_prefix();
+            for ambient in AMBIENT_WASI_PREFIXES {
+                assert!(
+                    !gated.starts_with(ambient) && !ambient.starts_with(gated),
+                    "gated prefix {gated} overlaps ambient prefix {ambient}"
+                );
+            }
+            let probe = format!("{gated}probe@0.2.6");
+            assert!(
+                matches!(classify_wasi(&probe), WasiGate::Gated(c) if c == *cap),
+                "{probe} did not classify as gated"
+            );
+        }
     }
 
     #[test]
