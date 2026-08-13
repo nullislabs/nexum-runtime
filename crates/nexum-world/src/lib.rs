@@ -44,11 +44,8 @@ impl Cap {
     }
 }
 
-/// A gated WASI capability name; the single source of the `wasi-*` name
-/// set. The runtime's import gate maps each name to its `wasi:` interface
-/// group and refuses any other `wasi:` interface. These names gate host
-/// linking only and emit no world import, so [`synthesize`] does not
-/// accept them.
+/// Gates host linking only: these emit no world import, so [`synthesize`]
+/// does not accept them.
 #[derive(
     Clone,
     Copy,
@@ -90,9 +87,8 @@ impl WasiCap {
     }
 }
 
-/// Capability names that gate a `wasi:` interface group rather than emit
-/// a world import: [`Cap::Http`], then the [`WasiCap`] names in
-/// declaration order. A registry recognizes these without registration.
+/// [`Cap::Http`] then the [`WasiCap`] names, in declaration order. A
+/// registry recognizes these without registration.
 pub const WASI_GATES: [&str; 1 + WasiCap::VARIANTS.len()] = {
     let mut out = [""; 1 + WasiCap::VARIANTS.len()];
     out[0] = Cap::Http.as_str();
@@ -828,7 +824,6 @@ mod tests {
         assert!(!CORE_IFACES.contains(&Cap::Http.as_str()));
     }
 
-    /// Pin the const accessor and the derived conversions to one vocabulary.
     #[test]
     fn cap_accessor_agrees_with_the_derived_vocabulary() {
         let names: Vec<&str> = CORE.iter().map(|c| c.name.as_str()).collect();
@@ -841,7 +836,6 @@ mod tests {
         }
     }
 
-    /// Pin the const accessor and the derived conversions to one vocabulary.
     #[test]
     fn wasi_cap_accessor_agrees_with_the_derived_vocabulary() {
         let names: Vec<&str> = WasiCap::ALL.iter().map(|c| c.as_str()).collect();

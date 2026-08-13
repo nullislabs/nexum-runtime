@@ -113,15 +113,13 @@ impl CapabilityRegistry {
         self.namespaces.push(ns);
     }
 
-    /// Whether `name` is a capability under any registered namespace or a
-    /// `wasi:` gate name.
+    /// Any registered namespace, or a `wasi:` gate name.
     pub fn is_known(&self, name: &str) -> bool {
         nexum_world::WASI_GATES.contains(&name)
             || self.namespaces.iter().any(|ns| ns.ifaces.contains(&name))
     }
 
-    /// Comma-joined recognized capability names, for error messages: the
-    /// registered namespaces, then [`nexum_world::WASI_GATES`].
+    /// For error messages: registered namespaces, then the `wasi:` gates.
     pub fn known_names(&self) -> String {
         self.namespaces
             .iter()
@@ -525,10 +523,8 @@ mod tests {
         assert!(enforce_capabilities(&none, ["wasi:filesystem/types"].into_iter(), &r).is_err());
     }
 
-    /// `classify_wasi` tests the ambient list before the gated prefixes,
-    /// and the two lists live in different crates: an overlap would let
-    /// the ambient side silently win and admit a gated interface group
-    /// with no declaration.
+    /// `classify_wasi` tests ambient first, and the lists now live in
+    /// different crates, so an overlap would silently admit a gated group.
     #[test]
     fn ambient_and_gated_prefixes_are_disjoint() {
         for cap in WasiCap::ALL {
