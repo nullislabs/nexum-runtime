@@ -7,8 +7,16 @@ use alloy_transport::TransportError;
 
 use crate::bindings::nexum::host::chain::{ChainError, RpcError};
 use crate::bindings::nexum::host::types::{Fault, RateLimit};
+use crate::engine_config::redact_urls_in_text;
 use crate::host::local_store_redb::StorageError;
 use crate::host::provider_pool::PoolError;
+
+/// The guest reads this, so every URL goes: reqwest appends `for url
+/// (<url>)` and the endpoint carries the operator's key. Host logs render
+/// `source` directly and keep it.
+fn guest_text(source: &TransportError) -> String {
+    redact_urls_in_text(&source.to_string())
+}
 
 /// `Denied` chain fault for a request the host policy refused.
 pub(crate) fn chain_denied(detail: impl Into<String>) -> ChainError {
@@ -75,7 +83,7 @@ fn classify_rpc(source: &TransportError) -> ChainError {
             // A code outside `i32` is a JSON-RPC spec violation, clamped
             // to `-32603` Internal error.
             code: i32::try_from(payload.code).unwrap_or(-32603),
-            message: source.to_string(),
+            message: guest_text(source),
             // alloy decodes the hex `error.data` into `Bytes`; non-hex or
             // structured data decodes to `None`.
             data: payload
@@ -106,10 +114,10 @@ fn transport_fault(source: &TransportError) -> Fault {
                 });
             }
             TransportErrorKind::HttpError(http) if http.status == 503 => {
-                return Fault::Unavailable(source.to_string());
+                return Fault::Unavailable(guest_text(source));
             }
             TransportErrorKind::BackendGone | TransportErrorKind::PubsubUnavailable => {
-                return Fault::Unavailable(source.to_string());
+                return Fault::Unavailable(guest_text(source));
             }
             _ => {}
         }
@@ -121,12 +129,14 @@ fn transport_fault(source: &TransportError) -> Fault {
         return Fault::Timeout;
     }
     // Last resort for transports that only surface a timeout in the message.
+    // The sniff runs on the unredacted text so redaction cannot change the
+    // classification; only the guest-visible string is redacted.
     let msg = source.to_string();
     let lower = msg.to_ascii_lowercase();
     if lower.contains("timed out") || lower.contains("timeout") {
         Fault::Timeout
     } else {
-        Fault::Unavailable(msg)
+        Fault::Unavailable(redact_urls_in_text(&msg))
     }
 }
 
@@ -173,6 +183,25 @@ mod tests {
 
     fn transport_err(msg: &str) -> TransportError {
         TransportErrorKind::custom_str(msg)
+    }
+
+    /// reqwest strips userinfo before rendering, so that leg only bites on
+    /// text echoing the URL as configured.
+    const CREDENTIALED_URL: &str =
+        "http://user:passsecret@127.0.0.1:1/v2/THISISALONGAPIKEY1234567890?apikey=qsecret";
+
+    fn assert_no_endpoint(payload: &str) {
+        for secret in [
+            "passsecret",
+            "THISISALONGAPIKEY1234567890",
+            "qsecret",
+            "127.0.0.1",
+        ] {
+            assert!(
+                !payload.contains(secret),
+                "`{secret}` leaked into the fault payload: {payload}"
+            );
+        }
     }
 
     #[test]
@@ -245,6 +274,104 @@ mod tests {
             chain_err,
             ChainError::Fault(Fault::Unavailable(_))
         ));
+    }
+
+    #[tokio::test]
+    async fn unreachable_endpoint_fault_redacts_the_credentialed_url() {
+        let err = reqwest::Client::new()
+            .post(CREDENTIALED_URL)
+            .send()
+            .await
+            .expect_err("port 1 refuses the connection");
+        let chain_err = ChainError::from(PoolError::Rpc(TransportErrorKind::custom(err)));
+        let ChainError::Fault(Fault::Unavailable(msg)) = chain_err else {
+            panic!("expected Unavailable fault, got {chain_err:?}");
+        };
+        assert_no_endpoint(&msg);
+        assert!(
+            msg.contains("error sending request"),
+            "diagnosis kept: {msg}"
+        );
+    }
+
+    #[test]
+    fn http_503_fault_redacts_an_echoed_endpoint() {
+        let body = format!("upstream {CREDENTIALED_URL} refused");
+        let chain_err = ChainError::from(PoolError::Rpc(TransportErrorKind::http_error(503, body)));
+        let ChainError::Fault(Fault::Unavailable(msg)) = chain_err else {
+            panic!("expected Unavailable fault, got {chain_err:?}");
+        };
+        assert_no_endpoint(&msg);
+        assert!(msg.contains("503"), "status kept: {msg}");
+    }
+
+    #[test]
+    fn fault_drops_a_host_borne_or_short_path_key() {
+        for url in [
+            "https://k7fQz2m9Xd.eth.rpc.example.com/",
+            "https://rpc.example.com/k7fQz2m9Xd",
+        ] {
+            let msg = format!("error sending request for url ({url})");
+            let chain_err = ChainError::from(PoolError::Rpc(transport_err(&msg)));
+            let ChainError::Fault(Fault::Unavailable(msg)) = chain_err else {
+                panic!("expected Unavailable fault, got {chain_err:?}");
+            };
+            assert!(!msg.contains("k7fQz2m9Xd"), "key gone: {msg}");
+            assert!(!msg.contains("rpc.example.com"), "endpoint gone: {msg}");
+        }
+    }
+
+    #[test]
+    fn fault_redaction_survives_multibyte_server_text() {
+        let body = format!("upstream \u{201c}{CREDENTIALED_URL}\u{201d} refused");
+        let chain_err = ChainError::from(PoolError::Rpc(TransportErrorKind::http_error(503, body)));
+        let ChainError::Fault(Fault::Unavailable(msg)) = chain_err else {
+            panic!("expected Unavailable fault, got {chain_err:?}");
+        };
+        assert_no_endpoint(&msg);
+    }
+
+    #[test]
+    fn dropped_backend_fault_carries_no_endpoint() {
+        // These render constants, so this pins the constants, not the
+        // redaction.
+        for source in [
+            TransportErrorKind::backend_gone(),
+            TransportErrorKind::pubsub_unavailable(),
+        ] {
+            let chain_err = ChainError::from(PoolError::Rpc(source));
+            let ChainError::Fault(Fault::Unavailable(msg)) = chain_err else {
+                panic!("expected Unavailable fault, got {chain_err:?}");
+            };
+            assert_no_endpoint(&msg);
+            assert!(!msg.is_empty(), "the fault still carries a diagnosis");
+        }
+    }
+
+    #[test]
+    fn error_resp_message_redacts_an_echoed_endpoint() {
+        let payload: ErrorPayload = serde_json::from_str(&format!(
+            r#"{{"code":-32005,"message":"daily limit reached for {CREDENTIALED_URL}"}}"#
+        ))
+        .expect("payload parses");
+        let chain_err = ChainError::from(PoolError::Rpc(AlloyRpcError::ErrorResp(payload)));
+        let ChainError::Rpc(rpc) = chain_err else {
+            panic!("expected ChainError::Rpc, got {chain_err:?}");
+        };
+        assert_no_endpoint(&rpc.message);
+        assert_eq!(rpc.code, -32005);
+        assert!(
+            rpc.message.contains("daily limit reached"),
+            "node message kept: {}",
+            rpc.message
+        );
+    }
+
+    #[test]
+    fn timeout_sniff_classifies_before_redaction() {
+        let msg = format!("request to {CREDENTIALED_URL} timed out");
+        let chain_err = ChainError::from(PoolError::Rpc(transport_err(&msg)));
+        assert!(matches!(chain_err, ChainError::Fault(Fault::Timeout)));
     }
 
     #[test]
