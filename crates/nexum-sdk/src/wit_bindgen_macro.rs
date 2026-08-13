@@ -62,25 +62,23 @@ macro_rules! bind_host_via_wit_bindgen {
         }
 
         /// Lower the SDK `Fault` back into the wit-bindgen `Fault` for
-        /// the export signature. A future `#[non_exhaustive]` SDK case
-        /// falls back to `internal` carrying the `Display` detail.
+        /// the export signature, via the closed `FaultParts` mirror so
+        /// the match stays exhaustive: a future SDK case fails to
+        /// compile instead of degrading to `internal`.
         impl ::core::convert::From<$crate::host::Fault> for nexum::host::types::Fault {
             fn from(f: $crate::host::Fault) -> Self {
-                match f {
-                    $crate::host::Fault::Unsupported(s) => Self::Unsupported(s),
-                    $crate::host::Fault::Unavailable(s) => Self::Unavailable(s),
-                    $crate::host::Fault::Denied(s) => Self::Denied(s),
-                    $crate::host::Fault::RateLimited(rl) => {
+                match $crate::host::FaultParts::from(f) {
+                    $crate::host::FaultParts::Unsupported(s) => Self::Unsupported(s),
+                    $crate::host::FaultParts::Unavailable(s) => Self::Unavailable(s),
+                    $crate::host::FaultParts::Denied(s) => Self::Denied(s),
+                    $crate::host::FaultParts::RateLimited(rl) => {
                         Self::RateLimited(nexum::host::types::RateLimit {
                             retry_after_ms: rl.retry_after_ms,
                         })
                     }
-                    $crate::host::Fault::Timeout => Self::Timeout,
-                    $crate::host::Fault::InvalidInput(s) => Self::InvalidInput(s),
-                    $crate::host::Fault::Internal(s) => Self::Internal(s),
-                    // `$crate::host::Fault` is `#[non_exhaustive]`; a
-                    // future SDK case lands here as `internal`.
-                    other => Self::Internal(::std::string::ToString::to_string(&other)),
+                    $crate::host::FaultParts::Timeout => Self::Timeout,
+                    $crate::host::FaultParts::InvalidInput(s) => Self::InvalidInput(s),
+                    $crate::host::FaultParts::Internal(s) => Self::Internal(s),
                 }
             }
         }

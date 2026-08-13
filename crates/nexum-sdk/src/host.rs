@@ -54,6 +54,51 @@ pub struct RateLimit {
     pub retry_after_ms: Option<u64>,
 }
 
+/// Closed mirror of [`Fault`], the shape the bind macro lowers to the
+/// wire enum. [`Fault`] is `#[non_exhaustive]`, so a match outside this
+/// crate needs a wildcard arm; matching this type instead keeps the
+/// lowering exhaustive, and a new [`Fault`] case fails to compile
+/// rather than degrading at the wire boundary.
+///
+/// Hidden: macro plumbing only, `pub` so the expansion can name it.
+/// Matching it elsewhere would defeat `#[non_exhaustive]` on [`Fault`],
+/// as the macro's arms are regenerated with the SDK but downstream
+/// matches are not.
+#[doc(hidden)]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum FaultParts {
+    /// [`Fault::Unsupported`].
+    Unsupported(String),
+    /// [`Fault::Unavailable`].
+    Unavailable(String),
+    /// [`Fault::Denied`].
+    Denied(String),
+    /// [`Fault::RateLimited`].
+    RateLimited(RateLimit),
+    /// [`Fault::Timeout`].
+    Timeout,
+    /// [`Fault::InvalidInput`].
+    InvalidInput(String),
+    /// [`Fault::Internal`].
+    Internal(String),
+}
+
+impl From<Fault> for FaultParts {
+    fn from(f: Fault) -> Self {
+        // Exhaustive: `#[non_exhaustive]` does not bind the defining
+        // crate, so a new `Fault` case is a compile error here.
+        match f {
+            Fault::Unsupported(s) => Self::Unsupported(s),
+            Fault::Unavailable(s) => Self::Unavailable(s),
+            Fault::Denied(s) => Self::Denied(s),
+            Fault::RateLimited(rl) => Self::RateLimited(rl),
+            Fault::Timeout => Self::Timeout,
+            Fault::InvalidInput(s) => Self::InvalidInput(s),
+            Fault::Internal(s) => Self::Internal(s),
+        }
+    }
+}
+
 /// Sealing markers for [`Host`] and [`HostFault`]: implement alongside
 /// the trait.
 #[doc(hidden)]
