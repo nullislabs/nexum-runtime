@@ -269,34 +269,151 @@ pub struct ModuleWorld {
     pub adapters: Vec<&'static str>,
 }
 
+/// A refusal from manifest reading or world synthesis. The `Display`
+/// text is operator-facing wording: the proc macro surfaces it verbatim
+/// as a compile error, so it is pinned by test.
+#[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
+pub enum WorldError {
+    /// A manifest failed to parse as TOML.
+    #[error("{file} is not valid TOML: {source}")]
+    NotToml {
+        /// The manifest's conventional file name.
+        file: &'static str,
+        /// The TOML parse failure.
+        #[source]
+        source: toml::de::Error,
+    },
+    /// The manifest still carries the replaced `[capabilities]` section.
+    #[error(
+        "[capabilities] is replaced by [dependencies]: each key names a host \
+         capability or a service, and its table carries that dependency's \
+         attributes (the http allowlist is now `http = {{{{ hosts = [...] }}}}`)"
+    )]
+    ReplacedCapabilities,
+    /// The manifest declares no `[dependencies]` table.
+    #[error(
+        "component.toml has no [dependencies] table; the macro derives the component's \
+         WIT world from it, so declare it (an empty table is valid)"
+    )]
+    MissingDependencies,
+    /// `[dependencies]` is not a table.
+    #[error("[dependencies] must be a table")]
+    DependenciesNotATable,
+    /// A `[dependencies]` value is not a table.
+    #[error("[dependencies].{name} must be a table; an empty one is `{name} = {{}}`")]
+    DependencyNotATable {
+        /// The dependency key.
+        name: String,
+    },
+    /// `[[subscription]]` is not an array of tables.
+    #[error("[[subscription]] must be an array of tables")]
+    SubscriptionsNotAnArray,
+    /// A chain-log subscription's `event_signature` is not a string.
+    #[error("[[subscription]].event_signature must be a string")]
+    EventSignatureNotAString,
+    /// A chain-log `event_signature` that is not 32-byte hex.
+    // Pinned operator wording; mirrors the runtime's load-time refusal.
+    #[error("invalid topic {topic:?}: {source}")]
+    InvalidTopic {
+        /// The topic as written.
+        topic: String,
+        /// The hex parse failure.
+        #[source]
+        source: alloy_primitives::hex::FromHexError,
+    },
+    /// `[extensions]` is not a table.
+    #[error("[extensions] must be a table of `[extensions.<name>]` rows")]
+    ExtensionsNotATable,
+    /// An `[extensions.<name>]` row is not a table.
+    #[error("[extensions.{name}] must be a table")]
+    ExtensionNotATable {
+        /// The extension name.
+        name: String,
+    },
+    /// An `[extensions.<name>]` row has no string `import`.
+    #[error("[extensions.{name}] must carry a string `import`")]
+    ExtensionMissingImport {
+        /// The extension name.
+        name: String,
+    },
+    /// An `[extensions.<name>].packages` value is not an array.
+    #[error("[extensions.{name}].packages must be an array of strings")]
+    ExtensionPackagesNotAnArray {
+        /// The extension name.
+        name: String,
+    },
+    /// An `[extensions.<name>].packages` item is not a string.
+    #[error("[extensions.{name}].packages must contain only strings")]
+    ExtensionPackageNotAString {
+        /// The extension name.
+        name: String,
+    },
+    /// A registered extension name shadows a core capability or another
+    /// registration.
+    #[error(
+        "extension capability `{name}` collides with an already-registered capability; \
+         names must be unique across the core table and the registered extensions"
+    )]
+    ExtensionCollision {
+        /// The colliding name.
+        name: String,
+    },
+    /// A declared dependency named no core capability and no registered
+    /// extension.
+    #[error(
+        "unknown dependency `{name}` in component.toml [dependencies]; expected one of: {}",
+        .known.join(", ")
+    )]
+    UnknownDependency {
+        /// The unrecognized name.
+        name: String,
+        /// The recognized names: core capabilities, then registered
+        /// extensions.
+        known: Vec<String>,
+    },
+    /// No `wit/` tree exists under the build root or any ancestor.
+    #[error("no `wit/` tree exists under {} or any ancestor", .start.display())]
+    NoWitTree {
+        /// The directory the search started from.
+        start: PathBuf,
+    },
+    /// A needed WIT package is absent from the nearest `wit/` tree.
+    #[error(
+        "declared capabilities need the `{package}` WIT package, but neither \
+         `wit/deps/{package}` nor `wit/{package}` exists in {}",
+        .wit.display()
+    )]
+    MissingWitPackage {
+        /// The package directory name.
+        package: String,
+        /// The `wit/` tree that was searched.
+        wit: PathBuf,
+    },
+    /// `CARGO_MANIFEST_DIR` is absent, so there is no crate root to
+    /// resolve against.
+    #[error("CARGO_MANIFEST_DIR is not set")]
+    NoManifestDir,
+}
+
 /// The declared dependency names from `[dependencies]` in the manifest
 /// text. A missing or malformed `[dependencies]` table is an
 /// error.
-pub fn manifest_capabilities(text: &str) -> Result<Vec<String>, String> {
-    let value: toml::Table = text
-        .parse()
-        .map_err(|e| format!("component.toml is not valid TOML: {e}"))?;
-    if value.get("capabilities").is_some() {
-        return Err(
-            "[capabilities] is replaced by [dependencies]: each key names a host \
-                    capability or a service, and its table carries that dependency's \
-                    attributes (the http allowlist is now `http = {{ hosts = [...] }}`)"
-                .to_string(),
-        );
-    }
-    let deps = value.get("dependencies").ok_or_else(|| {
-        "component.toml has no [dependencies] table; the macro derives the component's \
-         WIT world from it, so declare it (an empty table is valid)"
-            .to_string()
+pub fn manifest_capabilities(text: &str) -> Result<Vec<String>, WorldError> {
+    let value: toml::Table = text.parse().map_err(|source| WorldError::NotToml {
+        file: "component.toml",
+        source,
     })?;
-    let table = deps
-        .as_table()
-        .ok_or_else(|| "[dependencies] must be a table".to_string())?;
+    if value.get("capabilities").is_some() {
+        return Err(WorldError::ReplacedCapabilities);
+    }
+    let deps = value
+        .get("dependencies")
+        .ok_or(WorldError::MissingDependencies)?;
+    let table = deps.as_table().ok_or(WorldError::DependenciesNotATable)?;
     for (name, spec) in table {
         if !spec.is_table() {
-            return Err(format!(
-                "[dependencies].{name} must be a table; an empty one is `{name} = {{}}`"
-            ));
+            return Err(WorldError::DependencyNotATable { name: name.clone() });
         }
     }
     Ok(table.keys().cloned().collect())
@@ -304,16 +421,17 @@ pub fn manifest_capabilities(text: &str) -> Result<Vec<String>, String> {
 
 /// The distinct chain-log `event_signature` topics from the manifest
 /// text, in declaration order. Same hex grammar as the runtime's load.
-pub fn manifest_chain_log_topics(text: &str) -> Result<Vec<B256>, String> {
-    let value: toml::Table = text
-        .parse()
-        .map_err(|e| format!("component.toml is not valid TOML: {e}"))?;
+pub fn manifest_chain_log_topics(text: &str) -> Result<Vec<B256>, WorldError> {
+    let value: toml::Table = text.parse().map_err(|source| WorldError::NotToml {
+        file: "component.toml",
+        source,
+    })?;
     let Some(subscriptions) = value.get("subscription") else {
         return Ok(Vec::new());
     };
     let subscriptions = subscriptions
         .as_array()
-        .ok_or_else(|| "[[subscription]] must be an array of tables".to_string())?;
+        .ok_or(WorldError::SubscriptionsNotAnArray)?;
     let mut topics = Vec::new();
     for sub in subscriptions {
         let kind = sub
@@ -326,13 +444,11 @@ pub fn manifest_chain_log_topics(text: &str) -> Result<Vec<B256>, String> {
         let Some(raw) = sub.get("event_signature") else {
             continue;
         };
-        let raw = raw
-            .as_str()
-            .ok_or_else(|| "[[subscription]].event_signature must be a string".to_string())?;
-        let topic: B256 = raw
-            .parse()
-            // Pinned operator wording; mirrors the runtime's load-time refusal.
-            .map_err(|e| format!("invalid topic {raw:?}: {e}"))?;
+        let raw = raw.as_str().ok_or(WorldError::EventSignatureNotAString)?;
+        let topic: B256 = raw.parse().map_err(|source| WorldError::InvalidTopic {
+            topic: raw.to_owned(),
+            source,
+        })?;
         if !topics.contains(&topic) {
             topics.push(topic);
         }
@@ -344,38 +460,37 @@ pub fn manifest_chain_log_topics(text: &str) -> Result<Vec<B256>, String> {
 /// `[extensions.<name>]` table carries a WIT `import` and the extra
 /// `packages` its resolve path needs. No `[extensions]` section
 /// registers nothing.
-pub fn manifest_extensions(text: &str) -> Result<Vec<ExtensionRow>, String> {
-    let value: toml::Table = text
-        .parse()
-        .map_err(|e| format!("extensions.toml is not valid TOML: {e}"))?;
+pub fn manifest_extensions(text: &str) -> Result<Vec<ExtensionRow>, WorldError> {
+    let value: toml::Table = text.parse().map_err(|source| WorldError::NotToml {
+        file: "extensions.toml",
+        source,
+    })?;
     let Some(extensions) = value.get("extensions") else {
         return Ok(Vec::new());
     };
     let extensions = extensions
         .as_table()
-        .ok_or_else(|| "[extensions] must be a table of `[extensions.<name>]` rows".to_string())?;
+        .ok_or(WorldError::ExtensionsNotATable)?;
     extensions
         .iter()
         .map(|(name, row)| {
             let row = row
                 .as_table()
-                .ok_or_else(|| format!("[extensions.{name}] must be a table"))?;
+                .ok_or_else(|| WorldError::ExtensionNotATable { name: name.clone() })?;
             let import = row
                 .get("import")
                 .and_then(toml::Value::as_str)
-                .ok_or_else(|| format!("[extensions.{name}] must carry a string `import`"))?
+                .ok_or_else(|| WorldError::ExtensionMissingImport { name: name.clone() })?
                 .to_owned();
             let packages = match row.get("packages") {
                 None => Vec::new(),
                 Some(value) => value
                     .as_array()
-                    .ok_or_else(|| {
-                        format!("[extensions.{name}].packages must be an array of strings")
-                    })?
+                    .ok_or_else(|| WorldError::ExtensionPackagesNotAnArray { name: name.clone() })?
                     .iter()
                     .map(|item| {
                         item.as_str().map(str::to_owned).ok_or_else(|| {
-                            format!("[extensions.{name}].packages must contain only strings")
+                            WorldError::ExtensionPackageNotAString { name: name.clone() }
                         })
                     })
                     .collect::<Result<_, _>>()?,
@@ -408,16 +523,17 @@ pub fn find_extensions_manifest(start: &Path) -> Option<PathBuf> {
 /// one the module holds. `extensions` rows emit after the core rows. An
 /// unknown name is an error; an extension name that shadows a core row
 /// or another registration is an error.
-pub fn synthesize(declared: &[String], extensions: &[ExtensionRow]) -> Result<ModuleWorld, String> {
+pub fn synthesize(
+    declared: &[String],
+    extensions: &[ExtensionRow],
+) -> Result<ModuleWorld, WorldError> {
     for (idx, ext) in extensions.iter().enumerate() {
         if ext.name.parse::<Cap>().is_ok()
             || extensions[..idx].iter().any(|prior| prior.name == ext.name)
         {
-            return Err(format!(
-                "extension capability `{}` collides with an already-registered capability; \
-                 names must be unique across the core table and the registered extensions",
-                ext.name
-            ));
+            return Err(WorldError::ExtensionCollision {
+                name: ext.name.clone(),
+            });
         }
     }
 
@@ -427,16 +543,15 @@ pub fn synthesize(declared: &[String], extensions: &[ExtensionRow]) -> Result<Mo
             Ok(cap) => caps.push(cap),
             Err(_) if extensions.iter().any(|e| &e.name == name) => {}
             Err(_) => {
-                let names = Cap::VARIANTS
+                let known = Cap::VARIANTS
                     .iter()
-                    .copied()
-                    .chain(extensions.iter().map(|e| e.name.as_str()))
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                return Err(format!(
-                    "unknown dependency `{name}` in component.toml [dependencies]; expected one of: \
-                     {names}"
-                ));
+                    .map(|cap| (*cap).to_owned())
+                    .chain(extensions.iter().map(|e| e.name.clone()))
+                    .collect();
+                return Err(WorldError::UnknownDependency {
+                    name: name.clone(),
+                    known,
+                });
             }
         }
     }
@@ -502,23 +617,17 @@ pub fn synthesize(declared: &[String], extensions: &[ExtensionRow]) -> Result<Mo
 pub fn resolve_wit_packages<S: AsRef<str>>(
     start: &Path,
     packages: &[S],
-) -> Result<Vec<PathBuf>, String> {
-    let wit = find_wit_tree(start).ok_or_else(|| {
-        format!(
-            "no `wit/` tree exists under {} or any ancestor",
-            start.display()
-        )
+) -> Result<Vec<PathBuf>, WorldError> {
+    let wit = find_wit_tree(start).ok_or_else(|| WorldError::NoWitTree {
+        start: start.to_owned(),
     })?;
     packages
         .iter()
         .map(|package| {
             let package = package.as_ref();
-            resolve_wit_package(&wit, package).ok_or_else(|| {
-                format!(
-                    "declared capabilities need the `{package}` WIT package, but neither \
-                     `wit/deps/{package}` nor `wit/{package}` exists in {}",
-                    wit.display()
-                )
+            resolve_wit_package(&wit, package).ok_or_else(|| WorldError::MissingWitPackage {
+                package: package.to_owned(),
+                wit: wit.clone(),
             })
         })
         .collect()
@@ -526,15 +635,15 @@ pub fn resolve_wit_packages<S: AsRef<str>>(
 
 /// The consuming crate's manifest directory, the root every crate-local
 /// lookup starts from.
-pub fn manifest_dir() -> Result<PathBuf, String> {
+pub fn manifest_dir() -> Result<PathBuf, WorldError> {
     std::env::var("CARGO_MANIFEST_DIR")
         .map(PathBuf::from)
-        .map_err(|_| "CARGO_MANIFEST_DIR is not set".to_string())
+        .map_err(|_| WorldError::NoManifestDir)
 }
 
 /// [`resolve_wit_packages`] rooted at [`manifest_dir`], as the strings
 /// `wit_bindgen::generate!` takes for its `path`.
-pub fn manifest_wit_packages<S: AsRef<str>>(packages: &[S]) -> Result<Vec<String>, String> {
+pub fn manifest_wit_packages<S: AsRef<str>>(packages: &[S]) -> Result<Vec<String>, WorldError> {
     Ok(resolve_wit_packages(&manifest_dir()?, packages)?
         .into_iter()
         .map(|path| path.to_string_lossy().into_owned())
@@ -617,7 +726,16 @@ mod tests {
             packages: Vec::new(),
         }];
         let err = synthesize(&[Cap::Chain.to_string()], &rows).unwrap_err();
-        assert!(err.contains("extension capability `chain` collides"));
+        assert!(matches!(
+            &err,
+            WorldError::ExtensionCollision { name } if name == "chain"
+        ));
+        // Operator-facing wording, pinned verbatim.
+        assert_eq!(
+            err.to_string(),
+            "extension capability `chain` collides with an already-registered capability; \
+             names must be unique across the core table and the registered extensions"
+        );
     }
 
     #[test]
@@ -625,7 +743,14 @@ mod tests {
         let mut rows = ext();
         rows.extend(ext());
         let err = synthesize(&[], &rows).unwrap_err();
-        assert!(err.contains("extension capability `acme` collides"));
+        assert!(matches!(
+            &err,
+            WorldError::ExtensionCollision { name } if name == "acme"
+        ));
+        assert!(
+            err.to_string()
+                .contains("extension capability `acme` collides")
+        );
     }
 
     #[test]
@@ -733,9 +858,15 @@ mod tests {
     #[test]
     fn unknown_capability_is_rejected_with_the_known_list() {
         let err = synthesize(&["telepathy".to_string()], &ext()).unwrap_err();
+        // The known set is a typed field: core capabilities, then extensions.
+        assert!(matches!(
+            &err,
+            WorldError::UnknownDependency { name, known }
+                if name == "telepathy" && known.last().is_some_and(|k| k == "acme")
+        ));
         // Operator-facing wording and order, pinned verbatim.
         assert_eq!(
-            err,
+            err.to_string(),
             "unknown dependency `telepathy` in component.toml [dependencies]; expected one of: \
              chain, identity, local-store, remote-store, logging, http, acme"
         );
@@ -746,7 +877,11 @@ mod tests {
         // The seam is out of v1. A component still declaring it is refused
         // as unknown rather than granted a stub that cannot work.
         let err = synthesize(&["messaging".to_string()], &ext()).unwrap_err();
-        assert!(err.starts_with("unknown dependency `messaging`"), "{err}");
+        assert!(
+            err.to_string()
+                .starts_with("unknown dependency `messaging`"),
+            "{err}"
+        );
     }
 
     #[test]
@@ -782,7 +917,15 @@ import = "beta:ext/api@0.1.0"
     #[test]
     fn extension_row_without_an_import_is_an_error() {
         let err = manifest_extensions("[extensions.acme]\npackages = []\n").unwrap_err();
-        assert!(err.contains("[extensions.acme] must carry a string `import`"));
+        assert!(matches!(
+            &err,
+            WorldError::ExtensionMissingImport { name } if name == "acme"
+        ));
+        // Operator-facing wording, pinned verbatim.
+        assert_eq!(
+            err.to_string(),
+            "[extensions.acme] must carry a string `import`"
+        );
     }
 
     #[test]
@@ -790,7 +933,15 @@ import = "beta:ext/api@0.1.0"
         let err =
             manifest_extensions("[extensions.acme]\nimport = \"a:b/c@0.1.0\"\npackages = [1]\n")
                 .unwrap_err();
-        assert!(err.contains("only strings"));
+        assert!(matches!(
+            &err,
+            WorldError::ExtensionPackageNotAString { name } if name == "acme"
+        ));
+        // Operator-facing wording, pinned verbatim.
+        assert_eq!(
+            err.to_string(),
+            "[extensions.acme].packages must contain only strings"
+        );
     }
 
     #[test]
@@ -821,9 +972,14 @@ required = ["logging"]
 "#,
         )
         .expect_err("the replaced section must refuse");
-        assert!(
-            err.contains("[capabilities] is replaced by [dependencies]"),
-            "{err}"
+        assert!(matches!(err, WorldError::ReplacedCapabilities));
+        // Operator-facing wording, pinned verbatim (the doubled braces are
+        // the shipped text).
+        assert_eq!(
+            err.to_string(),
+            "[capabilities] is replaced by [dependencies]: each key names a host \
+             capability or a service, and its table carries that dependency's \
+             attributes (the http allowlist is now `http = {{ hosts = [...] }}`)"
         );
     }
 
@@ -838,7 +994,71 @@ logging = "yes"
 "#,
         )
         .expect_err("a non-table dependency must refuse");
-        assert!(err.contains("must be a table"), "{err}");
+        assert!(matches!(
+            &err,
+            WorldError::DependencyNotATable { name } if name == "logging"
+        ));
+        // Operator-facing wording, pinned verbatim.
+        assert_eq!(
+            err.to_string(),
+            "[dependencies].logging must be a table; an empty one is `logging = {}`"
+        );
+    }
+
+    /// Pin the operator-facing wording of the refusals no other test
+    /// triggers; a module author sees this text as a compile error.
+    #[test]
+    fn remaining_refusals_pin_the_operator_wording() {
+        let err = manifest_capabilities("=").unwrap_err();
+        assert!(matches!(&err, WorldError::NotToml { file, .. } if *file == "component.toml"));
+        assert!(
+            err.to_string()
+                .starts_with("component.toml is not valid TOML: "),
+            "{err}"
+        );
+        let err = manifest_extensions("=").unwrap_err();
+        assert!(matches!(&err, WorldError::NotToml { file, .. } if *file == "extensions.toml"));
+        assert!(
+            err.to_string()
+                .starts_with("extensions.toml is not valid TOML: "),
+            "{err}"
+        );
+        let err = manifest_capabilities("dependencies = 7\n").unwrap_err();
+        assert!(matches!(err, WorldError::DependenciesNotATable));
+        assert_eq!(err.to_string(), "[dependencies] must be a table");
+        let err = manifest_chain_log_topics("subscription = 7\n").unwrap_err();
+        assert!(matches!(err, WorldError::SubscriptionsNotAnArray));
+        assert_eq!(
+            err.to_string(),
+            "[[subscription]] must be an array of tables"
+        );
+        let err = manifest_extensions("extensions = 7\n").unwrap_err();
+        assert!(matches!(err, WorldError::ExtensionsNotATable));
+        assert_eq!(
+            err.to_string(),
+            "[extensions] must be a table of `[extensions.<name>]` rows"
+        );
+        let err = manifest_extensions("[extensions]\nacme = 7\n").unwrap_err();
+        assert!(matches!(
+            &err,
+            WorldError::ExtensionNotATable { name } if name == "acme"
+        ));
+        assert_eq!(err.to_string(), "[extensions.acme] must be a table");
+        let err =
+            manifest_extensions("[extensions.acme]\nimport = \"a:b/c@0.1.0\"\npackages = 7\n")
+                .unwrap_err();
+        assert!(matches!(
+            &err,
+            WorldError::ExtensionPackagesNotAnArray { name } if name == "acme"
+        ));
+        assert_eq!(
+            err.to_string(),
+            "[extensions.acme].packages must be an array of strings"
+        );
+        assert_eq!(
+            WorldError::NoManifestDir.to_string(),
+            "CARGO_MANIFEST_DIR is not set"
+        );
     }
 
     /// Pinned manifest grammar; the runtime's serde renames derive from it.
@@ -906,18 +1126,37 @@ event_signature = "not-hex-but-not-ours"
              event_signature = \"not-a-topic\"\n",
         )
         .unwrap_err();
-        assert!(err.starts_with("invalid topic \"not-a-topic\":"), "{err}");
+        assert!(matches!(
+            &err,
+            WorldError::InvalidTopic { topic, .. } if topic == "not-a-topic"
+        ));
+        assert!(
+            err.to_string()
+                .starts_with("invalid topic \"not-a-topic\":"),
+            "{err}"
+        );
         let err = manifest_chain_log_topics(
             "[[subscription]]\nkind = \"chain-log\"\nchain_id = 1\nevent_signature = 7\n",
         )
         .unwrap_err();
-        assert!(err.contains("must be a string"), "{err}");
+        assert!(matches!(err, WorldError::EventSignatureNotAString));
+        // Operator-facing wording, pinned verbatim.
+        assert_eq!(
+            err.to_string(),
+            "[[subscription]].event_signature must be a string"
+        );
     }
 
     #[test]
     fn manifest_without_a_dependency_table_is_an_error() {
         let err = manifest_capabilities("[component]\nname = \"x\"\n").unwrap_err();
-        assert!(err.contains("[dependencies]"), "{err}");
+        assert!(matches!(err, WorldError::MissingDependencies));
+        // Operator-facing wording, pinned verbatim.
+        assert_eq!(
+            err.to_string(),
+            "component.toml has no [dependencies] table; the macro derives the component's \
+             WIT world from it, so declare it (an empty table is valid)"
+        );
     }
 
     #[test]
@@ -995,15 +1234,38 @@ event_signature = "not-hex-but-not-ours"
         let dir = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(dir.path().join("wit")).unwrap();
         let err = resolve_wit_packages(dir.path(), &["pkg"]).unwrap_err();
-        assert!(err.contains("`pkg` WIT package"));
-        assert!(err.contains("wit/deps/pkg"));
+        assert!(matches!(
+            &err,
+            WorldError::MissingWitPackage { package, wit }
+                if package == "pkg" && *wit == dir.path().join("wit")
+        ));
+        // Operator-facing wording, pinned verbatim.
+        assert_eq!(
+            err.to_string(),
+            format!(
+                "declared capabilities need the `pkg` WIT package, but neither \
+                 `wit/deps/pkg` nor `wit/pkg` exists in {}",
+                dir.path().join("wit").display()
+            )
+        );
     }
 
     #[test]
     fn absent_wit_tree_is_an_error() {
         let dir = tempfile::tempdir().unwrap();
         let err = resolve_wit_packages(dir.path(), &["pkg"]).unwrap_err();
-        assert!(err.contains("no `wit/` tree"));
+        assert!(matches!(
+            &err,
+            WorldError::NoWitTree { start } if *start == dir.path()
+        ));
+        // Operator-facing wording, pinned verbatim.
+        assert_eq!(
+            err.to_string(),
+            format!(
+                "no `wit/` tree exists under {} or any ancestor",
+                dir.path().display()
+            )
+        );
     }
 
     #[test]
@@ -1014,7 +1276,10 @@ event_signature = "not-hex-but-not-ours"
         let leaf = root.join("crates/leaf");
         std::fs::create_dir_all(leaf.join("wit/deps/other")).unwrap();
         let err = resolve_wit_packages(&leaf, &["pkg"]).unwrap_err();
-        assert!(err.contains("`pkg` WIT package"));
+        assert!(matches!(
+            err,
+            WorldError::MissingWitPackage { ref package, .. } if package == "pkg"
+        ));
     }
 
     #[test]

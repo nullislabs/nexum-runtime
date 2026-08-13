@@ -22,6 +22,8 @@ alloy-primitives.workspace = true
 # supersedes a hand-maintained list, `EnumString` parses fail-closed.
 strum.workspace = true
 syn = { workspace = true, optional = true }
+# Typed public errors whose Display text is the operator-facing wording.
+thiserror.workspace = true
 toml.workspace = true
 
 [dev-dependencies]
