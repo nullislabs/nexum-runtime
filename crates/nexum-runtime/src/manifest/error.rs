@@ -1,14 +1,15 @@
 //! Error types for manifest parsing and capability enforcement.
 
-use strum::IntoStaticStr;
+use strum::{IntoStaticStr, VariantNames};
 use thiserror::Error;
 
 use crate::module_id::InvalidModuleName;
 
 /// Errors from loading or validating a manifest.
 // `IntoStaticStr`: the snake_case variant name is the stable per-class
-// label a metric or log field carries.
-#[derive(Debug, Error, IntoStaticStr)]
+// label a metric or log field carries; `VariantNames` lets the
+// label-set test enumerate without a value.
+#[derive(Debug, Error, IntoStaticStr, VariantNames)]
 #[strum(serialize_all = "snake_case")]
 #[non_exhaustive]
 pub enum ParseError {
@@ -128,7 +129,9 @@ pub struct CapabilityViolation {
 }
 
 /// A component's WIT imports exceed its declared capabilities.
-#[derive(Debug, Error, IntoStaticStr)]
+// `IntoStaticStr`: the snake_case variant name is the `error_kind` label;
+// `VariantNames` lets the label-set test enumerate without a value.
+#[derive(Debug, Error, IntoStaticStr, VariantNames)]
 #[strum(serialize_all = "snake_case")]
 #[non_exhaustive]
 pub enum CapabilityError {

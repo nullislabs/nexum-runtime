@@ -5,8 +5,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use alloy_chains::Chain;
-use anyhow::{Context, Result};
-use strum::IntoStaticStr;
+use strum::{IntoStaticStr, VariantNames};
 use thiserror::Error;
 use tracing::{info, warn};
 
@@ -14,11 +13,16 @@ use super::role::Role;
 use crate::engine_config::EngineConfig;
 use crate::manifest::{self, CapabilityRegistry, LoadedManifest, ParseError, Subscription};
 use crate::module_id::ModuleId;
+use crate::refusal::{Refusal, RefusalContext as _};
 
 /// Refusals before any compile; the wording is operator-pinned.
-#[derive(Debug, Error, IntoStaticStr)]
+// `IntoStaticStr`: the snake_case variant name is the `error_kind` label;
+// `VariantNames` lets the label-set test enumerate without a value.
+#[derive(Debug, Error, IntoStaticStr, VariantNames)]
 #[strum(serialize_all = "snake_case")]
-pub(crate) enum BootRefusal {
+#[non_exhaustive]
+pub enum BootRefusal {
+    /// A second claimant on a `[component].name`.
     #[error(
         "name {name} is claimed twice: {held_role} {} and {role} {}; \
          [component].name must be unique across [[modules]] and [[services]]",
@@ -26,49 +30,73 @@ pub(crate) enum BootRefusal {
         path.display()
     )]
     NamespaceClaimed {
+        /// The claimed name.
         name: String,
+        /// The holding entry's role label.
         held_role: &'static str,
+        /// The holding entry's path.
         held: PathBuf,
+        /// The second claimant's role label.
         role: &'static str,
+        /// The second claimant's path.
         path: PathBuf,
     },
+    /// The manifest failed to load or validate; the wrapped class is the
+    /// counter label.
     #[error(transparent)]
     Manifest(#[from] ParseError),
+    /// An explicit manifest path with nothing at it.
     #[error(
         "manifest {} not found for component {}",
         manifest.display(),
         component.display()
     )]
     ManifestNotFound {
+        /// The path the operator or the sibling rule named.
         manifest: PathBuf,
+        /// The component the manifest was for.
         component: PathBuf,
     },
+    /// No sibling `component.toml` and no explicit path.
     #[error(
         "no component.toml for component {}; ship one next to the component \
          or pass its path explicitly (an empty [dependencies] table grants \
          nothing)",
         component.display()
     )]
-    ManifestMissing { component: PathBuf },
+    ManifestMissing {
+        /// The component without a manifest.
+        component: PathBuf,
+    },
+    /// A chain subscription while running on defaults, with no
+    /// engine.toml at all.
     #[error(
         "{noun} {name} subscribes to chain {chain_id} but no engine.toml was found \
          (running on defaults, no chains configured); create engine.toml with a \
          [chains.{chain_id}] entry"
     )]
     UnconfiguredChainDefaulted {
+        /// The role label, `module` or `service`.
         noun: &'static str,
+        /// The subscriber's `[component].name`.
         name: String,
+        /// The chain the subscription names.
         chain_id: u64,
     },
+    /// A chain subscription outside the operator's `[chains]` set.
     #[error(
         "{noun} {name} subscribes to chain {chain_id} but engine.toml declares no \
          [chains.{chain_id}] entry; configured chains: {}",
         fmt_chain_ids(configured)
     )]
     UnconfiguredChain {
+        /// The role label, `module` or `service`.
         noun: &'static str,
+        /// The subscriber's `[component].name`.
         name: String,
+        /// The chain the subscription names.
         chain_id: u64,
+        /// The chains engine.toml declares.
         configured: BTreeSet<u64>,
     },
 }
@@ -234,7 +262,10 @@ pub(super) struct Prepass {
 }
 
 /// Services first, then modules; every refusal lands before any compile.
-pub(super) fn run(engine_cfg: &EngineConfig, registry: &CapabilityRegistry) -> Result<Prepass> {
+pub(super) fn run(
+    engine_cfg: &EngineConfig,
+    registry: &CapabilityRegistry,
+) -> Result<Prepass, Refusal> {
     let provider_registry = CapabilityRegistry::provider();
     let mut ledger = NamespaceLedger::new();
     let configured_chains = ConfiguredChains::from_config(engine_cfg);
@@ -279,15 +310,15 @@ fn load_role_manifests<'a>(
     registry: &CapabilityRegistry,
     pass: RolePass<'_>,
     ledger: &mut NamespaceLedger,
-) -> Result<Vec<LoadedManifest>> {
+) -> Result<Vec<LoadedManifest>, Refusal> {
     let mut manifests = Vec::new();
     for (path, explicit) in entries {
         let loaded = load_required_manifest(path, explicit, registry, pass.role.label())
-            .with_context(|| format!("{} {}", pass.role.load_context(), path.display()))?;
+            .with_refusal_context(|| format!("{} {}", pass.role.load_context(), path.display()))?;
         let namespace = manifest_namespace(&loaded);
         claim_namespace(ledger, namespace.as_str(), pass.role.label(), path)?;
         enforce_subscriptions(pass.role, namespace.as_str(), &loaded, pass.chains)
-            .with_context(|| format!("{} {}", pass.role.load_context(), path.display()))?;
+            .with_refusal_context(|| format!("{} {}", pass.role.load_context(), path.display()))?;
         manifests.push(loaded);
     }
     Ok(manifests)

@@ -2,51 +2,9 @@
 
 use super::*;
 
-/// A root missing here is a refusal class no operator dashboard sees, so the
-/// table is asserted through the same `with_context` wrap boot applies.
-#[test]
-fn every_typed_refusal_root_labels_the_counter_under_a_context_wrap() {
-    let digest = ContentDigest::of_bytes(b"artifact");
-    let cases: Vec<(anyhow::Error, &str)> = vec![
-        (
-            BootRefusal::ManifestMissing {
-                component: PathBuf::from("orphan.wasm"),
-            }
-            .into(),
-            "manifest_missing",
-        ),
-        (
-            LoadRefusal::SectionClaimed { section: "venue" }.into(),
-            "section_claimed",
-        ),
-        (
-            CapabilityError::UnknownWasi {
-                wit_import: "wasi:sockets/tcp@0.2.0".to_owned(),
-            }
-            .into(),
-            "unknown_wasi",
-        ),
-        (
-            DigestMismatch {
-                path: PathBuf::from("pinned.wasm"),
-                declared: digest,
-                actual: digest,
-            }
-            .into(),
-            "digest_mismatch",
-        ),
-    ];
-    for (err, kind) in cases {
-        let wrapped = err.context("module pinned.wasm");
-        assert_eq!(boot_refusal_kind(&wrapped), Some(kind), "{wrapped:#}");
-    }
-}
-
-/// An untyped refusal is counted under no kind rather than a wrong one.
-#[test]
-fn an_untyped_refusal_carries_no_counter_label() {
-    assert_eq!(boot_refusal_kind(&anyhow::anyhow!("engine gone")), None);
-}
+// The counter's label mapping and the closed `error_kind` set are pinned
+// by the tests in `crate::refusal`, on `Refusal` values rather than on a
+// downcast chain.
 
 /// Rejected before instantiation, naming the registered kinds; a manifest
 /// without a kind defaults to an event-module.

@@ -6,7 +6,7 @@ use std::time::Duration;
 use tokio::time::Instant;
 
 use anyhow::{Context, Error, Result};
-use strum::IntoStaticStr;
+use strum::{IntoStaticStr, VariantNames};
 use thiserror::Error as ThisError;
 use tracing::{info, warn};
 use wasmtime::component::{Component, Linker};
@@ -35,27 +35,58 @@ use crate::host::logs::RunId;
 use crate::host::state::HostState;
 use crate::manifest::{self, CapabilityRegistry, ComponentKind, LoadedManifest, Subscription};
 use crate::module_id::ModuleId;
+use crate::refusal::{Refusal, RefusalContext as _};
 use crate::runtime::dispatch_rate::TokenBucket;
 
 /// Admission refusals ahead of instantiation; the wording is operator-pinned.
-#[derive(Debug, ThisError, IntoStaticStr)]
+// `IntoStaticStr`: the snake_case variant name is the `error_kind` label;
+// `VariantNames` lets the label-set test enumerate without a value.
+#[derive(Debug, ThisError, IntoStaticStr, VariantNames)]
 #[strum(serialize_all = "snake_case")]
-pub(crate) enum LoadRefusal {
+#[non_exhaustive]
+pub enum LoadRefusal {
+    /// A manifest section no wired extension claims.
     #[error("{owner} declares manifest section [{section}]; no wired extension claims it")]
-    SectionUnclaimed { owner: String, section: String },
+    SectionUnclaimed {
+        /// The declaring component's namespace.
+        owner: String,
+        /// The unclaimed section key.
+        section: String,
+    },
+    /// Two wired extensions claim one namespace.
     #[error("extension namespace {namespace} is claimed twice")]
-    ExtensionNamespaceClaimed { namespace: &'static str },
-    #[error("subscription kind {kind} is claimed twice")]
-    SubscriptionKindClaimed { kind: &'static str },
-    #[error("manifest section [{section}] is claimed twice")]
-    SectionClaimed { section: &'static str },
-    #[error("provider kind {kind} is registered twice")]
-    KindRegisteredTwice { kind: &'static str },
-    #[error("extension {namespace} registers provider kind {kind} without a host service")]
-    ServicelessKind {
+    ExtensionNamespaceClaimed {
+        /// The doubly claimed namespace.
         namespace: &'static str,
+    },
+    /// Two wired extensions claim one subscription kind.
+    #[error("subscription kind {kind} is claimed twice")]
+    SubscriptionKindClaimed {
+        /// The doubly claimed kind.
         kind: &'static str,
     },
+    /// Two wired extensions claim one manifest section.
+    #[error("manifest section [{section}] is claimed twice")]
+    SectionClaimed {
+        /// The doubly claimed section key.
+        section: &'static str,
+    },
+    /// Two extensions register one provider kind.
+    #[error("provider kind {kind} is registered twice")]
+    KindRegisteredTwice {
+        /// The doubly registered kind.
+        kind: &'static str,
+    },
+    /// A provider kind whose extension owns no host service to install
+    /// into.
+    #[error("extension {namespace} registers provider kind {kind} without a host service")]
+    ServicelessKind {
+        /// The registering extension's namespace.
+        namespace: &'static str,
+        /// The serviceless kind.
+        kind: &'static str,
+    },
+    /// A `[[services]]` entry whose manifest declares the worker kind.
     #[error(
         "{} declares the worker kind; an [[services]] entry requires a \
          component.toml declaring a registered provider kind ({})",
@@ -63,29 +94,45 @@ pub(crate) enum LoadRefusal {
         registered.join(", ")
     )]
     WorkerKindAdapter {
+        /// The entry's component path.
         path: PathBuf,
+        /// The kinds a `[[services]]` entry may declare.
         registered: Vec<&'static str>,
     },
+    /// A provider kind no wired extension registered.
     #[error(
         "{} declares unregistered provider kind {kind}; registered kinds: {}",
         path.display(),
         registered.join(", ")
     )]
     UnregisteredKind {
+        /// The entry's component path.
         path: PathBuf,
+        /// The kind as the manifest declares it.
         kind: String,
+        /// The kinds a `[[services]]` entry may declare.
         registered: Vec<&'static str>,
     },
+    /// A subscription kind no wired extension declares.
     #[error(
         "module {module} subscribes to unknown event kind {kind}; no wired extension declares it"
     )]
-    UnknownEventKind { module: ModuleId, kind: String },
+    UnknownEventKind {
+        /// The subscribing module.
+        module: ModuleId,
+        /// The unknown kind.
+        kind: String,
+    },
+    /// No digest pin while `[engine] require_component_digest` is set.
     #[error(
         "no [component].digest digest for {} and [engine] require_component_digest is set; \
          pin the artifact's sha256 in its component.toml",
         path.display()
     )]
-    DigestUnpinned { path: PathBuf },
+    DigestUnpinned {
+        /// The unpinned entry's component path.
+        path: PathBuf,
+    },
 }
 
 /// Restarts reuse the cache, so the boot-time digest holds for every run.
@@ -164,8 +211,8 @@ fn admit_and_verify<T: RuntimeTypes, R>(
     loaded_manifest: &LoadedManifest,
     registry: &CapabilityRegistry,
     require_component_digest: bool,
-    admit: impl FnOnce() -> Result<R>,
-) -> Result<(R, Component, ContentDigest)> {
+    admit: impl FnOnce() -> Result<R, Refusal>,
+) -> Result<(R, Component, ContentDigest), Refusal> {
     enforce_extension_sections(owner, &loaded_manifest.extensions, &shared.extensions)?;
     let admitted = admit()?;
     let (component, digest) = read_verified_component(
@@ -182,7 +229,7 @@ fn admit_and_verify<T: RuntimeTypes, R>(
             .map(|(n, _)| n),
         registry,
     )
-    .with_context(|| format!("capability violation in {}", path.display()))?;
+    .with_refusal_context(|| format!("capability violation in {}", path.display()))?;
     Ok((admitted, component, digest))
 }
 
@@ -261,7 +308,7 @@ pub(super) async fn module<T: RuntimeTypes>(
     limits_cfg: &ResolvedModuleLimits,
     require_component_digest: bool,
     provider_manifests: &[ServiceManifest],
-) -> Result<LoadedModule<T>> {
+) -> Result<LoadedModule<T>, Refusal> {
     let module_namespace: ModuleId = manifest_namespace(&loaded_manifest);
     let registry = capability_registry(&shared.extensions);
     let sections = &loaded_manifest.extensions;
@@ -275,7 +322,9 @@ pub(super) async fn module<T: RuntimeTypes>(
         || {
             for ext in &shared.extensions {
                 ext.admit_worker(module_namespace.as_str(), sections, provider_manifests)
-                    .with_context(|| format!("install refused for {}", entry.path.display()))?;
+                    .with_refusal_context(|| {
+                        format!("install refused for {}", entry.path.display())
+                    })?;
             }
             info!(component = %entry.path.display(), "compiling component");
             Ok(())
@@ -371,7 +420,7 @@ pub(super) async fn provider<T: RuntimeTypes>(
     loaded_manifest: LoadedManifest,
     limits_cfg: &ResolvedModuleLimits,
     require_component_digest: bool,
-) -> Result<LoadedProvider> {
+) -> Result<LoadedProvider, Refusal> {
     let namespace: ModuleId = manifest_namespace(&loaded_manifest);
     // A core-only declaration fails at manifest load; an undeclared gated
     // import fails after compile; the linker withholds the core interfaces.
@@ -387,7 +436,9 @@ pub(super) async fn provider<T: RuntimeTypes>(
         || {
             for ext in &shared.extensions {
                 ext.admit_provider(namespace.as_str(), &sections)
-                    .with_context(|| format!("install refused for {}", entry.path.display()))?;
+                    .with_refusal_context(|| {
+                        format!("install refused for {}", entry.path.display())
+                    })?;
             }
             // An unregistered kind refuses before compile.
             // A service's name is the service type, so the name selects
@@ -454,7 +505,7 @@ pub(super) async fn provider<T: RuntimeTypes>(
     let (run, store) = fresh_run_store(shared, &namespace, 0, &seed.spec, Role::Service)?;
     let installed = install_provider(shared, row, &seed, &sections, store, liveness.clone())
         .await
-        .with_context(|| format!("install {}", entry.path.display()))?;
+        .with_refusal_context(|| format!("install {}", entry.path.display()))?;
     // A dead install at boot is permanent; the liveness records it for the sweep.
     if installed == Installed::Dead {
         liveness.mark_dead();

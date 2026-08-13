@@ -15,6 +15,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use nexum_tasks::{DrainOutcome, TaskExit, TaskHandle, TaskManager, TaskSet};
+use strum::{IntoStaticStr, VariantNames};
 use tracing::{error, info, warn};
 use wasmtime::Engine;
 
@@ -32,7 +33,10 @@ pub use crate::supervisor::WasiClockOverride;
 use crate::supervisor::{self, Supervisor, Viability};
 
 /// Launch refusals around the supervisor boot; the wording is operator-pinned.
-#[derive(Debug, thiserror::Error)]
+// `IntoStaticStr`: the snake_case variant name is the `error_kind` label;
+// `VariantNames` lets the label-set test enumerate without a value.
+#[derive(Debug, thiserror::Error, IntoStaticStr, VariantNames)]
+#[strum(serialize_all = "snake_case")]
 #[non_exhaustive]
 pub enum LaunchRefusal {
     /// The event-loop task ended before the launcher observed a shutdown,
