@@ -33,6 +33,8 @@ pub fn target_dir() -> PathBuf {
 
 const WASM_TARGET: &str = "wasm32-wasip2";
 
+/// Where the build puts a guest package's artifact, whether or not it
+/// is there.
 pub fn module_wasm(module: &str) -> PathBuf {
     let artifact = module.replace('-', "_");
     target_dir().join(format!("{WASM_TARGET}/release/{artifact}.wasm"))
@@ -54,6 +56,7 @@ pub fn module_wasm_or_skip(module: &str) -> Option<PathBuf> {
     )
 }
 
+/// [`module_wasm_or_skip`] for the reference module.
 pub fn example_wasm_or_skip() -> Option<PathBuf> {
     module_wasm_or_skip("example")
 }

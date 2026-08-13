@@ -128,6 +128,7 @@ pub enum EngineConfigError {
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct EngineConfig {
+    /// Process-wide settings: state directory, log level, metrics.
     #[serde(default)]
     pub engine: EngineSection,
     /// Per-module wasmtime resource limits, applied uniformly.
@@ -183,9 +184,11 @@ pub struct ServiceEntry {
     pub http_allow: Vec<String>,
 }
 
+/// `[engine]`: settings that apply to the process, not to one module.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct EngineSection {
+    /// Root of the on-disk state. Each module gets a namespace under it.
     #[serde(default = "default_state_dir")]
     pub state_dir: PathBuf,
     /// `EnvFilter` directive; defaults to `info`, `RUST_LOG` overrides at
@@ -227,6 +230,7 @@ fn default_log_backfill_concurrency() -> usize {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct MetricsSection {
+    /// Bind the HTTP listener. False still installs the recorder.
     #[serde(default)]
     pub enabled: bool,
     /// IPv4 / IPv6 socket address to bind. Default `127.0.0.1:9100`.
@@ -247,6 +251,7 @@ fn default_metrics_bind() -> String {
     "127.0.0.1:9100".to_owned()
 }
 
+/// One `[chains.<id>]` table: how the engine reaches a single chain.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ChainConfig {
@@ -740,21 +745,36 @@ fn is_valid_env_name(s: &str) -> bool {
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum EnvVarError {
+    /// A referenced variable is absent from the process environment.
+    /// Substitution refuses rather than expanding to empty, because an
+    /// empty RPC URL fails later and further from the cause.
     #[error(
         "environment variable `{name}` referenced via ${{{name}}} in engine.toml but not set. \
          Export it before launching the engine (e.g. via a `.env` file consumed by `docker compose`)."
     )]
-    Missing { name: String },
+    Missing {
+        /// The variable as referenced.
+        name: String,
+    },
+    /// The name inside `${...}` is not a shell-style variable name. The
+    /// message guesses an upper-case spelling, which is the usual slip.
     #[error(
         "invalid env var name `{name}` inside ${{...}} in engine.toml - names must match \
          [A-Z_][A-Z0-9_]*. Typo, or did you mean `${{{name_upper}}}`?",
         name_upper = name.to_uppercase()
     )]
-    InvalidName { name: String },
+    InvalidName {
+        /// The rejected name, as written.
+        name: String,
+    },
+    /// A `${` with no closing brace before the end of the file.
     #[error(
         "unclosed `${{` at byte offset {offset} in engine.toml - every `${{` needs a matching `}}`."
     )]
-    Unclosed { offset: usize },
+    Unclosed {
+        /// Byte offset of the opening `${` that never closed.
+        offset: usize,
+    },
 }
 
 /// Blank the credential-bearing parts of a URL (userinfo, query, fragment,

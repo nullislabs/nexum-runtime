@@ -385,18 +385,28 @@ impl ModuleStore {
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum StorageError {
+    /// The database file could not be opened. Boot fails here rather than
+    /// running a module with nowhere to persist.
     #[error("open redb: {0}")]
     Open(#[source] redb::DatabaseError),
+    /// A transaction could not be started.
     #[error("redb txn: {0}")]
     Txn(#[source] redb::TransactionError),
+    /// A table could not be opened inside a live transaction.
     #[error("redb table: {0}")]
     Table(#[source] redb::TableError),
+    /// A read or write failed against the storage layer.
     #[error("redb storage: {0}")]
     Storage(#[source] redb::StorageError),
+    /// The commit failed, so the whole batch is absent rather than partial.
     #[error("redb commit: {0}")]
     Commit(#[source] redb::CommitError),
+    /// The namespace does not survive keccak derivation, so no table can
+    /// be named from it.
     #[error("invalid namespace: {0}")]
     InvalidNamespace(String),
+    /// The write would push the module past its byte quota. Refused
+    /// whole: a partially applied batch is worse than none.
     #[error("local-store quota exceeded: write needs {needed} B but quota is {quota} B")]
     QuotaExceeded {
         /// Footprint the write would produce.
@@ -404,6 +414,7 @@ pub enum StorageError {
         /// The module's byte quota.
         quota: u64,
     },
+    /// The batch declares more operations than one `apply` may carry.
     #[error("apply batch has {ops} ops but the cap is {cap}")]
     ApplyOpsExceeded {
         /// Ops in the rejected batch.
@@ -411,6 +422,8 @@ pub enum StorageError {
         /// Per-batch op cap.
         cap: usize,
     },
+    /// The batch's set values exceed the per-batch byte cap, which bounds
+    /// the copy out of guest memory before the quota check runs.
     #[error("apply batch carries {bytes} value B but the cap is {cap} B")]
     ApplyBytesExceeded {
         /// Total set-value bytes in the rejected batch.

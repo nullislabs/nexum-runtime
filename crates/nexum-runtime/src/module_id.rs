@@ -10,10 +10,14 @@ use thiserror::Error;
 #[derive(Clone, Debug, Eq, Error, PartialEq)]
 #[non_exhaustive]
 pub enum InvalidModuleName {
+    /// Absent, empty, or whitespace only.
     #[error("[component].name is missing or blank; declare a non-empty name")]
     Blank,
+    /// The name reaches outside the state directory it would become.
     #[error("[component].name {0:?} must not contain '/', '\\', or '..'")]
     UnsafePathComponent(String),
+    /// Refused rather than trimmed: the name keys the local store, so
+    /// trimming would silently move a component's state.
     #[error("[component].name {0:?} must not have leading or trailing whitespace")]
     Untrimmed(String),
 }
@@ -27,6 +31,7 @@ pub enum InvalidModuleName {
 pub struct ModuleId(Arc<str>);
 
 impl ModuleId {
+    /// Validate a `[component].name` into an id.
     pub fn parse(name: &str) -> Result<Self, InvalidModuleName> {
         if name.trim().is_empty() {
             return Err(InvalidModuleName::Blank);
@@ -42,6 +47,7 @@ impl ModuleId {
         Ok(Self(Arc::from(name)))
     }
 
+    /// The namespace as written in the manifest.
     pub fn as_str(&self) -> &str {
         &self.0
     }

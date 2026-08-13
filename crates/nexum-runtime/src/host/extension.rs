@@ -231,6 +231,7 @@ pub fn downcast_service<S: HostService>(service: &Arc<dyn HostService>) -> Optio
 #[derive(Debug, thiserror::Error)]
 #[error("duplicate extension service namespace {namespace}")]
 pub struct DuplicateServiceNamespace {
+    /// The namespace both extensions claimed.
     pub namespace: &'static str,
 }
 

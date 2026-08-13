@@ -15,6 +15,7 @@ const SCHEME: &str = "sha256";
 pub struct ContentDigest([u8; 32]);
 
 impl ContentDigest {
+    /// Hash artifact bytes as read from disk.
     pub fn of_bytes(bytes: &[u8]) -> Self {
         Self(Sha256::digest(bytes).into())
     }
@@ -57,17 +58,27 @@ impl FromStr for ContentDigest {
     }
 }
 
+/// Why a digest string does not parse. The grammar is strict on purpose:
+/// a pin the operator can mistype loosely is not a pin.
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum DigestParseError {
     /// No `scheme:` prefix; the empty string lands here too.
     #[error("digest {0:?} has no scheme prefix; expected sha256:<64 hex chars>")]
     MissingScheme(String),
+    /// A `scheme:` prefix that is not `sha256`.
     #[error("unsupported digest scheme {scheme:?}; only sha256 is supported")]
-    UnsupportedScheme { scheme: String },
+    UnsupportedScheme {
+        /// The prefix as written.
+        scheme: String,
+    },
+    /// The payload is not 64 hex characters. A `0x` prefix lands here
+    /// too, which the hex decoder alone would have accepted.
     #[error("digest {value:?} has a malformed sha256 payload: {source}")]
     Hex {
+        /// The whole digest string, not just the payload.
         value: String,
+        /// Which character the decode stopped on.
         #[source]
         source: alloy_primitives::hex::FromHexError,
     },
@@ -84,8 +95,11 @@ pub enum DigestParseError {
     path.display()
 )]
 pub struct DigestMismatch {
+    /// The artifact that was read.
     pub path: PathBuf,
+    /// What the manifest pinned.
     pub declared: ContentDigest,
+    /// What the bytes on disk hash to.
     pub actual: ContentDigest,
 }
 

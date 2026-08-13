@@ -49,12 +49,16 @@ pub struct Supervisor<T: RuntimeTypes> {
 
 /// Boot inputs derived from [`EngineConfig`], bundled once at the call site.
 pub struct BootEnv<'a> {
+    /// The engine ceiling a manifest may narrow but never widen.
     pub limits: &'a ModuleLimits,
+    /// Chains with an `engine.toml` entry; a subscription elsewhere refuses.
     pub configured_chains: ConfiguredChains,
+    /// Refuse a component whose manifest declares no digest.
     pub require_component_digest: bool,
 }
 
 impl<'a> BootEnv<'a> {
+    /// Pick the boot-relevant fields out of the loaded config.
     pub fn from_config(cfg: &'a EngineConfig) -> Self {
         Self {
             limits: &cfg.limits,
@@ -78,6 +82,10 @@ pub(super) struct Shared<T: RuntimeTypes> {
 }
 
 impl<T: RuntimeTypes> Supervisor<T> {
+    /// Admit, compile and initialize every configured component.
+    ///
+    /// Refusals are counted by kind before they propagate, so a failed
+    /// boot is visible in metrics and not only in the log.
     pub async fn boot(
         engine: &Engine,
         linker: &Linker<HostState<T>>,
@@ -188,6 +196,7 @@ impl<T: RuntimeTypes> Supervisor<T> {
         booted.inspect_err(count_boot_refusal)
     }
 
+    /// Modules the supervisor holds, alive or not.
     pub fn module_count(&self) -> usize {
         self.modules.len()
     }
@@ -205,6 +214,8 @@ impl<T: RuntimeTypes> Supervisor<T> {
             .count()
     }
 
+    /// Modules quarantined after repeated traps. Only a full engine
+    /// restart clears one.
     pub fn poisoned_count(&self) -> usize {
         self.modules
             .iter()
@@ -212,6 +223,7 @@ impl<T: RuntimeTypes> Supervisor<T> {
             .count()
     }
 
+    /// The per-namespace service map every module store carries.
     pub fn services(&self) -> &HostServices {
         &self.shared.services
     }

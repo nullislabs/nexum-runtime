@@ -16,6 +16,7 @@ pub struct DispatchRatePolicy {
 }
 
 impl DispatchRatePolicy {
+    /// Pair a burst allowance with the rate that refills it.
     pub const fn new(capacity: u32, refill_per_sec: u32) -> Self {
         Self {
             capacity,

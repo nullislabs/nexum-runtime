@@ -2,6 +2,8 @@
 
 use std::path::{Path, PathBuf};
 
+/// How a test supplies the manifest: the three shapes the loader must
+/// handle, including the absent one.
 #[derive(Debug, Clone, derive_more::From)]
 pub enum ManifestSource {
     /// No explicit path; the loader falls back to discovery beside the component.
@@ -52,6 +54,7 @@ pub struct TestManifest {
 }
 
 impl TestManifest {
+    /// A minimal valid manifest: a name and nothing else.
     pub fn new(name: impl Into<String>) -> Self {
         Self {
             name: name.into(),
@@ -94,6 +97,7 @@ impl TestManifest {
         self
     }
 
+    /// Add a `[[subscription]]` on new blocks for one chain.
     pub fn block_sub(mut self, chain_id: u64) -> Self {
         self.subscriptions.push(subscription("block", chain_id));
         self
@@ -141,6 +145,9 @@ impl TestManifest {
         self
     }
 
+    /// Render the manifest text. Built through `toml::Table` rather than
+    /// string formatting, so a test cannot assert against TOML the real
+    /// parser would reject.
     pub fn to_toml(&self) -> String {
         let mut component = toml::Table::new();
         component.insert("name".into(), self.name.clone().into());
@@ -192,6 +199,8 @@ impl TestManifest {
         self.write_as(&dir.join("component.toml"))
     }
 
+    /// Write to an exact path, for a test that hands the loader a name
+    /// other than `component.toml`.
     pub fn write_as(&self, path: &Path) -> PathBuf {
         std::fs::write(path, self.to_toml()).expect("write the test manifest");
         path.to_path_buf()

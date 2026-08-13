@@ -100,6 +100,7 @@ impl BootScenario<CoreRuntime> {
 }
 
 impl<T: RuntimeTypes> BootScenario<T> {
+    /// A scenario rooted in a fresh tempdir, holding the given backends.
     pub fn over(components: Components<T>) -> Self {
         Self::rooted(tempfile::tempdir().expect("scenario tempdir"), components)
     }
@@ -131,16 +132,19 @@ impl<T: RuntimeTypes> BootScenario<T> {
         self
     }
 
+    /// Add a `[[modules]]` entry.
     pub fn module(mut self, entry: impl Into<Entry>) -> Self {
         self.modules.push(entry.into());
         self
     }
 
+    /// Add a `[[services]]` entry.
     pub fn adapter(mut self, entry: impl Into<Entry>) -> Self {
         self.services.push(entry.into());
         self
     }
 
+    /// Replace the whole `[limits]` section.
     pub fn limits(mut self, limits: ModuleLimits) -> Self {
         self.limits = limits;
         self
@@ -191,6 +195,8 @@ impl<T: RuntimeTypes> BootScenario<T> {
         self
     }
 
+    /// Write the manifests, build the engine, and boot the supervisor.
+    /// The error side is what a refusal test asserts on.
     pub async fn boot(self) -> anyhow::Result<Booted<T>> {
         let (config, launch) = self.split();
         let engine = test_wasmtime_engine();
@@ -279,12 +285,14 @@ impl Default for BootScenario<CoreRuntime> {
 
 /// Booted supervisor; the held tempdir keeps its manifests and store alive.
 pub struct Booted<T: RuntimeTypes = CoreRuntime> {
+    /// The live supervisor, for dispatching and for counts.
     pub supervisor: Supervisor<T>,
     logs: LogPipeline,
     _dir: TempDir,
 }
 
 impl<T: RuntimeTypes> Booted<T> {
+    /// The log pipeline, for reading what a module emitted.
     pub fn logs(&self) -> &LogPipeline {
         &self.logs
     }
@@ -311,6 +319,8 @@ impl<T: RuntimeTypes> Booted<T> {
     }
 }
 
+/// A boot error under assertion. Wraps `anyhow::Error` so a test can
+/// reach the typed root instead of matching on a `Display` substring.
 #[derive(Debug, From)]
 pub struct Refusal(anyhow::Error);
 

@@ -119,10 +119,13 @@ pub enum Viability {
     Live,
 }
 
+/// One module's declared interest in a chain's logs, resolved at boot.
 pub struct ChainLogSub {
     /// Also the module's store namespace.
     pub module: ModuleId,
+    /// Chain the filter runs against; it must have an `engine.toml` entry.
     pub chain: Chain,
+    /// Address and topic filter, built from the manifest.
     pub filter: alloy_rpc_types_eth::Filter,
     /// `Some` iff `resume = true`: the key the resume cursor lives under.
     pub cursor_key: Option<String>,

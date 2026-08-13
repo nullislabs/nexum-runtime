@@ -194,6 +194,10 @@ trybuild = "1"
 # code still trips review by convention.
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "warn"
+# Every public item states what the signature does not. `-D warnings` in
+# CI makes this fatal, so an undocumented addition to a public surface
+# fails the build rather than accruing.
+missing_docs = "warn"
 
 [workspace.lints.clippy]
 # Deny the easy footguns. Each crate carries its own narrower

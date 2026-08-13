@@ -8,6 +8,10 @@
 //! components see are the ones the core host constructs. `PartialEq` is derived
 //! so extension services can compare event payloads.
 
+// Every item in this module is macro output, so a doc comment has nowhere
+// to attach. The module doc above stands for the world it binds.
+#![allow(missing_docs)]
+
 wasmtime::component::bindgen!({
     path: ["../../wit/nexum-host"],
     world: "nexum:host/event-module",

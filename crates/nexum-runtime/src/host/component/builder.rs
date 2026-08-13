@@ -101,6 +101,7 @@ pub enum BuildError {
 /// Assembles the core and log-pipeline builders into a [`Components`]
 /// bundle; the logs slot defaults to [`LogPipelineBuilder`].
 pub struct ComponentsBuilder<C, S, L = LogPipelineBuilder> {
+    /// Builds the chain backend.
     pub chain: C,
     /// Builds the store backend ([`RuntimeTypes::Store`]).
     pub store: S,
