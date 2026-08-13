@@ -9,6 +9,7 @@ use alloy_primitives::{Address, B256};
 use serde::Deserialize;
 
 use super::error::ParseError;
+use crate::host_pattern::HostPattern;
 
 /// Core capability names: the `nexum:host` interfaces linked into every
 /// module. `http` is gated separately (it gates `wasi:http/*`), and
@@ -284,9 +285,9 @@ pub struct LoadedManifest {
     pub resources: ResourceSection,
     /// `[dependencies]`; presence is validated, an absent table refuses.
     pub dependencies: DependencySection,
-    /// Hosts wasi:http outgoing requests may target. Each entry is
-    /// either an exact hostname or a `*.suffix` wildcard.
-    pub http_allowlist: Vec<String>,
+    /// Hosts wasi:http outgoing requests may target, each parsed from an
+    /// exact hostname or a `*.suffix` wildcard entry.
+    pub http_allowlist: Vec<HostPattern>,
     /// `[config]` flattened to `(key, stringified-value)` pairs for a
     /// module's `init`. Scalars become their text form; arrays and tables
     /// their TOML representation.
@@ -329,7 +330,12 @@ impl TryFrom<Manifest> for LoadedManifest {
             .ok_or(ParseError::MissingCapabilities)?;
         let http_allowlist = dependencies
             .get(nexum_world::Cap::Http.as_str())
-            .map(|dep| dep.hosts.clone())
+            .map(|dep| {
+                dep.hosts
+                    .iter()
+                    .map(|h| HostPattern::from(h.as_str()))
+                    .collect()
+            })
             .unwrap_or_default();
         let config = manifest
             .config

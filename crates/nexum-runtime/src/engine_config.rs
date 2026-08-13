@@ -15,6 +15,7 @@ use serde::Deserialize;
 use thiserror::Error;
 use tracing::{info, warn};
 
+use crate::host_pattern::HostPattern;
 use crate::runtime::dispatch_rate::{
     DEFAULT_DISPATCH_BURST, DEFAULT_DISPATCH_REFILL_PER_SEC, DispatchRatePolicy,
 };
@@ -229,9 +230,10 @@ pub struct ServiceEntry {
     /// Path to the service's `component.toml`. Defaults to `<path-parent>/component.toml`.
     #[serde(default)]
     pub manifest: Option<std::path::PathBuf>,
-    /// Outbound HTTP host allowlist: exact hostname or `*.suffix` wildcard.
+    /// Outbound HTTP host allowlist: exact hostname or `*.suffix` wildcard,
+    /// parsed to [`HostPattern`] as the config loads.
     #[serde(default)]
-    pub http_allow: Vec<String>,
+    pub http_allow: Vec<HostPattern>,
 }
 
 /// `[engine]`: settings that apply to the process, not to one module.
@@ -1267,7 +1269,13 @@ manifest = "services/bare/component.toml"
             PathBuf::from("providers/acme/acme_provider.wasm")
         );
         assert!(first.manifest.is_none(), "manifest defaults to sibling");
-        assert_eq!(first.http_allow, vec!["api.acme.example", "*.acme.example"]);
+        assert_eq!(
+            first.http_allow,
+            vec![
+                HostPattern::from("api.acme.example"),
+                HostPattern::from("*.acme.example"),
+            ]
+        );
         let second = &cfg.services[1];
         assert_eq!(
             second.manifest.as_deref(),

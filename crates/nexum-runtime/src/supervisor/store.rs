@@ -17,6 +17,7 @@ use crate::host::extension::{Extension, HostServices, ServiceKind};
 use crate::host::http::HttpGate;
 use crate::host::logs::{LogSource, RunId, StdioStream};
 use crate::host::state::HostState;
+use crate::host_pattern::HostPattern;
 use crate::manifest::ResourceSection;
 use crate::module_id::ModuleId;
 
@@ -119,7 +120,7 @@ fn clamp<T: Ord + std::fmt::Display>(field: &str, requested: Option<T>, ceiling:
 /// Cached whole for restarts, so a rebuilt store is budgeted exactly like
 /// the boot-time one.
 pub(super) struct StoreSpec {
-    pub(super) http_allowlist: Vec<String>,
+    pub(super) http_allowlist: Vec<HostPattern>,
     pub(super) http_limits: OutboundHttpLimits,
     /// Operator-permitted addresses that would otherwise be refused.
     pub(super) http_permitted: Vec<std::net::IpAddr>,
