@@ -11,15 +11,9 @@ use crate::engine_config::redact_urls_in_text;
 use crate::host::local_store_redb::StorageError;
 use crate::host::provider_pool::PoolError;
 
-/// Render a [`TransportError`] for a guest-visible fault. The text can embed
-/// the RPC endpoint (reqwest appends `for url (<url>)`), and the endpoint
-/// carries operator credentials by design, so every URL is dropped for a
-/// placeholder before the string crosses the WIT boundary to the untrusted
-/// module (ADR-0001). Partial redaction is not enough: a provider key can
-/// sit in the subdomain or a short path segment, which `redact_url` keeps.
-/// A body that echoes a credential without URL shape stays beyond any
-/// URL-level rule. Host-side logs render the error directly and keep the
-/// full text.
+/// The guest reads this, so every URL goes: reqwest appends `for url
+/// (<url>)` and the endpoint carries the operator's key. Host logs render
+/// `source` directly and keep it.
 fn guest_text(source: &TransportError) -> String {
     redact_urls_in_text(&source.to_string())
 }
@@ -191,15 +185,11 @@ mod tests {
         TransportErrorKind::custom_str(msg)
     }
 
-    /// A credentialed endpoint in the shapes `${VAR}` interpolation produces:
-    /// userinfo, an API key path segment, and a query credential. reqwest
-    /// strips userinfo from the URL it renders, so the userinfo leg only
-    /// matters for text that echoes the URL as configured.
+    /// reqwest strips userinfo before rendering, so that leg only bites on
+    /// text echoing the URL as configured.
     const CREDENTIALED_URL: &str =
         "http://user:passsecret@127.0.0.1:1/v2/THISISALONGAPIKEY1234567890?apikey=qsecret";
 
-    /// Assert neither a credential nor the endpoint authority survives in a
-    /// guest-visible payload.
     fn assert_no_endpoint(payload: &str) {
         for secret in [
             "passsecret",
@@ -288,8 +278,6 @@ mod tests {
 
     #[tokio::test]
     async fn unreachable_endpoint_fault_redacts_the_credentialed_url() {
-        // A real reqwest send failure renders `error sending request for url
-        // (<url>)` with the key in the clear; the guest fault must not.
         let err = reqwest::Client::new()
             .post(CREDENTIALED_URL)
             .send()
@@ -308,8 +296,6 @@ mod tests {
 
     #[test]
     fn http_503_fault_redacts_an_echoed_endpoint() {
-        // A proxy 503 body can echo the request URL; the guest fault keeps
-        // the status but not the credential.
         let body = format!("upstream {CREDENTIALED_URL} refused");
         let chain_err = ChainError::from(PoolError::Rpc(TransportErrorKind::http_error(503, body)));
         let ChainError::Fault(Fault::Unavailable(msg)) = chain_err else {
@@ -321,9 +307,6 @@ mod tests {
 
     #[test]
     fn fault_drops_a_host_borne_or_short_path_key() {
-        // A provider key can sit in the subdomain or a path segment of 20
-        // chars or fewer, which `redact_url` keeps, so the guest fault
-        // drops the whole URL.
         for url in [
             "https://k7fQz2m9Xd.eth.rpc.example.com/",
             "https://rpc.example.com/k7fQz2m9Xd",
@@ -340,9 +323,6 @@ mod tests {
 
     #[test]
     fn fault_redaction_survives_multibyte_server_text() {
-        // An HTTP error body is server-controlled and can abut the URL with
-        // a multi-byte char (a typographic quote, an NBSP); redaction must
-        // not panic, since a host panic aborts the whole process.
         let body = format!("upstream \u{201c}{CREDENTIALED_URL}\u{201d} refused");
         let chain_err = ChainError::from(PoolError::Rpc(TransportErrorKind::http_error(503, body)));
         let ChainError::Fault(Fault::Unavailable(msg)) = chain_err else {
@@ -353,10 +333,8 @@ mod tests {
 
     #[test]
     fn dropped_backend_fault_carries_no_endpoint() {
-        // `BackendGone` and `PubsubUnavailable` render compile-time constant
-        // text with no data, so this pins that the constants stay free of
-        // the endpoint; it cannot observe the defensive redaction at the
-        // call site, which is a no-op on such text today.
+        // These render constants, so this pins the constants, not the
+        // redaction.
         for source in [
             TransportErrorKind::backend_gone(),
             TransportErrorKind::pubsub_unavailable(),
@@ -372,7 +350,6 @@ mod tests {
 
     #[test]
     fn error_resp_message_redacts_an_echoed_endpoint() {
-        // A node error message can echo the endpoint it was reached on.
         let payload: ErrorPayload = serde_json::from_str(&format!(
             r#"{{"code":-32005,"message":"daily limit reached for {CREDENTIALED_URL}"}}"#
         ))
@@ -392,8 +369,6 @@ mod tests {
 
     #[test]
     fn timeout_sniff_classifies_before_redaction() {
-        // The sniff runs on the unredacted text, so a URL in the message
-        // cannot change the class; `timeout` carries no payload to leak.
         let msg = format!("request to {CREDENTIALED_URL} timed out");
         let chain_err = ChainError::from(PoolError::Rpc(transport_err(&msg)));
         assert!(matches!(chain_err, ChainError::Fault(Fault::Timeout)));

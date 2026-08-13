@@ -982,32 +982,23 @@ pub fn redact_url(url: &str) -> String {
     parsed.to_string()
 }
 
-/// Replace every URL embedded in free text with a fixed placeholder, for
-/// error text an untrusted reader sees. Partial redaction via [`redact_url`]
-/// is not enough here: it keeps the authority and short path segments, and a
-/// provider key can sit in the subdomain or a path token of 20 characters or
-/// fewer, so the whole URL goes. Text that echoes a credential without URL
-/// shape is beyond any URL-level rule.
+/// For text an untrusted reader sees. [`redact_url`] is not enough: it keeps
+/// the authority and short path segments, either of which can hold the key.
 pub fn redact_urls_in_text(text: &str) -> String {
     const PLACEHOLDER: &str = "<redacted-url>";
     let mut out = String::with_capacity(text.len());
     let mut rest = text;
     while let Some(sep) = rest.find("://") {
-        // Back up over the scheme characters before `://`. The text can be
-        // server-controlled with a multi-byte char abutting the scheme, so
-        // the cut must land past the whole char, not one byte after its
-        // start (`panic = "abort"` makes a slice panic fatal to the host).
+        // Cut past the whole char: the text is server-controlled, and
+        // `panic = "abort"` makes a mid-codepoint slice fatal to the host.
         let scheme_start = rest[..sep]
             .char_indices()
             .rev()
             .find(|&(_, c)| !(c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.')))
             .map_or(0, |(i, c)| i + c.len_utf8());
-        // A rendered URL contains no whitespace; the token runs to the next
-        // whitespace or the end of the text.
         let after = &rest[sep + 3..];
         let token_end = sep + 3 + after.find(char::is_whitespace).unwrap_or(after.len());
         let token = &rest[scheme_start..token_end];
-        // Prose punctuation closing around the URL is not part of it.
         let url = token.trim_end_matches([')', ']', '}', '.', ',', ';', '\'', '"', '>']);
         out.push_str(&rest[..scheme_start]);
         out.push_str(PLACEHOLDER);
@@ -1710,8 +1701,6 @@ key = "value"
 
     #[test]
     fn redact_text_handles_reqwest_parenthesized_form() {
-        // The exact shape reqwest renders: the URL sits inside parentheses
-        // with the key in the path and a query credential.
         let text = "error sending request for url \
                     (https://lb.example.com/v2/AnOfyGnZ0nWpSOOwQzqAnFjNaa0s?apikey=qsecret)";
         let redacted = redact_urls_in_text(text);
@@ -1726,8 +1715,6 @@ key = "value"
 
     #[test]
     fn redact_text_replaces_unparseable_url_wholesale() {
-        // A token that looks like a URL but does not parse must not pass
-        // through: over-redaction, never a leak.
         let redacted = redact_urls_in_text("connect to http://[secret failed");
         assert_eq!(redacted, "connect to <redacted-url> failed");
     }
@@ -1741,9 +1728,6 @@ key = "value"
 
     #[test]
     fn redact_text_drops_host_borne_and_short_path_keys() {
-        // `redact_url` keeps the authority and any path segment of 20 chars
-        // or fewer, and a provider key can sit in either, so the text rule
-        // drops the whole URL.
         for text in [
             "error sending request for url (https://k7fQz2m9Xd.eth.rpc.example.com/)",
             "error sending request for url (https://rpc.example.com/k7fQz2m9Xd)",
@@ -1760,9 +1744,6 @@ key = "value"
 
     #[test]
     fn redact_text_survives_a_multibyte_char_abutting_the_url() {
-        // Server-controlled text (an HTTP error body, a node's message) can
-        // abut the scheme with a typographic quote, an NBSP, or a full-width
-        // colon; the scheme back-up must cut on a char boundary.
         for text in [
             "upstream \u{201c}https://rpc.example/v2/KEY\u{201d} is down",
             "upstream\u{a0}https://rpc.example/v2/KEY unavailable",
