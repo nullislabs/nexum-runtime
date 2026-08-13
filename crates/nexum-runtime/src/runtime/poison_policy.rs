@@ -5,26 +5,36 @@
 //! sets the `nexum_runtime_module_poisoned{module}` gauge to 1, and logs the
 //! quarantine. Recovery needs an operator-driven full engine restart.
 
+use std::num::NonZeroU32;
 use std::time::Duration;
 
+/// A literal as non-zero; a zero fails the build.
+const fn nz(n: u32) -> NonZeroU32 {
+    match NonZeroU32::new(n) {
+        Some(v) => v,
+        None => panic!("zero constant"),
+    }
+}
+
 /// Production defaults: 5 traps within 10 minutes quarantines a module.
-pub const POISON_MAX_FAILURES: u32 = 5;
+pub const POISON_MAX_FAILURES: NonZeroU32 = nz(5);
 /// Sliding window [`POISON_MAX_FAILURES`] is counted across.
 pub const POISON_WINDOW: Duration = Duration::from_secs(600);
 
 /// Configurable poison-pill thresholds from `[limits.poison]`, else
-/// [`PoisonPolicy::default`].
+/// [`PoisonPolicy::default`]. `max_failures` is non-zero by type: a zero
+/// trap budget is a degenerate policy, not a usable one.
 #[derive(Debug, Clone, Copy)]
 pub struct PoisonPolicy {
     /// Maximum traps within `window` before the module is poisoned.
-    pub max_failures: u32,
+    pub max_failures: NonZeroU32,
     /// Sliding window the failures are counted across.
     pub window: Duration,
 }
 
 impl PoisonPolicy {
     /// Pair a trap budget with the window it is counted over.
-    pub const fn new(max_failures: u32, window: Duration) -> Self {
+    pub const fn new(max_failures: NonZeroU32, window: Duration) -> Self {
         Self {
             max_failures,
             window,
@@ -40,7 +50,7 @@ impl Default for PoisonPolicy {
 
 /// `true` when the recent-failure count crosses the configured threshold.
 pub fn should_poison(policy: PoisonPolicy, recent_failures: u32) -> bool {
-    recent_failures >= policy.max_failures
+    recent_failures >= policy.max_failures.get()
 }
 
 #[cfg(test)]
@@ -56,7 +66,7 @@ mod tests {
 
     #[test]
     fn poisons_at_threshold() {
-        let p = PoisonPolicy::new(3, Duration::from_secs(60));
+        let p = PoisonPolicy::new(nz(3), Duration::from_secs(60));
         assert!(!should_poison(p, 0));
         assert!(!should_poison(p, 2));
         assert!(should_poison(p, 3));

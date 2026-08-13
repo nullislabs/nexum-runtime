@@ -661,7 +661,7 @@ mod tests {
         // Holding _launch keeps the manifest tempdir alive for the asserts.
         let (config, _launch) = scenario.split();
 
-        assert_eq!(config.limits.poison.max_failures, 3);
+        assert_eq!(config.limits.poison.max_failures.get(), 3);
         let ids = |chains: &HashMap<Chain, ChainConfig>| {
             chains
                 .keys()

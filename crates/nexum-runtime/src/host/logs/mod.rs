@@ -238,8 +238,8 @@ mod tests {
     #[test]
     fn pipeline_read_side_reaches_the_backend() {
         let limits = crate::engine_config::LogRetentionLimits {
-            bytes_per_run: 1024,
-            runs_retained: 4,
+            bytes_per_run: std::num::NonZeroUsize::new(1024).unwrap(),
+            runs_retained: std::num::NonZeroUsize::new(4).unwrap(),
         };
         let pipeline = LogPipeline::in_memory(limits);
         let run = RunId::new(test_module_id(), 0);

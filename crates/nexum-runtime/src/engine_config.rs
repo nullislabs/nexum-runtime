@@ -7,7 +7,7 @@
 
 use std::collections::HashMap;
 use std::net::IpAddr;
-use std::num::{NonZeroU64, NonZeroUsize};
+use std::num::{NonZeroU32, NonZeroU64, NonZeroUsize};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -22,12 +22,28 @@ use crate::runtime::dispatch_rate::{
 };
 use crate::runtime::poison_policy::{POISON_MAX_FAILURES, POISON_WINDOW, PoisonPolicy};
 
+/// A literal as non-zero; a zero fails the build.
+const fn nz_usize(n: usize) -> NonZeroUsize {
+    match NonZeroUsize::new(n) {
+        Some(v) => v,
+        None => panic!("zero constant"),
+    }
+}
+
+/// As [`nz_usize`], for `u64` constants.
+const fn nz_u64(n: u64) -> NonZeroU64 {
+    match NonZeroU64::new(n) {
+        Some(v) => v,
+        None => panic!("zero constant"),
+    }
+}
+
 /// Default per-caller submission budget within [`DEFAULT_QUOTA_WINDOW`].
 pub const DEFAULT_QUOTA_MAX_CHARGES: u32 = 256;
 /// Default sliding window the per-caller submission budget is counted over.
 pub const DEFAULT_QUOTA_WINDOW: Duration = Duration::from_secs(60);
 /// Default cap on receipts under status watch at once.
-pub const DEFAULT_WATCH_MAX_ENTRIES: usize = 1024;
+pub const DEFAULT_WATCH_MAX_ENTRIES: NonZeroUsize = nz_usize(1024);
 /// Default base window a healthy provider refreshes within; the give-up
 /// deadline is the derived `grace`, not this directly.
 pub const DEFAULT_WATCH_EXPIRY: Duration = Duration::from_secs(86_400);
@@ -80,7 +96,7 @@ impl Default for SubmitQuota {
 #[derive(Debug, Clone, Copy)]
 pub struct WatchLimit {
     /// Maximum receipts under status watch at once.
-    pub max_entries: usize,
+    pub max_entries: NonZeroUsize,
     /// Base window a healthy provider refreshes the deadline within.
     pub expiry: Duration,
     /// Give-up deadline: how long a watch survives an unreachable provider
@@ -91,12 +107,12 @@ pub struct WatchLimit {
 
 impl WatchLimit {
     /// Pair a cap with the base expiry; `grace` derives from `expiry`.
-    pub const fn new(max_entries: usize, expiry: Duration) -> Self {
+    pub const fn new(max_entries: NonZeroUsize, expiry: Duration) -> Self {
         Self::with_grace(max_entries, expiry, derive_grace(expiry))
     }
 
     /// As [`new`](Self::new) but with an explicit `grace`.
-    pub const fn with_grace(max_entries: usize, expiry: Duration, grace: Duration) -> Self {
+    pub const fn with_grace(max_entries: NonZeroUsize, expiry: Duration, grace: Duration) -> Self {
         Self {
             max_entries,
             expiry,
@@ -335,13 +351,13 @@ fn default_chain_request_timeout_secs() -> u64 {
 }
 
 /// Default fuel budget per `on_event` invocation (~1e9 WASM instructions).
-const DEFAULT_FUEL_PER_EVENT: u64 = 1_000_000_000;
+const DEFAULT_FUEL_PER_EVENT: NonZeroU64 = nz_u64(1_000_000_000);
 
 /// Default per-dispatch wall-clock deadline.
 const DEFAULT_EVENT_DEADLINE: Duration = Duration::from_secs(120);
 
 /// Default linear-memory cap per module store (64 MiB).
-const DEFAULT_MEMORY_LIMIT: usize = 64 * 1024 * 1024;
+const DEFAULT_MEMORY_LIMIT: NonZeroUsize = nz_usize(64 * 1024 * 1024);
 
 /// Default per-module local-store byte quota (50 MiB).
 const DEFAULT_STATE_BYTES: u64 = 50 * 1024 * 1024;
@@ -363,16 +379,16 @@ const DEFAULT_HTTP_TOTAL_DEADLINE: Duration = Duration::from_secs(60);
 const DEFAULT_HTTP_RESPONSE_BODY_MAX: u64 = 16 * 1024 * 1024;
 
 /// Default cap on one chain JSON-RPC response body (1 MiB).
-const DEFAULT_CHAIN_RESPONSE_MAX_BYTES: usize = 1024 * 1024;
+const DEFAULT_CHAIN_RESPONSE_MAX_BYTES: NonZeroUsize = nz_usize(1024 * 1024);
 
 /// Ceiling for the `[limits.http]` millisecond knobs (24 h).
 const HTTP_LIMIT_MS_MAX: u64 = 86_400_000;
 
 /// Default per-run log ring budget (256 KiB).
-const DEFAULT_LOG_BYTES_PER_RUN: usize = 256 * 1024;
+const DEFAULT_LOG_BYTES_PER_RUN: NonZeroUsize = nz_usize(256 * 1024);
 
 /// Default past runs retained per module (16).
-const DEFAULT_LOG_RUNS_RETAINED: usize = 16;
+const DEFAULT_LOG_RUNS_RETAINED: NonZeroUsize = nz_usize(16);
 
 /// Serde shape of `[limits]`. Every field is optional; conversion into
 /// [`ResolvedModuleLimits`] fills the built-in defaults and refuses
@@ -460,36 +476,41 @@ fn zero_field(field: &str) -> EngineConfigError {
     }
 }
 
-/// Override-or-default for an integer knob that keeps its plain type; a
-/// zero override refuses, naming `field`.
-fn nonzero<T: PartialEq + From<u8>>(
+/// Override-or-default, proving the resolution in the type; a zero
+/// override refuses, naming `field`.
+fn nonzero_u64(
     field: &str,
-    value: Option<T>,
-    default: T,
-) -> Result<T, EngineConfigError> {
+    value: Option<u64>,
+    default: NonZeroU64,
+) -> Result<NonZeroU64, EngineConfigError> {
     match value {
-        Some(v) if v == T::from(0) => Err(zero_field(field)),
-        Some(v) => Ok(v),
+        Some(v) => NonZeroU64::new(v).ok_or_else(|| zero_field(field)),
         None => Ok(default),
     }
 }
 
-/// As [`nonzero`], proving the resolution in the type.
-fn nonzero_u64(
+/// As [`nonzero_u64`], for `u32` knobs.
+fn nonzero_u32(
     field: &str,
-    value: Option<u64>,
-    default: u64,
-) -> Result<NonZeroU64, EngineConfigError> {
-    NonZeroU64::new(value.unwrap_or(default)).ok_or_else(|| zero_field(field))
+    value: Option<u32>,
+    default: NonZeroU32,
+) -> Result<NonZeroU32, EngineConfigError> {
+    match value {
+        Some(v) => NonZeroU32::new(v).ok_or_else(|| zero_field(field)),
+        None => Ok(default),
+    }
 }
 
 /// As [`nonzero_u64`], for `usize` knobs.
 fn nonzero_usize(
     field: &str,
     value: Option<usize>,
-    default: usize,
+    default: NonZeroUsize,
 ) -> Result<NonZeroUsize, EngineConfigError> {
-    NonZeroUsize::new(value.unwrap_or(default)).ok_or_else(|| zero_field(field))
+    match value {
+        Some(v) => NonZeroUsize::new(v).ok_or_else(|| zero_field(field)),
+        None => Ok(default),
+    }
 }
 
 /// Second-denominated knob resolved to a `Duration`, zero refused.
@@ -555,19 +576,19 @@ impl TryFrom<ModuleLimits> for ResolvedModuleLimits {
                 .unwrap_or(DEFAULT_HTTP_RESPONSE_BODY_MAX),
         };
         let logs = LogRetentionLimits {
-            bytes_per_run: nonzero(
+            bytes_per_run: nonzero_usize(
                 "limits.logs.bytes_per_run",
                 raw.logs.bytes_per_run,
                 DEFAULT_LOG_BYTES_PER_RUN,
             )?,
-            runs_retained: nonzero(
+            runs_retained: nonzero_usize(
                 "limits.logs.runs_retained",
                 raw.logs.runs_retained,
                 DEFAULT_LOG_RUNS_RETAINED,
             )?,
         };
         let poison = PoisonPolicy::new(
-            nonzero(
+            nonzero_u32(
                 "limits.poison.max_failures",
                 raw.poison.max_failures,
                 POISON_MAX_FAILURES,
@@ -588,7 +609,7 @@ impl TryFrom<ModuleLimits> for ResolvedModuleLimits {
                 DEFAULT_QUOTA_WINDOW,
             )?,
         );
-        let max_entries = nonzero(
+        let max_entries = nonzero_usize(
             "limits.watch.max_entries",
             raw.watch.max_entries,
             DEFAULT_WATCH_MAX_ENTRIES,
@@ -606,12 +627,12 @@ impl TryFrom<ModuleLimits> for ResolvedModuleLimits {
             None => WatchLimit::new(max_entries, expiry),
         };
         let dispatch = DispatchRatePolicy::new(
-            nonzero(
+            nonzero_u32(
                 "limits.dispatch.burst",
                 raw.dispatch.burst,
                 DEFAULT_DISPATCH_BURST,
             )?,
-            nonzero(
+            nonzero_u32(
                 "limits.dispatch.refill_per_sec",
                 raw.dispatch.refill_per_sec,
                 DEFAULT_DISPATCH_REFILL_PER_SEC,
@@ -765,14 +786,15 @@ pub struct DispatchLimitsSection {
     pub refill_per_sec: Option<u32>,
 }
 
-/// Resolved log retention limits the in-memory store enforces.
+/// Resolved log retention limits the in-memory store enforces. Non-zero
+/// by type: a zero budget would retain nothing.
 #[derive(Debug, Clone, Copy)]
 pub struct LogRetentionLimits {
     /// Byte budget for one run's ring; the newest record is never evicted
     /// to nothing.
-    pub bytes_per_run: usize,
+    pub bytes_per_run: NonZeroUsize,
     /// Runs retained per module; the oldest run evicts first.
-    pub runs_retained: usize,
+    pub runs_retained: NonZeroUsize,
 }
 
 fn default_state_dir() -> PathBuf {
@@ -1399,8 +1421,8 @@ max_charges = 0
     #[test]
     fn log_limits_default_when_absent() {
         let logs = ResolvedModuleLimits::default().logs;
-        assert_eq!(logs.bytes_per_run, 256 * 1024);
-        assert_eq!(logs.runs_retained, 16);
+        assert_eq!(logs.bytes_per_run.get(), 256 * 1024);
+        assert_eq!(logs.runs_retained.get(), 16);
     }
 
     #[test]
@@ -1414,8 +1436,8 @@ runs_retained = 3
         )
         .expect("limits.logs parses");
         let logs = cfg.limits.logs;
-        assert_eq!(logs.bytes_per_run, 4_096);
-        assert_eq!(logs.runs_retained, 3);
+        assert_eq!(logs.bytes_per_run.get(), 4_096);
+        assert_eq!(logs.runs_retained.get(), 3);
     }
 
     #[test]
@@ -1436,7 +1458,7 @@ window_secs  = 60
         )
         .expect("limits.poison parses");
         let poison = cfg.limits.poison;
-        assert_eq!(poison.max_failures, 3);
+        assert_eq!(poison.max_failures.get(), 3);
         assert_eq!(poison.window, Duration::from_secs(60));
     }
 
@@ -1503,8 +1525,8 @@ refill_per_sec = 4
         )
         .expect("limits.dispatch parses");
         let policy = cfg.limits.dispatch;
-        assert_eq!(policy.capacity, 8);
-        assert_eq!(policy.refill_per_sec, 4);
+        assert_eq!(policy.capacity.get(), 8);
+        assert_eq!(policy.refill_per_sec.get(), 4);
     }
 
     #[test]
@@ -1525,7 +1547,7 @@ expiry_secs = 900
         )
         .expect("limits.watch parses");
         let watch = cfg.limits.watch;
-        assert_eq!(watch.max_entries, 32);
+        assert_eq!(watch.max_entries.get(), 32);
         assert_eq!(watch.expiry, Duration::from_secs(900));
         // Omitted grace_secs derives from expiry (min(2 * expiry, 24h)).
         assert_eq!(watch.grace, Duration::from_secs(1800));

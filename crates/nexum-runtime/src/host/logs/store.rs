@@ -171,10 +171,10 @@ impl RunLogStore for InMemoryRunLogStore {
         if !entry.rings.contains_key(&record.run) {
             entry
                 .rings
-                .insert(record.run.clone(), Ring::new(limits.bytes_per_run));
+                .insert(record.run.clone(), Ring::new(limits.bytes_per_run.get()));
             entry.order.push_back(record.run.clone());
             // Evict whole runs beyond the retained cap, oldest first.
-            while entry.order.len() > limits.runs_retained {
+            while entry.order.len() > limits.runs_retained.get() {
                 if let Some(old) = entry.order.pop_front() {
                     entry.rings.remove(&old);
                 }
@@ -220,8 +220,8 @@ mod tests {
 
     fn limits(bytes_per_run: usize, runs_retained: usize) -> LogRetentionLimits {
         LogRetentionLimits {
-            bytes_per_run,
-            runs_retained,
+            bytes_per_run: std::num::NonZeroUsize::new(bytes_per_run).unwrap(),
+            runs_retained: std::num::NonZeroUsize::new(runs_retained).unwrap(),
         }
     }
 
