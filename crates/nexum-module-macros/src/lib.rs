@@ -108,15 +108,9 @@ fn expand(args: ModuleArgs, input: ItemImpl) -> Result<proc_macro2::TokenStream,
         anchors,
         world: module_world,
         chain_log_topics,
-        path: manifest_path,
     } = nexum_world::manifest_dir()
         .map_err(|source| MacroError::NoManifestDir { source })
         .and_then(|dir| derive_manifest_facts(&dir, !args.subscribes.is_empty()))?;
-    if !args.subscribes.is_empty() && chain_log_topics.is_empty() {
-        return Err(MacroError::SubscribesWithoutChainLog {
-            path: manifest_path,
-        });
-    }
     let parity = topic_parity_check(&args.subscribes, &chain_log_topics);
     let wit_paths = nexum_world::manifest_wit_packages(&module_world.packages)
         .map_err(|source| MacroError::WitResolution { source })?;
@@ -390,13 +384,13 @@ struct ManifestFacts {
     world: nexum_world::ModuleWorld,
     /// Distinct chain-log `event_signature` topics, in declaration order.
     chain_log_topics: Vec<B256>,
-    path: String,
 }
 
 /// Synthesize the per-module world from the crate's `component.toml`
 /// `[dependencies]` plus the nearest ancestor `extensions.toml`.
 /// Topics are read only for `want_topics`, so a manifest field no
-/// opted-in module names can never fail a build.
+/// opted-in module names can never fail a build; a `want_topics` manifest
+/// with no chain-log subscription refuses.
 fn derive_manifest_facts(
     crate_dir: &std::path::Path,
     want_topics: bool,
@@ -446,11 +440,16 @@ fn derive_manifest_facts(
             path: manifest_path.clone(),
             source: Box::new(source),
         })?;
+    // Last, so a manifest rule refusal above keeps surfacing first.
+    if want_topics && chain_log_topics.is_empty() {
+        return Err(MacroError::SubscribesWithoutChainLog {
+            path: manifest_path,
+        });
+    }
     Ok(ManifestFacts {
         anchors,
         world,
         chain_log_topics,
-        path: manifest_path,
     })
 }
 
@@ -754,7 +753,11 @@ mod tests {
     #[test]
     fn every_manifest_read_is_a_rebuild_anchor() {
         let dir = tempfile::tempdir().expect("tempdir");
-        std::fs::write(dir.path().join("component.toml"), MANIFEST).expect("write manifest");
+        std::fs::write(
+            dir.path().join("component.toml"),
+            format!("{MANIFEST}{SUBSCRIPTION}"),
+        )
+        .expect("write manifest");
         std::fs::write(
             dir.path().join("extensions.toml"),
             "[extensions.acme]\nimport = \"acme:host/acme@0.1.0\"\n",
@@ -801,7 +804,59 @@ mod tests {
         );
     }
 
+    /// A missing `component.toml` refuses with the guidance-bearing
+    /// variant, not a bare io error.
+    #[test]
+    fn missing_manifest_is_refused_as_unreadable() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let err = derive_manifest_facts(dir.path(), false).err().unwrap();
+        assert!(
+            matches!(err, MacroError::ManifestUnreadable { .. }),
+            "{err:?}"
+        );
+    }
+
+    /// An `extensions.toml` that exists but cannot be read (here: not
+    /// UTF-8, which fails `read_to_string` even when running as root)
+    /// refuses with the registry's own variant.
+    #[test]
+    fn unreadable_registry_is_refused() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(dir.path().join("component.toml"), MANIFEST).expect("write manifest");
+        std::fs::write(dir.path().join("extensions.toml"), b"\xff\xfe").expect("write registry");
+        let err = derive_manifest_facts(dir.path(), false).err().unwrap();
+        assert!(
+            matches!(err, MacroError::RegistryUnreadable { .. }),
+            "{err:?}"
+        );
+    }
+
+    /// `subscribes(...)` needs a manifest chain-log subscription; one with
+    /// an `event_signature` satisfies it.
+    #[test]
+    fn subscribes_without_chain_log_subscription_is_refused() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(dir.path().join("component.toml"), MANIFEST).expect("write manifest");
+        let err = derive_manifest_facts(dir.path(), true).err().unwrap();
+        assert!(
+            matches!(err, MacroError::SubscribesWithoutChainLog { .. }),
+            "{err:?}"
+        );
+
+        std::fs::write(
+            dir.path().join("component.toml"),
+            format!("{MANIFEST}{SUBSCRIPTION}"),
+        )
+        .expect("write manifest");
+        assert!(derive_manifest_facts(dir.path(), true).is_ok());
+    }
+
     const MANIFEST: &str = "[component]\nname = \"t\"\n\n[dependencies]\nlogging = {}\n";
+
+    /// A chain-log subscription with a valid `event_signature`, appended
+    /// to [`MANIFEST`] where a test wants topics.
+    const SUBSCRIPTION: &str = "\n[[subscription]]\nkind = \"chain-log\"\nchain_id = 1\n\
+         event_signature = \"0xcf5f9de2984132265203b5c335b25727702ca77262ff622e136baa7362bf1da9\"\n";
 
     /// The string literals the emitted `assert!`s carry.
     fn refusal_messages(emitted: &str) -> Vec<String> {
