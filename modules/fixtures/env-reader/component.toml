@@ -1,0 +1,17 @@
+# env-reader test fixture. Subscribes to a single chain's blocks so the
+# supervisor invokes `on_event` once per block; the handler counts the
+# environment variables and process arguments std can see and logs both.
+# The integration test boots this fixture from a host process whose own
+# environment and argv are non-empty and asserts the guest observed zero
+# of each, proving the store discloses neither.
+
+[component]
+name = "env-reader"
+version = "0.1.0"
+
+[dependencies]
+logging = {}
+
+[[subscription]]
+kind = "block"
+chain_id = 1

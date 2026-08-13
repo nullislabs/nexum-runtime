@@ -811,6 +811,57 @@ mod tests {
         rt.wait().await.expect("clean shutdown");
     }
 
+    /// The guest sees no host environment, no process arguments, and no
+    /// stdin: the env-reader fixture counts all three through std, which
+    /// routes to the ambient `wasi:cli/environment` and `wasi:cli/stdin`
+    /// interfaces. The host process carries environment and arguments, so
+    /// a store that started inheriting either would report a non-zero
+    /// count here, and an inherited stdin would report its bytes or block.
+    #[tokio::test]
+    async fn harness_guest_observes_no_environment_arguments_or_stdin() {
+        let Some(wasm) = module_wasm_or_skip("env-reader") else {
+            return;
+        };
+
+        // The precondition that makes a zero reading meaningful: an
+        // inherited context could not answer with nothing.
+        assert!(
+            std::env::vars_os().next().is_some(),
+            "the test process must carry environment variables",
+        );
+        assert!(
+            std::env::args_os().next().is_some(),
+            "the test process must carry process arguments",
+        );
+
+        let mut rt = TestRuntime::builder(wasm)
+            .manifest_inline(
+                TestManifest::new("env-reader")
+                    .cap("logging")
+                    .block_sub(1)
+                    .to_toml(),
+            )
+            .launch()
+            .await
+            .expect("launch env-reader over the harness");
+
+        rt.push_block(header_numbered(19_000_000));
+        let record = rt
+            .wait_for_log("env-reader", "env vars ")
+            .await
+            .expect("the guest logs its environment observation after dispatch");
+
+        // Exact match, not substring: on a leak the fixture also logs each
+        // key and argument, so the counts line names the failure precisely.
+        assert_eq!(
+            record.message, "env vars 0 args 0 stdin 0",
+            "the guest observed the host environment, arguments, or stdin",
+        );
+
+        rt.shutdown();
+        rt.wait().await.expect("clean shutdown");
+    }
+
     /// [`TestRuntimeBuilder::boot_supervisor`] reaches services, the alive
     /// count and dispatch without a boot entry or an event loop.
     #[tokio::test]

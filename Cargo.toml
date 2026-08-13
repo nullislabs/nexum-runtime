@@ -13,6 +13,7 @@ members = [
     "modules/examples/http-probe",
     "modules/examples/price-alert",
     "modules/fixtures/clock-reader",
+    "modules/fixtures/env-reader",
     "modules/fixtures/flaky-bomb",
     "modules/fixtures/fuel-bomb",
     "modules/fixtures/memory-bomb",
