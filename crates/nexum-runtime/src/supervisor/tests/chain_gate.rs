@@ -99,13 +99,26 @@ async fn boot_refuses_an_adapter_subscription_on_an_unconfigured_chain() {
 /// topic refuses the boot as a manifest error, before any compile.
 #[tokio::test]
 async fn boot_refuses_an_invalid_chain_log_filter() {
-    for (manifest, detail) in [
+    fn is_address(e: &BootRefusal) -> bool {
+        matches!(
+            e,
+            BootRefusal::Manifest(ParseError::InvalidChainLogAddress { .. })
+        )
+    }
+    fn is_topic(e: &BootRefusal) -> bool {
+        matches!(
+            e,
+            BootRefusal::Manifest(ParseError::InvalidChainLogTopic { .. })
+        )
+    }
+    for (manifest, detail, variant) in [
         (
             TestManifest::new("example")
                 .cap("logging")
                 .chain_log_sub_filtered(1, Some("0xabc"), None),
             // Pinned operator wording.
             "invalid chain-log address \"0xabc\"",
+            is_address as fn(&BootRefusal) -> bool,
         ),
         (
             TestManifest::new("example")
@@ -113,16 +126,16 @@ async fn boot_refuses_an_invalid_chain_log_filter() {
                 .chain_log_sub_filtered(1, None, Some("not-a-topic")),
             // Pinned operator wording.
             "invalid topic \"not-a-topic\"",
+            is_topic as fn(&BootRefusal) -> bool,
         ),
     ] {
         BootScenario::new()
             .module(manifest)
             .expect_refusal()
             .await
-            .variant::<BootRefusal>(|e| matches!(e, BootRefusal::Manifest(ParseError::Toml(_))))
+            .variant::<BootRefusal>(variant)
             // Operator wording pin.
             .names("load module")
-            .names("manifest: parse")
             .names(detail)
             .lacks("read component")
             .lacks("compile");
@@ -232,8 +245,8 @@ async fn boot_refusal_names_the_missing_engine_toml_on_the_defaulted_path() {
 
 #[test]
 fn configured_chains_normalise_named_and_numeric_spellings() {
-    let cfg: EngineConfig =
-        toml::from_str("[chains.sepolia]\nrpc_url = \"http://localhost:8545\"\n")
+    let cfg =
+        toml::from_str::<EngineConfig>("[chains.sepolia]\nrpc_url = \"http://localhost:8545\"\n")
             .expect("named chain key parses");
     let chains = ConfiguredChains::from_config(&cfg);
     assert!(chains.contains(11_155_111));

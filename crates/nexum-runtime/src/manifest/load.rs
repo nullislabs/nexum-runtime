@@ -8,34 +8,19 @@ use tracing::info;
 use super::capabilities::CapabilityRegistry;
 use super::error::ParseError;
 use super::types::{LoadedManifest, Manifest};
-use crate::module_id::ModuleId;
 
 /// Parse and validate `component.toml`; no `[dependencies]` table refuses the
 /// manifest (`required = []` is valid).
 pub fn load(path: &Path, registry: &CapabilityRegistry) -> Result<LoadedManifest, ParseError> {
     let raw = std::fs::read_to_string(path)?;
     let manifest: Manifest = toml::from_str(&raw)?;
+    let loaded = LoadedManifest::try_from(manifest)?;
 
-    // The only producer of a `ModuleId`.
-    let name = ModuleId::parse(&manifest.component.name)?;
-
-    let component_digest = manifest
-        .component
-        .digest
-        .as_deref()
-        .map(str::parse)
-        .transpose()
-        .map_err(|source| ParseError::InvalidComponentDigest {
-            value: manifest.component.digest.clone().unwrap_or_default(),
-            source,
-        })?;
-
-    let deps = manifest
-        .dependencies
-        .as_ref()
-        .ok_or(ParseError::MissingCapabilities)?;
-
-    for (name, dep) in deps {
+    // The registry cross-check lives here, not in the `TryFrom`
+    // conversion, because it needs the wired registry. The `hosts`
+    // placement check follows it per entry, so an unknown name refuses
+    // as unknown rather than as a misplaced attribute.
+    for (name, dep) in &loaded.dependencies {
         if !registry.is_known(name) {
             return Err(ParseError::UnknownCapability {
                 name: name.clone(),
@@ -51,32 +36,14 @@ pub fn load(path: &Path, registry: &CapabilityRegistry) -> Result<LoadedManifest
             });
         }
     }
-    if !deps.is_empty() {
-        let names: Vec<&str> = deps.keys().map(String::as_str).collect();
+    if !loaded.dependencies.is_empty() {
+        let names: Vec<&str> = loaded.dependencies.keys().map(String::as_str).collect();
         info!(target: "manifest", dependencies = %names.join(", "), "dependencies");
     }
-
-    let http_allowlist = deps
-        .get(nexum_world::Cap::Http.as_str())
-        .map(|dep| dep.hosts.clone())
-        .unwrap_or_default();
-    if !http_allowlist.is_empty() {
-        info!(target: "manifest", hosts = %http_allowlist.join(", "), "http hosts");
+    if !loaded.http_allowlist.is_empty() {
+        info!(target: "manifest", hosts = %loaded.http_allowlist.join(", "), "http hosts");
     }
-
-    let config = manifest
-        .config
-        .iter()
-        .map(|(k, v)| (k.clone(), stringify_toml_value(v)))
-        .collect();
-
-    Ok(LoadedManifest {
-        name,
-        manifest,
-        http_allowlist,
-        config,
-        component_digest,
-    })
+    Ok(loaded)
 }
 
 /// Whether `host` matches any allowlist pattern: exact, or a `*.suffix`
@@ -95,21 +62,17 @@ pub fn host_allowed(host: &str, allowlist: &[String]) -> bool {
     })
 }
 
-fn stringify_toml_value(v: &toml::Value) -> String {
-    match v {
-        toml::Value::String(s) => s.clone(),
-        toml::Value::Integer(i) => i.to_string(),
-        toml::Value::Float(f) => f.to_string(),
-        toml::Value::Boolean(b) => b.to_string(),
-        toml::Value::Datetime(d) => d.to_string(),
-        toml::Value::Array(_) | toml::Value::Table(_) => v.to_string(),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::manifest::types::Subscription;
+
+    /// Parse and validate an inline manifest, skipping the registry
+    /// cross-check `load` adds.
+    fn validate(toml: &str) -> Result<LoadedManifest, ParseError> {
+        let manifest: Manifest = toml::from_str(toml)?;
+        manifest.try_into()
+    }
 
     #[test]
     fn load_parses_block_and_chain_log_subscriptions() {
@@ -131,16 +94,16 @@ chain_id = 1
 address  = "0xC92E8bdf79f0507f65a392b0ab4667716BFE0110"
 event_signature = "0x00000000000000000000000000000000000000000000000000000000deadbeef"
 "#;
-        let manifest: Manifest = toml::from_str(toml).expect("parse");
-        assert_eq!(manifest.component.name, "twap-monitor");
-        assert_eq!(manifest.subscriptions.len(), 2);
+        let loaded = validate(toml).expect("parse");
+        assert_eq!(loaded.name.as_str(), "twap-monitor");
+        assert_eq!(loaded.subscriptions.len(), 2);
         assert!(matches!(
-            &manifest.subscriptions[0],
+            &loaded.subscriptions[0],
             Subscription::Block { chain_id: 1 }
         ));
         if let Subscription::ChainLog {
             chain_id, address, ..
-        } = &manifest.subscriptions[1]
+        } = &loaded.subscriptions[1]
         {
             assert_eq!(*chain_id, 1);
             assert!(address.is_some());
@@ -149,28 +112,71 @@ event_signature = "0x00000000000000000000000000000000000000000000000000000000dea
         }
     }
 
-    /// Malformed chain-log hex refuses the manifest at parse, not at first
-    /// dispatch, with the operator wording pinned verbatim.
+    /// Malformed chain-log hex refuses the manifest at load, not at first
+    /// dispatch, with a typed variant carrying the value and the operator
+    /// wording pinned verbatim.
     #[test]
     fn load_refuses_malformed_chain_log_hex_at_parse() {
-        for (field, detail) in [
-            (
-                "address  = \"0xabc\"",
-                "invalid chain-log address \"0xabc\"",
-            ),
-            (
-                "event_signature = \"not-a-topic\"",
-                "invalid topic \"not-a-topic\"",
-            ),
-        ] {
-            let toml = format!(
+        fn chain_log(field: &str) -> String {
+            format!(
                 "[component]\nname = \"bad\"\n\n[[subscription]]\nkind     = \"chain-log\"\n\
                  chain_id = 1\n{field}\n"
-            );
-            let err = toml::from_str::<Manifest>(&toml).expect_err("malformed hex");
-            // Foreign toml::de::Error; pins our hex message threaded through it.
-            assert!(err.to_string().contains(detail), "{err}");
+            )
         }
+        let err = validate(&chain_log("address  = \"0xabc\"")).expect_err("malformed address");
+        assert!(
+            matches!(err, ParseError::InvalidChainLogAddress { ref value, .. } if value == "0xabc"),
+            "{err:?}",
+        );
+        // Operator wording pin.
+        assert!(
+            err.to_string()
+                .contains("invalid chain-log address \"0xabc\""),
+            "{err}"
+        );
+
+        let err =
+            validate(&chain_log("event_signature = \"not-a-topic\"")).expect_err("malformed topic");
+        assert!(
+            matches!(err, ParseError::InvalidChainLogTopic { ref value, .. } if value == "not-a-topic"),
+            "{err:?}",
+        );
+        // Operator wording pin.
+        assert!(
+            err.to_string().contains("invalid topic \"not-a-topic\""),
+            "{err}"
+        );
+    }
+
+    /// A core-kind table whose shape does not match its kind carries the
+    /// declared kind and the table's position in the refusal.
+    #[test]
+    fn load_refuses_a_core_subscription_missing_its_shape() {
+        let toml = "[component]\nname = \"bad\"\n\n[[subscription]]\nkind = \"chain-log\"\n";
+        let err = validate(toml).expect_err("chain-log without chain_id");
+        assert!(
+            matches!(
+                err,
+                ParseError::InvalidSubscription { index: 1, ref kind, .. } if kind == "chain-log"
+            ),
+            "{err:?}",
+        );
+    }
+
+    /// A subscription table without a `kind` cannot dispatch; the refusal
+    /// carries the table's 1-based position, the only locator left once
+    /// validation runs after the TOML parse.
+    #[test]
+    fn load_refuses_a_subscription_without_a_kind() {
+        let toml = "[component]\nname = \"bad\"\n\n[[subscription]]\nkind = \"block\"\n\
+                    chain_id = 1\n\n[[subscription]]\nchain_id = 1\n";
+        let err = validate(toml).expect_err("kindless subscription");
+        assert!(
+            matches!(err, ParseError::MissingSubscriptionKind { index: 2 }),
+            "{err:?}"
+        );
+        // The position reaches the operator.
+        assert!(err.to_string().contains("table 2"), "{err}");
     }
 
     /// Typing the field must neither widen nor narrow the accepted spelling:
@@ -187,13 +193,13 @@ event_signature = "0x00000000000000000000000000000000000000000000000000000000dea
             "c92e8bdf79f0507f65a392b0ab4667716bfe0110",
         ] {
             let toml = format!(
-                "[component]\nname = \"ok\"\n\n[[subscription]]\nkind     = \"chain-log\"\n\
-                 chain_id = 1\naddress  = \"{spelling}\"\n"
+                "[component]\nname = \"ok\"\n\n[dependencies]\n\n[[subscription]]\n\
+                 kind     = \"chain-log\"\nchain_id = 1\naddress  = \"{spelling}\"\n"
             );
-            let manifest: Manifest = toml::from_str(&toml).expect(spelling);
+            let loaded = validate(&toml).expect(spelling);
             assert!(
                 matches!(
-                    &manifest.subscriptions[0],
+                    &loaded.subscriptions[0],
                     Subscription::ChainLog { address: Some(a), .. } if *a == expected
                 ),
                 "{spelling} must parse to the canonical address",
@@ -209,6 +215,8 @@ event_signature = "0x00000000000000000000000000000000000000000000000000000000dea
         let toml = r#"
 [component]
 name = "watcher"
+
+[dependencies]
 
 [[subscription]]
 kind     = "block"
@@ -229,10 +237,10 @@ kind     = "chain-log"
 chain_id = 100
 event_signature = "cf5f9de2984132265203b5c335b25727702ca77262ff622e136baa7362bf1da9"
 "#;
-        let manifest: Manifest = toml::from_str(toml).expect("parse");
+        let loaded_manifest = validate(toml).expect("parse");
         // Distinct, not `dedup`: the repeat is non-adjacent, as it is on chain.
         let mut loaded: Vec<alloy_primitives::B256> = Vec::new();
-        for sub in &manifest.subscriptions {
+        for sub in &loaded_manifest.subscriptions {
             if let Subscription::ChainLog {
                 event_signature: Some(topic),
                 ..
@@ -254,7 +262,10 @@ event_signature = "cf5f9de2984132265203b5c335b25727702ca77262ff622e136baa7362bf1
 
         let bad = "[component]\nname = \"bad\"\n\n[[subscription]]\nkind = \"chain-log\"\n\
                    chain_id = 1\nevent_signature = \"not-a-topic\"\n";
-        assert!(toml::from_str::<Manifest>(bad).is_err());
+        assert!(matches!(
+            validate(bad),
+            Err(ParseError::InvalidChainLogTopic { .. })
+        ));
         assert!(nexum_world::manifest_chain_log_topics(bad).is_err());
     }
 
@@ -268,13 +279,15 @@ event_signature = "cf5f9de2984132265203b5c335b25727702ca77262ff622e136baa7362bf1
 [component]
 name = "stale"
 
+[dependencies]
+
 [[subscription]]
 kind     = "log"
 chain_id = "1"
 "#;
-        let manifest: Manifest = toml::from_str(toml).expect("parse");
+        let loaded = validate(toml).expect("parse");
         assert!(matches!(
-            &manifest.subscriptions[0],
+            &loaded.subscriptions[0],
             Subscription::Extension { kind, .. } if kind == "log"
         ));
     }
@@ -285,6 +298,8 @@ chain_id = "1"
 [component]
 name = "watcher"
 
+[dependencies]
+
 [[subscription]]
 kind = "acme-status"
 
@@ -292,19 +307,20 @@ kind = "acme-status"
 kind  = "acme-status"
 scope = "primary"
 "#;
-        let manifest: Manifest = toml::from_str(toml).expect("parse");
+        let loaded = validate(toml).expect("parse");
         assert!(matches!(
-            &manifest.subscriptions[0],
+            &loaded.subscriptions[0],
             Subscription::Extension { kind, filters } if kind == "acme-status" && filters.is_empty()
         ));
         assert!(matches!(
-            &manifest.subscriptions[1],
+            &loaded.subscriptions[1],
             Subscription::Extension { kind, filters }
                 if kind == "acme-status" && filters.get("scope").is_some_and(|v| v == "primary")
         ));
     }
 
-    /// A non-string filter value on an extension kind is refused at parse.
+    /// A non-string filter value on an extension kind is refused at load
+    /// with a typed variant carrying the filter key.
     #[test]
     fn load_rejects_a_non_string_extension_filter() {
         let toml = r#"
@@ -315,8 +331,12 @@ name = "watcher"
 kind  = "acme-status"
 scope = 7
 "#;
-        let err = toml::from_str::<Manifest>(toml).expect_err("non-string filter");
-        // Foreign toml::de::Error; pins our filter message threaded through it.
+        let err = validate(toml).expect_err("non-string filter");
+        assert!(
+            matches!(err, ParseError::NonStringSubscriptionFilter { ref key } if key == "scope"),
+            "{err:?}",
+        );
+        // Operator wording pin.
         assert!(err.to_string().contains("must be a string"), "{err}");
     }
 
@@ -327,6 +347,8 @@ scope = 7
 [component]
 name = "keeper"
 
+[dependencies]
+
 [venue]
 body_version = 2
 
@@ -334,11 +356,11 @@ body_version = 2
 kind     = "block"
 chain_id = 1
 "#;
-        let manifest: Manifest = toml::from_str(toml).expect("parse");
-        assert_eq!(manifest.component.name, "keeper");
-        assert_eq!(manifest.subscriptions.len(), 1);
-        assert_eq!(manifest.extensions.len(), 1);
-        let venue = manifest.extensions.get("venue").expect("venue section");
+        let loaded = validate(toml).expect("parse");
+        assert_eq!(loaded.name.as_str(), "keeper");
+        assert_eq!(loaded.subscriptions.len(), 1);
+        assert_eq!(loaded.extensions.len(), 1);
+        let venue = loaded.extensions.get("venue").expect("venue section");
         assert_eq!(
             venue.get("body_version").and_then(toml::Value::as_integer),
             Some(2),
@@ -351,9 +373,11 @@ chain_id = 1
         let toml = r#"
 [component]
 name = "plain"
+
+[dependencies]
 "#;
-        let manifest: Manifest = toml::from_str(toml).expect("parse");
-        assert!(manifest.extensions.is_empty());
+        let loaded = validate(toml).expect("parse");
+        assert!(loaded.extensions.is_empty());
     }
 
     #[test]
@@ -362,13 +386,15 @@ name = "plain"
 [component]
 name = "scheduler"
 
+[dependencies]
+
 [[subscription]]
 kind     = "cron"
 schedule = "*/5 * * * *"
 "#;
-        let manifest: Manifest = toml::from_str(toml).expect("parse");
+        let loaded = validate(toml).expect("parse");
         assert!(matches!(
-            &manifest.subscriptions[0],
+            &loaded.subscriptions[0],
             Subscription::Cron { .. }
         ));
     }
@@ -396,6 +422,51 @@ not-a-real-cap = {}
             "manifest: unknown dependency \"not-a-real-cap\" in [dependencies] (known: chain, \
              identity, local-store, remote-store, logging, http, wasi-sockets, \
              wasi-filesystem)"
+        );
+    }
+
+    /// `hosts` on a known dependency other than `http` refuses with the
+    /// misplaced-attribute variant and its pinned wording.
+    #[test]
+    fn load_refuses_hosts_on_a_dependency_that_does_not_take_it() {
+        let toml = r#"
+[component]
+name = "bad"
+
+[dependencies]
+chain = { hosts = ["api.acme.example"] }
+"#;
+        let err = load_inline(toml).unwrap_err();
+        assert!(
+            matches!(
+                err,
+                ParseError::MisplacedDependencyAttribute { ref dependency, attribute: "hosts" }
+                    if dependency == "chain"
+            ),
+            "{err:?}",
+        );
+        // Operator wording pin.
+        assert_eq!(
+            err.to_string(),
+            "manifest: [dependencies].chain does not take `hosts`",
+        );
+    }
+
+    /// An unknown dependency refuses as unknown even when it also carries
+    /// `hosts`; the name check precedes the placement check per entry.
+    #[test]
+    fn an_unknown_dependency_with_hosts_refuses_as_unknown() {
+        let toml = r#"
+[component]
+name = "bad"
+
+[dependencies]
+not-a-real-cap = { hosts = ["api.acme.example"] }
+"#;
+        let err = load_inline(toml).unwrap_err();
+        assert!(
+            matches!(err, ParseError::UnknownCapability { ref name, .. } if name == "not-a-real-cap"),
+            "{err:?}",
         );
     }
 
@@ -443,30 +514,34 @@ enabled  = true
     #[test]
     fn component_kind_defaults_to_a_module() {
         use crate::manifest::types::ComponentKind;
-        let manifest: Manifest = toml::from_str(
+        let loaded = validate(
             r#"
 [component]
 name = "plain"
+
+[dependencies]
 "#,
         )
         .expect("parse");
-        assert_eq!(manifest.component.kind, ComponentKind::Module);
+        assert_eq!(loaded.kind, ComponentKind::Module);
     }
 
     #[test]
     fn component_kind_reads_service() {
         use crate::manifest::types::ComponentKind;
-        let manifest: Manifest = toml::from_str(
+        let loaded = validate(
             r#"
 [component]
 name = "acme-provider"
 kind = "service"
+
+[dependencies]
 "#,
         )
         .expect("parse");
-        assert_eq!(manifest.component.kind, ComponentKind::Service);
+        assert_eq!(loaded.kind, ComponentKind::Service);
         // A service's name is the service type, so the name selects the row.
-        assert_eq!(manifest.component.name, "acme-provider");
+        assert_eq!(loaded.name.as_str(), "acme-provider");
     }
 
     /// `Display` is the manifest spelling for both kinds.
@@ -478,10 +553,10 @@ kind = "service"
     }
 
     /// The kind is a closed role now, so an invented spelling refuses at
-    /// parse instead of surviving to boot as a provider name.
+    /// load instead of surviving to boot as a provider name.
     #[test]
     fn component_kind_refuses_an_unknown_spelling() {
-        let err = toml::from_str::<Manifest>(
+        let err = validate(
             r#"
 [component]
 name = "bad"
@@ -489,7 +564,10 @@ kind = "gadget"
 "#,
         )
         .expect_err("an unknown kind must refuse");
-        assert!(err.to_string().contains("gadget"), "{err}");
+        assert!(
+            matches!(err, ParseError::UnknownComponentKind { ref kind } if kind == "gadget"),
+            "{err:?}",
+        );
     }
 
     #[test]
@@ -498,23 +576,25 @@ kind = "gadget"
 [component]
 name = "twap"
 
+[dependencies]
+
 [component.resources]
 max_memory_bytes   = 10485760
 max_fuel_per_event = 100000
 max_state_bytes    = 52428800
 "#;
-        let m: Manifest = toml::from_str(toml).expect("parse");
-        assert_eq!(m.component.resources.max_memory_bytes, Some(10_485_760));
-        assert_eq!(m.component.resources.max_fuel_per_event, Some(100_000));
-        assert_eq!(m.component.resources.max_state_bytes, Some(52_428_800));
+        let loaded = validate(toml).expect("parse");
+        assert_eq!(loaded.resources.max_memory_bytes, Some(10_485_760));
+        assert_eq!(loaded.resources.max_fuel_per_event, Some(100_000));
+        assert_eq!(loaded.resources.max_state_bytes, Some(52_428_800));
     }
 
     #[test]
     fn resources_section_defaults_to_none() {
-        let m: Manifest = toml::from_str("[component]\nname = \"x\"\n").expect("parse");
-        assert_eq!(m.component.resources.max_memory_bytes, None);
-        assert_eq!(m.component.resources.max_fuel_per_event, None);
-        assert_eq!(m.component.resources.max_state_bytes, None);
+        let loaded = validate("[component]\nname = \"x\"\n\n[dependencies]\n").expect("parse");
+        assert_eq!(loaded.resources.max_memory_bytes, None);
+        assert_eq!(loaded.resources.max_fuel_per_event, None);
+        assert_eq!(loaded.resources.max_state_bytes, None);
     }
 
     #[test]
@@ -590,7 +670,7 @@ max_state_bytes    = 52428800
         )
         .unwrap();
         let loaded = load(&path, &CapabilityRegistry::core()).unwrap();
-        assert_eq!(loaded.manifest.component.name, "twap-monitor");
+        assert_eq!(loaded.name.as_str(), "twap-monitor");
     }
 
     #[test]
@@ -609,7 +689,8 @@ max_state_bytes    = 52428800
     #[test]
     fn load_refuses_a_manifest_still_carrying_optional() {
         // Silently ignoring the key would drop a declaration the author
-        // believes is in effect, so the section denies unknown fields.
+        // believes is in effect; the retired key reads as an unknown
+        // dependency and is refused by name.
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("component.toml");
         std::fs::write(
@@ -618,7 +699,10 @@ max_state_bytes    = 52428800
         )
         .unwrap();
         let err = load(&path, &CapabilityRegistry::core()).unwrap_err();
-        assert!(err.to_string().contains("optional"), "{err}");
+        assert!(
+            matches!(err, ParseError::UnknownCapability { ref name, .. } if name == "optional"),
+            "{err:?}",
+        );
     }
 
     #[test]
@@ -627,12 +711,7 @@ max_state_bytes    = 52428800
         let path = dir.path().join("component.toml");
         std::fs::write(&path, "[component]\nname = \"minimal\"\n\n[dependencies]\n").unwrap();
         let loaded = load(&path, &CapabilityRegistry::core()).unwrap();
-        let deps = loaded
-            .manifest
-            .dependencies
-            .as_ref()
-            .expect("dependency table parsed");
-        assert!(deps.is_empty());
+        assert!(loaded.dependencies.is_empty());
     }
 
     fn load_inline(toml: &str) -> Result<LoadedManifest, ParseError> {
@@ -667,7 +746,6 @@ max_state_bytes    = 52428800
     #[test]
     fn load_defaults_an_absent_component_digest_to_none() {
         let loaded = load_inline(&digest_manifest("")).expect("absent digest loads");
-        assert!(loaded.manifest.component.digest.is_none());
         assert!(loaded.component_digest.is_none());
     }
 

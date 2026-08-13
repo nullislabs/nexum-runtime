@@ -241,15 +241,18 @@ mod tests {
                 .chain_log_sub(11_155_111),
         );
 
-        assert_eq!(loaded.manifest.component.name, "example");
-        assert_eq!(loaded.manifest.component.kind, ComponentKind::Module);
-        let deps = loaded.manifest.dependencies.expect("dependency table");
+        assert_eq!(loaded.name.as_str(), "example");
+        assert_eq!(loaded.kind, ComponentKind::Module);
         assert_eq!(
-            deps.keys().map(String::as_str).collect::<Vec<_>>(),
+            loaded
+                .dependencies
+                .keys()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
             ["chain", "logging"],
         );
 
-        let subs = &loaded.manifest.subscriptions;
+        let subs = &loaded.subscriptions;
         assert_eq!(subs.len(), 2, "both subscriptions parsed: {subs:?}");
         assert!(matches!(subs[0], Subscription::Block { chain_id: 1 }));
         assert!(matches!(
@@ -277,9 +280,12 @@ mod tests {
                 .config("quoted", "a \"quoted\" value"),
         );
 
-        assert_eq!(loaded.manifest.component.kind, ComponentKind::Service);
-        assert_eq!(loaded.manifest.component.name, "price-provider");
-        assert_eq!(loaded.manifest.component.digest.as_deref(), Some(DIGEST));
+        assert_eq!(loaded.kind, ComponentKind::Service);
+        assert_eq!(loaded.name.as_str(), "price-provider");
+        assert_eq!(
+            loaded.component_digest.expect("digest parsed").to_string(),
+            DIGEST,
+        );
         assert_eq!(
             loaded.config,
             vec![
@@ -293,8 +299,7 @@ mod tests {
     #[test]
     fn dependency_table_is_emitted_even_without_entries() {
         let loaded = load_core(&TestManifest::new("bare"));
-        let deps = loaded.manifest.dependencies.expect("dependency table");
-        assert!(deps.is_empty());
+        assert!(loaded.dependencies.is_empty());
     }
 
     #[test]
@@ -308,9 +313,12 @@ mod tests {
         );
 
         assert_eq!(loaded.http_allowlist, ["127.0.0.1", "*.acme.example"]);
-        let deps = loaded.manifest.dependencies.expect("dependency table");
         assert_eq!(
-            deps.keys().map(String::as_str).collect::<Vec<_>>(),
+            loaded
+                .dependencies
+                .keys()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
             ["http", "logging"],
             "the http attributes must not displace a sibling dependency",
         );
@@ -332,7 +340,7 @@ mod tests {
                 .extension_sub("acme-status", &[("scope", "primary")]),
         );
 
-        let subs = &loaded.manifest.subscriptions;
+        let subs = &loaded.subscriptions;
         assert!(
             matches!(
                 &subs[0],
@@ -434,7 +442,7 @@ kind = "chain-log"
 
         let inline = ManifestSource::from(TestManifest::new("inline").cap("logging"));
         assert_eq!(inline.resolve(&at).as_deref(), Some(at.as_path()));
-        assert_eq!(load_path(&at).manifest.component.name, "inline");
+        assert_eq!(load_path(&at).name.as_str(), "inline");
     }
 
     #[test]
@@ -449,7 +457,7 @@ kind = "chain-log"
             .block_sub(100)
             .write_as(&dir.path().join("b.toml"));
 
-        assert_eq!(load_path(&a).manifest.component.name, "module-a");
-        assert_eq!(load_path(&b).manifest.component.name, "module-b");
+        assert_eq!(load_path(&a).name.as_str(), "module-a");
+        assert_eq!(load_path(&b).name.as_str(), "module-b");
     }
 }

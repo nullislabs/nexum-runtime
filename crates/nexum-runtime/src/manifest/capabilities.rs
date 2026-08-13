@@ -180,21 +180,14 @@ impl CapabilityRegistry {
     }
 }
 
-/// Deny every gated import the manifest does not declare; absent
-/// an absent `[dependencies]` table is the empty set. Runs before instantiation.
+/// Deny every gated import the manifest does not declare. Runs before
+/// instantiation.
 pub fn enforce_capabilities<'a>(
     loaded: &LoadedManifest,
     component_imports: impl Iterator<Item = &'a str>,
     registry: &CapabilityRegistry,
 ) -> Result<(), CapabilityError> {
-    let declared: HashSet<&str> = loaded
-        .manifest
-        .dependencies
-        .as_ref()
-        .into_iter()
-        .flat_map(|deps| deps.keys())
-        .map(String::as_str)
-        .collect();
+    let declared: HashSet<&str> = loaded.dependencies.keys().map(String::as_str).collect();
 
     for import_name in component_imports {
         let without_version = import_name.split('@').next().unwrap_or(import_name);
@@ -235,7 +228,7 @@ pub fn enforce_capabilities<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::manifest::types::{Dependency, Manifest};
+    use crate::manifest::types::{ComponentKind, Dependency, ResourceSection};
 
     /// A registry with one extension namespace registered, mirroring
     /// what a composition root assembles.
@@ -309,29 +302,22 @@ mod tests {
     fn manifest_with_caps(required: &[&str]) -> LoadedManifest {
         LoadedManifest {
             name: test_module_id(),
-            manifest: Manifest {
-                dependencies: Some(
-                    required
-                        .iter()
-                        .map(|s| ((*s).to_owned(), Dependency::default()))
-                        .collect(),
-                ),
-                ..Default::default()
-            },
+            kind: ComponentKind::Module,
+            component_digest: None,
+            resources: ResourceSection::default(),
+            dependencies: required
+                .iter()
+                .map(|s| ((*s).to_owned(), Dependency::default()))
+                .collect(),
             http_allowlist: vec![],
             config: vec![],
-            component_digest: None,
+            subscriptions: vec![],
+            extensions: Default::default(),
         }
     }
 
     fn manifest_no_caps() -> LoadedManifest {
-        LoadedManifest {
-            name: test_module_id(),
-            manifest: Manifest::default(),
-            http_allowlist: vec![],
-            config: vec![],
-            component_digest: None,
-        }
+        manifest_with_caps(&[])
     }
 
     #[test]
