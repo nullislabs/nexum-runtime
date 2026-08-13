@@ -75,38 +75,30 @@ impl ProviderPool {
         let mut entries: Vec<_> = cfg.chains.iter().collect();
         entries.sort_by_key(|(c, _)| c.id());
         for (chain, chain_cfg) in entries {
-            let url = chain_cfg.rpc_url.as_str();
-            // The boot log carries the URL with embedded API keys
-            // redacted - log aggregators (Loki, Datadog, splunk) often
-            // ingest these lines and the key shouldn't end up in
-            // long-term storage. The engine still uses the full URL
-            // when actually connecting to the provider below.
+            let endpoint = &chain_cfg.rpc_url;
             info!(
                 chain_id = chain.id(),
-                url = %crate::engine_config::redact_url(url),
+                url = %endpoint,
                 "opening chain RPC provider",
             );
             let timeout = Duration::from_secs(chain_cfg.request_timeout_secs);
-            let supports_pubsub = url.starts_with("ws://") || url.starts_with("wss://");
+            let supports_pubsub = endpoint.supports_pubsub();
             let provider = if supports_pubsub {
                 // WS has no client-level timeout; only `request` bounds its calls.
                 let client = ClientBuilder::default()
                     .layer(retry_layer())
-                    .ws(WsConnect::new(url))
+                    .ws(WsConnect::new(endpoint.unredacted_dial_url().as_str()))
                     .await
                     .with_context(|| format!("connect chain {chain}"))?;
                 ProviderBuilder::new().connect_client(client).erased()
             } else {
-                let parsed: url::Url = url
-                    .parse()
-                    .with_context(|| format!("connect chain {chain}"))?;
                 let http = reqwest::Client::builder()
                     .timeout(timeout)
                     .build()
                     .with_context(|| format!("connect chain {chain}"))?;
                 let client = ClientBuilder::default()
                     .layer(retry_layer())
-                    .http_with_client(http, parsed);
+                    .http_with_client(http, endpoint.unredacted_dial_url().clone());
                 ProviderBuilder::new().connect_client(client).erased()
             };
             providers.insert(
@@ -364,12 +356,12 @@ mod tests {
 
     /// As [`test_config`], with an explicit per-request timeout.
     fn test_config_with_timeout(chain: Chain, rpc_url: &str, timeout_secs: u64) -> EngineConfig {
-        use crate::engine_config::{ChainConfig, EngineConfig};
+        use crate::engine_config::{ChainConfig, EngineConfig, RpcEndpoint};
         let mut chains = HashMap::new();
         chains.insert(
             chain,
             ChainConfig {
-                rpc_url: rpc_url.to_owned(),
+                rpc_url: RpcEndpoint::try_from(rpc_url).expect("test rpc url parses"),
                 request_timeout_secs: timeout_secs,
             },
         );
