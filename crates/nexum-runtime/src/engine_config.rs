@@ -6,6 +6,7 @@
 //! else defaults (no chains, `state_dir = ./data`).
 
 use std::collections::HashMap;
+use std::fmt;
 use std::net::IpAddr;
 use std::num::{NonZeroU32, NonZeroU64, NonZeroUsize};
 use std::path::{Path, PathBuf};
@@ -153,6 +154,15 @@ pub enum EngineConfigError {
         /// TOML path of the refused field.
         field: String,
     },
+    /// A `[chains.<key>].rpc_url` the engine cannot open a transport for.
+    #[error("engine config: chains.{key}.rpc_url: {source}")]
+    InvalidRpcUrl {
+        /// The `[chains]` key of the refused entry.
+        key: String,
+        /// Why the URL was refused.
+        #[source]
+        source: RpcEndpointError,
+    },
 }
 
 /// Engine-side configuration loaded from `engine.toml`. Deserialization
@@ -185,7 +195,8 @@ pub struct EngineConfig {
 
 /// Raw deserialized engine config; the `[chains]` keys stay as written
 /// until the `TryFrom` conversion into [`EngineConfig`] validates them.
-#[derive(Debug, Default, Deserialize)]
+/// No `Debug`: the raw `rpc_url` strings may carry credentials.
+#[derive(Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawEngineConfig {
     #[serde(default)]
@@ -193,7 +204,7 @@ struct RawEngineConfig {
     #[serde(default)]
     limits: ModuleLimits,
     #[serde(default)]
-    chains: HashMap<String, ChainConfig>,
+    chains: HashMap<String, RawChainConfig>,
     #[serde(default)]
     extensions: HashMap<String, toml::Value>,
     #[serde(default)]
@@ -219,7 +230,15 @@ impl TryFrom<RawEngineConfig> for EngineConfig {
                     if cfg.request_timeout_secs == 0 {
                         return Err(zero_field(&format!("chains.{key}.request_timeout_secs")));
                     }
-                    chains.insert(chain, cfg);
+                    let rpc_url = RpcEndpoint::try_from(cfg.rpc_url)
+                        .map_err(|source| EngineConfigError::InvalidRpcUrl { key, source })?;
+                    chains.insert(
+                        chain,
+                        ChainConfig {
+                            rpc_url,
+                            request_timeout_secs: cfg.request_timeout_secs,
+                        },
+                    );
                 }
                 Err(_) => return Err(EngineConfigError::InvalidChainKey { key }),
             }
@@ -333,21 +352,133 @@ fn default_metrics_bind() -> String {
 }
 
 /// One `[chains.<id>]` table: how the engine reaches a single chain.
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone)]
 pub struct ChainConfig {
-    /// JSON-RPC endpoint. `ws(s)://` engages pubsub (needed for
-    /// `eth_subscribe`); `http(s)://` is request/response only.
-    pub rpc_url: String,
+    /// JSON-RPC endpoint, validated at load. `ws(s)://` engages pubsub
+    /// (needed for `eth_subscribe`); `http(s)://` is request/response only.
+    pub rpc_url: RpcEndpoint,
     /// Per-request timeout in seconds; HTTP bounds every call, WS only
     /// `chain::request`. Default 30, zero refused at load: it would leave
     /// every request unbounded.
-    #[serde(default = "default_chain_request_timeout_secs")]
     pub request_timeout_secs: u64,
+}
+
+/// Raw `[chains.<id>]` shape; `rpc_url` stays a string until the
+/// `TryFrom` conversion into [`EngineConfig`] validates it. No `Debug`:
+/// the raw string may carry a credential.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawChainConfig {
+    rpc_url: String,
+    #[serde(default = "default_chain_request_timeout_secs")]
+    request_timeout_secs: u64,
 }
 
 fn default_chain_request_timeout_secs() -> u64 {
     30
+}
+
+/// The transport a chain RPC endpoint's scheme selects.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RpcTransport {
+    /// `http://` or `https://`: request/response only.
+    Http,
+    /// `ws://` or `wss://`: pubsub-capable.
+    WebSocket,
+}
+
+/// A chain RPC endpoint validated at config load: the URL parses and its
+/// scheme maps to a transport. `Debug` and `Display` both print the
+/// redacted form; [`unredacted_dial_url`](Self::unredacted_dial_url) is
+/// the only way to the credentialed URL. Deliberately not `Deserialize`:
+/// a field-level serde refusal would echo the raw source line, credential
+/// included. Construct via `TryFrom`; the engine config path funnels
+/// through [`TryFrom<RawEngineConfig>`], whose refusal never carries the
+/// input.
+#[derive(Clone)]
+pub struct RpcEndpoint {
+    url: url::Url,
+    transport: RpcTransport,
+}
+
+impl RpcEndpoint {
+    /// The transport the URL scheme selects.
+    pub fn transport(&self) -> RpcTransport {
+        self.transport
+    }
+
+    /// True when the transport pushes `newHeads` (ws/wss).
+    pub fn supports_pubsub(&self) -> bool {
+        matches!(self.transport, RpcTransport::WebSocket)
+    }
+
+    /// The full URL, credentials included, for opening the connection.
+    /// Never log this; `Display` prints the redacted form for that.
+    pub fn unredacted_dial_url(&self) -> &url::Url {
+        &self.url
+    }
+
+    /// The redacted form, exactly what `Display` and `Debug` print.
+    pub fn redacted(&self) -> String {
+        redact_parsed(self.url.clone())
+    }
+}
+
+impl fmt::Debug for RpcEndpoint {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("RpcEndpoint")
+            .field("url", &self.redacted())
+            .field("transport", &self.transport)
+            .finish()
+    }
+}
+
+impl fmt::Display for RpcEndpoint {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.redacted())
+    }
+}
+
+impl TryFrom<String> for RpcEndpoint {
+    type Error = RpcEndpointError;
+
+    fn try_from(raw: String) -> Result<Self, RpcEndpointError> {
+        let url = url::Url::parse(&raw)?;
+        let transport = match url.scheme() {
+            "http" | "https" => RpcTransport::Http,
+            "ws" | "wss" => RpcTransport::WebSocket,
+            other => {
+                return Err(RpcEndpointError::UnsupportedScheme {
+                    scheme: other.to_owned(),
+                });
+            }
+        };
+        Ok(Self { url, transport })
+    }
+}
+
+impl TryFrom<&str> for RpcEndpoint {
+    type Error = RpcEndpointError;
+
+    fn try_from(raw: &str) -> Result<Self, RpcEndpointError> {
+        Self::try_from(raw.to_owned())
+    }
+}
+
+/// Why a string refused to become an [`RpcEndpoint`]. Neither variant
+/// carries the input, which may hold the credential the refusal protects.
+#[derive(Debug, Error)]
+#[non_exhaustive]
+pub enum RpcEndpointError {
+    /// Not a parseable URL.
+    #[error("not a valid URL: {0}")]
+    Parse(#[from] url::ParseError),
+    /// A scheme no engine transport speaks.
+    #[error("unsupported scheme {scheme:?}: expected http(s) or ws(s)")]
+    UnsupportedScheme {
+        /// The refused scheme, as written.
+        scheme: String,
+    },
 }
 
 /// Default fuel budget per `on_event` invocation (~1e9 WASM instructions).
@@ -944,9 +1075,14 @@ pub enum EnvVarError {
 /// long API-key path segments) so it is safe to log. Unparseable input
 /// yields a placeholder.
 pub fn redact_url(url: &str) -> String {
-    let Ok(mut parsed) = url::Url::parse(url) else {
+    let Ok(parsed) = url::Url::parse(url) else {
         return "<unparseable-url>".to_owned();
     };
+    redact_parsed(parsed)
+}
+
+/// [`redact_url`] over an already-parsed URL; no re-parse.
+fn redact_parsed(mut parsed: url::Url) -> String {
     if !parsed.username().is_empty() {
         let _ = parsed.set_username("REDACTED");
     }
@@ -1029,12 +1165,108 @@ rpc_url = "wss://example.test/sepolia"
             cfg.chains.contains_key(&Chain::sepolia()),
             "the [chains.sepolia] table keys on the Sepolia chain",
         );
+        let endpoint = &cfg
+            .chains
+            .get(&Chain::sepolia())
+            .expect("sepolia entry")
+            .rpc_url;
         assert_eq!(
-            cfg.chains
-                .get(&Chain::sepolia())
-                .expect("sepolia entry")
-                .rpc_url,
+            endpoint.unredacted_dial_url().as_str(),
             "wss://example.test/sepolia",
+        );
+        assert!(
+            endpoint.supports_pubsub(),
+            "wss selects the pubsub transport"
+        );
+        assert_eq!(endpoint.transport(), RpcTransport::WebSocket);
+    }
+
+    #[test]
+    fn debug_and_display_of_a_credentialed_config_redact_the_credential() {
+        // `{:?}` of the whole config is the leak the type exists to close:
+        // no derived or hand-written formatting path may print the key.
+        let cfg = toml::from_str::<EngineConfig>(
+            "[chains.1]\nrpc_url = \"https://user:hunter2secret@rpc.example.com\
+             /AnOfyGnZ0nWpSOOwQzqAnFjNaa0sR8ZxkVjewFaCJ?apikey=querysecret#fragsecret\"\n",
+        )
+        .expect("credentialed URL parses");
+        let debugged = format!("{cfg:?}");
+        for secret in ["hunter2secret", "AnOfyGnZ", "querysecret", "fragsecret"] {
+            assert!(!debugged.contains(secret), "{secret} leaked: {debugged}");
+        }
+        assert!(
+            debugged.contains("rpc.example.com"),
+            "host kept: {debugged}"
+        );
+
+        let endpoint = &cfg.chains.get(&Chain::from_id(1)).expect("entry").rpc_url;
+        let displayed = endpoint.to_string();
+        for secret in ["hunter2secret", "AnOfyGnZ", "querysecret", "fragsecret"] {
+            assert!(!displayed.contains(secret), "{secret} leaked: {displayed}");
+        }
+        assert_eq!(displayed, endpoint.redacted());
+        // The dial path still gets the real URL.
+        assert!(
+            endpoint
+                .unredacted_dial_url()
+                .as_str()
+                .contains("hunter2secret"),
+            "the dial accessor must return the credentialed URL",
+        );
+    }
+
+    #[test]
+    fn a_malformed_rpc_url_refuses_at_load_with_a_typed_error() {
+        const BAD: &str = "[chains.1]\nrpc_url = \"not a url\"\n";
+        let raw = toml::from_str::<RawEngineConfig>(BAD)
+            .expect("the raw parse only decides the TOML is well formed");
+        let err = EngineConfig::try_from(raw).expect_err("a malformed URL must not validate");
+        assert!(
+            matches!(
+                err,
+                EngineConfigError::InvalidRpcUrl {
+                    ref key,
+                    source: RpcEndpointError::Parse(_),
+                } if key == "1"
+            ),
+            "{err:?}",
+        );
+        // The public `Deserialize` path funnels through the same
+        // conversion; pins the operator-facing message.
+        let err = toml::from_str::<EngineConfig>(BAD).expect_err("a malformed URL must not parse");
+        assert!(err.to_string().contains("chains.1.rpc_url"), "{err}");
+    }
+
+    #[test]
+    fn an_unsupported_rpc_scheme_refuses_at_load() {
+        const FTP: &str = "[chains.1]\nrpc_url = \"ftp://rpc.example.com/x\"\n";
+        let raw = toml::from_str::<RawEngineConfig>(FTP)
+            .expect("the raw parse only decides the TOML is well formed");
+        let err = EngineConfig::try_from(raw).expect_err("an ftp URL must not validate");
+        assert!(
+            matches!(
+                err,
+                EngineConfigError::InvalidRpcUrl {
+                    ref key,
+                    source: RpcEndpointError::UnsupportedScheme { ref scheme },
+                } if key == "1" && scheme == "ftp"
+            ),
+            "{err:?}",
+        );
+    }
+
+    #[test]
+    fn a_scheme_less_host_port_refuses_as_an_unsupported_scheme() {
+        // `localhost:8545` parses: `localhost` is the scheme, `8545` the
+        // opaque path. The refusal therefore names the scheme; it is not
+        // a parse error, and the operator-facing message must say so.
+        let err = RpcEndpoint::try_from("localhost:8545").expect_err("scheme-less must refuse");
+        assert!(
+            matches!(
+                err,
+                RpcEndpointError::UnsupportedScheme { ref scheme } if scheme == "localhost"
+            ),
+            "{err:?}",
         );
     }
 

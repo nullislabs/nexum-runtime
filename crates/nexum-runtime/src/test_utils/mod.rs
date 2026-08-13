@@ -70,13 +70,17 @@ pub(crate) fn in_memory_logs() -> LogPipeline {
 
 /// `[chains]` entries for every chain id the test fixtures name; never dialled at boot.
 pub fn test_chain_configs() -> HashMap<Chain, ChainConfig> {
+    let rpc_url = match crate::engine_config::RpcEndpoint::try_from("http://localhost:8545") {
+        Ok(endpoint) => endpoint,
+        Err(_) => unreachable!("the literal test URL parses"),
+    };
     [1, 100, 11_155_111]
         .into_iter()
         .map(|id| {
             (
                 Chain::from_id(id),
                 ChainConfig {
-                    rpc_url: "http://localhost:8545".to_owned(),
+                    rpc_url: rpc_url.clone(),
                     request_timeout_secs: 30,
                 },
             )
