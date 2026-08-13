@@ -6,6 +6,7 @@
 //! this crate knows nothing beyond the runtime seam.
 
 #![cfg_attr(not(test), warn(unused_crate_dependencies))]
+#![forbid(unsafe_code)]
 
 mod cli;
 

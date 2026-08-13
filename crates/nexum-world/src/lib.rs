@@ -9,6 +9,8 @@
 //! per-namespace rows come from a composition root's `extensions.toml`
 //! ([`manifest_extensions`]) and are passed to [`synthesize`].
 
+#![forbid(unsafe_code)]
+
 use alloy_primitives::B256;
 use std::path::{Path, PathBuf};
 use strum::{Display, EnumString, IntoStaticStr, VariantNames};

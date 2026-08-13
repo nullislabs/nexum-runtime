@@ -6,6 +6,9 @@
 //! CI by `scripts/zero-leak.sh`.
 
 #![cfg_attr(not(test), warn(unused_crate_dependencies))]
+// Not unconditional: `with_env` in the `engine_config` tests calls
+// `std::env::set_var`, which is unsafe as of the 2024 edition.
+#![cfg_attr(not(test), forbid(unsafe_code))]
 
 // alloy split its API across multiple crates; we depend on the
 // transports directly so cargo resolves the right feature set, but

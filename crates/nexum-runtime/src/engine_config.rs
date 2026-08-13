@@ -710,6 +710,10 @@ fn substitute_env_vars(raw: &str) -> Result<String, EnvVarError> {
             i = end + 1;
         } else {
             // Push one UTF-8 char (find the next char boundary).
+            #[expect(
+                clippy::expect_used,
+                reason = "i only ever advances by ch.len_utf8() or past an ASCII '}', so raw[i..] starts on a char boundary and is non-empty inside the loop"
+            )]
             let ch = raw[i..]
                 .chars()
                 .next()

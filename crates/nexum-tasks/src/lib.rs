@@ -3,6 +3,8 @@
 //! shutdown signal and the bounded drain. The only crate a raw `tokio`
 //! spawn appears in, so shutdown reaches every task.
 
+#![forbid(unsafe_code)]
+
 mod manager;
 mod shutdown;
 mod task;

@@ -4,6 +4,8 @@
 //! per-cdylib module. Reach it through `nexum_sdk::module`, not this
 //! crate directly; a downstream layer supplies its own venue-side macros.
 
+#![forbid(unsafe_code)]
+
 use alloy_primitives::B256;
 use proc_macro::TokenStream;
 use quote::{ToTokens, quote};

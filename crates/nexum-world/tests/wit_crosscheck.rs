@@ -160,7 +160,7 @@ fn blanket_caps_list(source: &str) -> Vec<String> {
         1,
         "expected exactly one literal `caps: [...]` list in the bind macro, found {lists:?}",
     );
-    lists.pop().unwrap()
+    lists.remove(0)
 }
 
 /// Plain snake_case, the only shape a bind-macro capability takes.
