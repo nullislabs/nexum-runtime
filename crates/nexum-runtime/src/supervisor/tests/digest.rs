@@ -25,9 +25,9 @@ fn read_verified_component_rejects_a_mismatched_digest() {
     let err = read_verified_component(&engine, &path, Some(&declared), false)
         .err()
         .expect("a mismatched digest must refuse the component");
-    let mismatch = err
-        .downcast_ref::<DigestMismatch>()
-        .expect("the error is the typed mismatch");
+    let crate::refusal::Refusal::Digest(mismatch) = &err else {
+        panic!("the refusal is the typed mismatch arm: {err}");
+    };
     assert_eq!(mismatch.declared, declared);
     assert_eq!(
         mismatch.actual,

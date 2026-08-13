@@ -31,7 +31,7 @@ use crate::engine_config::{ModuleLimits, ResolvedModuleLimits};
 use crate::host::extension::{HostService, Installed, ServiceInstance, ServiceKind};
 use crate::host::logs::LogSource;
 use crate::host::provider_pool::ProviderPool;
-use crate::manifest::{self, CapabilityRegistry, ParseError, ResourceSection};
+use crate::manifest::{self, CapabilityError, CapabilityRegistry, ParseError, ResourceSection};
 use crate::preset::CoreRuntime;
 use crate::test_utils::{
     BootScenario, Entry, ManifestSource, Refusal, TestManifest, example_wasm_or_skip,
@@ -119,7 +119,8 @@ async fn try_boot_single(
         &core_extensions(),
         clocks,
     )
-    .await;
+    .await
+    .map_err(anyhow::Error::from);
     (dir, result)
 }
 

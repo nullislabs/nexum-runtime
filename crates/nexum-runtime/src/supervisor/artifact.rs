@@ -5,13 +5,14 @@
 
 use std::path::Path;
 
-use anyhow::{Context, Error, Result};
+use anyhow::{Context, Error};
 use tracing::{debug, warn};
 use wasmtime::component::Component;
 use wasmtime::{CodeBuilder, Engine};
 
 use super::load::LoadRefusal;
 use crate::digest::{ContentDigest, DigestMismatch};
+use crate::refusal::Refusal;
 
 /// The only production compile path; the verified bytes are the compiled bytes.
 pub(super) fn read_verified_component(
@@ -19,12 +20,12 @@ pub(super) fn read_verified_component(
     path: &Path,
     declared: Option<&ContentDigest>,
     require_digest: bool,
-) -> Result<(Component, ContentDigest)> {
+) -> Result<(Component, ContentDigest), Refusal> {
     let bytes =
         std::fs::read(path).with_context(|| format!("read component {}", path.display()))?;
     let actual = ContentDigest::of_bytes(&bytes);
     match declared {
-        // A mismatch stays its own anyhow root: callers downcast to `DigestMismatch`.
+        // A mismatch stays a typed arm of the refusal: callers match on it.
         Some(declared) => {
             if actual != *declared {
                 return Err(DigestMismatch {

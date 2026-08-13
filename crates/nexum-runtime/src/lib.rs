@@ -37,6 +37,7 @@ pub mod manifest;
 pub mod metrics;
 pub mod module_id;
 pub mod preset;
+pub mod refusal;
 pub mod runtime;
 pub mod supervisor;
 

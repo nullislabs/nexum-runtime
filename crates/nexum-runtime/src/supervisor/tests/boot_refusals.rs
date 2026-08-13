@@ -2,50 +2,47 @@
 
 use super::*;
 
-/// A root missing here is a refusal class no operator dashboard sees, so the
-/// table is asserted through the same `with_context` wrap boot applies.
-#[test]
-fn every_typed_refusal_root_labels_the_counter_under_a_context_wrap() {
-    let digest = ContentDigest::of_bytes(b"artifact");
-    let cases: Vec<(anyhow::Error, &str)> = vec![
-        (
-            BootRefusal::ManifestMissing {
-                component: PathBuf::from("orphan.wasm"),
-            }
-            .into(),
-            "manifest_missing",
-        ),
-        (
-            LoadRefusal::SectionClaimed { section: "venue" }.into(),
-            "section_claimed",
-        ),
-        (
-            CapabilityError::UnknownWasi {
-                wit_import: "wasi:sockets/tcp@0.2.0".to_owned(),
-            }
-            .into(),
-            "unknown_wasi",
-        ),
-        (
-            DigestMismatch {
-                path: PathBuf::from("pinned.wasm"),
-                declared: digest,
-                actual: digest,
-            }
-            .into(),
-            "digest_mismatch",
-        ),
-    ];
-    for (err, kind) in cases {
-        let wrapped = err.context("module pinned.wasm");
-        assert_eq!(boot_refusal_kind(&wrapped), Some(kind), "{wrapped:#}");
-    }
-}
+// The counter's label mapping and the closed `error_kind` set are pinned
+// by the tests in `crate::refusal`, on `Refusal` values rather than on a
+// downcast chain.
 
-/// An untyped refusal is counted under no kind rather than a wrong one.
+/// The real counter at the real call site: a boot through the supervisor
+/// increments `nexum_runtime_boot_refusals_total` under the refusal's
+/// split ParseError class, with the `error_kind` label key intact.
 #[test]
-fn an_untyped_refusal_carries_no_counter_label() {
-    assert_eq!(boot_refusal_kind(&anyhow::anyhow!("engine gone")), None);
+fn a_boot_refusal_increments_the_counter_under_its_parse_class() {
+    use metrics_util::debugging::DebugValue;
+
+    use crate::test_utils::metrics_capture::{capture_metrics, samples_named};
+
+    // Raw TOML: the textual absence of [dependencies] is the fixture.
+    let manifest = "[component]\nname = \"example\"\n";
+    let (refusal, samples) = capture_metrics(|| {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("current-thread runtime")
+            .block_on(
+                BootScenario::new()
+                    .module(manifest.to_owned())
+                    .expect_refusal(),
+            )
+    });
+    refusal.variant::<BootRefusal>(|e| {
+        matches!(e, BootRefusal::Manifest(ParseError::MissingCapabilities))
+    });
+    let hits = samples_named(&samples, "nexum_runtime_boot_refusals_total");
+    assert_eq!(hits.len(), 1, "one series: {samples:?}");
+    assert!(
+        hits[0].has_label("error_kind", "missing_capabilities"),
+        "{:?}",
+        hits[0].labels,
+    );
+    assert!(
+        matches!(hits[0].value, DebugValue::Counter(1)),
+        "{:?}",
+        hits[0].value,
+    );
 }
 
 /// Rejected before instantiation, naming the registered kinds; a manifest

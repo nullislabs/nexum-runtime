@@ -12,28 +12,27 @@ mod role;
 mod store;
 mod subscriptions;
 
-pub use prepass::ConfiguredChains;
+pub use load::LoadRefusal;
+pub use prepass::{BootRefusal, ConfiguredChains};
 pub use store::{WasiClockOverride, build_linker, build_provider_linker};
 pub use subscriptions::{ChainLogSub, SubscriptionPlan, Viability};
 
 use std::sync::Arc;
 
-use anyhow::{Context, Result};
 use tracing::info;
 use wasmtime::Engine;
 use wasmtime::component::Linker;
 
-use crate::digest::DigestMismatch;
 use crate::engine_config::{EngineConfig, ModuleEntry, ResolvedModuleLimits};
 use crate::host::component::{Components, RuntimeTypes};
 use crate::host::extension::{Extension, HostServices, ServiceManifest};
 use crate::host::state::HostState;
-use crate::manifest::CapabilityError;
+use crate::refusal::{Refusal, RefusalContext as _};
 use crate::runtime::poison_policy::PoisonPolicy;
 use admission::{ServiceKinds, capability_registry, enforce_extension_uniqueness, provider_kinds};
 use cursors::ChainLogCursors;
-use load::{LoadRefusal, LoadedModule, LoadedProvider};
-use prepass::{BootRefusal, enforce_subscriptions, load_required_manifest, manifest_namespace};
+use load::{LoadedModule, LoadedProvider};
+use prepass::{enforce_subscriptions, load_required_manifest, manifest_namespace};
 use role::Role;
 
 /// Owns every loaded module and provider and exposes the dispatch surface.
@@ -93,8 +92,8 @@ impl<T: RuntimeTypes> Supervisor<T> {
         components: &Components<T>,
         extensions: &[Arc<dyn Extension<T>>],
         clocks: Option<WasiClockOverride>,
-    ) -> Result<Self> {
-        let booted: Result<Self> = async {
+    ) -> Result<Self, Refusal> {
+        let booted: Result<Self, Refusal> = async {
             let shared = wire_extensions(engine, components, extensions, clocks, true)?;
             let registry = capability_registry(&shared.extensions);
             let prepass = prepass::run(engine_cfg, &registry)?;
@@ -157,8 +156,8 @@ impl<T: RuntimeTypes> Supervisor<T> {
         env: &BootEnv<'_>,
         extensions: &[Arc<dyn Extension<T>>],
         clocks: Option<WasiClockOverride>,
-    ) -> Result<Self> {
-        let booted: Result<Self> = async {
+    ) -> Result<Self, Refusal> {
+        let booted: Result<Self, Refusal> = async {
             // Provider kinds come only from `engine.toml`, so none register here.
             let shared = wire_extensions(engine, components, extensions, clocks, false)?;
             let registry = capability_registry(&shared.extensions);
@@ -229,30 +228,14 @@ impl<T: RuntimeTypes> Supervisor<T> {
     }
 }
 
-/// Counts a refusal under its typed kind; wraps without a typed root go uncounted.
-fn count_boot_refusal(err: &anyhow::Error) {
-    let Some(kind) = boot_refusal_kind(err) else {
+/// Counts a refusal under its [`Refusal::error_kind`] label; a refusal
+/// without a label goes uncounted. The launcher's refusal sites in
+/// `builder` call it too, so a launch refusal counts like a boot one.
+pub(crate) fn count_boot_refusal(refusal: &Refusal) {
+    let Some(kind) = refusal.error_kind() else {
         return;
     };
     metrics::counter!("nexum_runtime_boot_refusals_total", "error_kind" => kind).increment(1);
-}
-
-/// A root missing here is a refusal class the counter never sees.
-fn boot_refusal_kind(err: &anyhow::Error) -> Option<&'static str> {
-    err.chain().find_map(|cause| {
-        if let Some(refusal) = cause.downcast_ref::<BootRefusal>() {
-            return Some(refusal.into());
-        }
-        if let Some(refusal) = cause.downcast_ref::<LoadRefusal>() {
-            return Some(refusal.into());
-        }
-        if let Some(violation) = cause.downcast_ref::<CapabilityError>() {
-            return Some(violation.into());
-        }
-        cause
-            .downcast_ref::<DigestMismatch>()
-            .map(|_| "digest_mismatch")
-    })
 }
 
 /// The resulting [`Shared`] is the one wiring every later phase reads.
@@ -263,9 +246,11 @@ fn wire_extensions<T: RuntimeTypes>(
     extensions: &[Arc<dyn Extension<T>>],
     clocks: Option<WasiClockOverride>,
     with_provider_kinds: bool,
-) -> Result<Shared<T>> {
+) -> Result<Shared<T>, Refusal> {
     enforce_extension_uniqueness(extensions)?;
-    let services = HostServices::from_extensions(extensions)?;
+    // A duplicate service namespace is an embedder wiring bug, not an
+    // operator refusal, so it stays untyped and uncounted.
+    let services = HostServices::from_extensions(extensions).map_err(anyhow::Error::new)?;
     let kinds = if with_provider_kinds {
         provider_kinds(extensions, &services)?
     } else {
@@ -288,13 +273,13 @@ async fn load_role<E, L>(
     manifests: Vec<crate::manifest::LoadedManifest>,
     role: Role,
     path: impl Fn(&E) -> &std::path::Path,
-    load: impl AsyncFn(&E, crate::manifest::LoadedManifest) -> Result<L>,
-) -> Result<Vec<L>> {
+    load: impl AsyncFn(&E, crate::manifest::LoadedManifest) -> Result<L, Refusal>,
+) -> Result<Vec<L>, Refusal> {
     let mut out = Vec::with_capacity(entries.len());
     for (entry, manifest) in entries.iter().zip(manifests) {
-        let loaded = load(entry, manifest)
-            .await
-            .with_context(|| format!("{} {}", role.load_context(), path(entry).display()))?;
+        let loaded = load(entry, manifest).await.with_refusal_context(|| {
+            format!("{} {}", role.load_context(), path(entry).display())
+        })?;
         out.push(loaded);
     }
     Ok(out)

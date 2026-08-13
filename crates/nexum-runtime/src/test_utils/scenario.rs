@@ -328,10 +328,31 @@ impl<T: RuntimeTypes> Booted<T> {
 #[derive(Debug, From)]
 pub struct Refusal(anyhow::Error);
 
+impl From<crate::refusal::Refusal> for Refusal {
+    fn from(refusal: crate::refusal::Refusal) -> Self {
+        Self(refusal.into())
+    }
+}
+
 impl Refusal {
     /// The typed root under the context wraps, for `matches!` on a variant.
     pub fn root<E: std::error::Error + Send + Sync + 'static>(&self) -> Option<&E> {
-        self.0.chain().find_map(|cause| cause.downcast_ref::<E>())
+        self.0.chain().find_map(|cause| {
+            if let Some(err) = cause.downcast_ref::<E>() {
+                return Some(err);
+            }
+            // A boot refusal crosses the chain as one `Refusal` value; its
+            // typed cause sits inside it, not as a chain element of its own.
+            let refusal = cause.downcast_ref::<crate::refusal::Refusal>()?;
+            let mut cause = Some(refusal.cause());
+            while let Some(current) = cause {
+                if let Some(err) = current.downcast_ref::<E>() {
+                    return Some(err);
+                }
+                cause = current.source();
+            }
+            None
+        })
     }
 
     /// Assert the chain carries an `E` matching `pred`.
