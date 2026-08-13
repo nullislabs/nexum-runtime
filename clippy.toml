@@ -12,7 +12,32 @@
 allow-unwrap-in-tests = true
 allow-expect-in-tests = true
 
+# The host process environment holds operator secrets: engine.toml resolves
+# `${VAR}`, so an RPC provider key lives there. A module manifest is
+# author-supplied and untrusted, so a guest must see none of it. Each entry
+# below hands host state to every guest at once. Pass a per-module value
+# through `[component.config]` instead.
+#
+# Banning the resolved path rather than the spelling: an aliased import or a
+# re-export lands on the same rule, which a source-text scan cannot do.
+# `harness_guest_observes_no_environment_arguments_or_stdin` in
+# `test_utils/harness.rs` holds the property from inside a real guest; these
+# entries refuse the call at its site.
 disallowed-methods = [
+    { path = "wasmtime_wasi::WasiCtxBuilder::inherit_env", reason = "hands the operator's environment, including RPC provider keys, to every guest" },
+    { path = "wasmtime_wasi::WasiCtxBuilder::envs", reason = "hands host environment variables to every guest: use [component.config]" },
+    { path = "wasmtime_wasi::WasiCtxBuilder::env", reason = "hands a host environment variable to every guest: use [component.config]" },
+    { path = "wasmtime_wasi::WasiCtxBuilder::inherit_args", reason = "hands the host process arguments to every guest" },
+    { path = "wasmtime_wasi::WasiCtxBuilder::args", reason = "hands process arguments to every guest" },
+    { path = "wasmtime_wasi::WasiCtxBuilder::inherit_stdio", reason = "wires host stdio into every guest" },
+    { path = "wasmtime_wasi::WasiCtxBuilder::inherit_stdin", reason = "wires host stdin into every guest" },
+    { path = "wasmtime_wasi::WasiCtxBuilder::inherit_stdout", reason = "wires host stdout into every guest: the log pipeline owns this" },
+    { path = "wasmtime_wasi::WasiCtxBuilder::inherit_stderr", reason = "wires host stderr into every guest: the log pipeline owns this" },
+    { path = "wasmtime_wasi::WasiCtxBuilder::stdin", reason = "wires a host input handle into every guest" },
+    { path = "wasmtime_wasi::WasiCtxBuilder::preopened_dir", reason = "grants a guest a host filesystem path" },
+    { path = "wasmtime_wasi::WasiCtxBuilder::inherit_network", reason = "grants a guest the host network: outbound egress goes through the http allowlist" },
+    { path = "wasmtime_wasi::WasiCtxBuilder::socket_addr_check", reason = "widens guest network reach past the http allowlist" },
+    { path = "wasmtime_wasi::WasiCtxBuilder::initial_cwd", reason = "discloses a host filesystem path to every guest" },
     { path = "tokio::spawn", reason = "raw spawning belongs to nexum-tasks: use TaskExecutor::spawn" },
     { path = "tokio::task::spawn", reason = "raw spawning belongs to nexum-tasks: use TaskExecutor::spawn" },
     { path = "tokio::task::spawn_blocking", reason = "raw spawning belongs to nexum-tasks: use TaskExecutor::spawn_blocking" },
