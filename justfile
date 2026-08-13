@@ -14,8 +14,8 @@ build-examples:
 # Build the test fixture modules for wasm32-wasip2.
 build-fixtures:
     cargo build --target wasm32-wasip2 --release \
-        -p clock-reader -p flaky-bomb -p fuel-bomb -p memory-bomb \
-        -p panic-bomb -p slow-host -p topic-parity
+        -p clock-reader -p env-reader -p flaky-bomb -p fuel-bomb \
+        -p memory-bomb -p panic-bomb -p slow-host -p topic-parity
 
 # Build everything the E2E suite needs.
 build: build-engine build-module build-examples build-fixtures
@@ -78,8 +78,8 @@ ci:
     cargo doc --workspace --all-features --no-deps
     cargo build --release --target wasm32-wasip2 \
         -p example -p price-alert -p balance-tracker -p http-probe \
-        -p clock-reader -p flaky-bomb -p fuel-bomb -p memory-bomb \
-        -p panic-bomb -p slow-host -p topic-parity
+        -p clock-reader -p env-reader -p flaky-bomb -p fuel-bomb \
+        -p memory-bomb -p panic-bomb -p slow-host -p topic-parity
     # nextest for the suite (as CI does); doctests run separately since nextest
     # does not cover them.
     cargo nextest run --workspace --all-features --no-fail-fast
