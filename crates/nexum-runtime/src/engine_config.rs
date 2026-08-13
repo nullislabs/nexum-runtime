@@ -157,9 +157,9 @@ pub enum EngineConfigError {
     /// A `[chains.<key>].rpc_url` the engine cannot open a transport for.
     #[error("engine config: chains.{key}.rpc_url: {source}")]
     InvalidRpcUrl {
-        /// The `[chains]` key of the refused entry.
+        /// The `[chains]` key.
         key: String,
-        /// Why the URL was refused.
+        /// Why the URL refused.
         #[source]
         source: RpcEndpointError,
     },
@@ -387,14 +387,10 @@ pub enum RpcTransport {
     WebSocket,
 }
 
-/// A chain RPC endpoint validated at config load: the URL parses and its
-/// scheme maps to a transport. `Debug` and `Display` both print the
-/// redacted form; [`unredacted_dial_url`](Self::unredacted_dial_url) is
-/// the only way to the credentialed URL. Deliberately not `Deserialize`:
-/// a field-level serde refusal would echo the raw source line, credential
-/// included. Construct via `TryFrom`; the engine config path funnels
-/// through [`TryFrom<RawEngineConfig>`], whose refusal never carries the
-/// input.
+/// `Debug` and `Display` print the redacted form;
+/// [`unredacted_dial_url`](Self::unredacted_dial_url) is the only way to
+/// the credential. Deliberately not `Deserialize`: a field-level serde
+/// refusal would echo the raw source line.
 #[derive(Clone)]
 pub struct RpcEndpoint {
     url: url::Url,
@@ -402,7 +398,7 @@ pub struct RpcEndpoint {
 }
 
 impl RpcEndpoint {
-    /// The transport the URL scheme selects.
+    /// The transport the scheme selected.
     pub fn transport(&self) -> RpcTransport {
         self.transport
     }
@@ -412,13 +408,12 @@ impl RpcEndpoint {
         matches!(self.transport, RpcTransport::WebSocket)
     }
 
-    /// The full URL, credentials included, for opening the connection.
-    /// Never log this; `Display` prints the redacted form for that.
+    /// Never log this: `Display` is the redacted form.
     pub fn unredacted_dial_url(&self) -> &url::Url {
         &self.url
     }
 
-    /// The redacted form, exactly what `Display` and `Debug` print.
+    /// What `Display` and `Debug` print.
     pub fn redacted(&self) -> String {
         redact_parsed(self.url.clone())
     }
@@ -465,8 +460,7 @@ impl TryFrom<&str> for RpcEndpoint {
     }
 }
 
-/// Why a string refused to become an [`RpcEndpoint`]. Neither variant
-/// carries the input, which may hold the credential the refusal protects.
+/// Neither variant carries the input: it may hold the credential.
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum RpcEndpointError {
@@ -476,7 +470,7 @@ pub enum RpcEndpointError {
     /// A scheme no engine transport speaks.
     #[error("unsupported scheme {scheme:?}: expected http(s) or ws(s)")]
     UnsupportedScheme {
-        /// The refused scheme, as written.
+        /// As written.
         scheme: String,
     },
 }
@@ -1231,8 +1225,6 @@ rpc_url = "wss://example.test/sepolia"
             ),
             "{err:?}",
         );
-        // The public `Deserialize` path funnels through the same
-        // conversion; pins the operator-facing message.
         let err = toml::from_str::<EngineConfig>(BAD).expect_err("a malformed URL must not parse");
         assert!(err.to_string().contains("chains.1.rpc_url"), "{err}");
     }

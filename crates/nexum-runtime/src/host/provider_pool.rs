@@ -76,10 +76,6 @@ impl ProviderPool {
         entries.sort_by_key(|(c, _)| c.id());
         for (chain, chain_cfg) in entries {
             let endpoint = &chain_cfg.rpc_url;
-            // `RpcEndpoint`'s `Display` is the redacted URL - log
-            // aggregators (Loki, Datadog, splunk) often ingest these lines
-            // and the key shouldn't end up in long-term storage. The
-            // engine still dials the full URL below.
             info!(
                 chain_id = chain.id(),
                 url = %endpoint,
