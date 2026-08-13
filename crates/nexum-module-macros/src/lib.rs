@@ -41,34 +41,35 @@ const HANDLERS: [&str; 5] = ["init", "on_block", "on_chain_logs", "on_tick", "on
 /// `event_signature` values match as sets; the manifest stays authoritative.
 #[proc_macro_attribute]
 pub fn module(attr: TokenStream, item: TokenStream) -> TokenStream {
-    let args = syn::parse_macro_input!(attr as ModuleArgs);
-
+    let args = match parse_args(attr.into()) {
+        Ok(args) => args,
+        Err(error) => return error.into_syn_error().to_compile_error().into(),
+    };
     let input = syn::parse_macro_input!(item as ItemImpl);
+    match expand(args, input) {
+        Ok(tokens) => tokens.into(),
+        Err(error) => error.into_syn_error().to_compile_error().into(),
+    }
+}
 
+/// Fallible body of [`module`]: one conversion to `syn::Error` at the
+/// entry point, not at each failure.
+fn expand(args: ModuleArgs, input: ItemImpl) -> Result<proc_macro2::TokenStream, MacroError> {
     let self_ty: &syn::Type = &input.self_ty;
     if !nexum_world::is_plain_type(self_ty) {
-        return syn::Error::new_spanned(
-            self_ty,
-            "#[nexum_sdk::module] must be applied to an inherent impl of a named type",
-        )
-        .to_compile_error()
-        .into();
+        return Err(MacroError::UnnamedSelfType {
+            self_ty: self_ty.to_token_stream(),
+        });
     }
     if let Some((_, trait_path, _)) = &input.trait_ {
-        return syn::Error::new_spanned(
-            trait_path,
-            "#[nexum_sdk::module] must be applied to an inherent impl, not a trait impl",
-        )
-        .to_compile_error()
-        .into();
+        return Err(MacroError::TraitImpl {
+            trait_path: trait_path.to_token_stream(),
+        });
     }
     if !input.generics.params.is_empty() {
-        return syn::Error::new_spanned(
-            &input.generics,
-            "#[nexum_sdk::module] must be applied to a non-generic impl",
-        )
-        .to_compile_error()
-        .into();
+        return Err(MacroError::GenericImpl {
+            generics: input.generics.to_token_stream(),
+        });
     }
 
     // A typo'd handler (`on_blocks`, `on_chainlogs`, ...) would otherwise
@@ -78,15 +79,9 @@ pub fn module(attr: TokenStream, item: TokenStream) -> TokenStream {
         if let ImplItem::Fn(f) = item {
             let name = f.sig.ident.to_string();
             if name.starts_with("on_") && !HANDLERS.contains(&name.as_str()) {
-                return syn::Error::new_spanned(
-                    &f.sig.ident,
-                    format!(
-                        "`{name}` is not a recognized #[nexum_sdk::module] handler; expected one \
-                         of {HANDLERS:?} (rename helpers so they do not start with `on_`)"
-                    ),
-                )
-                .to_compile_error()
-                .into();
+                return Err(MacroError::UnknownHandler {
+                    ident: f.sig.ident.to_token_stream(),
+                });
             }
         }
     }
@@ -103,53 +98,22 @@ pub fn module(attr: TokenStream, item: TokenStream) -> TokenStream {
         })
         .collect();
     if present.is_empty() {
-        return syn::Error::new_spanned(
-            self_ty,
-            "#[nexum_sdk::module] found no recognized handlers on this impl; define at least one \
-             of `init`, `on_block`, `on_chain_logs`, `on_tick`, `on_custom`",
-        )
-        .to_compile_error()
-        .into();
+        return Err(MacroError::NoHandlers {
+            self_ty: self_ty.to_token_stream(),
+        });
     }
     let has = |name: &str| present.contains(&name);
 
-    let facts = match nexum_world::manifest_dir()
-        .map_err(|e| e.to_string())
-        .and_then(|dir| derive_manifest_facts(&dir, !args.subscribes.is_empty()))
-    {
-        Ok(facts) => facts,
-        Err(msg) => {
-            return syn::Error::new(proc_macro2::Span::call_site(), msg)
-                .to_compile_error()
-                .into();
-        }
-    };
     let ManifestFacts {
         anchors,
         world: module_world,
         chain_log_topics,
-        path: manifest_path,
-    } = facts;
-    if !args.subscribes.is_empty() && chain_log_topics.is_empty() {
-        return syn::Error::new(
-            proc_macro2::Span::call_site(),
-            format!(
-                "`subscribes(...)` names events, but {manifest_path} declares no chain-log \
-                 subscription with an `event_signature`; add the subscription or drop the argument"
-            ),
-        )
-        .to_compile_error()
-        .into();
-    }
+    } = nexum_world::manifest_dir()
+        .map_err(|source| MacroError::NoManifestDir { source })
+        .and_then(|dir| derive_manifest_facts(&dir, !args.subscribes.is_empty()))?;
     let parity = topic_parity_check(&args.subscribes, &chain_log_topics);
-    let wit_paths = match nexum_world::manifest_wit_packages(&module_world.packages) {
-        Ok(paths) => paths,
-        Err(msg) => {
-            return syn::Error::new(proc_macro2::Span::call_site(), msg)
-                .to_compile_error()
-                .into();
-        }
-    };
+    let wit_paths = nexum_world::manifest_wit_packages(&module_world.packages)
+        .map_err(|source| MacroError::WitResolution { source })?;
     let inline_world = &module_world.wit;
     let adapter_bind = adapter_bind(&module_world.adapters);
 
@@ -161,7 +125,7 @@ pub fn module(attr: TokenStream, item: TokenStream) -> TokenStream {
     let custom_arm = dispatch_arm(self_ty, &present, "on_custom", "Custom");
 
     let anchors = rebuild_anchors(&anchors);
-    quote! {
+    Ok(quote! {
         #anchors
 
         wit_bindgen::generate!({
@@ -194,8 +158,105 @@ pub fn module(attr: TokenStream, item: TokenStream) -> TokenStream {
         }
 
         export!(__NexumModuleExport);
+    })
+}
+
+/// `Display` is the module-author contract: the entry point renders it
+/// verbatim as the compile error. Variants carry the tokens the
+/// diagnostic underlines, not just a span, so multi-token underlines
+/// survive the conversion.
+#[derive(Debug, thiserror::Error)]
+enum MacroError {
+    #[error("expected `subscribes(EventType, ...)` or no arguments")]
+    NonIdentArgument { span: proc_macro2::Span },
+    #[error("#[nexum_sdk::module] takes no arguments except `subscribes(EventType, ...)`")]
+    UnknownArgument { span: proc_macro2::Span },
+    #[error("unexpected tokens after `subscribes(...)`")]
+    TrailingTokens { span: proc_macro2::Span },
+    #[error("`subscribes(...)` must name at least one event type")]
+    EmptySubscribes { span: proc_macro2::Span },
+    #[error(transparent)]
+    MalformedArgs(syn::Error),
+    #[error("#[nexum_sdk::module] must be applied to an inherent impl of a named type")]
+    UnnamedSelfType { self_ty: proc_macro2::TokenStream },
+    #[error("#[nexum_sdk::module] must be applied to an inherent impl, not a trait impl")]
+    TraitImpl {
+        trait_path: proc_macro2::TokenStream,
+    },
+    #[error("#[nexum_sdk::module] must be applied to a non-generic impl")]
+    GenericImpl { generics: proc_macro2::TokenStream },
+    #[error(
+        "`{}` is not a recognized #[nexum_sdk::module] handler; expected one \
+         of {:?} (rename helpers so they do not start with `on_`)",
+        .ident,
+        HANDLERS
+    )]
+    UnknownHandler { ident: proc_macro2::TokenStream },
+    #[error(
+        "#[nexum_sdk::module] found no recognized handlers on this impl; define at least one \
+         of `init`, `on_block`, `on_chain_logs`, `on_tick`, `on_custom`"
+    )]
+    NoHandlers { self_ty: proc_macro2::TokenStream },
+    #[error("{source}")]
+    NoManifestDir { source: nexum_world::WorldError },
+    #[error(
+        "could not read {path} ({source}); #[nexum_sdk::module] derives the component's WIT \
+         world from the manifest's [dependencies] table, so the manifest must sit next to \
+         Cargo.toml"
+    )]
+    ManifestUnreadable {
+        path: String,
+        source: std::io::Error,
+    },
+    #[error("{path}: {source}")]
+    Manifest {
+        path: String,
+        // The refused rule, boxed to keep the enum under clippy's
+        // `result_large_err` limit.
+        source: Box<nexum_world::WorldError>,
+    },
+    #[error("could not read {path}: {source}")]
+    RegistryUnreadable {
+        path: String,
+        source: std::io::Error,
+    },
+    #[error("{source}")]
+    WitResolution { source: nexum_world::WorldError },
+    #[error(
+        "`subscribes(...)` names events, but {path} declares no chain-log subscription with \
+         an `event_signature`; add the subscription or drop the argument"
+    )]
+    SubscribesWithoutChainLog { path: String },
+}
+
+impl MacroError {
+    /// The single conversion to the rendered diagnostic. Token-carrying
+    /// variants re-attach exactly the tokens they carry, span-carrying
+    /// ones their span; manifest variants sit at the call site because
+    /// no attribute token names them.
+    fn into_syn_error(self) -> syn::Error {
+        let message = self.to_string();
+        match self {
+            Self::MalformedArgs(error) => error,
+            Self::NonIdentArgument { span }
+            | Self::UnknownArgument { span }
+            | Self::TrailingTokens { span }
+            | Self::EmptySubscribes { span } => syn::Error::new(span, message),
+            Self::UnnamedSelfType { self_ty: tokens }
+            | Self::TraitImpl { trait_path: tokens }
+            | Self::GenericImpl { generics: tokens }
+            | Self::UnknownHandler { ident: tokens }
+            | Self::NoHandlers { self_ty: tokens } => syn::Error::new_spanned(tokens, message),
+            Self::NoManifestDir { .. }
+            | Self::ManifestUnreadable { .. }
+            | Self::Manifest { .. }
+            | Self::RegistryUnreadable { .. }
+            | Self::WitResolution { .. }
+            | Self::SubscribesWithoutChainLog { .. } => {
+                syn::Error::new(proc_macro2::Span::call_site(), message)
+            }
+        }
     }
-    .into()
 }
 
 /// The macro's arguments: bare, or `subscribes(EventType, ...)`.
@@ -203,42 +264,57 @@ struct ModuleArgs {
     subscribes: Vec<syn::Path>,
 }
 
-impl syn::parse::Parse for ModuleArgs {
-    fn parse(input: syn::parse::ParseStream<'_>) -> syn::Result<Self> {
-        if input.is_empty() {
-            return Ok(Self {
-                subscribes: Vec::new(),
-            });
-        }
-        let ident: syn::Ident = input.parse().map_err(|e| {
-            syn::Error::new(
-                e.span(),
-                "expected `subscribes(EventType, ...)` or no arguments",
-            )
-        })?;
-        if ident != "subscribes" {
-            return Err(syn::Error::new(
-                ident.span(),
-                "#[nexum_sdk::module] takes no arguments except `subscribes(EventType, ...)`",
-            ));
-        }
-        let inner;
-        syn::parenthesized!(inner in input);
-        if !input.is_empty() {
-            return Err(input.error("unexpected tokens after `subscribes(...)`"));
-        }
-        let paths = inner
-            .call(syn::punctuated::Punctuated::<syn::Path, syn::Token![,]>::parse_terminated)?;
-        if paths.is_empty() {
-            return Err(syn::Error::new(
-                ident.span(),
-                "`subscribes(...)` must name at least one event type",
-            ));
-        }
-        Ok(Self {
-            subscribes: paths.into_iter().collect(),
-        })
+/// Syn's own grammar failures pass through as
+/// [`MacroError::MalformedArgs`] rather than becoming our variants.
+fn parse_args(tokens: proc_macro2::TokenStream) -> Result<ModuleArgs, MacroError> {
+    match syn::parse::Parser::parse2(parse_args_inner, tokens) {
+        Ok(parsed) => parsed,
+        Err(error) => Err(MacroError::MalformedArgs(error)),
     }
+}
+
+/// The stream-level grammar behind [`parse_args`]: `Ok(Err(_))` is one
+/// of the macro's refusals, `Err(_)` is syn's.
+fn parse_args_inner(
+    input: syn::parse::ParseStream<'_>,
+) -> syn::Result<Result<ModuleArgs, MacroError>> {
+    if input.is_empty() {
+        return Ok(Ok(ModuleArgs {
+            subscribes: Vec::new(),
+        }));
+    }
+    let span = input.span();
+    let Ok(ident) = input.parse::<syn::Ident>() else {
+        return refuse(input, MacroError::NonIdentArgument { span });
+    };
+    if ident != "subscribes" {
+        return refuse(input, MacroError::UnknownArgument { span: ident.span() });
+    }
+    let inner;
+    syn::parenthesized!(inner in input);
+    if !input.is_empty() {
+        let span = input.span();
+        inner.parse::<proc_macro2::TokenStream>()?;
+        return refuse(input, MacroError::TrailingTokens { span });
+    }
+    let paths =
+        inner.call(syn::punctuated::Punctuated::<syn::Path, syn::Token![,]>::parse_terminated)?;
+    if paths.is_empty() {
+        return refuse(input, MacroError::EmptySubscribes { span: ident.span() });
+    }
+    Ok(Ok(ModuleArgs {
+        subscribes: paths.into_iter().collect(),
+    }))
+}
+
+/// Refuse with the macro's own error, draining `input` first so
+/// `Parser::parse2` does not report the unconsumed rest instead.
+fn refuse(
+    input: syn::parse::ParseStream<'_>,
+    error: MacroError,
+) -> syn::Result<Result<ModuleArgs, MacroError>> {
+    input.parse::<proc_macro2::TokenStream>()?;
+    Ok(Err(error))
 }
 
 struct ManifestFacts {
@@ -247,32 +323,33 @@ struct ManifestFacts {
     world: nexum_world::ModuleWorld,
     /// Distinct chain-log `event_signature` topics, in declaration order.
     chain_log_topics: Vec<B256>,
-    path: String,
 }
 
 /// Synthesize the per-module world from the crate's `component.toml`
 /// `[dependencies]` plus the nearest ancestor `extensions.toml`.
 /// Topics are read only for `want_topics`, so a manifest field no
-/// opted-in module names can never fail a build.
+/// opted-in module names can never fail a build; a `want_topics` manifest
+/// with no chain-log subscription refuses.
 fn derive_manifest_facts(
     crate_dir: &std::path::Path,
     want_topics: bool,
-) -> Result<ManifestFacts, String> {
-    let manifest_path = crate_dir.join("component.toml");
-    let text = std::fs::read_to_string(&manifest_path).map_err(|e| {
-        format!(
-            "could not read {} ({e}); #[nexum_sdk::module] derives the component's WIT world \
-             from the manifest's [dependencies] table, so the manifest must sit next to \
-             Cargo.toml",
-            manifest_path.display()
-        )
+) -> Result<ManifestFacts, MacroError> {
+    let file = crate_dir.join("component.toml");
+    let manifest_path = file.to_string_lossy().into_owned();
+    let text = std::fs::read_to_string(&file).map_err(|source| MacroError::ManifestUnreadable {
+        path: manifest_path.clone(),
+        source,
     })?;
-    let declared = nexum_world::manifest_capabilities(&text)
-        .map_err(|e| format!("{}: {e}", manifest_path.display()))?;
-    let manifest_path = manifest_path.to_string_lossy().into_owned();
+    let declared =
+        nexum_world::manifest_capabilities(&text).map_err(|source| MacroError::Manifest {
+            path: manifest_path.clone(),
+            source: Box::new(source),
+        })?;
     let chain_log_topics = if want_topics {
-        nexum_world::manifest_chain_log_topics(&text)
-            .map_err(|e| format!("{manifest_path}: {e}"))?
+        nexum_world::manifest_chain_log_topics(&text).map_err(|source| MacroError::Manifest {
+            path: manifest_path.clone(),
+            source: Box::new(source),
+        })?
     } else {
         Vec::new()
     };
@@ -281,21 +358,37 @@ fn derive_manifest_facts(
     let extensions = match nexum_world::find_extensions_manifest(crate_dir) {
         None => Vec::new(),
         Some(registry) => {
-            let text = std::fs::read_to_string(&registry)
-                .map_err(|e| format!("could not read {}: {e}", registry.display()))?;
-            let rows = nexum_world::manifest_extensions(&text)
-                .map_err(|e| format!("{}: {e}", registry.display()))?;
-            anchors.push(registry.to_string_lossy().into_owned());
+            let registry_path = registry.to_string_lossy().into_owned();
+            let text = std::fs::read_to_string(&registry).map_err(|source| {
+                MacroError::RegistryUnreadable {
+                    path: registry_path.clone(),
+                    source,
+                }
+            })?;
+            let rows =
+                nexum_world::manifest_extensions(&text).map_err(|source| MacroError::Manifest {
+                    path: registry_path.clone(),
+                    source: Box::new(source),
+                })?;
+            anchors.push(registry_path);
             rows
         }
     };
-    let world = nexum_world::synthesize(&declared, &extensions)
-        .map_err(|e| format!("{manifest_path}: {e}"))?;
+    let world =
+        nexum_world::synthesize(&declared, &extensions).map_err(|source| MacroError::Manifest {
+            path: manifest_path.clone(),
+            source: Box::new(source),
+        })?;
+    // Last, so a manifest rule refusal above keeps surfacing first.
+    if want_topics && chain_log_topics.is_empty() {
+        return Err(MacroError::SubscribesWithoutChainLog {
+            path: manifest_path,
+        });
+    }
     Ok(ManifestFacts {
         anchors,
         world,
         chain_log_topics,
-        path: manifest_path,
     })
 }
 
@@ -424,10 +517,6 @@ fn path_string(path: &syn::Path) -> String {
 mod tests {
     use super::*;
 
-    fn parse_args(tokens: proc_macro2::TokenStream) -> syn::Result<ModuleArgs> {
-        syn::parse2(tokens)
-    }
-
     #[test]
     fn bare_attribute_names_no_events() {
         assert!(parse_args(quote! {}).unwrap().subscribes.is_empty());
@@ -443,21 +532,35 @@ mod tests {
     #[test]
     fn empty_subscribes_is_rejected() {
         let err = parse_args(quote! { subscribes() }).err().unwrap();
-        // Foreign syn::Error; pins our macro message.
-        assert!(err.to_string().contains("at least one event type"), "{err}");
+        assert!(matches!(err, MacroError::EmptySubscribes { .. }), "{err:?}");
+    }
+
+    #[test]
+    fn non_ident_argument_is_rejected() {
+        let err = parse_args(quote! { 42 }).err().unwrap();
+        assert!(
+            matches!(err, MacroError::NonIdentArgument { .. }),
+            "{err:?}"
+        );
     }
 
     #[test]
     fn unknown_argument_is_rejected() {
         let err = parse_args(quote! { emits(Foo) }).err().unwrap();
-        // Foreign syn::Error; pins our macro message.
-        assert!(
-            err.to_string().contains("subscribes(EventType, ...)"),
-            "{err}"
-        );
+        assert!(matches!(err, MacroError::UnknownArgument { .. }), "{err:?}");
+    }
+
+    #[test]
+    fn trailing_tokens_are_rejected() {
         let err = parse_args(quote! { subscribes(Foo), extra }).err().unwrap();
-        // Foreign syn::Error; pins our macro message.
-        assert!(err.to_string().contains("unexpected tokens"), "{err}");
+        assert!(matches!(err, MacroError::TrailingTokens { .. }), "{err:?}");
+    }
+
+    /// A failure of syn's own grammar keeps syn's diagnostic.
+    #[test]
+    fn malformed_args_pass_through_syn_diagnostics() {
+        let err = parse_args(quote! { subscribes(1) }).err().unwrap();
+        assert!(matches!(err, MacroError::MalformedArgs(_)), "{err:?}");
     }
 
     /// Strips quote's token spacing so an assertion reads as source.
@@ -589,7 +692,11 @@ mod tests {
     #[test]
     fn every_manifest_read_is_a_rebuild_anchor() {
         let dir = tempfile::tempdir().expect("tempdir");
-        std::fs::write(dir.path().join("component.toml"), MANIFEST).expect("write manifest");
+        std::fs::write(
+            dir.path().join("component.toml"),
+            format!("{MANIFEST}{SUBSCRIPTION}"),
+        )
+        .expect("write manifest");
         std::fs::write(
             dir.path().join("extensions.toml"),
             "[extensions.acme]\nimport = \"acme:host/acme@0.1.0\"\n",
@@ -624,10 +731,71 @@ mod tests {
 
         assert!(derive_manifest_facts(dir.path(), false).is_ok());
         let err = derive_manifest_facts(dir.path(), true).err().unwrap();
-        assert!(err.contains("invalid topic \"not-a-topic\""), "{err}");
+        let MacroError::Manifest { source, .. } = &err else {
+            panic!("unexpected refusal: {err:?}");
+        };
+        assert!(
+            matches!(
+                &**source,
+                nexum_world::WorldError::InvalidTopic { topic, .. } if topic == "not-a-topic"
+            ),
+            "{err:?}",
+        );
+    }
+
+    /// A missing `component.toml` refuses with the guidance-bearing
+    /// variant, not a bare io error.
+    #[test]
+    fn missing_manifest_is_refused_as_unreadable() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let err = derive_manifest_facts(dir.path(), false).err().unwrap();
+        assert!(
+            matches!(err, MacroError::ManifestUnreadable { .. }),
+            "{err:?}"
+        );
+    }
+
+    /// An `extensions.toml` that exists but cannot be read (here: not
+    /// UTF-8, which fails `read_to_string` even when running as root)
+    /// refuses with the registry's own variant.
+    #[test]
+    fn unreadable_registry_is_refused() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(dir.path().join("component.toml"), MANIFEST).expect("write manifest");
+        std::fs::write(dir.path().join("extensions.toml"), b"\xff\xfe").expect("write registry");
+        let err = derive_manifest_facts(dir.path(), false).err().unwrap();
+        assert!(
+            matches!(err, MacroError::RegistryUnreadable { .. }),
+            "{err:?}"
+        );
+    }
+
+    /// `subscribes(...)` needs a manifest chain-log subscription; one with
+    /// an `event_signature` satisfies it.
+    #[test]
+    fn subscribes_without_chain_log_subscription_is_refused() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(dir.path().join("component.toml"), MANIFEST).expect("write manifest");
+        let err = derive_manifest_facts(dir.path(), true).err().unwrap();
+        assert!(
+            matches!(err, MacroError::SubscribesWithoutChainLog { .. }),
+            "{err:?}"
+        );
+
+        std::fs::write(
+            dir.path().join("component.toml"),
+            format!("{MANIFEST}{SUBSCRIPTION}"),
+        )
+        .expect("write manifest");
+        assert!(derive_manifest_facts(dir.path(), true).is_ok());
     }
 
     const MANIFEST: &str = "[component]\nname = \"t\"\n\n[dependencies]\nlogging = {}\n";
+
+    /// A chain-log subscription with a valid `event_signature`, appended
+    /// to [`MANIFEST`] where a test wants topics.
+    const SUBSCRIPTION: &str = "\n[[subscription]]\nkind = \"chain-log\"\nchain_id = 1\n\
+         event_signature = \"0xcf5f9de2984132265203b5c335b25727702ca77262ff622e136baa7362bf1da9\"\n";
 
     /// The string literals the emitted `assert!`s carry.
     fn refusal_messages(emitted: &str) -> Vec<String> {
@@ -636,5 +804,183 @@ mod tests {
             .skip(1)
             .map(|rest| rest.split('"').next().unwrap_or_default().to_owned())
             .collect()
+    }
+
+    /// One pin per variant: the rendered text is the module-author
+    /// contract, so a rewording fails exactly one of these.
+    mod wording {
+        use super::*;
+
+        fn site() -> proc_macro2::Span {
+            proc_macro2::Span::call_site()
+        }
+
+        #[test]
+        fn non_ident_argument() {
+            assert_eq!(
+                MacroError::NonIdentArgument { span: site() }.to_string(),
+                "expected `subscribes(EventType, ...)` or no arguments",
+            );
+        }
+
+        #[test]
+        fn unknown_argument() {
+            assert_eq!(
+                MacroError::UnknownArgument { span: site() }.to_string(),
+                "#[nexum_sdk::module] takes no arguments except `subscribes(EventType, ...)`",
+            );
+        }
+
+        #[test]
+        fn trailing_tokens() {
+            assert_eq!(
+                MacroError::TrailingTokens { span: site() }.to_string(),
+                "unexpected tokens after `subscribes(...)`",
+            );
+        }
+
+        #[test]
+        fn empty_subscribes() {
+            assert_eq!(
+                MacroError::EmptySubscribes { span: site() }.to_string(),
+                "`subscribes(...)` must name at least one event type",
+            );
+        }
+
+        #[test]
+        fn malformed_args() {
+            let inner = syn::Error::new(site(), "expected identifier");
+            assert_eq!(
+                MacroError::MalformedArgs(inner).to_string(),
+                "expected identifier",
+            );
+        }
+
+        #[test]
+        fn unnamed_self_type() {
+            assert_eq!(
+                MacroError::UnnamedSelfType {
+                    self_ty: quote!(&Alerts),
+                }
+                .to_string(),
+                "#[nexum_sdk::module] must be applied to an inherent impl of a named type",
+            );
+        }
+
+        #[test]
+        fn trait_impl() {
+            assert_eq!(
+                MacroError::TraitImpl {
+                    trait_path: quote!(Handler),
+                }
+                .to_string(),
+                "#[nexum_sdk::module] must be applied to an inherent impl, not a trait impl",
+            );
+        }
+
+        #[test]
+        fn generic_impl() {
+            assert_eq!(
+                MacroError::GenericImpl {
+                    generics: quote!(<T>),
+                }
+                .to_string(),
+                "#[nexum_sdk::module] must be applied to a non-generic impl",
+            );
+        }
+
+        #[test]
+        fn unknown_handler() {
+            assert_eq!(
+                MacroError::UnknownHandler {
+                    ident: quote!(on_blocks),
+                }
+                .to_string(),
+                "`on_blocks` is not a recognized #[nexum_sdk::module] handler; expected one of \
+                 [\"init\", \"on_block\", \"on_chain_logs\", \"on_tick\", \"on_custom\"] (rename \
+                 helpers so they do not start with `on_`)",
+            );
+        }
+
+        #[test]
+        fn no_handlers() {
+            assert_eq!(
+                MacroError::NoHandlers {
+                    self_ty: quote!(Alerts),
+                }
+                .to_string(),
+                "#[nexum_sdk::module] found no recognized handlers on this impl; define at least \
+                 one of `init`, `on_block`, `on_chain_logs`, `on_tick`, `on_custom`",
+            );
+        }
+
+        #[test]
+        fn no_manifest_dir() {
+            assert_eq!(
+                MacroError::NoManifestDir {
+                    source: nexum_world::WorldError::NoManifestDir,
+                }
+                .to_string(),
+                "CARGO_MANIFEST_DIR is not set",
+            );
+        }
+
+        #[test]
+        fn manifest_unreadable() {
+            let err = MacroError::ManifestUnreadable {
+                path: "/m/component.toml".into(),
+                source: std::io::Error::other("denied"),
+            };
+            assert_eq!(
+                err.to_string(),
+                "could not read /m/component.toml (denied); #[nexum_sdk::module] derives the \
+                 component's WIT world from the manifest's [dependencies] table, so the manifest \
+                 must sit next to Cargo.toml",
+            );
+        }
+
+        #[test]
+        fn manifest_rule() {
+            let err = MacroError::Manifest {
+                path: "/m/component.toml".into(),
+                source: Box::new(nexum_world::WorldError::DependenciesNotATable),
+            };
+            assert_eq!(
+                err.to_string(),
+                "/m/component.toml: [dependencies] must be a table",
+            );
+        }
+
+        #[test]
+        fn registry_unreadable() {
+            let err = MacroError::RegistryUnreadable {
+                path: "/m/extensions.toml".into(),
+                source: std::io::Error::other("denied"),
+            };
+            assert_eq!(err.to_string(), "could not read /m/extensions.toml: denied");
+        }
+
+        #[test]
+        fn wit_resolution() {
+            let err = MacroError::WitResolution {
+                source: nexum_world::WorldError::NoWitTree { start: "/m".into() },
+            };
+            assert_eq!(
+                err.to_string(),
+                "no `wit/` tree exists under /m or any ancestor",
+            );
+        }
+
+        #[test]
+        fn subscribes_without_chain_log() {
+            let err = MacroError::SubscribesWithoutChainLog {
+                path: "/m/component.toml".into(),
+            };
+            assert_eq!(
+                err.to_string(),
+                "`subscribes(...)` names events, but /m/component.toml declares no chain-log \
+                 subscription with an `event_signature`; add the subscription or drop the argument",
+            );
+        }
     }
 }
