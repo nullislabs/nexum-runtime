@@ -194,6 +194,10 @@ trybuild = "1"
 # code still trips review by convention.
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "warn"
+# Every public item states what the signature does not. `-D warnings` in
+# CI makes this fatal, so an undocumented addition to a public surface
+# fails the build rather than accruing.
+missing_docs = "warn"
 
 [workspace.lints.clippy]
 # Deny the easy footguns. Each crate carries its own narrower
@@ -201,6 +205,13 @@ unsafe_op_in_unsafe_fn = "warn"
 # binary entrypoints carry `unused_crate_dependencies` warn).
 dbg_macro = "deny"
 todo = "deny"
+# A panic in the host kills every module it supervises, so a fallible
+# call in production code states its recovery. Tests are exempt through
+# `allow-unwrap-in-tests` / `allow-expect-in-tests` in `clippy.toml`;
+# a production site that genuinely cannot fail carries an `#[expect]`
+# with the invariant that makes it so.
+unwrap_used = "deny"
+expect_used = "warn"
 
 [profile.dev]
 panic = "abort"

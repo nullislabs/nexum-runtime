@@ -193,6 +193,8 @@ impl ProviderPool {
         Ok(Box::pin(stream))
     }
 
+    /// The alloy provider for one chain. Unrelated to a nexum service:
+    /// this is the RPC transport, not a component.
     pub fn provider(&self, chain: Chain) -> Result<&DynProvider, PoolError> {
         self.providers
             .get(&chain)
@@ -271,6 +273,7 @@ pub type BlockStream = Pin<Box<dyn Stream<Item = Result<Header, TransportError>>
 /// yields a batch.
 #[derive(Debug, Clone)]
 pub struct CanonicalLogBatch {
+    /// Block height the batch was fetched at.
     pub number: u64,
     /// Canonical block hash the batch was fetched against.
     pub hash: B256,
@@ -295,6 +298,8 @@ pub enum PoolError {
     /// The configured per-request timeout elapsed.
     #[error("rpc request timed out")]
     Timeout,
+    /// Anything alloy's transport reports: connect, decode, or a node
+    /// error response. Classified into a fault at the WIT edge.
     #[error(transparent)]
     Rpc(#[from] TransportError),
 }

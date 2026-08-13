@@ -18,8 +18,12 @@ use serde_json::value::RawValue;
 use crate::host::component::ChainMethod;
 use crate::host::provider_pool::ProviderPool;
 
+/// One request as the mock transport saw it, so a test can assert on
+/// what the runtime asked for rather than only on what it did with the
+/// answer.
 #[derive(Debug, Clone)]
 pub struct CapturedRpc {
+    /// JSON-RPC method name.
     pub method: String,
     /// Decoded params array; `Null` when the request carried none.
     pub params: serde_json::Value,
@@ -96,10 +100,13 @@ pub struct MockRpc {
 }
 
 impl MockRpc {
+    /// An empty script. Every call fails until a response is pushed.
     pub fn new() -> Self {
         Self::default()
     }
 
+    /// An alloy provider over the scripted transport, capture layer
+    /// attached.
     pub fn provider(&self) -> DynProvider {
         let client = ClientBuilder::default()
             .layer(CaptureLayer(self.captured.clone()))
@@ -138,6 +145,7 @@ impl MockRpc {
     }
 }
 
+/// A JSON-RPC success carrying `value`.
 pub fn rpc_ok<T: serde::Serialize>(value: &T) -> MockResponse {
     let body = serde_json::to_string(value).expect("mock response serializes");
     MockResponse::Success(RawValue::from_string(body).expect("serialized JSON is a raw value"))
@@ -169,6 +177,7 @@ pub fn linked_block(number: u64) -> Block {
     block
 }
 
+/// A pool wired to one [`MockRpc`] per chain.
 pub fn mocked_pool<'a>(
     chains: impl IntoIterator<Item = (Chain, &'a MockRpc)>,
     poll_interval: Duration,
@@ -205,6 +214,7 @@ struct FakeNodeState {
 }
 
 impl FakeNode {
+    /// A node at genesis with no blocks served yet.
     pub fn new() -> Self {
         Self::default()
     }
@@ -213,6 +223,7 @@ impl FakeNode {
         self.0.state.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
+    /// A pool serving every chain from this one node.
     pub fn pool(&self, chains: &[Chain], poll_interval: Duration) -> ProviderPool {
         ProviderPool::for_tests(
             chains.iter().map(|&chain| (chain, self.provider())),
@@ -220,6 +231,8 @@ impl FakeNode {
         )
     }
 
+    /// An alloy provider routed to this node. Unrelated to a nexum
+    /// service: this is the RPC transport.
     pub fn provider(&self) -> DynProvider {
         let client = ClientBuilder::default().transport(self.clone(), true);
         ProviderBuilder::new().connect_client(client).erased()

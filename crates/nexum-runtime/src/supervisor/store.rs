@@ -32,6 +32,9 @@ pub struct WasiClockOverride {
 }
 
 impl WasiClockOverride {
+    /// Pair the two clocks a guest can observe. Both are replaced
+    /// together: a test that moves one and not the other is worse than
+    /// the ambient pair.
     pub fn new(
         wall: Arc<dyn HostWallClock + Send + Sync>,
         monotonic: Arc<dyn HostMonotonicClock + Send + Sync>,

@@ -442,6 +442,8 @@ async fn reconnecting_chain_log_task(
     }
 }
 
+/// Block headers tagged with the chain they came from. The error side
+/// carries the chain too, so a failing stream names itself.
 pub type TaggedBlockStream = std::pin::Pin<
     Box<
         dyn futures::Stream<
@@ -451,6 +453,7 @@ pub type TaggedBlockStream = std::pin::Pin<
 >;
 /// `(module, chain, log, cursor_key)`; `cursor_key` is `Some` for `resume`.
 pub type TaggedChainLog = (ModuleId, Chain, alloy_rpc_types_eth::Log, Option<Arc<str>>);
+/// Stream of [`TaggedChainLog`], merged across every subscribed chain.
 pub type TaggedChainLogStream =
     std::pin::Pin<Box<dyn futures::Stream<Item = TaggedChainLog> + Send>>;
 /// Drive the supervisor with events until `shutdown` resolves.

@@ -9,6 +9,7 @@ use std::time::Duration;
 
 /// Production defaults: 5 traps within 10 minutes quarantines a module.
 pub const POISON_MAX_FAILURES: u32 = 5;
+/// Sliding window [`POISON_MAX_FAILURES`] is counted across.
 pub const POISON_WINDOW: Duration = Duration::from_secs(600);
 
 /// Configurable poison-pill thresholds from `[limits.poison]`, else
@@ -22,6 +23,7 @@ pub struct PoisonPolicy {
 }
 
 impl PoisonPolicy {
+    /// Pair a trap budget with the window it is counted over.
     pub const fn new(max_failures: u32, window: Duration) -> Self {
         Self {
             max_failures,

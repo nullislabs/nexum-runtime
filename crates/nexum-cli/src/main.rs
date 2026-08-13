@@ -2,6 +2,7 @@
 //! payload, composed over the generic launcher.
 
 #![cfg_attr(not(test), warn(unused_crate_dependencies))]
+#![forbid(unsafe_code)]
 
 use nexum_runtime::preset::CoreRuntime;
 

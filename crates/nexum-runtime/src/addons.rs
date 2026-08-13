@@ -12,18 +12,30 @@ use crate::engine_config::MetricsSection;
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum PrometheusError {
+    /// `[engine.metrics].bind_addr` is not a socket address.
     #[error("invalid [engine.metrics].bind_addr `{addr}`: {cause}")]
     BindAddr {
+        /// The value as the operator wrote it.
         addr: String,
+        /// What the address parser objected to.
         cause: std::net::AddrParseError,
     },
+    /// The exporter could not take the listener, typically because the
+    /// port is in use.
     #[error("install Prometheus exporter on {addr}: {cause}")]
     Exporter {
+        /// The address that was parsed and then refused.
         addr: std::net::SocketAddr,
+        /// What the exporter build objected to.
         cause: BuildError,
     },
+    /// The listener-free path failed, which leaves every `metrics!` call
+    /// site recording into nothing.
     #[error("install Prometheus recorder: {cause}")]
-    Recorder { cause: BuildError },
+    Recorder {
+        /// What the recorder build objected to.
+        cause: BuildError,
+    },
 }
 
 /// Inputs an add-on reads at install time.

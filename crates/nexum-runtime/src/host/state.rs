@@ -15,7 +15,10 @@ use super::provider_pool::ProviderPool;
 
 /// Per-module host state, generic over the [`RuntimeTypes`] lattice.
 pub struct HostState<T: RuntimeTypes> {
+    /// WASI context. Deliberately built with no environment, no
+    /// arguments, and no preopened directory.
     pub wasi: WasiCtx,
+    /// Resource table backing the WASI and wasi:http handles.
     pub table: ResourceTable,
     /// Wasmtime memory/table/instance resource limits for this store.
     pub limits: wasmtime::StoreLimits,

@@ -9,6 +9,8 @@
 // the WIT signatures, which can exceed clippy's too-many-arguments threshold.
 #![cfg_attr(not(test), warn(unused_crate_dependencies))]
 #![allow(clippy::too_many_arguments)]
+// wit_bindgen::generate! output carries no doc comments.
+#![allow(missing_docs)]
 
 use nexum::host::{logging, types};
 

@@ -28,6 +28,11 @@
 //! # }
 //! ```
 
+// Test support, gated behind `feature = "test-utils"` rather than
+// `cfg(test)`, so `allow-unwrap-in-tests` never sees it. A harness that
+// cannot build its own fixture has nothing to recover from.
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 mod builders;
 pub mod clock;
 pub mod harness;

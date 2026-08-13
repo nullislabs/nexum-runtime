@@ -35,23 +35,38 @@ use crate::supervisor::{self, Supervisor, Viability};
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum LaunchRefusal {
+    /// The event-loop task ended before the launcher observed a shutdown,
+    /// so nothing is left to dispatch to.
     #[error("event loop task terminated abnormally")]
     EventLoopGone,
+    /// No module source at all: neither an override nor a config entry.
     #[error(
         "no modules to run - set a module source or declare [[modules]] or \
          [[services]] entries in engine.toml"
     )]
     NothingToRun,
+    /// Every module died in `init`, and they came from a command-line
+    /// override, so the fix is the binary the operator passed.
     #[error(
         "all {modules} module(s) failed initialization - check the logs above for \
          per-module errors and fix the wasm binary passed as an override"
     )]
-    AllDeadOverride { modules: usize },
+    AllDeadOverride {
+        /// How many were tried.
+        modules: usize,
+    },
+    /// Every module died in `init`, and they came from `engine.toml`, so
+    /// the fix is a config entry.
     #[error(
         "all {modules} module(s) failed initialization - check the logs above for \
          per-module errors and fix or remove the failing module from engine.toml"
     )]
-    AllDeadConfigured { modules: usize },
+    AllDeadConfigured {
+        /// How many were tried.
+        modules: usize,
+    },
+    /// Some modules survived `init`, but no surviving one holds a
+    /// subscription, so the engine would run and never be woken.
     #[error(
         "every declared [[subscription]] belongs to an init-failed module - \
          the engine would idle with nothing to run; fix or remove the \

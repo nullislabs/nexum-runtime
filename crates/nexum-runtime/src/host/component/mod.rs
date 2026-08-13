@@ -21,7 +21,9 @@ use crate::host::provider_pool::ProviderPool;
 /// Owned bundle of shared backends threaded into every module store; cheap to
 /// clone.
 pub struct Components<T: RuntimeTypes> {
+    /// Shared JSON-RPC pool, one provider per configured chain.
     pub chain: ProviderPool,
+    /// Shared store backend; each module sees only its own namespace.
     pub store: T::Store,
     /// Shared log pipeline.
     pub logs: crate::host::logs::LogPipeline,

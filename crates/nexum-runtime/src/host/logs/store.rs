@@ -149,11 +149,22 @@ impl InMemoryRunLogStore {
             }),
         }
     }
+
+    /// Poisoning means a previous holder panicked mid-mutation, so the
+    /// retention bookkeeping may no longer match the rings it describes.
+    /// Serving from it would report runs that are not there.
+    #[expect(
+        clippy::expect_used,
+        reason = "a poisoned log store cannot be reasoned about; every caller returns () or an empty page and has nowhere to surface a lock error"
+    )]
+    fn lock(&self) -> std::sync::MutexGuard<'_, Inner> {
+        self.inner.lock().expect("log store mutex poisoned")
+    }
 }
 
 impl RunLogStore for InMemoryRunLogStore {
     fn append(&self, record: LogRecord) {
-        let mut inner = self.inner.lock().expect("log store mutex poisoned");
+        let mut inner = self.lock();
         let limits = inner.limits;
         let module = record.run.module.clone();
         let entry = inner.modules.entry(module).or_insert_with(ModuleRuns::new);
@@ -178,7 +189,7 @@ impl RunLogStore for InMemoryRunLogStore {
     }
 
     fn list_runs(&self, module: &str) -> Vec<RunMeta> {
-        let inner = self.inner.lock().expect("log store mutex poisoned");
+        let inner = self.lock();
         let Some(entry) = inner.modules.get(module) else {
             return Vec::new();
         };
@@ -190,7 +201,7 @@ impl RunLogStore for InMemoryRunLogStore {
     }
 
     fn read(&self, run: &RunId, cursor: u64) -> LogPage {
-        let inner = self.inner.lock().expect("log store mutex poisoned");
+        let inner = self.lock();
         inner
             .modules
             .get(run.module.as_str())

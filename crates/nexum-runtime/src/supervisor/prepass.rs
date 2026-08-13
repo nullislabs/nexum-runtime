@@ -170,6 +170,8 @@ pub struct ConfiguredChains {
 }
 
 impl ConfiguredChains {
+    /// Collect the chain ids the operator configured. Named and numeric
+    /// keys normalize to one id, so both spellings match.
     pub fn from_config(cfg: &EngineConfig) -> Self {
         Self {
             ids: cfg.chains.keys().copied().map(Chain::id).collect(),

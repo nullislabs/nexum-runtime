@@ -6,6 +6,12 @@
 #   dependency, so clippy never sees it. `send_with_limits` in
 #   `crates/nexum-runtime/src/host/http.rs` spawns two tasks that way.
 
+# `unwrap_used` / `expect_used` are workspace lints. A test asserting on a
+# value it just constructed has nothing to recover from, and threading a
+# `Result` through every assertion buys nothing.
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+
 disallowed-methods = [
     { path = "tokio::spawn", reason = "raw spawning belongs to nexum-tasks: use TaskExecutor::spawn" },
     { path = "tokio::task::spawn", reason = "raw spawning belongs to nexum-tasks: use TaskExecutor::spawn" },

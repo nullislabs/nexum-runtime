@@ -6,6 +6,8 @@
 
 #![cfg_attr(not(test), warn(unused_crate_dependencies))]
 #![allow(clippy::too_many_arguments)]
+// wit_bindgen::generate! output carries no doc comments.
+#![allow(missing_docs)]
 
 use alloy_sol_types::sol;
 use nexum::host::{logging, types};

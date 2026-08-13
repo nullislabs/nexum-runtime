@@ -183,6 +183,8 @@ pub struct TestRuntime {
 }
 
 impl TestRuntime {
+    /// The fake node the running engine is wired to, for scripting
+    /// responses while it runs.
     pub fn chain(&self) -> &FakeNode {
         &self.chain
     }
