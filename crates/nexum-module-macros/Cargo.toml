@@ -20,6 +20,9 @@ nexum-world = { path = "../nexum-world", features = ["macros"] }
 proc-macro2.workspace = true
 quote.workspace = true
 syn = { workspace = true, features = ["full"] }
+# The macro's own error enum: `Display` is the author-facing diagnostic,
+# and `WorldError` rides along as a typed source.
+thiserror.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

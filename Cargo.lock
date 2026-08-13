@@ -3293,6 +3293,7 @@ dependencies = [
  "quote",
  "syn 2.0.118",
  "tempfile",
+ "thiserror 2.0.18",
  "trybuild",
 ]
 
