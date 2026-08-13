@@ -120,7 +120,7 @@ impl TestRuntimeBuilder {
 
         let mut config = EngineConfig::default();
         config.engine.state_dir = tmp.path().to_path_buf();
-        config.limits = self.limits;
+        config.limits = self.limits.try_into()?;
         // The chain gate applies even over mock backends.
         config.chains = super::test_chain_configs();
 

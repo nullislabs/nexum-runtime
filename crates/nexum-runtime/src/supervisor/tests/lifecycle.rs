@@ -571,7 +571,7 @@ fn provider_at_run_zero(
     kind: &'static str,
 ) -> crate::supervisor::load::LoadedProvider {
     const EMPTY_COMPONENT: &[u8] = b"(component)";
-    let limits = ModuleLimits::default();
+    let limits = ResolvedModuleLimits::default();
     crate::supervisor::load::LoadedProvider {
         name: crate::module_id::ModuleId::parse("scripted").expect("valid module name"),
         kind,
@@ -585,14 +585,14 @@ fn provider_at_run_zero(
             },
             spec: crate::supervisor::store::StoreSpec {
                 http_allowlist: Vec::new(),
-                http_limits: limits.http(),
-                http_permitted: limits.http_permitted_destinations(),
-                memory_limit: limits.memory(),
-                fuel: limits.fuel(),
-                chain_response_max_bytes: limits.chain_response_max_bytes(),
-                state_quota: limits.state_bytes(),
+                http_limits: limits.http,
+                http_permitted: limits.http_permit_destinations.clone(),
+                memory_limit: limits.memory_bytes.get(),
+                fuel: limits.fuel_per_event.get(),
+                chain_response_max_bytes: limits.chain_response_max_bytes.get(),
+                state_quota: limits.state_bytes,
             },
-            event_deadline: limits.event_deadline(),
+            event_deadline: limits.event_deadline,
         },
         liveness: crate::host::actor::Liveness::default(),
         run: crate::host::logs::RunId::new(
@@ -629,7 +629,10 @@ async fn a_dead_provider_reinstall_defers_without_committing_a_run() {
     let live = Arc::new(AtomicBool::new(false));
     let (_dir, shared) = kind_shared(Arc::new(ScriptedExtension(live.clone())));
     let mut provider = provider_at_run_zero(&shared.engine, "scripted-adapter");
-    let policy = crate::runtime::poison_policy::PoisonPolicy::new(9, Duration::from_secs(600));
+    let policy = crate::runtime::poison_policy::PoisonPolicy::new(
+        std::num::NonZeroU32::new(9).unwrap(),
+        Duration::from_secs(600),
+    );
 
     // The actor trapped: the sweep discovers the death through the shared
     // liveness and counts the 1 s backoff from the death instant.
@@ -730,7 +733,10 @@ async fn a_hanging_provider_install_fails_by_deadline() {
     let (_dir, shared) = kind_shared(Arc::new(HangingExtension));
     let mut provider = provider_at_run_zero(&shared.engine, "hanging-adapter");
     provider.seed.event_deadline = INSTALL_DEADLINE;
-    let policy = crate::runtime::poison_policy::PoisonPolicy::new(9, Duration::from_secs(600));
+    let policy = crate::runtime::poison_policy::PoisonPolicy::new(
+        std::num::NonZeroU32::new(9).unwrap(),
+        Duration::from_secs(600),
+    );
 
     provider.liveness.mark_dead();
     let died_at = provider.liveness.dead_since().expect("marked dead");

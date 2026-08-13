@@ -27,7 +27,7 @@ use super::subscriptions::build_alloy_filter;
 use super::*;
 use crate::bindings::nexum;
 use crate::digest::{ContentDigest, DigestMismatch};
-use crate::engine_config::ModuleLimits;
+use crate::engine_config::{ModuleLimits, ResolvedModuleLimits};
 use crate::host::extension::{HostService, Installed, ServiceInstance, ServiceKind};
 use crate::host::logs::LogSource;
 use crate::host::provider_pool::ProviderPool;
@@ -104,7 +104,7 @@ async fn try_boot_single(
         path: wasm.to_path_buf(),
         manifest: manifest.map(Path::to_path_buf),
     };
-    let limits = ModuleLimits::default();
+    let limits = ResolvedModuleLimits::default();
     let env = BootEnv {
         limits: &limits,
         configured_chains: test_chains(),

@@ -7,6 +7,7 @@
 
 use std::collections::HashMap;
 use std::net::IpAddr;
+use std::num::{NonZeroU32, NonZeroU64, NonZeroUsize};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -21,12 +22,28 @@ use crate::runtime::dispatch_rate::{
 };
 use crate::runtime::poison_policy::{POISON_MAX_FAILURES, POISON_WINDOW, PoisonPolicy};
 
+/// A literal as non-zero; a zero fails the build.
+const fn nz_usize(n: usize) -> NonZeroUsize {
+    match NonZeroUsize::new(n) {
+        Some(v) => v,
+        None => panic!("zero constant"),
+    }
+}
+
+/// As [`nz_usize`], for `u64` constants.
+const fn nz_u64(n: u64) -> NonZeroU64 {
+    match NonZeroU64::new(n) {
+        Some(v) => v,
+        None => panic!("zero constant"),
+    }
+}
+
 /// Default per-caller submission budget within [`DEFAULT_QUOTA_WINDOW`].
 pub const DEFAULT_QUOTA_MAX_CHARGES: u32 = 256;
 /// Default sliding window the per-caller submission budget is counted over.
 pub const DEFAULT_QUOTA_WINDOW: Duration = Duration::from_secs(60);
 /// Default cap on receipts under status watch at once.
-pub const DEFAULT_WATCH_MAX_ENTRIES: usize = 1024;
+pub const DEFAULT_WATCH_MAX_ENTRIES: NonZeroUsize = nz_usize(1024);
 /// Default base window a healthy provider refreshes within; the give-up
 /// deadline is the derived `grace`, not this directly.
 pub const DEFAULT_WATCH_EXPIRY: Duration = Duration::from_secs(86_400);
@@ -79,7 +96,7 @@ impl Default for SubmitQuota {
 #[derive(Debug, Clone, Copy)]
 pub struct WatchLimit {
     /// Maximum receipts under status watch at once.
-    pub max_entries: usize,
+    pub max_entries: NonZeroUsize,
     /// Base window a healthy provider refreshes the deadline within.
     pub expiry: Duration,
     /// Give-up deadline: how long a watch survives an unreachable provider
@@ -90,12 +107,12 @@ pub struct WatchLimit {
 
 impl WatchLimit {
     /// Pair a cap with the base expiry; `grace` derives from `expiry`.
-    pub const fn new(max_entries: usize, expiry: Duration) -> Self {
+    pub const fn new(max_entries: NonZeroUsize, expiry: Duration) -> Self {
         Self::with_grace(max_entries, expiry, derive_grace(expiry))
     }
 
     /// As [`new`](Self::new) but with an explicit `grace`.
-    pub const fn with_grace(max_entries: usize, expiry: Duration, grace: Duration) -> Self {
+    pub const fn with_grace(max_entries: NonZeroUsize, expiry: Duration, grace: Duration) -> Self {
         Self {
             max_entries,
             expiry,
@@ -130,6 +147,12 @@ pub enum EngineConfigError {
         /// The key as written.
         key: String,
     },
+    /// A zero in a numeric field whose mechanism a zero would disable.
+    #[error("engine config: {field} must not be 0")]
+    ZeroField {
+        /// TOML path of the refused field.
+        field: String,
+    },
 }
 
 /// Engine-side configuration loaded from `engine.toml`. Deserialization
@@ -140,8 +163,9 @@ pub enum EngineConfigError {
 pub struct EngineConfig {
     /// Process-wide settings: state directory, log level, metrics.
     pub engine: EngineSection,
-    /// Per-module wasmtime resource limits, applied uniformly.
-    pub limits: ModuleLimits,
+    /// Per-module wasmtime resource limits, resolved once at load and
+    /// applied uniformly.
+    pub limits: ResolvedModuleLimits,
     /// Per-chain RPC config keyed by EIP-155 chain id. Numeric
     /// (`[chains.11155111]`) and named (`[chains.sepolia]`) keys both
     /// validate via `Chain`'s `FromStr` after the TOML parse.
@@ -181,15 +205,20 @@ struct RawEngineConfig {
 impl TryFrom<RawEngineConfig> for EngineConfig {
     type Error = EngineConfigError;
 
-    /// The value check serde defers: parse each raw `[chains]` key into a
-    /// [`Chain`], typed refusal instead of a serde string. The derived
-    /// `Deserialize` runs this too, so the public `toml::from_str` path
-    /// cannot yield an unvalidated config.
+    /// The value checks serde defers: parse each raw `[chains]` key into a
+    /// [`Chain`], refuse a zero timeout or `[limits]` knob, typed refusal
+    /// instead of a serde string. The derived `Deserialize` runs this too,
+    /// so the public `toml::from_str` path cannot yield an unvalidated
+    /// config.
     fn try_from(raw: RawEngineConfig) -> Result<Self, EngineConfigError> {
         let mut chains = HashMap::with_capacity(raw.chains.len());
         for (key, cfg) in raw.chains {
             match key.parse::<Chain>() {
                 Ok(chain) => {
+                    // A zero timeout would leave every request unbounded.
+                    if cfg.request_timeout_secs == 0 {
+                        return Err(zero_field(&format!("chains.{key}.request_timeout_secs")));
+                    }
                     chains.insert(chain, cfg);
                 }
                 Err(_) => return Err(EngineConfigError::InvalidChainKey { key }),
@@ -197,7 +226,7 @@ impl TryFrom<RawEngineConfig> for EngineConfig {
         }
         Ok(Self {
             engine: raw.engine,
-            limits: raw.limits,
+            limits: raw.limits.try_into()?,
             chains,
             extensions: raw.extensions,
             modules: raw.modules,
@@ -311,11 +340,9 @@ pub struct ChainConfig {
     /// `eth_subscribe`); `http(s)://` is request/response only.
     pub rpc_url: String,
     /// Per-request timeout in seconds; HTTP bounds every call, WS only
-    /// `chain::request`. Default 30, zero rejected at parse.
-    #[serde(
-        default = "default_chain_request_timeout_secs",
-        deserialize_with = "nonzero_timeout_secs"
-    )]
+    /// `chain::request`. Default 30, zero refused at load: it would leave
+    /// every request unbounded.
+    #[serde(default = "default_chain_request_timeout_secs")]
     pub request_timeout_secs: u64,
 }
 
@@ -323,28 +350,14 @@ fn default_chain_request_timeout_secs() -> u64 {
     30
 }
 
-/// A zero timeout would leave every request unbounded.
-fn nonzero_timeout_secs<'de, D: serde::Deserializer<'de>>(d: D) -> Result<u64, D::Error> {
-    let secs = u64::deserialize(d)?;
-    if secs == 0 {
-        return Err(serde::de::Error::custom(
-            "request_timeout_secs must not be 0",
-        ));
-    }
-    Ok(secs)
-}
-
 /// Default fuel budget per `on_event` invocation (~1e9 WASM instructions).
-const DEFAULT_FUEL_PER_EVENT: u64 = 1_000_000_000;
+const DEFAULT_FUEL_PER_EVENT: NonZeroU64 = nz_u64(1_000_000_000);
 
 /// Default per-dispatch wall-clock deadline.
 const DEFAULT_EVENT_DEADLINE: Duration = Duration::from_secs(120);
 
-/// Floor for the resolved dispatch deadline.
-const MIN_EVENT_DEADLINE: Duration = Duration::from_secs(1);
-
 /// Default linear-memory cap per module store (64 MiB).
-const DEFAULT_MEMORY_LIMIT: usize = 64 * 1024 * 1024;
+const DEFAULT_MEMORY_LIMIT: NonZeroUsize = nz_usize(64 * 1024 * 1024);
 
 /// Default per-module local-store byte quota (50 MiB).
 const DEFAULT_STATE_BYTES: u64 = 50 * 1024 * 1024;
@@ -366,25 +379,20 @@ const DEFAULT_HTTP_TOTAL_DEADLINE: Duration = Duration::from_secs(60);
 const DEFAULT_HTTP_RESPONSE_BODY_MAX: u64 = 16 * 1024 * 1024;
 
 /// Default cap on one chain JSON-RPC response body (1 MiB).
-const DEFAULT_CHAIN_RESPONSE_MAX_BYTES: usize = 1024 * 1024;
+const DEFAULT_CHAIN_RESPONSE_MAX_BYTES: NonZeroUsize = nz_usize(1024 * 1024);
 
 /// Ceiling for the `[limits.http]` millisecond knobs (24 h).
 const HTTP_LIMIT_MS_MAX: u64 = 86_400_000;
 
 /// Default per-run log ring budget (256 KiB).
-const DEFAULT_LOG_BYTES_PER_RUN: usize = 256 * 1024;
+const DEFAULT_LOG_BYTES_PER_RUN: NonZeroUsize = nz_usize(256 * 1024);
 
 /// Default past runs retained per module (16).
-const DEFAULT_LOG_RUNS_RETAINED: usize = 16;
+const DEFAULT_LOG_RUNS_RETAINED: NonZeroUsize = nz_usize(16);
 
-/// Saturate a millisecond knob into [1 ms, 24 h].
-fn clamp_http_ms(ms: u64) -> Duration {
-    Duration::from_millis(ms.clamp(1, HTTP_LIMIT_MS_MAX))
-}
-
-/// Per-module wasmtime resource limits. Every field is optional; omitted
-/// values resolve to built-in defaults. Sections are documented on their
-/// own types.
+/// Serde shape of `[limits]`. Every field is optional; conversion into
+/// [`ResolvedModuleLimits`] fills the built-in defaults and refuses
+/// zeroes. Sections are documented on their own types.
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ModuleLimits {
@@ -419,157 +427,257 @@ pub struct ModuleLimits {
     pub dispatch: DispatchLimitsSection,
 }
 
-impl ModuleLimits {
-    /// Resolved fuel budget (override or default).
-    pub fn fuel(&self) -> u64 {
-        self.fuel_per_event.unwrap_or(DEFAULT_FUEL_PER_EVENT)
-    }
-
-    /// Resolved memory cap (override or default).
-    pub fn memory(&self) -> usize {
-        self.memory_bytes.unwrap_or(DEFAULT_MEMORY_LIMIT)
-    }
-
-    /// Resolved chain response size cap; a degenerate `0` saturates to 1 byte.
-    pub fn chain_response_max_bytes(&self) -> usize {
-        self.chain
-            .response_body_max_bytes
-            .map(|b| (b.max(1)) as usize)
-            .unwrap_or(DEFAULT_CHAIN_RESPONSE_MAX_BYTES)
-    }
-
-    /// Resolved local-store byte quota (override or default).
-    pub fn state_bytes(&self) -> u64 {
-        self.state_bytes.unwrap_or(DEFAULT_STATE_BYTES)
-    }
-
-    /// Resolved per-dispatch deadline; an override saturates up to a 1 s floor.
-    pub fn event_deadline(&self) -> Duration {
-        self.event_deadline_secs
-            .map(|secs| Duration::from_secs(secs).max(MIN_EVENT_DEADLINE))
-            .unwrap_or(DEFAULT_EVENT_DEADLINE)
-    }
-
-    /// Resolved outbound HTTP limits.
-    pub fn http(&self) -> OutboundHttpLimits {
-        OutboundHttpLimits {
-            connect_timeout_max: self
-                .http
-                .connect_timeout_max_ms
-                .map(clamp_http_ms)
-                .unwrap_or(DEFAULT_HTTP_CONNECT_TIMEOUT_MAX),
-            first_byte_timeout_max: self
-                .http
-                .first_byte_timeout_max_ms
-                .map(clamp_http_ms)
-                .unwrap_or(DEFAULT_HTTP_FIRST_BYTE_TIMEOUT_MAX),
-            between_bytes_timeout_max: self
-                .http
-                .between_bytes_timeout_max_ms
-                .map(clamp_http_ms)
-                .unwrap_or(DEFAULT_HTTP_BETWEEN_BYTES_TIMEOUT_MAX),
-            total_deadline: self
-                .http
-                .total_deadline_ms
-                .map(clamp_http_ms)
-                .unwrap_or(DEFAULT_HTTP_TOTAL_DEADLINE),
-            response_body_max_bytes: self
-                .http
-                .response_body_max_bytes
-                .unwrap_or(DEFAULT_HTTP_RESPONSE_BODY_MAX),
-        }
-    }
-
+/// `[limits]` resolved once at load: every optional knob replaced by its
+/// override or built-in default. The [`TryFrom<ModuleLimits>`] conversion
+/// refuses zeroes, so no consumer clamps on read.
+#[derive(Debug, Clone)]
+pub struct ResolvedModuleLimits {
+    /// Fuel budget granted per `on_event` invocation.
+    pub fuel_per_event: NonZeroU64,
+    /// Wall-clock deadline for a dispatch, covering host-call time fuel
+    /// cannot meter.
+    pub event_deadline: Duration,
+    /// Linear-memory cap in bytes per module store.
+    pub memory_bytes: NonZeroUsize,
+    /// Local-store on-disk byte quota per module; zero denies every write.
+    pub state_bytes: u64,
+    /// Cap on one chain JSON-RPC response body.
+    pub chain_response_max_bytes: NonZeroUsize,
+    /// Outbound wasi:http limits.
+    pub http: OutboundHttpLimits,
     /// Addresses the operator permits despite falling in a refused range.
     /// Empty by default, so every refused range stays refused.
-    pub fn http_permitted_destinations(&self) -> Vec<IpAddr> {
-        self.http.permit_destinations.clone()
-    }
+    pub http_permit_destinations: Vec<IpAddr>,
+    /// Per-run log retention limits.
+    pub logs: LogRetentionLimits,
+    /// Poison-pill quarantine thresholds.
+    pub poison: PoisonPolicy,
+    /// Per-caller provider submission quota.
+    pub quota: SubmitQuota,
+    /// Status-watch set bounds.
+    pub watch: WatchLimit,
+    /// Per-module dispatch rate-limit policy.
+    pub dispatch: DispatchRatePolicy,
+}
 
-    /// Resolved log retention limits; degenerate zeroes saturate up to 1.
-    pub fn logs(&self) -> LogRetentionLimits {
-        LogRetentionLimits {
-            bytes_per_run: self
-                .logs
-                .bytes_per_run
-                .map(|b| b.max(1))
-                .unwrap_or(DEFAULT_LOG_BYTES_PER_RUN),
-            runs_retained: self
-                .logs
-                .runs_retained
-                .map(|r| r.max(1))
-                .unwrap_or(DEFAULT_LOG_RUNS_RETAINED),
-        }
-    }
-
-    /// Resolved poison-pill thresholds; degenerate zeroes saturate up to 1.
-    pub fn poison(&self) -> PoisonPolicy {
-        PoisonPolicy::new(
-            self.poison
-                .max_failures
-                .map(|n| n.max(1))
-                .unwrap_or(POISON_MAX_FAILURES),
-            self.poison
-                .window_secs
-                .map(|s| Duration::from_secs(s.max(1)))
-                .unwrap_or(POISON_WINDOW),
-        )
-    }
-
-    /// Resolved dispatch rate policy; a zero `burst` or `refill_per_sec`
-    /// saturates up to 1.
-    pub fn dispatch_rate(&self) -> DispatchRatePolicy {
-        DispatchRatePolicy::new(
-            self.dispatch
-                .burst
-                .map(|b| b.max(1))
-                .unwrap_or(DEFAULT_DISPATCH_BURST),
-            self.dispatch
-                .refill_per_sec
-                .map(|r| r.max(1))
-                .unwrap_or(DEFAULT_DISPATCH_REFILL_PER_SEC),
-        )
-    }
-
-    /// Resolved per-caller submission quota; a zero `max_charges` is
-    /// saturated up to 1 by the consuming service.
-    pub fn quota(&self) -> SubmitQuota {
-        SubmitQuota::new(
-            self.quota.max_charges.unwrap_or(DEFAULT_QUOTA_MAX_CHARGES),
-            self.quota
-                .window_secs
-                .map(|s| Duration::from_secs(s.max(1)))
-                .unwrap_or(DEFAULT_QUOTA_WINDOW),
-        )
-    }
-
-    /// Resolved status-watch bounds; zero `max_entries`/`expiry_secs`
-    /// saturate up to a usable minimum. `grace_secs` overrides the give-up
-    /// deadline, else it derives from `expiry` via [`WatchLimit::new`].
-    pub fn watch(&self) -> WatchLimit {
-        let max_entries = self
-            .watch
-            .max_entries
-            .map(|n| n.max(1))
-            .unwrap_or(DEFAULT_WATCH_MAX_ENTRIES);
-        let expiry = self
-            .watch
-            .expiry_secs
-            .map(|s| Duration::from_secs(s.max(1)))
-            .unwrap_or(DEFAULT_WATCH_EXPIRY);
-        match self.watch.grace_secs {
-            Some(secs) => {
-                WatchLimit::with_grace(max_entries, expiry, Duration::from_secs(secs.max(1)))
-            }
-            None => WatchLimit::new(max_entries, expiry),
+impl Default for ResolvedModuleLimits {
+    fn default() -> Self {
+        match Self::try_from(ModuleLimits::default()) {
+            Ok(resolved) => resolved,
+            Err(_) => unreachable!("the built-in limit defaults are non-zero"),
         }
     }
 }
 
-/// `[limits.http]` outbound limits. All optional; millisecond values
-/// saturate into [1 ms, 24 h]. The `*_timeout_max_ms` fields are ceilings
-/// on the matching guest-settable `request-options` timeouts: a higher
-/// guest value is clamped down, an unset one inherits the ceiling.
+/// A configured zero, named by its TOML path.
+fn zero_field(field: &str) -> EngineConfigError {
+    EngineConfigError::ZeroField {
+        field: field.to_owned(),
+    }
+}
+
+/// Override-or-default, proving the resolution in the type; a zero
+/// override refuses, naming `field`.
+fn nonzero_u64(
+    field: &str,
+    value: Option<u64>,
+    default: NonZeroU64,
+) -> Result<NonZeroU64, EngineConfigError> {
+    match value {
+        Some(v) => NonZeroU64::new(v).ok_or_else(|| zero_field(field)),
+        None => Ok(default),
+    }
+}
+
+/// As [`nonzero_u64`], for `u32` knobs.
+fn nonzero_u32(
+    field: &str,
+    value: Option<u32>,
+    default: NonZeroU32,
+) -> Result<NonZeroU32, EngineConfigError> {
+    match value {
+        Some(v) => NonZeroU32::new(v).ok_or_else(|| zero_field(field)),
+        None => Ok(default),
+    }
+}
+
+/// As [`nonzero_u64`], for `usize` knobs.
+fn nonzero_usize(
+    field: &str,
+    value: Option<usize>,
+    default: NonZeroUsize,
+) -> Result<NonZeroUsize, EngineConfigError> {
+    match value {
+        Some(v) => NonZeroUsize::new(v).ok_or_else(|| zero_field(field)),
+        None => Ok(default),
+    }
+}
+
+/// Second-denominated knob resolved to a `Duration`, zero refused.
+fn nonzero_secs(
+    field: &str,
+    value: Option<u64>,
+    default: Duration,
+) -> Result<Duration, EngineConfigError> {
+    match value {
+        Some(0) => Err(zero_field(field)),
+        Some(secs) => Ok(Duration::from_secs(secs)),
+        None => Ok(default),
+    }
+}
+
+/// Millisecond knob resolved to a `Duration`: zero refused, a value above
+/// [`HTTP_LIMIT_MS_MAX`] saturates down so timer arithmetic cannot
+/// overflow at request time.
+fn nonzero_ms_capped(
+    field: &str,
+    value: Option<u64>,
+    default: Duration,
+) -> Result<Duration, EngineConfigError> {
+    match value {
+        Some(0) => Err(zero_field(field)),
+        Some(ms) => Ok(Duration::from_millis(ms.min(HTTP_LIMIT_MS_MAX))),
+        None => Ok(default),
+    }
+}
+
+impl TryFrom<ModuleLimits> for ResolvedModuleLimits {
+    type Error = EngineConfigError;
+
+    /// Refuses every zero that would disable the mechanism its field
+    /// bounds; any other override resolves to exactly the value written.
+    fn try_from(raw: ModuleLimits) -> Result<Self, EngineConfigError> {
+        let http = OutboundHttpLimits {
+            connect_timeout_max: nonzero_ms_capped(
+                "limits.http.connect_timeout_max_ms",
+                raw.http.connect_timeout_max_ms,
+                DEFAULT_HTTP_CONNECT_TIMEOUT_MAX,
+            )?,
+            first_byte_timeout_max: nonzero_ms_capped(
+                "limits.http.first_byte_timeout_max_ms",
+                raw.http.first_byte_timeout_max_ms,
+                DEFAULT_HTTP_FIRST_BYTE_TIMEOUT_MAX,
+            )?,
+            between_bytes_timeout_max: nonzero_ms_capped(
+                "limits.http.between_bytes_timeout_max_ms",
+                raw.http.between_bytes_timeout_max_ms,
+                DEFAULT_HTTP_BETWEEN_BYTES_TIMEOUT_MAX,
+            )?,
+            total_deadline: nonzero_ms_capped(
+                "limits.http.total_deadline_ms",
+                raw.http.total_deadline_ms,
+                DEFAULT_HTTP_TOTAL_DEADLINE,
+            )?,
+            // Zero stays legal: a zero cap refuses every response body,
+            // which is an enforceable operator choice, not a wedge.
+            response_body_max_bytes: raw
+                .http
+                .response_body_max_bytes
+                .unwrap_or(DEFAULT_HTTP_RESPONSE_BODY_MAX),
+        };
+        let logs = LogRetentionLimits {
+            bytes_per_run: nonzero_usize(
+                "limits.logs.bytes_per_run",
+                raw.logs.bytes_per_run,
+                DEFAULT_LOG_BYTES_PER_RUN,
+            )?,
+            runs_retained: nonzero_usize(
+                "limits.logs.runs_retained",
+                raw.logs.runs_retained,
+                DEFAULT_LOG_RUNS_RETAINED,
+            )?,
+        };
+        let poison = PoisonPolicy::new(
+            nonzero_u32(
+                "limits.poison.max_failures",
+                raw.poison.max_failures,
+                POISON_MAX_FAILURES,
+            )?,
+            nonzero_secs(
+                "limits.poison.window_secs",
+                raw.poison.window_secs,
+                POISON_WINDOW,
+            )?,
+        );
+        let quota = SubmitQuota::new(
+            // Zero stays legal: a zero budget denies every submission,
+            // which is an enforceable operator choice, not a wedge.
+            raw.quota.max_charges.unwrap_or(DEFAULT_QUOTA_MAX_CHARGES),
+            nonzero_secs(
+                "limits.quota.window_secs",
+                raw.quota.window_secs,
+                DEFAULT_QUOTA_WINDOW,
+            )?,
+        );
+        let max_entries = nonzero_usize(
+            "limits.watch.max_entries",
+            raw.watch.max_entries,
+            DEFAULT_WATCH_MAX_ENTRIES,
+        )?;
+        let expiry = nonzero_secs(
+            "limits.watch.expiry_secs",
+            raw.watch.expiry_secs,
+            DEFAULT_WATCH_EXPIRY,
+        )?;
+        // An explicit grace overrides the give-up deadline, else it
+        // derives from `expiry` via [`WatchLimit::new`].
+        let watch = match raw.watch.grace_secs {
+            Some(0) => return Err(zero_field("limits.watch.grace_secs")),
+            Some(secs) => WatchLimit::with_grace(max_entries, expiry, Duration::from_secs(secs)),
+            None => WatchLimit::new(max_entries, expiry),
+        };
+        let dispatch = DispatchRatePolicy::new(
+            nonzero_u32(
+                "limits.dispatch.burst",
+                raw.dispatch.burst,
+                DEFAULT_DISPATCH_BURST,
+            )?,
+            nonzero_u32(
+                "limits.dispatch.refill_per_sec",
+                raw.dispatch.refill_per_sec,
+                DEFAULT_DISPATCH_REFILL_PER_SEC,
+            )?,
+        );
+        Ok(Self {
+            fuel_per_event: nonzero_u64(
+                "limits.fuel_per_event",
+                raw.fuel_per_event,
+                DEFAULT_FUEL_PER_EVENT,
+            )?,
+            event_deadline: nonzero_secs(
+                "limits.event_deadline_secs",
+                raw.event_deadline_secs,
+                DEFAULT_EVENT_DEADLINE,
+            )?,
+            memory_bytes: nonzero_usize(
+                "limits.memory_bytes",
+                raw.memory_bytes,
+                DEFAULT_MEMORY_LIMIT,
+            )?,
+            // Zero stays legal: a zero quota denies every local-store
+            // write, which is an enforceable operator choice.
+            state_bytes: raw.state_bytes.unwrap_or(DEFAULT_STATE_BYTES),
+            chain_response_max_bytes: nonzero_usize(
+                "limits.chain.response_body_max_bytes",
+                raw.chain.response_body_max_bytes.map(|b| b as usize),
+                DEFAULT_CHAIN_RESPONSE_MAX_BYTES,
+            )?,
+            http,
+            http_permit_destinations: raw.http.permit_destinations,
+            logs,
+            poison,
+            quota,
+            watch,
+            dispatch,
+        })
+    }
+}
+
+/// `[limits.http]` outbound limits. All optional; a zero millisecond value
+/// refuses at load, one above 24 h saturates down. The `*_timeout_max_ms`
+/// fields are ceilings on the matching guest-settable `request-options`
+/// timeouts: a higher guest value is clamped down, an unset one inherits
+/// the ceiling.
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct HttpLimitsSection {
@@ -614,8 +722,8 @@ pub struct OutboundHttpLimits {
     pub response_body_max_bytes: u64,
 }
 
-/// `[limits.logs]` per-run retention knobs. Both optional; degenerate
-/// zeroes saturate up to 1.
+/// `[limits.logs]` per-run retention knobs. Both optional; a zero refuses
+/// at load.
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct LogLimitsSection {
@@ -625,8 +733,8 @@ pub struct LogLimitsSection {
     pub runs_retained: Option<usize>,
 }
 
-/// `[limits.poison]` quarantine thresholds. Both optional; degenerate
-/// zeroes saturate up to 1. A module reaching `max_failures` traps within
+/// `[limits.poison]` quarantine thresholds. Both optional; a zero refuses
+/// at load. A module reaching `max_failures` traps within
 /// a sliding `window_secs` is quarantined and no longer dispatched until
 /// an operator-driven engine restart.
 #[derive(Debug, Default, Deserialize)]
@@ -651,10 +759,9 @@ pub struct QuotaLimitsSection {
     pub window_secs: Option<u64>,
 }
 
-/// `[limits.watch]` status-watch set bounds. All optional; degenerate
-/// zeroes saturate up to a usable minimum. The cap bounds the per-cadence
-/// poll fan-out; at the cap a new watch is refused and logged, live
-/// watches are never dropped.
+/// `[limits.watch]` status-watch set bounds. All optional; a zero refuses
+/// at load. The cap bounds the per-cadence poll fan-out; at the cap a new
+/// watch is refused and logged, live watches are never dropped.
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct WatchLimitsSection {
@@ -669,7 +776,7 @@ pub struct WatchLimitsSection {
 
 /// `[limits.dispatch]` per-module dispatch rate-limit knobs. Both
 /// optional; omitted values resolve to the production defaults, and a
-/// degenerate zero saturates up to 1 via [`ModuleLimits::dispatch_rate`].
+/// zero refuses at load.
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct DispatchLimitsSection {
@@ -679,14 +786,15 @@ pub struct DispatchLimitsSection {
     pub refill_per_sec: Option<u32>,
 }
 
-/// Resolved log retention limits the in-memory store enforces.
+/// Resolved log retention limits the in-memory store enforces. Non-zero
+/// by type: a zero budget would retain nothing.
 #[derive(Debug, Clone, Copy)]
 pub struct LogRetentionLimits {
     /// Byte budget for one run's ring; the newest record is never evicted
     /// to nothing.
-    pub bytes_per_run: usize,
+    pub bytes_per_run: NonZeroUsize,
     /// Runs retained per module; the oldest run evicts first.
-    pub runs_retained: usize,
+    pub runs_retained: NonZeroUsize,
 }
 
 fn default_state_dir() -> PathBuf {
@@ -904,16 +1012,23 @@ rpc_url = "wss://example.test/sepolia"
     }
 
     #[test]
-    fn zero_request_timeout_is_rejected_at_parse() {
-        let err = toml::from_str::<EngineConfig>(
-            r#"
+    fn zero_request_timeout_is_rejected_at_load() {
+        const ZERO: &str = r#"
 [chains.1]
 rpc_url = "http://example.test/x"
 request_timeout_secs = 0
-"#,
-        )
-        .expect_err("a zero timeout must not parse");
-        // Foreign toml::de::Error; pins our serde message threaded through it.
+"#;
+        let raw = toml::from_str::<RawEngineConfig>(ZERO)
+            .expect("the raw parse only decides the TOML is well formed");
+        let err = EngineConfig::try_from(raw).expect_err("a zero timeout must not validate");
+        assert!(
+            matches!(err, EngineConfigError::ZeroField { ref field }
+                if field == "chains.1.request_timeout_secs"),
+            "{err:?}",
+        );
+        // The public `Deserialize` path funnels through the same
+        // conversion; pins the operator-facing message.
+        let err = toml::from_str::<EngineConfig>(ZERO).expect_err("a zero timeout must not parse");
         assert!(
             err.to_string()
                 .contains("request_timeout_secs must not be 0"),
@@ -974,7 +1089,7 @@ request_timeout_secs = 0
 
     #[test]
     fn http_limits_default_when_absent() {
-        let http = ModuleLimits::default().http();
+        let http = ResolvedModuleLimits::default().http;
         assert_eq!(http.connect_timeout_max, Duration::from_secs(10));
         assert_eq!(http.first_byte_timeout_max, Duration::from_secs(30));
         assert_eq!(http.between_bytes_timeout_max, Duration::from_secs(30));
@@ -996,8 +1111,8 @@ response_body_max_bytes = 1_024
 "#,
         )
         .expect("limits.http parses");
-        assert_eq!(cfg.limits.fuel(), 7);
-        let http = cfg.limits.http();
+        assert_eq!(cfg.limits.fuel_per_event.get(), 7);
+        let http = cfg.limits.http;
         assert_eq!(http.connect_timeout_max, Duration::from_millis(5_000));
         assert_eq!(http.total_deadline, Duration::from_millis(90_000));
         assert_eq!(http.response_body_max_bytes, 1_024);
@@ -1058,7 +1173,7 @@ http_allow = ["api.acme.example"]
 "#,
         )
         .expect("every documented section parses under the guard");
-        assert_eq!(cfg.limits.fuel(), 7);
+        assert_eq!(cfg.limits.fuel_per_event.get(), 7);
         assert_eq!(cfg.modules.len(), 1);
         assert_eq!(cfg.services.len(), 1);
         assert!(
@@ -1071,7 +1186,7 @@ http_allow = ["api.acme.example"]
     fn permit_destinations_defaults_to_empty_and_parses_both_families() {
         let bare: EngineConfig = toml::from_str("[limits]\n").expect("bare limits parse");
         assert!(
-            bare.limits.http_permitted_destinations().is_empty(),
+            bare.limits.http_permit_destinations.is_empty(),
             "an absent list permits nothing"
         );
 
@@ -1083,7 +1198,7 @@ permit_destinations = ["10.0.5.7", "::1"]
         )
         .expect("permit_destinations parses");
         assert_eq!(
-            cfg.limits.http_permitted_destinations(),
+            cfg.limits.http_permit_destinations,
             vec![
                 IpAddr::V4(std::net::Ipv4Addr::new(10, 0, 5, 7)),
                 IpAddr::V6(std::net::Ipv6Addr::LOCALHOST),
@@ -1107,7 +1222,9 @@ permit_destinations = ["10.0.5.0/24"]
     #[test]
     fn chain_limits_default_when_absent() {
         assert_eq!(
-            ModuleLimits::default().chain_response_max_bytes(),
+            ResolvedModuleLimits::default()
+                .chain_response_max_bytes
+                .get(),
             1024 * 1024,
         );
     }
@@ -1121,59 +1238,191 @@ response_body_max_bytes = 2_048
 "#,
         )
         .expect("limits.chain parses");
-        assert_eq!(cfg.limits.chain_response_max_bytes(), 2_048);
+        assert_eq!(cfg.limits.chain_response_max_bytes.get(), 2_048);
+    }
+
+    /// Pins the built-in numbers, not the constants, so a resolution that
+    /// pairs a field with the wrong default constant fails here.
+    #[test]
+    fn core_limits_default_when_absent() {
+        let limits = ResolvedModuleLimits::default();
+        assert_eq!(limits.fuel_per_event.get(), 1_000_000_000);
+        assert_eq!(limits.event_deadline, Duration::from_secs(120));
+        assert_eq!(limits.memory_bytes.get(), 64 * 1024 * 1024);
+        assert_eq!(limits.state_bytes, 50 * 1024 * 1024);
     }
 
     #[test]
-    fn chain_limits_saturate_degenerate_zero() {
+    fn core_limits_parse_with_overrides() {
         let cfg: EngineConfig = toml::from_str(
             r#"
-[limits.chain]
-response_body_max_bytes = 0
+[limits]
+fuel_per_event      = 7
+event_deadline_secs = 30
+memory_bytes        = 1_048_576
+state_bytes         = 2_048
 "#,
         )
-        .expect("limits.chain parses");
-        assert_eq!(
-            cfg.limits.chain_response_max_bytes(),
-            1,
-            "zero saturates to 1 so resolution never rejects an empty body",
-        );
+        .expect("top-level limits parse");
+        assert_eq!(cfg.limits.fuel_per_event.get(), 7);
+        assert_eq!(cfg.limits.event_deadline, Duration::from_secs(30));
+        assert_eq!(cfg.limits.memory_bytes.get(), 1_048_576);
+        assert_eq!(cfg.limits.state_bytes, 2_048);
     }
 
     #[test]
-    fn http_limits_saturate_degenerate_millisecond_values() {
-        // Zero would fail every request instantly; u64::MAX would
-        // overflow timer arithmetic at request time. Both saturate.
+    fn quota_limits_default_when_absent() {
+        let quota = ResolvedModuleLimits::default().quota;
+        assert_eq!(quota.max_charges, 256);
+        assert_eq!(quota.window, Duration::from_secs(60));
+    }
+
+    #[test]
+    fn quota_limits_parse_with_overrides() {
+        let cfg: EngineConfig = toml::from_str(
+            r#"
+[limits.quota]
+max_charges = 9
+window_secs = 30
+"#,
+        )
+        .expect("limits.quota parses");
+        assert_eq!(cfg.limits.quota.max_charges, 9);
+        assert_eq!(cfg.limits.quota.window, Duration::from_secs(30));
+    }
+
+    /// Every `[limits]` zero that used to saturate silently now refuses at
+    /// load, through the typed conversion and the public parse alike.
+    #[test]
+    fn a_zero_limit_refuses_at_load_naming_the_field() {
+        for (toml, field) in [
+            ("[limits]\nfuel_per_event = 0\n", "limits.fuel_per_event"),
+            (
+                "[limits]\nevent_deadline_secs = 0\n",
+                "limits.event_deadline_secs",
+            ),
+            ("[limits]\nmemory_bytes = 0\n", "limits.memory_bytes"),
+            (
+                "[limits.chain]\nresponse_body_max_bytes = 0\n",
+                "limits.chain.response_body_max_bytes",
+            ),
+            (
+                "[limits.http]\nconnect_timeout_max_ms = 0\n",
+                "limits.http.connect_timeout_max_ms",
+            ),
+            (
+                "[limits.http]\nfirst_byte_timeout_max_ms = 0\n",
+                "limits.http.first_byte_timeout_max_ms",
+            ),
+            (
+                "[limits.http]\nbetween_bytes_timeout_max_ms = 0\n",
+                "limits.http.between_bytes_timeout_max_ms",
+            ),
+            (
+                "[limits.http]\ntotal_deadline_ms = 0\n",
+                "limits.http.total_deadline_ms",
+            ),
+            (
+                "[limits.logs]\nbytes_per_run = 0\n",
+                "limits.logs.bytes_per_run",
+            ),
+            (
+                "[limits.logs]\nruns_retained = 0\n",
+                "limits.logs.runs_retained",
+            ),
+            (
+                "[limits.poison]\nmax_failures = 0\n",
+                "limits.poison.max_failures",
+            ),
+            (
+                "[limits.poison]\nwindow_secs = 0\n",
+                "limits.poison.window_secs",
+            ),
+            (
+                "[limits.quota]\nwindow_secs = 0\n",
+                "limits.quota.window_secs",
+            ),
+            (
+                "[limits.watch]\nmax_entries = 0\n",
+                "limits.watch.max_entries",
+            ),
+            (
+                "[limits.watch]\nexpiry_secs = 0\n",
+                "limits.watch.expiry_secs",
+            ),
+            (
+                "[limits.watch]\ngrace_secs = 0\n",
+                "limits.watch.grace_secs",
+            ),
+            ("[limits.dispatch]\nburst = 0\n", "limits.dispatch.burst"),
+            (
+                "[limits.dispatch]\nrefill_per_sec = 0\n",
+                "limits.dispatch.refill_per_sec",
+            ),
+        ] {
+            let raw = toml::from_str::<RawEngineConfig>(toml)
+                .expect("the raw parse only decides the TOML is well formed");
+            let err =
+                EngineConfig::try_from(raw).expect_err(&format!("{field} = 0 must not validate"));
+            assert!(
+                matches!(err, EngineConfigError::ZeroField { field: ref f } if f == field),
+                "{field}: {err:?}",
+            );
+            // The public `Deserialize` path refuses too, naming the field.
+            let err = toml::from_str::<EngineConfig>(toml)
+                .expect_err(&format!("{field} = 0 must not parse"));
+            assert!(
+                err.to_string().contains(&format!("{field} must not be 0")),
+                "{field}: {err}",
+            );
+        }
+    }
+
+    /// Zero stays legal where it is an enforceable cap rather than a
+    /// wedge: a zero quota denies, it does not misconfigure.
+    #[test]
+    fn a_zero_deny_cap_stays_legal_and_resolves_to_zero() {
+        let cfg: EngineConfig = toml::from_str(
+            r#"
+[limits]
+state_bytes = 0
+
+[limits.http]
+response_body_max_bytes = 0
+
+[limits.quota]
+max_charges = 0
+"#,
+        )
+        .expect("zero deny caps parse");
+        assert_eq!(cfg.limits.state_bytes, 0);
+        assert_eq!(cfg.limits.http.response_body_max_bytes, 0);
+        assert_eq!(cfg.limits.quota.max_charges, 0);
+    }
+
+    #[test]
+    fn http_limits_saturate_a_millisecond_value_above_the_ceiling() {
+        // u64::MAX would overflow timer arithmetic at request time, so it
+        // saturates down to the 24 h ceiling at load.
         let limits = ModuleLimits {
             http: HttpLimitsSection {
-                connect_timeout_max_ms: Some(0),
                 total_deadline_ms: Some(u64::MAX),
                 ..Default::default()
             },
             ..Default::default()
         };
-        let http = limits.http();
-        assert_eq!(http.connect_timeout_max, Duration::from_millis(1));
-        assert_eq!(http.total_deadline, Duration::from_millis(86_400_000));
-    }
-
-    #[test]
-    fn http_limits_saturate_zero_from_toml() {
-        let cfg: EngineConfig = toml::from_str(
-            r#"
-[limits.http]
-total_deadline_ms = 0
-"#,
-        )
-        .expect("limits.http parses");
-        assert_eq!(cfg.limits.http().total_deadline, Duration::from_millis(1));
+        let resolved = ResolvedModuleLimits::try_from(limits).expect("saturating value resolves");
+        assert_eq!(
+            resolved.http.total_deadline,
+            Duration::from_millis(86_400_000)
+        );
     }
 
     #[test]
     fn log_limits_default_when_absent() {
-        let logs = ModuleLimits::default().logs();
-        assert_eq!(logs.bytes_per_run, 256 * 1024);
-        assert_eq!(logs.runs_retained, 16);
+        let logs = ResolvedModuleLimits::default().logs;
+        assert_eq!(logs.bytes_per_run.get(), 256 * 1024);
+        assert_eq!(logs.runs_retained.get(), 16);
     }
 
     #[test]
@@ -1186,31 +1435,14 @@ runs_retained = 3
 "#,
         )
         .expect("limits.logs parses");
-        let logs = cfg.limits.logs();
-        assert_eq!(logs.bytes_per_run, 4_096);
-        assert_eq!(logs.runs_retained, 3);
-    }
-
-    #[test]
-    fn log_limits_saturate_zero_up_to_one() {
-        // Zero would retain nothing; the saturating resolve keeps at
-        // least the newest record and run.
-        let cfg: EngineConfig = toml::from_str(
-            r#"
-[limits.logs]
-bytes_per_run = 0
-runs_retained = 0
-"#,
-        )
-        .expect("limits.logs parses");
-        let logs = cfg.limits.logs();
-        assert_eq!(logs.bytes_per_run, 1);
-        assert_eq!(logs.runs_retained, 1);
+        let logs = cfg.limits.logs;
+        assert_eq!(logs.bytes_per_run.get(), 4_096);
+        assert_eq!(logs.runs_retained.get(), 3);
     }
 
     #[test]
     fn poison_limits_default_when_absent() {
-        let poison = ModuleLimits::default().poison();
+        let poison = ResolvedModuleLimits::default().poison;
         assert_eq!(poison.max_failures, POISON_MAX_FAILURES);
         assert_eq!(poison.window, POISON_WINDOW);
     }
@@ -1225,27 +1457,9 @@ window_secs  = 60
 "#,
         )
         .expect("limits.poison parses");
-        let poison = cfg.limits.poison();
-        assert_eq!(poison.max_failures, 3);
+        let poison = cfg.limits.poison;
+        assert_eq!(poison.max_failures.get(), 3);
         assert_eq!(poison.window, Duration::from_secs(60));
-    }
-
-    #[test]
-    fn poison_limits_saturate_zero_up_to_one() {
-        // Zero max_failures would quarantine on the first trap; a zero
-        // window would prune every failure before the check. Both
-        // saturate to a usable minimum.
-        let cfg: EngineConfig = toml::from_str(
-            r#"
-[limits.poison]
-max_failures = 0
-window_secs  = 0
-"#,
-        )
-        .expect("limits.poison parses");
-        let poison = cfg.limits.poison();
-        assert_eq!(poison.max_failures, 1);
-        assert_eq!(poison.window, Duration::from_secs(1));
     }
 
     #[test]
@@ -1295,7 +1509,7 @@ manifest = "services/bare/component.toml"
 
     #[test]
     fn dispatch_rate_default_when_absent() {
-        let policy = ModuleLimits::default().dispatch_rate();
+        let policy = ResolvedModuleLimits::default().dispatch;
         assert_eq!(policy.capacity, DEFAULT_DISPATCH_BURST);
         assert_eq!(policy.refill_per_sec, DEFAULT_DISPATCH_REFILL_PER_SEC);
     }
@@ -1310,30 +1524,14 @@ refill_per_sec = 4
 "#,
         )
         .expect("limits.dispatch parses");
-        let policy = cfg.limits.dispatch_rate();
-        assert_eq!(policy.capacity, 8);
-        assert_eq!(policy.refill_per_sec, 4);
-    }
-
-    #[test]
-    fn dispatch_rate_saturates_zero_up_to_one() {
-        // A zero burst or refill would wedge the bucket; saturate to a minimum.
-        let cfg: EngineConfig = toml::from_str(
-            r#"
-[limits.dispatch]
-burst          = 0
-refill_per_sec = 0
-"#,
-        )
-        .expect("limits.dispatch parses");
-        let policy = cfg.limits.dispatch_rate();
-        assert_eq!(policy.capacity, 1);
-        assert_eq!(policy.refill_per_sec, 1);
+        let policy = cfg.limits.dispatch;
+        assert_eq!(policy.capacity.get(), 8);
+        assert_eq!(policy.refill_per_sec.get(), 4);
     }
 
     #[test]
     fn watch_limits_default_when_absent() {
-        let watch = ModuleLimits::default().watch();
+        let watch = ResolvedModuleLimits::default().watch;
         assert_eq!(watch.max_entries, DEFAULT_WATCH_MAX_ENTRIES);
         assert_eq!(watch.expiry, DEFAULT_WATCH_EXPIRY);
     }
@@ -1348,8 +1546,8 @@ expiry_secs = 900
 "#,
         )
         .expect("limits.watch parses");
-        let watch = cfg.limits.watch();
-        assert_eq!(watch.max_entries, 32);
+        let watch = cfg.limits.watch;
+        assert_eq!(watch.max_entries.get(), 32);
         assert_eq!(watch.expiry, Duration::from_secs(900));
         // Omitted grace_secs derives from expiry (min(2 * expiry, 24h)).
         assert_eq!(watch.grace, Duration::from_secs(1800));
@@ -1363,24 +1561,7 @@ grace_secs = 120
 "#,
         )
         .expect("limits.watch parses");
-        assert_eq!(cfg.limits.watch().grace, Duration::from_secs(120));
-    }
-
-    #[test]
-    fn watch_limits_saturate_zero_up_to_one() {
-        // A zero cap would refuse every watch; a zero expiry would evict
-        // each watch before its first poll. Both saturate.
-        let cfg: EngineConfig = toml::from_str(
-            r#"
-[limits.watch]
-max_entries = 0
-expiry_secs = 0
-"#,
-        )
-        .expect("limits.watch parses");
-        let watch = cfg.limits.watch();
-        assert_eq!(watch.max_entries, 1);
-        assert_eq!(watch.expiry, Duration::from_secs(1));
+        assert_eq!(cfg.limits.watch.grace, Duration::from_secs(120));
     }
 
     #[test]

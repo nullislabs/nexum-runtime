@@ -339,7 +339,10 @@ mod health_tests {
     use super::*;
 
     fn policy(max_failures: u32, window_secs: u64) -> PoisonPolicy {
-        PoisonPolicy::new(max_failures, Duration::from_secs(window_secs))
+        PoisonPolicy::new(
+            std::num::NonZeroU32::new(max_failures).unwrap(),
+            Duration::from_secs(window_secs),
+        )
     }
 
     fn secs(n: u64) -> Duration {

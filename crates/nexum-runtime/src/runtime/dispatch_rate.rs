@@ -3,21 +3,32 @@
 //! starts (fuel/memory/poison cap what one costs); per-module, so a flood
 //! cannot starve other modules. Pure with injected time.
 
+use std::num::NonZeroU32;
+
 use tokio::time::Instant;
 
+/// A literal as non-zero; a zero fails the build.
+const fn nz(n: u32) -> NonZeroU32 {
+    match NonZeroU32::new(n) {
+        Some(v) => v,
+        None => panic!("zero constant"),
+    }
+}
+
 /// Token-bucket thresholds from `[limits.dispatch]`, else
-/// [`DispatchRatePolicy::default`].
+/// [`DispatchRatePolicy::default`]. Non-zero by type: a zero in either
+/// field would drop every dispatch forever.
 #[derive(Debug, Clone, Copy)]
 pub struct DispatchRatePolicy {
     /// Bucket capacity: the burst allowance. One dispatch consumes one token.
-    pub capacity: u32,
+    pub capacity: NonZeroU32,
     /// Tokens replenished per second: the sustained ceiling.
-    pub refill_per_sec: u32,
+    pub refill_per_sec: NonZeroU32,
 }
 
 impl DispatchRatePolicy {
     /// Pair a burst allowance with the rate that refills it.
-    pub const fn new(capacity: u32, refill_per_sec: u32) -> Self {
+    pub const fn new(capacity: NonZeroU32, refill_per_sec: NonZeroU32) -> Self {
         Self {
             capacity,
             refill_per_sec,
@@ -32,10 +43,10 @@ impl Default for DispatchRatePolicy {
 }
 
 /// Production default burst allowance.
-pub const DEFAULT_DISPATCH_BURST: u32 = 256;
+pub const DEFAULT_DISPATCH_BURST: NonZeroU32 = nz(256);
 
 /// Production default sustained ceiling, in dispatches per second.
-pub const DEFAULT_DISPATCH_REFILL_PER_SEC: u32 = 128;
+pub const DEFAULT_DISPATCH_REFILL_PER_SEC: NonZeroU32 = nz(128);
 
 /// Per-module token-bucket state; fractional tokens, starts full.
 #[derive(Debug)]
@@ -51,7 +62,7 @@ impl TokenBucket {
     pub fn new(policy: DispatchRatePolicy, now: Instant) -> Self {
         Self {
             policy,
-            tokens: f64::from(policy.capacity),
+            tokens: f64::from(policy.capacity.get()),
             last_refill: now,
         }
     }
@@ -59,11 +70,12 @@ impl TokenBucket {
     /// Refill for elapsed time, then consume one token; `true` allowed,
     /// `false` over-rate. `now` is injected.
     pub fn try_acquire(&mut self, now: Instant) -> bool {
-        let capacity = f64::from(self.policy.capacity);
+        let capacity = f64::from(self.policy.capacity.get());
         let elapsed = now
             .saturating_duration_since(self.last_refill)
             .as_secs_f64();
-        self.tokens = (self.tokens + elapsed * f64::from(self.policy.refill_per_sec)).min(capacity);
+        self.tokens =
+            (self.tokens + elapsed * f64::from(self.policy.refill_per_sec.get())).min(capacity);
         self.last_refill = now;
         if self.tokens >= 1.0 {
             self.tokens -= 1.0;
@@ -90,7 +102,7 @@ mod tests {
     #[test]
     fn bucket_starts_full_and_allows_a_burst_up_to_capacity() {
         let now = Instant::now();
-        let mut bucket = TokenBucket::new(DispatchRatePolicy::new(3, 1), now);
+        let mut bucket = TokenBucket::new(DispatchRatePolicy::new(nz(3), nz(1)), now);
         // Three dispatches in the same instant clear the burst allowance.
         assert!(bucket.try_acquire(now));
         assert!(bucket.try_acquire(now));
@@ -102,7 +114,7 @@ mod tests {
     #[test]
     fn empty_bucket_refills_over_time() {
         let start = Instant::now();
-        let mut bucket = TokenBucket::new(DispatchRatePolicy::new(2, 4), start);
+        let mut bucket = TokenBucket::new(DispatchRatePolicy::new(nz(2), nz(4)), start);
         // Drain the burst.
         assert!(bucket.try_acquire(start));
         assert!(bucket.try_acquire(start));
@@ -116,7 +128,7 @@ mod tests {
     #[test]
     fn refill_never_exceeds_capacity() {
         let start = Instant::now();
-        let mut bucket = TokenBucket::new(DispatchRatePolicy::new(2, 100), start);
+        let mut bucket = TokenBucket::new(DispatchRatePolicy::new(nz(2), nz(100)), start);
         assert!(bucket.try_acquire(start));
         assert!(bucket.try_acquire(start));
         // A long idle would refill 100 tokens/s, but the bucket caps at
@@ -134,7 +146,7 @@ mod tests {
     #[test]
     fn one_flooding_bucket_does_not_starve_another() {
         let now = Instant::now();
-        let policy = DispatchRatePolicy::new(2, 1);
+        let policy = DispatchRatePolicy::new(nz(2), nz(1));
         let mut flooder = TokenBucket::new(policy, now);
         let mut neighbour = TokenBucket::new(policy, now);
 

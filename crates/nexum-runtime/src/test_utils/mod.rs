@@ -56,7 +56,7 @@ use std::time::Duration;
 
 use alloy_chains::Chain;
 
-use crate::engine_config::{ChainConfig, ModuleLimits};
+use crate::engine_config::{ChainConfig, ResolvedModuleLimits};
 use crate::host::component::Components;
 use crate::host::logs::LogPipeline;
 use rpc::FakeNode;
@@ -65,7 +65,7 @@ pub(crate) const HARNESS_POLL_INTERVAL: Duration = Duration::from_millis(20);
 
 /// A fresh in-memory [`LogPipeline`] at default retention limits.
 pub(crate) fn in_memory_logs() -> LogPipeline {
-    LogPipeline::in_memory(ModuleLimits::default().logs())
+    LogPipeline::in_memory(ResolvedModuleLimits::default().logs)
 }
 
 /// `[chains]` entries for every chain id the test fixtures name; never dialled at boot.

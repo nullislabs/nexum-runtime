@@ -4,16 +4,16 @@ use super::*;
 
 #[test]
 fn module_limits_default_to_engine_limits_when_unset() {
-    let cfg = ModuleLimits::default();
+    let cfg = ResolvedModuleLimits::default();
     let resolved = resolve_module_limits(&ResourceSection::default(), &cfg);
-    assert_eq!(resolved.fuel, cfg.fuel());
-    assert_eq!(resolved.memory, cfg.memory());
-    assert_eq!(resolved.state_bytes, cfg.state_bytes());
+    assert_eq!(resolved.fuel, cfg.fuel_per_event.get());
+    assert_eq!(resolved.memory, cfg.memory_bytes.get());
+    assert_eq!(resolved.state_bytes, cfg.state_bytes);
 }
 
 #[test]
 fn manifest_resource_overrides_take_effect_and_are_field_local() {
-    let cfg = ModuleLimits::default();
+    let cfg = ResolvedModuleLimits::default();
     // Only fuel is overridden; memory + state keep the engine defaults.
     let res = ResourceSection {
         max_memory_bytes: None,
@@ -22,7 +22,7 @@ fn manifest_resource_overrides_take_effect_and_are_field_local() {
     };
     let resolved = resolve_module_limits(&res, &cfg);
     assert_eq!(resolved.fuel, 100_000);
-    assert_eq!(resolved.memory, cfg.memory());
+    assert_eq!(resolved.memory, cfg.memory_bytes.get());
     assert_eq!(resolved.state_bytes, 2048);
 }
 
@@ -31,13 +31,16 @@ fn manifest_resource_overrides_take_effect_and_are_field_local() {
 /// only covered one of the three would fail here.
 #[test]
 fn manifest_resources_cannot_widen_the_engine_ceiling() {
-    let cfg = ModuleLimits::default();
+    let cfg = ResolvedModuleLimits::default();
 
     let fuel_grab = ResourceSection {
         max_fuel_per_event: Some(u64::MAX),
         ..ResourceSection::default()
     };
-    assert_eq!(resolve_module_limits(&fuel_grab, &cfg).fuel, cfg.fuel());
+    assert_eq!(
+        resolve_module_limits(&fuel_grab, &cfg).fuel,
+        cfg.fuel_per_event.get()
+    );
 
     let memory_grab = ResourceSection {
         max_memory_bytes: Some(usize::MAX),
@@ -45,7 +48,7 @@ fn manifest_resources_cannot_widen_the_engine_ceiling() {
     };
     assert_eq!(
         resolve_module_limits(&memory_grab, &cfg).memory,
-        cfg.memory()
+        cfg.memory_bytes.get()
     );
 
     let state_grab = ResourceSection {
@@ -54,23 +57,23 @@ fn manifest_resources_cannot_widen_the_engine_ceiling() {
     };
     assert_eq!(
         resolve_module_limits(&state_grab, &cfg).state_bytes,
-        cfg.state_bytes(),
+        cfg.state_bytes,
     );
 }
 
 /// Clamping must not cost a module the narrower budget it asked for.
 #[test]
 fn a_narrower_manifest_value_still_wins() {
-    let cfg = ModuleLimits::default();
+    let cfg = ResolvedModuleLimits::default();
     let res = ResourceSection {
-        max_memory_bytes: Some(cfg.memory() / 2),
-        max_fuel_per_event: Some(cfg.fuel() / 2),
-        max_state_bytes: Some(cfg.state_bytes() / 2),
+        max_memory_bytes: Some(cfg.memory_bytes.get() / 2),
+        max_fuel_per_event: Some(cfg.fuel_per_event.get() / 2),
+        max_state_bytes: Some(cfg.state_bytes / 2),
     };
     let resolved = resolve_module_limits(&res, &cfg);
-    assert_eq!(resolved.fuel, cfg.fuel() / 2);
-    assert_eq!(resolved.memory, cfg.memory() / 2);
-    assert_eq!(resolved.state_bytes, cfg.state_bytes() / 2);
+    assert_eq!(resolved.fuel, cfg.fuel_per_event.get() / 2);
+    assert_eq!(resolved.memory, cfg.memory_bytes.get() / 2);
+    assert_eq!(resolved.state_bytes, cfg.state_bytes / 2);
 }
 
 /// An over-long future is dropped at the deadline, not awaited out.
@@ -107,31 +110,31 @@ async fn dispatch_deadline_lets_a_prompt_call_finish() {
     assert_eq!(result.expect("prompt call is well under the deadline"), 7);
 }
 
-/// A degenerate `0` saturates up to the 1 s floor so it cannot cut every
-/// dispatch off instantly.
+/// A `0` deadline would cut every dispatch off instantly, so it refuses
+/// at load instead of resolving.
 #[test]
-fn event_deadline_resolves_override_default_and_floor() {
-    let default = ModuleLimits::default();
+fn event_deadline_resolves_override_and_default_and_refuses_zero() {
+    let default = ResolvedModuleLimits::default();
     assert_eq!(
-        default.event_deadline(),
+        default.event_deadline,
         Duration::from_secs(120),
         "unset resolves to the built-in default",
     );
 
-    let overridden = ModuleLimits {
+    let overridden = ResolvedModuleLimits::try_from(ModuleLimits {
         event_deadline_secs: Some(5),
         ..ModuleLimits::default()
-    };
-    assert_eq!(overridden.event_deadline(), Duration::from_secs(5));
+    })
+    .expect("a non-zero override resolves");
+    assert_eq!(overridden.event_deadline, Duration::from_secs(5));
 
-    let degenerate = ModuleLimits {
+    let degenerate = ResolvedModuleLimits::try_from(ModuleLimits {
         event_deadline_secs: Some(0),
         ..ModuleLimits::default()
-    };
-    assert_eq!(
-        degenerate.event_deadline(),
-        Duration::from_secs(1),
-        "a zero override saturates up to the 1s floor",
+    });
+    assert!(
+        degenerate.is_err(),
+        "a zero deadline must refuse at load, not saturate",
     );
 }
 
