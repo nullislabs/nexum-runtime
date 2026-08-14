@@ -1,5 +1,5 @@
 ---
-status: accepted
+status: superseded in part by 0017-capabilities-and-services.md
 ---
 
 # A component declares a kind and its dependencies
@@ -88,6 +88,7 @@ The manifest file is `component.toml`, and `[[adapters]]` in `engine.toml` becom
 - The direction of every key is legible.
   A component states its identity, its kind, and what it depends on, and nothing else in the file is a demand on the engine.
 - Naming a service and naming a host capability read the same, because the engine already treats them the same.
+  Superseded by [ADR-0017](0017-capabilities-and-services.md): the engine treating them the same was the conflation, not evidence they are alike.
 - `nexum-module-macros` and the `#[module]` attribute keep their names.
   The macro serves the module kind, so the name stays accurate.
 - The WIT worlds spell the worker kind `event-module`.
