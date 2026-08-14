@@ -3,7 +3,7 @@
 //! they compile for any world and test against the in-memory mocks.
 //!
 //! - [`CommitmentSet`] - commitment-set registry, one
-//!   `watch:{owner}:{hash}` row per conditional commitment.
+//!   `commitment:{owner}:{hash}` row per conditional commitment.
 //! - [`Gates`] - `next_block:` / `next_epoch:` gate keys holding a u64
 //!   little-endian threshold, with an [`is_ready`](Gates::is_ready)
 //!   predicate.
@@ -76,9 +76,8 @@ use strum::IntoStaticStr;
 
 use crate::host::{Fault, LocalStoreHost};
 
-/// Prefix of every commitment-set row. The value is frozen: deployed
-/// keepers read their rows back under it.
-pub const COMMITMENT_PREFIX: &str = "watch:";
+/// Prefix of every commitment-set row.
+pub const COMMITMENT_PREFIX: &str = "commitment:";
 /// Prefix of the block-height gate row paired with a commitment.
 pub const NEXT_BLOCK_PREFIX: &str = "next_block:";
 /// Prefix of the Unix-seconds gate row paired with a commitment.
@@ -109,7 +108,7 @@ pub struct CommitmentRef<'k> {
 }
 
 impl<'k> CommitmentRef<'k> {
-    /// Parse a `watch:{owner}:{hash}` key. `None` when the prefix or
+    /// Parse a `commitment:{owner}:{hash}` key. `None` when the prefix or
     /// colon is missing, or either half is empty.
     pub fn parse(key: &'k str) -> Option<Self> {
         let rest = key.strip_prefix(COMMITMENT_PREFIX)?;
@@ -156,7 +155,7 @@ impl<'k> CommitmentRef<'k> {
 }
 
 /// Commitment-set registry: one row per conditional commitment, keyed
-/// `watch:{owner}:{hash}` with the encoded commitment parameters as
+/// `commitment:{owner}:{hash}` with the encoded commitment parameters as
 /// the value.
 pub struct CommitmentSet<'h, H> {
     host: &'h H,
@@ -434,9 +433,7 @@ impl<'h, H: LocalStoreHost> Journal<'h, H> {
     /// park faults propagate.
     ///
     /// The caller chooses the `Disposition` per outcome, so `guard`
-    /// fixes the ordering, not the retry policy. `Keeper::run`'s
-    /// fresh-submit arm releases on every venue error, so wiring `guard`
-    /// there must supply that policy, not the reconcile pass's park.
+    /// fixes the ordering, not the retry policy.
     pub async fn guard<T, F, Fut>(
         &self,
         key: &str,

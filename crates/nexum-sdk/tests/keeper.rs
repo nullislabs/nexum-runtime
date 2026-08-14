@@ -25,7 +25,7 @@ fn commitment_key_is_lowercase_prefixed_hex() {
     assert_eq!(
         key,
         concat!(
-            "watch:0x00112233445566778899aabbccddeeff00112233:",
+            "commitment:0x00112233445566778899aabbccddeeff00112233:",
             "0x0202020202020202020202020202020202020202020202020202020202020202",
         ),
     );
@@ -49,19 +49,19 @@ fn commitment_key_round_trips_via_parse() {
 #[test]
 fn parse_rejects_missing_prefix_or_separator() {
     assert_eq!(CommitmentRef::parse("gate:0xaa:0xbb"), None);
-    assert_eq!(CommitmentRef::parse("watch:0xaa0xbb"), None);
+    assert_eq!(CommitmentRef::parse("commitment:0xaa0xbb"), None);
     assert_eq!(CommitmentRef::parse(""), None);
 }
 
 #[test]
 fn parse_rejects_empty_halves() {
-    // `watch::` splits into two empty halves, which would derive
+    // `commitment::` splits into two empty halves, which would derive
     // degenerate gate keys like `next_block::`; reject it outright.
-    assert_eq!(CommitmentRef::parse("watch::"), None);
-    assert_eq!(CommitmentRef::parse("watch:0xaa:"), None);
-    assert_eq!(CommitmentRef::parse("watch::0xbb"), None);
+    assert_eq!(CommitmentRef::parse("commitment::"), None);
+    assert_eq!(CommitmentRef::parse("commitment:0xaa:"), None);
+    assert_eq!(CommitmentRef::parse("commitment::0xbb"), None);
     // A well-formed key with both halves still parses.
-    assert!(CommitmentRef::parse("watch:0xaa:0xbb").is_some());
+    assert!(CommitmentRef::parse("commitment:0xaa:0xbb").is_some());
 }
 
 #[test]
@@ -69,7 +69,7 @@ fn parse_preserves_key_substrings_verbatim() {
     // A foreign writer may have cased the hex differently; gate keys
     // must derive from the stored substrings, not from a re-rendered
     // canonical form.
-    let commitment = CommitmentRef::parse("watch:0xAABB:0xCCDD").expect("parse");
+    let commitment = CommitmentRef::parse("commitment:0xAABB:0xCCDD").expect("parse");
     assert_eq!(commitment.owner_hex(), "0xAABB");
     assert_eq!(commitment.hash_hex(), "0xCCDD");
     assert_eq!(commitment.next_block_key(), "next_block:0xAABB:0xCCDD");
@@ -222,7 +222,7 @@ fn remove_propagates_a_gate_delete_fault_and_keeps_the_commitment() {
 #[test]
 fn ready_with_no_gates_set() {
     let host = MockHost::new();
-    let commitment = CommitmentRef::parse("watch:0xaa:0xbb").unwrap();
+    let commitment = CommitmentRef::parse("commitment:0xaa:0xbb").unwrap();
     assert!(Gates::new(&host).is_ready(commitment, 0, 0).unwrap());
 }
 
@@ -230,7 +230,7 @@ fn ready_with_no_gates_set() {
 fn next_block_gate_is_inclusive_at_threshold() {
     let host = MockHost::new();
     let gates = Gates::new(&host);
-    let commitment = CommitmentRef::parse("watch:0xaa:0xbb").unwrap();
+    let commitment = CommitmentRef::parse("commitment:0xaa:0xbb").unwrap();
     gates.set_next_block(commitment, 500).unwrap();
 
     assert!(!gates.is_ready(commitment, 499, u64::MAX).unwrap());
@@ -242,7 +242,7 @@ fn next_block_gate_is_inclusive_at_threshold() {
 fn next_epoch_gate_is_inclusive_at_threshold() {
     let host = MockHost::new();
     let gates = Gates::new(&host);
-    let commitment = CommitmentRef::parse("watch:0xaa:0xbb").unwrap();
+    let commitment = CommitmentRef::parse("commitment:0xaa:0xbb").unwrap();
     gates.set_next_epoch(commitment, 1_700_000_000).unwrap();
 
     assert!(!gates.is_ready(commitment, u64::MAX, 1_699_999_999).unwrap());
@@ -253,7 +253,7 @@ fn next_epoch_gate_is_inclusive_at_threshold() {
 fn both_gates_must_pass() {
     let host = MockHost::new();
     let gates = Gates::new(&host);
-    let commitment = CommitmentRef::parse("watch:0xaa:0xbb").unwrap();
+    let commitment = CommitmentRef::parse("commitment:0xaa:0xbb").unwrap();
     gates.set_next_block(commitment, 100).unwrap();
     gates.set_next_epoch(commitment, 2_000).unwrap();
 
@@ -266,7 +266,7 @@ fn both_gates_must_pass() {
 fn gate_values_are_u64_le() {
     let host = MockHost::new();
     let gates = Gates::new(&host);
-    let commitment = CommitmentRef::parse("watch:0xaa:0xbb").unwrap();
+    let commitment = CommitmentRef::parse("commitment:0xaa:0xbb").unwrap();
     gates
         .set_next_block(commitment, 0x0102_0304_0506_0708)
         .unwrap();
@@ -281,7 +281,7 @@ fn gate_values_are_u64_le() {
 fn malformed_gate_value_reads_as_no_gate() {
     let host = MockHost::new();
     let gates = Gates::new(&host);
-    let commitment = CommitmentRef::parse("watch:0xaa:0xbb").unwrap();
+    let commitment = CommitmentRef::parse("commitment:0xaa:0xbb").unwrap();
     host.store.set("next_block:0xaa:0xbb", b"not8b").unwrap();
 
     assert!(
@@ -294,7 +294,7 @@ fn malformed_gate_value_reads_as_no_gate() {
 fn clear_removes_both_gate_keys() {
     let host = MockHost::new();
     let gates = Gates::new(&host);
-    let commitment = CommitmentRef::parse("watch:0xaa:0xbb").unwrap();
+    let commitment = CommitmentRef::parse("commitment:0xaa:0xbb").unwrap();
     gates.set_next_block(commitment, 1).unwrap();
     gates.set_next_epoch(commitment, 2).unwrap();
 
@@ -309,7 +309,7 @@ fn clear_removes_both_gate_keys() {
 fn gate_fault_propagates_from_is_ready() {
     let host = MockHost::new();
     let gates = Gates::new(&host);
-    let commitment = CommitmentRef::parse("watch:0xaa:0xbb").unwrap();
+    let commitment = CommitmentRef::parse("commitment:0xaa:0xbb").unwrap();
     host.store
         .fail_on(NEXT_EPOCH_PREFIX, Fault::Unavailable("injected".into()));
 
