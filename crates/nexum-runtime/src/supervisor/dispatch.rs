@@ -201,7 +201,7 @@ impl<T: RuntimeTypes> Supervisor<T> {
         let start = Instant::now();
         // A deadline hit is fatal like a trap: cancellation leaves the store
         // unusable, so the trap arm must mark the module dead.
-        let deadline = module.seed.event_deadline;
+        let deadline = module.seed.dispatch_deadline;
         let call = module
             .live
             .bindings

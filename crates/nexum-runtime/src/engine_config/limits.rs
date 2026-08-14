@@ -12,97 +12,8 @@ use crate::runtime::poison_policy::{POISON_MAX_FAILURES, POISON_WINDOW, PoisonPo
 use super::error::{EngineConfigError, nonzero_secs, nonzero_u32, nonzero_usize, zero_field};
 use super::nz_usize;
 
-/// Default per-caller submission budget within [`DEFAULT_QUOTA_WINDOW`].
-pub const DEFAULT_QUOTA_MAX_CHARGES: u32 = 256;
-/// Default sliding window the per-caller submission budget is counted over.
-pub const DEFAULT_QUOTA_WINDOW: Duration = Duration::from_secs(60);
-/// Default cap on receipts under status watch at once.
-pub const DEFAULT_WATCH_MAX_ENTRIES: NonZeroUsize = nz_usize(1024);
-/// Default base window a healthy provider refreshes within; the give-up
-/// deadline is the derived `grace`, not this directly.
-pub const DEFAULT_WATCH_EXPIRY: Duration = Duration::from_secs(86_400);
-/// Derived grace defaults to this many `expiry` windows.
-pub const WATCH_GRACE_MULTIPLIER: u64 = 2;
-/// Ceiling on the derived grace window.
-pub const WATCH_GRACE_MAX: Duration = Duration::from_secs(86_400);
-
-/// Give-up window derived from `expiry`: `min(MULTIPLIER * expiry, MAX)`.
-const fn derive_grace(expiry: Duration) -> Duration {
-    let scaled = expiry.as_secs().saturating_mul(WATCH_GRACE_MULTIPLIER);
-    let capped = if scaled < WATCH_GRACE_MAX.as_secs() {
-        scaled
-    } else {
-        WATCH_GRACE_MAX.as_secs()
-    };
-    Duration::from_secs(capped)
-}
-
-/// Per-caller submission quota toward providers. A submission and a
-/// charged decode failure each consume one unit; the window slides.
-/// Resolved from `[limits.quota]`.
-#[derive(Debug, Clone, Copy)]
-pub struct SubmitQuota {
-    /// Maximum charges a single caller may accrue within `window`.
-    pub max_charges: u32,
-    /// Sliding window the charges are counted across.
-    pub window: Duration,
-}
-
-impl SubmitQuota {
-    /// Budget paired with the window it is counted over.
-    pub const fn new(max_charges: u32, window: Duration) -> Self {
-        Self {
-            max_charges,
-            window,
-        }
-    }
-}
-
-impl Default for SubmitQuota {
-    fn default() -> Self {
-        Self::new(DEFAULT_QUOTA_MAX_CHARGES, DEFAULT_QUOTA_WINDOW)
-    }
-}
-
-/// Bounds on a provider status-watch set: `max_entries` caps the
-/// per-cadence poll fan-out, `grace` is the give-up deadline, `expiry`
-/// the base window it derives from. Resolved from `[limits.watch]`.
-#[derive(Debug, Clone, Copy)]
-pub struct WatchLimit {
-    /// Maximum receipts under status watch at once.
-    pub max_entries: NonZeroUsize,
-    /// Base window a healthy provider refreshes the deadline within.
-    pub expiry: Duration,
-    /// Give-up deadline: how long a watch survives an unreachable provider
-    /// before unreported eviction. A reachable poll resets it; a resolve
-    /// failure or errored poll rides out against it. Derived unless set.
-    pub grace: Duration,
-}
-
-impl WatchLimit {
-    /// Pair a cap with the base expiry; `grace` derives from `expiry`.
-    pub const fn new(max_entries: NonZeroUsize, expiry: Duration) -> Self {
-        Self::with_grace(max_entries, expiry, derive_grace(expiry))
-    }
-
-    /// As [`new`](Self::new) but with an explicit `grace`.
-    pub const fn with_grace(max_entries: NonZeroUsize, expiry: Duration, grace: Duration) -> Self {
-        Self {
-            max_entries,
-            expiry,
-            grace,
-        }
-    }
-}
-
-impl Default for WatchLimit {
-    fn default() -> Self {
-        Self::new(DEFAULT_WATCH_MAX_ENTRIES, DEFAULT_WATCH_EXPIRY)
-    }
-}
-
 /// Default per-dispatch wall-clock deadline.
-const DEFAULT_EVENT_DEADLINE: Duration = Duration::from_secs(120);
+const DEFAULT_DISPATCH_DEADLINE: Duration = Duration::from_secs(120);
 
 /// Default ceiling on the guest-settable connect timeout.
 const DEFAULT_HTTP_CONNECT_TIMEOUT_MAX: Duration = Duration::from_secs(10);
@@ -143,8 +54,6 @@ pub struct ModuleLimits {
     pub(crate) fuel_per_event: Option<toml::Value>,
     pub(crate) memory_bytes: Option<toml::Value>,
     pub(crate) state_bytes: Option<toml::Value>,
-    /// Wall-clock deadline (s) for a dispatch, covering host-call time fuel cannot meter.
-    pub event_deadline_secs: Option<u64>,
     /// `[limits.http]`.
     #[serde(default)]
     pub http: HttpLimitsSection,
@@ -157,12 +66,6 @@ pub struct ModuleLimits {
     /// `[limits.poison]`.
     #[serde(default)]
     pub poison: PoisonLimitsSection,
-    /// `[limits.quota]`.
-    #[serde(default)]
-    pub quota: QuotaLimitsSection,
-    /// `[limits.watch]`.
-    #[serde(default)]
-    pub watch: WatchLimitsSection,
     /// `[limits.dispatch]`.
     #[serde(default)]
     pub dispatch: DispatchLimitsSection,
@@ -175,7 +78,7 @@ pub struct ModuleLimits {
 pub struct ResolvedModuleLimits {
     /// Wall-clock deadline for a dispatch, covering host-call time fuel
     /// cannot meter.
-    pub event_deadline: Duration,
+    pub dispatch_deadline: Duration,
     /// Cap on one chain JSON-RPC response body.
     pub chain_response_max_bytes: NonZeroUsize,
     /// Outbound wasi:http limits.
@@ -187,10 +90,6 @@ pub struct ResolvedModuleLimits {
     pub logs: LogRetentionLimits,
     /// Poison-pill quarantine thresholds.
     pub poison: PoisonPolicy,
-    /// Per-caller provider submission quota.
-    pub quota: SubmitQuota,
-    /// Status-watch set bounds.
-    pub watch: WatchLimit,
     /// Per-module dispatch rate-limit policy.
     pub dispatch: DispatchRatePolicy,
 }
@@ -298,33 +197,6 @@ impl TryFrom<ModuleLimits> for ResolvedModuleLimits {
                 POISON_WINDOW,
             )?,
         );
-        let quota = SubmitQuota::new(
-            // Zero stays legal: a zero budget denies every submission,
-            // which is an enforceable operator choice, not a wedge.
-            raw.quota.max_charges.unwrap_or(DEFAULT_QUOTA_MAX_CHARGES),
-            nonzero_secs(
-                "limits.quota.window_secs",
-                raw.quota.window_secs,
-                DEFAULT_QUOTA_WINDOW,
-            )?,
-        );
-        let max_entries = nonzero_usize(
-            "limits.watch.max_entries",
-            raw.watch.max_entries,
-            DEFAULT_WATCH_MAX_ENTRIES,
-        )?;
-        let expiry = nonzero_secs(
-            "limits.watch.expiry_secs",
-            raw.watch.expiry_secs,
-            DEFAULT_WATCH_EXPIRY,
-        )?;
-        // An explicit grace overrides the give-up deadline, else it
-        // derives from `expiry` via [`WatchLimit::new`].
-        let watch = match raw.watch.grace_secs {
-            Some(0) => return Err(zero_field("limits.watch.grace_secs")),
-            Some(secs) => WatchLimit::with_grace(max_entries, expiry, Duration::from_secs(secs)),
-            None => WatchLimit::new(max_entries, expiry),
-        };
         let dispatch = DispatchRatePolicy::new(
             nonzero_u32(
                 "limits.dispatch.burst",
@@ -338,10 +210,10 @@ impl TryFrom<ModuleLimits> for ResolvedModuleLimits {
             )?,
         );
         Ok(Self {
-            event_deadline: nonzero_secs(
-                "limits.event_deadline_secs",
-                raw.event_deadline_secs,
-                DEFAULT_EVENT_DEADLINE,
+            dispatch_deadline: nonzero_secs(
+                "limits.dispatch.deadline_secs",
+                raw.dispatch.deadline_secs,
+                DEFAULT_DISPATCH_DEADLINE,
             )?,
             chain_response_max_bytes: nonzero_usize(
                 "limits.chain.response_body_max_bytes",
@@ -352,8 +224,6 @@ impl TryFrom<ModuleLimits> for ResolvedModuleLimits {
             http_permit_destinations: raw.http.permit_destinations,
             logs,
             poison,
-            quota,
-            watch,
             dispatch,
         })
     }
@@ -431,36 +301,8 @@ pub struct PoisonLimitsSection {
     pub window_secs: Option<u64>,
 }
 
-/// `[limits.quota]` per-caller submission budget. Both optional. A caller
-/// (keyed by its namespace) may accrue at most `max_charges` within a
-/// sliding `window_secs`; a charged decode failure counts the same.
-#[derive(Debug, Default, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct QuotaLimitsSection {
-    /// Charges per caller in the window.
-    pub max_charges: Option<u32>,
-    /// Sliding window the charges are counted across, in seconds.
-    pub window_secs: Option<u64>,
-}
-
-/// `[limits.watch]` status-watch set bounds. All optional; a zero refuses
-/// at load. The cap bounds the per-cadence poll fan-out; at the cap a new
-/// watch is refused and logged, live watches are never dropped.
-#[derive(Debug, Default, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct WatchLimitsSection {
-    /// Maximum receipts under status watch at once.
-    pub max_entries: Option<usize>,
-    /// Base window seconds a healthy venue refreshes the deadline within.
-    pub expiry_secs: Option<u64>,
-    /// Give-up deadline seconds: how long a watch rides out an unreachable
-    /// venue before eviction. Omitted, it derives from `expiry_secs`.
-    pub grace_secs: Option<u64>,
-}
-
-/// `[limits.dispatch]` per-module dispatch rate-limit knobs. Both
-/// optional; omitted values resolve to the production defaults, and a
-/// zero refuses at load.
+/// `[limits.dispatch]` per-module dispatch knobs. All optional; omitted
+/// values resolve to the production defaults, and a zero refuses at load.
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct DispatchLimitsSection {
@@ -468,6 +310,9 @@ pub struct DispatchLimitsSection {
     pub burst: Option<u32>,
     /// Sustained dispatch ceiling: tokens replenished per second.
     pub refill_per_sec: Option<u32>,
+    /// Wall-clock deadline (s) for a dispatch, covering host-call time
+    /// fuel cannot meter.
+    pub deadline_secs: Option<u64>,
 }
 
 /// Resolved log retention limits the in-memory store enforces. Non-zero
@@ -613,27 +458,6 @@ response_body_max_bytes = 2_048
     }
 
     #[test]
-    fn quota_limits_default_when_absent() {
-        let quota = ResolvedModuleLimits::default().quota;
-        assert_eq!(quota.max_charges, 256);
-        assert_eq!(quota.window, Duration::from_secs(60));
-    }
-
-    #[test]
-    fn quota_limits_parse_with_overrides() {
-        let cfg: EngineConfig = toml::from_str(
-            r#"
-[limits.quota]
-max_charges = 9
-window_secs = 30
-"#,
-        )
-        .expect("limits.quota parses");
-        assert_eq!(cfg.limits.quota.max_charges, 9);
-        assert_eq!(cfg.limits.quota.window, Duration::from_secs(30));
-    }
-
-    #[test]
     fn http_limits_saturate_a_millisecond_value_above_the_ceiling() {
         // u64::MAX would overflow timer arithmetic at request time, so it
         // saturates down to the 24 h ceiling at load.
@@ -715,40 +539,5 @@ refill_per_sec = 4
         let policy = cfg.limits.dispatch;
         assert_eq!(policy.capacity.get(), 8);
         assert_eq!(policy.refill_per_sec.get(), 4);
-    }
-
-    #[test]
-    fn watch_limits_default_when_absent() {
-        let watch = ResolvedModuleLimits::default().watch;
-        assert_eq!(watch.max_entries, DEFAULT_WATCH_MAX_ENTRIES);
-        assert_eq!(watch.expiry, DEFAULT_WATCH_EXPIRY);
-    }
-
-    #[test]
-    fn watch_limits_parse_with_overrides() {
-        let cfg: EngineConfig = toml::from_str(
-            r#"
-[limits.watch]
-max_entries = 32
-expiry_secs = 900
-"#,
-        )
-        .expect("limits.watch parses");
-        let watch = cfg.limits.watch;
-        assert_eq!(watch.max_entries.get(), 32);
-        assert_eq!(watch.expiry, Duration::from_secs(900));
-        // Omitted grace_secs derives from expiry (min(2 * expiry, 24h)).
-        assert_eq!(watch.grace, Duration::from_secs(1800));
-
-        // An explicit grace_secs overrides the derivation.
-        let cfg: EngineConfig = toml::from_str(
-            r#"
-[limits.watch]
-expiry_secs = 900
-grace_secs = 120
-"#,
-        )
-        .expect("limits.watch parses");
-        assert_eq!(cfg.limits.watch.grace, Duration::from_secs(120));
     }
 }

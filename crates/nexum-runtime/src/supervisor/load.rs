@@ -134,7 +134,7 @@ pub(super) struct Seed {
     pub(super) artifact: CachedArtifact,
     pub(super) spec: StoreSpec,
     /// Wall-clock bound on a whole dispatch, host calls included.
-    pub(super) event_deadline: Duration,
+    pub(super) dispatch_deadline: Duration,
 }
 
 /// Restarts replace bindings, store, and run; the rate bucket carries across.
@@ -221,7 +221,7 @@ pub(super) async fn instantiate_module<T: RuntimeTypes>(
         &bindings,
         store,
         &seed.artifact.init_config,
-        seed.event_deadline,
+        seed.dispatch_deadline,
     )
     .await?;
     Ok((bindings, init))
@@ -343,7 +343,7 @@ pub(super) async fn module<T: RuntimeTypes>(
             init_config: config,
         },
         spec,
-        event_deadline: limits_cfg.event_deadline,
+        dispatch_deadline: limits_cfg.dispatch_deadline,
     };
     let (run, mut store) = fresh_run_store(shared, &module_namespace, 0, &seed.spec)?;
     let (bindings, init) = instantiate_module(linker, &seed, &module_namespace, &mut store).await?;

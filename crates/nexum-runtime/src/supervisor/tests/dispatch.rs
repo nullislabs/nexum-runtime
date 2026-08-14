@@ -1,6 +1,14 @@
 //! Dispatch: limits resolution, deadlines, rate limiting, per-chain isolation.
 
 use super::*;
+use crate::engine_config::DispatchLimitsSection;
+
+fn deadline_secs(secs: u64) -> DispatchLimitsSection {
+    DispatchLimitsSection {
+        deadline_secs: Some(secs),
+        ..Default::default()
+    }
+}
 
 #[test]
 fn module_limits_default_to_policy_ceilings_when_unset() {
@@ -164,23 +172,23 @@ async fn dispatch_deadline_lets_a_prompt_call_finish() {
 /// A `0` deadline would cut every dispatch off instantly, so it refuses
 /// at load instead of resolving.
 #[test]
-fn event_deadline_resolves_override_and_default_and_refuses_zero() {
+fn dispatch_deadline_resolves_override_and_default_and_refuses_zero() {
     let default = ResolvedModuleLimits::default();
     assert_eq!(
-        default.event_deadline,
+        default.dispatch_deadline,
         Duration::from_secs(120),
         "unset resolves to the built-in default",
     );
 
     let overridden = ResolvedModuleLimits::try_from(ModuleLimits {
-        event_deadline_secs: Some(5),
+        dispatch: deadline_secs(5),
         ..ModuleLimits::default()
     })
     .expect("a non-zero override resolves");
-    assert_eq!(overridden.event_deadline, Duration::from_secs(5));
+    assert_eq!(overridden.dispatch_deadline, Duration::from_secs(5));
 
     let degenerate = ResolvedModuleLimits::try_from(ModuleLimits {
-        event_deadline_secs: Some(0),
+        dispatch: deadline_secs(0),
         ..ModuleLimits::default()
     });
     assert!(
@@ -215,7 +223,7 @@ async fn dispatch_deadline_cuts_off_a_blocked_host_call_and_recovers() {
         crate::test_utils::MockStateStore::new(),
     ))
     .limits(ModuleLimits {
-        event_deadline_secs: Some(1),
+        dispatch: deadline_secs(1),
         ..ModuleLimits::default()
     })
     .wasm(wasm)
@@ -298,9 +306,10 @@ async fn dispatch_rate_limit_throttles_a_flood_without_starving_others() {
     let mut booted = BootScenario::new()
         .wasm(wasm)
         .limits(ModuleLimits {
-            dispatch: crate::engine_config::DispatchLimitsSection {
+            dispatch: DispatchLimitsSection {
                 burst: Some(2),
                 refill_per_sec: Some(1),
+                ..Default::default()
             },
             ..Default::default()
         })
