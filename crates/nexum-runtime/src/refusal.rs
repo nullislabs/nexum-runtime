@@ -173,6 +173,7 @@ mod tests {
         "manifest_missing",
         "unconfigured_chain_defaulted",
         "unconfigured_chain",
+        "total_memory_exceeded",
         // ParseError.
         "io",
         "toml",
@@ -196,6 +197,8 @@ mod tests {
         "section_claimed",
         "unknown_event_kind",
         "digest_unpinned",
+        "capability_not_permitted",
+        "chain_subscription_not_permitted",
         // LaunchRefusal, less the wait-time `event_loop_gone`, which is
         // raised after a successful boot and never counted.
         "nothing_to_run",

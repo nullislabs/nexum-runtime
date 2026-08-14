@@ -15,6 +15,7 @@ use std::task::{Context, Poll};
 use bytes::Bytes;
 use http_body::{Body, Frame, SizeHint};
 use http_body_util::BodyExt;
+use ipnet::IpNet;
 use tokio::net::lookup_host;
 use tracing::warn;
 use wasmtime_wasi_http::p2::bindings::http::types::ErrorCode;
@@ -32,26 +33,35 @@ use crate::host_pattern::{HostPattern, host_allowed};
 /// Per-module outbound HTTP policy.
 pub struct HttpGate {
     module: String,
+    /// The author's `[dependencies.http].hosts`.
     allowlist: Vec<HostPattern>,
+    /// `[policy.component.<id>].http_allow`; when present a host must
+    /// match this list too, so the manifest cannot widen past it.
+    operator_allow: Option<Vec<HostPattern>>,
     limits: OutboundHttpLimits,
     /// Operator-permitted addresses that would otherwise be refused.
     permitted: Vec<IpAddr>,
+    /// `[policy].http_deny` ranges, refused after every allowlist.
+    denied: Vec<IpNet>,
 }
 
 impl HttpGate {
-    /// Gate for `module` with its allowlist, outbound limits, and the
-    /// operator's list of otherwise-refused addresses it may still reach.
+    /// Gate for `module`.
     pub fn new(
         module: impl Into<String>,
         allowlist: Vec<HostPattern>,
+        operator_allow: Option<Vec<HostPattern>>,
         limits: OutboundHttpLimits,
         permitted: Vec<IpAddr>,
+        denied: Vec<IpNet>,
     ) -> Self {
         Self {
             module: module.into(),
             allowlist,
+            operator_allow,
             limits,
             permitted,
+            denied,
         }
     }
 }
@@ -62,7 +72,11 @@ impl WasiHttpHooks for HttpGate {
         request: http::Request<HyperOutgoingBody>,
         config: OutgoingRequestConfig,
     ) -> HttpResult<HostFutureIncomingResponse> {
-        if let Err(code) = admit(request.uri(), &self.allowlist) {
+        if let Err(code) = admit(
+            request.uri(),
+            &self.allowlist,
+            self.operator_allow.as_deref(),
+        ) {
             // Log the host only: paths and query strings are
             // guest-supplied and may carry credentials.
             warn!(
@@ -77,6 +91,7 @@ impl WasiHttpHooks for HttpGate {
             clamp(config, &self.limits),
             self.limits,
             self.permitted.clone(),
+            self.denied.clone(),
         ))
     }
 }
@@ -101,12 +116,13 @@ fn send_with_limits(
     config: OutgoingRequestConfig,
     limits: OutboundHttpLimits,
     permitted: Vec<IpAddr>,
+    denied: Vec<IpNet>,
 ) -> HostFutureIncomingResponse {
     let handle = wasmtime_wasi::runtime::spawn(async move {
         let deadline = tokio::time::Instant::now() + limits.total_deadline;
         let uri = request.uri().clone();
         let sent = tokio::time::timeout_at(deadline, async move {
-            reject_prohibited_destination(&uri, &permitted).await?;
+            reject_prohibited_destination(&uri, &permitted, &denied).await?;
             default_send_request_handler(request, config).await
         })
         .await;
@@ -202,11 +218,21 @@ impl Body for CappedBody {
 /// or `*.suffix` per [`host_allowed`]; IPv6 literals stay bracketed.
 /// Name-based and pre-resolution, so it pins no address on its own.
 /// `reject_prohibited_destination` applies the address rules after it.
-fn admit(uri: &http::Uri, allowlist: &[HostPattern]) -> Result<(), ErrorCode> {
+///
+/// The host must match the author list and, when the operator wrote one,
+/// the `http_allow` list too: the effective set is the intersection, so
+/// neither file can widen past the other.
+fn admit(
+    uri: &http::Uri,
+    allowlist: &[HostPattern],
+    operator_allow: Option<&[HostPattern]>,
+) -> Result<(), ErrorCode> {
     let Some(host) = uri.host() else {
         return Err(ErrorCode::HttpRequestUriInvalid);
     };
-    if host_allowed(host, allowlist) {
+    let admitted = host_allowed(host, allowlist)
+        && operator_allow.is_none_or(|allow| host_allowed(host, allow));
+    if admitted {
         Ok(())
     } else {
         Err(ErrorCode::HttpRequestDenied)
@@ -225,12 +251,15 @@ fn admit(uri: &http::Uri, allowlist: &[HostPattern]) -> Result<(), ErrorCode> {
 /// A literal is checked the same way. The allowlist naming it is
 /// author-supplied (ADR-0001), so a module cannot reach a refused address by
 /// writing it out. Only `[limits.http].permit_destinations`, which the
-/// operator writes, admits one.
+/// operator writes, admits one. A `[policy].http_deny` range is refused
+/// unconditionally: the subtraction runs after every allow.
 async fn reject_prohibited_destination(
     uri: &http::Uri,
     permitted: &[IpAddr],
+    denied: &[IpNet],
 ) -> Result<(), ErrorCode> {
-    let refused = |ip: &IpAddr| is_prohibited(*ip) && !permitted.contains(ip);
+    let refused =
+        |ip: &IpAddr| in_denied(denied, *ip) || (is_prohibited(*ip) && !permitted.contains(ip));
     let Some(host) = uri.host() else {
         return Ok(()); // `admit` already rejects a hostless URI before this runs.
     };
@@ -248,6 +277,19 @@ async fn reject_prohibited_destination(
         return Err(ErrorCode::DestinationIpProhibited);
     }
     Ok(())
+}
+
+/// `IpNet::contains` never crosses address families, so an IPv4-mapped
+/// spelling is checked in both forms; without this, `::ffff:a.b.c.d`
+/// renames its way past an IPv4 deny range, and the reverse.
+fn in_denied(denied: &[IpNet], ip: IpAddr) -> bool {
+    let alternate = match ip {
+        IpAddr::V4(v4) => Some(IpAddr::V6(v4.to_ipv6_mapped())),
+        IpAddr::V6(v6) => v6.to_ipv4_mapped().map(IpAddr::V4),
+    };
+    denied
+        .iter()
+        .any(|net| net.contains(&ip) || alternate.as_ref().is_some_and(|alt| net.contains(alt)))
 }
 
 /// `http::Uri::host()` keeps an IPv6 literal's brackets (see
@@ -338,6 +380,19 @@ mod tests {
 
     fn allow(entries: &[&str]) -> Vec<HostPattern> {
         entries.iter().copied().map(HostPattern::from).collect()
+    }
+
+    /// The author-list-only form; the intersection cases call the real one.
+    fn admit(uri: &http::Uri, allowlist: &[HostPattern]) -> Result<(), ErrorCode> {
+        super::admit(uri, allowlist, None)
+    }
+
+    /// The no-deny form; the `http_deny` cases call the real one.
+    async fn reject_prohibited_destination(
+        uri: &http::Uri,
+        permitted: &[IpAddr],
+    ) -> Result<(), ErrorCode> {
+        super::reject_prohibited_destination(uri, permitted, &[]).await
     }
 
     /// Generous limits so a test trips only the one it tightens.
@@ -779,8 +834,10 @@ mod tests {
         let mut gate = HttpGate::new(
             "test-module",
             allow(&["localhost"]),
+            None,
             limits(),
             vec![IpAddr::V4(Ipv4Addr::LOCALHOST)],
+            vec![],
         );
         let pending = gate
             .send_request(request("http://localhost:1/x"), config())
@@ -816,8 +873,10 @@ mod tests {
         let mut gate = HttpGate::new(
             "test-module",
             allow(&["api.acme.example"]),
+            None,
             limits(),
             vec![IpAddr::V4(Ipv4Addr::LOCALHOST)],
+            vec![],
         );
         let Err(err) = gate.send_request(request("http://evil.example/x"), config()) else {
             panic!("off-list host must be denied");
@@ -835,13 +894,98 @@ mod tests {
         let mut gate = HttpGate::new(
             "test-module",
             allow(&["127.0.0.1"]),
+            None,
             limits(),
             vec![IpAddr::V4(Ipv4Addr::LOCALHOST)],
+            vec![],
         );
         assert!(
             gate.send_request(request("http://127.0.0.1:1/x"), config())
                 .is_ok()
         );
+    }
+
+    /// The effective host set is the intersection: the manifest list alone
+    /// admits nothing the operator row excludes, and the operator row
+    /// grants nothing the manifest never asked for.
+    #[test]
+    fn operator_http_allow_intersects_the_author_list() {
+        let author = allow(&["api.cow.fi", "evil.example"]);
+        let operator = allow(&["api.cow.fi", "unrequested.example"]);
+        let both = |host: &str| super::admit(&uri(host), &author, Some(&operator));
+        assert!(both("https://api.cow.fi/x").is_ok());
+        assert!(matches!(
+            both("https://evil.example/x"),
+            Err(ErrorCode::HttpRequestDenied)
+        ));
+        assert!(matches!(
+            both("https://unrequested.example/x"),
+            Err(ErrorCode::HttpRequestDenied)
+        ));
+        // An empty operator row denies everything: narrowing to nothing.
+        assert!(matches!(
+            super::admit(&uri("https://api.cow.fi/x"), &author, Some(&[])),
+            Err(ErrorCode::HttpRequestDenied)
+        ));
+    }
+
+    #[tokio::test]
+    async fn http_deny_refuses_a_range_even_when_otherwise_permitted() {
+        let denied = ["203.0.113.0/24".parse::<IpNet>().expect("test CIDR")];
+        assert!(matches!(
+            super::reject_prohibited_destination(&uri("http://203.0.113.9:1/x"), &[], &denied)
+                .await,
+            Err(ErrorCode::DestinationIpProhibited)
+        ));
+        // Outside the denied range the public address stays reachable.
+        assert!(
+            super::reject_prohibited_destination(&uri("http://203.0.114.9:1/x"), &[], &denied)
+                .await
+                .is_ok()
+        );
+        // The deny wins over permit_destinations: the subtraction is last.
+        let permitted = [IpAddr::V4(Ipv4Addr::LOCALHOST)];
+        let deny_loopback = ["127.0.0.0/8".parse::<IpNet>().expect("test CIDR")];
+        assert!(matches!(
+            super::reject_prohibited_destination(
+                &uri("http://127.0.0.1:1/x"),
+                &permitted,
+                &deny_loopback
+            )
+            .await,
+            Err(ErrorCode::DestinationIpProhibited)
+        ));
+    }
+
+    #[tokio::test]
+    async fn http_deny_matches_the_ipv4_mapped_spelling_in_both_directions() {
+        let denied = ["203.0.113.0/24".parse::<IpNet>().expect("test CIDR")];
+        assert!(matches!(
+            super::reject_prohibited_destination(
+                &uri("http://[::ffff:203.0.113.9]:1/x"),
+                &[],
+                &denied
+            )
+            .await,
+            Err(ErrorCode::DestinationIpProhibited)
+        ));
+        assert!(
+            super::reject_prohibited_destination(
+                &uri("http://[::ffff:203.0.114.9]:1/x"),
+                &[],
+                &denied
+            )
+            .await
+            .is_ok()
+        );
+        let mapped = ["::ffff:203.0.113.0/120"
+            .parse::<IpNet>()
+            .expect("test CIDR")];
+        assert!(matches!(
+            super::reject_prohibited_destination(&uri("http://203.0.113.9:1/x"), &[], &mapped)
+                .await,
+            Err(ErrorCode::DestinationIpProhibited)
+        ));
     }
 
     fn config_with(timeout: Duration) -> OutgoingRequestConfig {
@@ -933,8 +1077,10 @@ mod tests {
         let mut gate = HttpGate::new(
             "test-module",
             allow(&["127.0.0.1"]),
+            None,
             limits,
             vec![IpAddr::V4(Ipv4Addr::LOCALHOST)],
+            vec![],
         );
         let pending = gate
             .send_request(request(&format!("http://{addr}/x")), config_10s())

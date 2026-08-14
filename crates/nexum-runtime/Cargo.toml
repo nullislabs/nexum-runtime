@@ -47,6 +47,7 @@ nexum-world = { path = "../nexum-world" }
 # Manifest parsing.
 serde.workspace = true
 toml.workspace = true
+ipnet.workspace = true
 serde_json = { workspace = true, features = ["std"] }
 
 # Observability. `tracing` replaces the prior `eprintln!` debug log

@@ -160,3 +160,92 @@ async fn boot_denies_an_undeclared_chain_import_for_balance_tracker() {
                 if v.capability == "chain" && v.wit_import.starts_with("nexum:host/chain"))
         });
 }
+
+/// `[policy].capabilities` is the ceiling on what a manifest may declare;
+/// the refusal precedes any component read.
+#[tokio::test]
+async fn boot_refuses_a_capability_the_policy_excludes() {
+    BootScenario::new()
+        .policy(PolicySection {
+            capabilities: Some(vec!["chain".to_owned()]),
+            ..PolicySection::default()
+        })
+        .module(TestManifest::new("example").cap("logging"))
+        .expect_refusal()
+        .await
+        .variant::<LoadRefusal>(|e| {
+            matches!(e, LoadRefusal::CapabilityNotPermitted { id, capability, .. }
+                if id == "m0" && capability == "logging")
+        })
+        .lacks("read component")
+        .lacks("compile");
+}
+
+/// Chain events arrive through `on_event` rather than an import, so a
+/// permitted set that excludes `chain` refuses a chain subscription too.
+#[tokio::test]
+async fn boot_refuses_a_chain_subscription_the_policy_excludes() {
+    BootScenario::new()
+        .policy(PolicySection {
+            capabilities: Some(vec!["logging".to_owned()]),
+            ..PolicySection::default()
+        })
+        .module(TestManifest::new("example").cap("logging").block_sub(1))
+        .expect_refusal()
+        .await
+        .variant::<LoadRefusal>(|e| {
+            matches!(e, LoadRefusal::ChainSubscriptionNotPermitted { id, permitted }
+                if id == "m0" && permitted == "logging")
+        })
+        .lacks("compile");
+}
+
+/// A `[policy.component]` row that permits the declared set admits the
+/// component under the same global allowlist that refuses its sibling.
+#[tokio::test]
+async fn a_component_policy_row_overrides_the_global_capability_set() {
+    let Some(wasm) = example_wasm_or_skip() else {
+        return;
+    };
+    BootScenario::new()
+        .wasm(wasm)
+        .policy(PolicySection {
+            capabilities: Some(vec!["chain".to_owned()]),
+            component: [(
+                "m0".to_owned(),
+                ComponentPolicy {
+                    capabilities: Some(vec!["logging".to_owned()]),
+                    ..ComponentPolicy::default()
+                },
+            )]
+            .into(),
+            ..PolicySection::default()
+        })
+        .module(TestManifest::new("example").cap("logging"))
+        .boot()
+        .await
+        .expect("the row permits what the global set refuses");
+}
+
+/// Two in-ceiling components still refuse together when their declared
+/// reservations cross `[policy.total]`; the refusal names the second.
+#[tokio::test]
+async fn boot_refuses_an_oversubscribed_component_set() {
+    BootScenario::new()
+        .policy(PolicySection {
+            total: TotalPolicy {
+                // One default 64 MiB reservation fits, two do not.
+                max_memory_bytes: std::num::NonZeroUsize::new(100 * 1024 * 1024),
+            },
+            ..PolicySection::default()
+        })
+        .module(TestManifest::new("a").cap("logging"))
+        .module(TestManifest::new("b").cap("logging"))
+        .expect_refusal()
+        .await
+        .variant::<BootRefusal>(
+            |e| matches!(e, BootRefusal::TotalMemoryExceeded { id, .. } if id == "m1"),
+        )
+        .lacks("read component")
+        .lacks("compile");
+}

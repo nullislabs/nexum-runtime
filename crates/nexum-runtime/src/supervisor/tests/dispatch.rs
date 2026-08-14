@@ -3,43 +3,43 @@
 use super::*;
 
 #[test]
-fn module_limits_default_to_engine_limits_when_unset() {
-    let cfg = ResolvedModuleLimits::default();
-    let resolved = resolve_module_limits(&ResourceSection::default(), &cfg);
-    assert_eq!(resolved.fuel, cfg.fuel_per_event.get());
-    assert_eq!(resolved.memory, cfg.memory_bytes.get());
-    assert_eq!(resolved.state_bytes, cfg.state_bytes);
+fn module_limits_default_to_policy_ceilings_when_unset() {
+    let cfg = PolicyCeilings::default();
+    let resolved = resolve_module_limits("m", &ResourceSection::default(), &cfg);
+    assert_eq!(resolved.fuel, cfg.max_fuel_per_event.get());
+    assert_eq!(resolved.memory, cfg.max_memory_bytes.get());
+    assert_eq!(resolved.state_bytes, cfg.max_state_bytes);
 }
 
 #[test]
 fn manifest_resource_overrides_take_effect_and_are_field_local() {
-    let cfg = ResolvedModuleLimits::default();
-    // Only fuel is overridden; memory + state keep the engine defaults.
+    let cfg = PolicyCeilings::default();
+    // Only fuel is overridden; memory + state keep the policy defaults.
     let res = ResourceSection {
         max_memory_bytes: None,
         max_fuel_per_event: Some(100_000),
         max_state_bytes: Some(2048),
     };
-    let resolved = resolve_module_limits(&res, &cfg);
+    let resolved = resolve_module_limits("m", &res, &cfg);
     assert_eq!(resolved.fuel, 100_000);
-    assert_eq!(resolved.memory, cfg.memory_bytes.get());
+    assert_eq!(resolved.memory, cfg.max_memory_bytes.get());
     assert_eq!(resolved.state_bytes, 2048);
 }
 
-/// The manifest is author-supplied, so a field above the engine ceiling is
+/// The manifest is author-supplied, so a field above the policy ceiling is
 /// capped rather than granted. Each field is raised alone, so a clamp that
 /// only covered one of the three would fail here.
 #[test]
-fn manifest_resources_cannot_widen_the_engine_ceiling() {
-    let cfg = ResolvedModuleLimits::default();
+fn manifest_resources_cannot_widen_the_policy_ceiling() {
+    let cfg = PolicyCeilings::default();
 
     let fuel_grab = ResourceSection {
         max_fuel_per_event: Some(u64::MAX),
         ..ResourceSection::default()
     };
     assert_eq!(
-        resolve_module_limits(&fuel_grab, &cfg).fuel,
-        cfg.fuel_per_event.get()
+        resolve_module_limits("m", &fuel_grab, &cfg).fuel,
+        cfg.max_fuel_per_event.get()
     );
 
     let memory_grab = ResourceSection {
@@ -47,8 +47,8 @@ fn manifest_resources_cannot_widen_the_engine_ceiling() {
         ..ResourceSection::default()
     };
     assert_eq!(
-        resolve_module_limits(&memory_grab, &cfg).memory,
-        cfg.memory_bytes.get()
+        resolve_module_limits("m", &memory_grab, &cfg).memory,
+        cfg.max_memory_bytes.get()
     );
 
     let state_grab = ResourceSection {
@@ -56,24 +56,75 @@ fn manifest_resources_cannot_widen_the_engine_ceiling() {
         ..ResourceSection::default()
     };
     assert_eq!(
-        resolve_module_limits(&state_grab, &cfg).state_bytes,
-        cfg.state_bytes,
+        resolve_module_limits("m", &state_grab, &cfg).state_bytes,
+        cfg.max_state_bytes,
     );
 }
 
 /// Clamping must not cost a module the narrower budget it asked for.
 #[test]
 fn a_narrower_manifest_value_still_wins() {
-    let cfg = ResolvedModuleLimits::default();
+    let cfg = PolicyCeilings::default();
     let res = ResourceSection {
-        max_memory_bytes: Some(cfg.memory_bytes.get() / 2),
-        max_fuel_per_event: Some(cfg.fuel_per_event.get() / 2),
-        max_state_bytes: Some(cfg.state_bytes / 2),
+        max_memory_bytes: Some(cfg.max_memory_bytes.get() / 2),
+        max_fuel_per_event: Some(cfg.max_fuel_per_event.get() / 2),
+        max_state_bytes: Some(cfg.max_state_bytes / 2),
     };
-    let resolved = resolve_module_limits(&res, &cfg);
-    assert_eq!(resolved.fuel, cfg.fuel_per_event.get() / 2);
-    assert_eq!(resolved.memory, cfg.memory_bytes.get() / 2);
-    assert_eq!(resolved.state_bytes, cfg.state_bytes / 2);
+    let resolved = resolve_module_limits("m", &res, &cfg);
+    assert_eq!(resolved.fuel, cfg.max_fuel_per_event.get() / 2);
+    assert_eq!(resolved.memory, cfg.max_memory_bytes.get() / 2);
+    assert_eq!(resolved.state_bytes, cfg.max_state_bytes / 2);
+}
+
+/// A `[policy.component]` row is the ceiling for its component alone; the
+/// clamp direction holds against the row exactly as against the default.
+#[test]
+fn a_component_row_rebases_the_ceiling_without_widening() {
+    let policy = PolicySection {
+        component: [(
+            "wallet".to_owned(),
+            ComponentPolicy {
+                max_memory_bytes: std::num::NonZeroUsize::new(1024),
+                ..ComponentPolicy::default()
+            },
+        )]
+        .into(),
+        ..PolicySection::default()
+    };
+    let row = policy.for_component("wallet").ceilings;
+    let grab = ResourceSection {
+        max_memory_bytes: Some(usize::MAX),
+        ..ResourceSection::default()
+    };
+    assert_eq!(resolve_module_limits("m", &grab, &row).memory, 1024);
+    // An unnamed component clamps against the [policy] default instead.
+    let other = policy.for_component("tracker").ceilings;
+    assert_eq!(
+        resolve_module_limits("m", &grab, &other).memory,
+        PolicyCeilings::default().max_memory_bytes.get()
+    );
+}
+
+/// The aggregate check refuses on the entry that crosses the cap and
+/// admits a set that exactly fills it.
+#[test]
+fn total_reservation_refuses_the_crossing_component() {
+    let policy = PolicySection {
+        total: TotalPolicy {
+            max_memory_bytes: std::num::NonZeroUsize::new(1000),
+        },
+        ..PolicySection::default()
+    };
+    assert!(enforce_total_reservation(&policy, [("a", 500), ("b", 500)]).is_ok());
+    let err = enforce_total_reservation(&policy, [("a", 500), ("b", 500), ("c", 1)])
+        .expect_err("the third entry crosses the cap");
+    assert!(
+        matches!(&err, BootRefusal::TotalMemoryExceeded { id, sum, total }
+            if id == "c" && *sum == 1001 && *total == 1000),
+        "{err:?}",
+    );
+    // No cap, no bound.
+    assert!(enforce_total_reservation(&PolicySection::default(), [("a", usize::MAX)]).is_ok());
 }
 
 /// An over-long future is dropped at the deadline, not awaited out.

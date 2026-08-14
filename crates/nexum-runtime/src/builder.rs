@@ -20,7 +20,7 @@ use tracing::{error, info, warn};
 use wasmtime::Engine;
 
 use crate::addons::{AddOnHandle, AddOns, AddOnsContext};
-use crate::engine_config::{EngineConfig, ModuleEntry};
+use crate::engine_config::{EngineConfig, ModuleEntry, PolicySection};
 use crate::host::component::{
     BuilderContext, ComponentBuilder, Components, ComponentsBuilder, RuntimeTypes,
 };
@@ -241,7 +241,29 @@ impl<T: RuntimeTypes> AssembledRuntime<T> {
                     "ignoring engine.toml [[modules]] because a module source override was given"
                 );
             }
+            if !engine_cfg.policy.component.is_empty() {
+                warn!(
+                    "ignoring engine.toml [policy.component] rows: the override is not a \
+                     configured component, so it gets the [policy] defaults"
+                );
+            }
+            // The override is not any configured component, and its file
+            // stem is not an operator-written id, so no [policy.component]
+            // row may bind to it (ADR-0018); the stem is display-only.
+            let policy = PolicySection {
+                component: Default::default(),
+                ..engine_cfg.policy.clone()
+            };
+            let env = supervisor::BootEnv {
+                policy: &policy,
+                ..supervisor::BootEnv::from_config(engine_cfg)
+            };
+            let id = wasm
+                .file_stem()
+                .map(|s| s.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "module".to_owned());
             let entry = ModuleEntry {
+                id,
                 path: wasm,
                 manifest,
             };
@@ -250,7 +272,7 @@ impl<T: RuntimeTypes> AssembledRuntime<T> {
                 &linker,
                 &entry,
                 &components,
-                &supervisor::BootEnv::from_config(engine_cfg),
+                &env,
                 &extensions,
                 clocks,
             )
@@ -1077,6 +1099,53 @@ mod tests {
             "run reads the overridden pipeline",
         );
 
+        handle.shutdown();
+        handle.wait().await.expect("clean shutdown");
+    }
+
+    /// A `[policy.component]` row keyed to an id equal to the override's
+    /// file stem must not bind: the stem is author-controlled, so the
+    /// override gets the `[policy]` defaults (ADR-0018). The row here
+    /// excludes `logging`, which the example manifest declares, so the
+    /// launch only succeeds when the row goes unapplied.
+    #[tokio::test]
+    async fn a_module_source_override_never_binds_a_policy_component_row() {
+        let Some(wasm) = example_wasm_or_skip() else {
+            return;
+        };
+        let stem = wasm
+            .file_stem()
+            .expect("fixture has a file stem")
+            .to_string_lossy()
+            .into_owned();
+        let manifest = workspace_root().join("modules/example/component.toml");
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut config = EngineConfig::default();
+        config.engine.state_dir = dir.path().join("state");
+        config.modules.push(ModuleEntry {
+            id: stem.clone(),
+            path: dir.path().join("unrelated.wasm"),
+            manifest: None,
+        });
+        config.policy.component.insert(
+            stem,
+            crate::engine_config::ComponentPolicy {
+                capabilities: Some(vec!["chain".to_owned()]),
+                ..Default::default()
+            },
+        );
+
+        let mut handle = RuntimeBuilder::new(&config)
+            .with_types::<CoreRuntime>()
+            .with_module_source(Some(wasm), Some(manifest))
+            .with_components(ComponentsBuilder::new(
+                ProviderPoolBuilder,
+                LocalStoreBuilder,
+            ))
+            .launch()
+            .await
+            .expect("the row must not bind to the override");
         handle.shutdown();
         handle.wait().await.expect("clean shutdown");
     }

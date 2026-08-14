@@ -11,7 +11,6 @@ use thiserror::Error as ThisError;
 use tracing::{info, warn};
 use wasmtime::component::{Component, Linker};
 
-use super::Shared;
 use super::admission::{
     capability_registry, enforce_extension_sections, extension_subscription_vocabulary,
 };
@@ -19,11 +18,12 @@ use super::artifact::read_verified_component;
 use super::dispatch::with_dispatch_deadline;
 use super::lifecycle::Health;
 use super::prepass::manifest_namespace;
-use super::store::{HostStore, ResolvedLimits, StoreSpec, fresh_run_store, resolve_module_limits};
+use super::store::{HostStore, ResolvedLimits, StoreSpec, fresh_run_store};
+use super::{BootEnv, Shared};
 use crate::bindings::nexum::host::types::Fault;
 use crate::bindings::{Config, EventModule};
 use crate::digest::ContentDigest;
-use crate::engine_config::{ModuleEntry, ResolvedModuleLimits};
+use crate::engine_config::ModuleEntry;
 use crate::host::component::RuntimeTypes;
 use crate::host::logs::RunId;
 use crate::host::state::HostState;
@@ -90,6 +90,33 @@ pub enum LoadRefusal {
     DigestUnpinned {
         /// The unpinned entry's component path.
         path: PathBuf,
+    },
+    /// The operator's capability allowlist is the ceiling; a manifest
+    /// declaration cannot widen it (ADR-0001: grant whole or refuse).
+    #[error(
+        "component {id} declares capability {capability}; \
+         [policy].capabilities permits only: {permitted}"
+    )]
+    CapabilityNotPermitted {
+        /// The entry's operator-written id.
+        id: String,
+        /// The declared capability the policy excludes.
+        capability: String,
+        /// The permitted set, for the fix.
+        permitted: String,
+    },
+    /// Chain events reach the guest through `on_event`, not an import, so
+    /// the subscription is gated on the same operator grant as the `chain`
+    /// dependency.
+    #[error(
+        "component {id} subscribes to chain events; \
+         [policy].capabilities permits only: {permitted}"
+    )]
+    ChainSubscriptionNotPermitted {
+        /// The entry's operator-written id.
+        id: String,
+        /// The permitted set, for the fix.
+        permitted: String,
     },
 }
 
@@ -200,16 +227,69 @@ pub(super) async fn instantiate_module<T: RuntimeTypes>(
     Ok((bindings, init))
 }
 
+/// `[policy].capabilities` bounds what a manifest may declare, so the
+/// component's imports (already checked against the declared set) cannot
+/// exceed the operator grant either.
+fn enforce_policy_capabilities(
+    id: &str,
+    loaded: &LoadedManifest,
+    permitted: Option<&[String]>,
+) -> Result<(), LoadRefusal> {
+    let Some(permitted) = permitted else {
+        return Ok(());
+    };
+    let permitted_set = || {
+        if permitted.is_empty() {
+            "none".to_owned()
+        } else {
+            permitted.join(", ")
+        }
+    };
+    for declared in loaded.dependencies.keys() {
+        if !permitted.iter().any(|p| p == declared) {
+            return Err(LoadRefusal::CapabilityNotPermitted {
+                id: id.to_owned(),
+                capability: declared.clone(),
+                permitted: permitted_set(),
+            });
+        }
+    }
+    // A block or chain-log subscription delivers chain data without an
+    // import, so the `chain` grant gates it too.
+    let subscribes_to_chain = loaded.subscriptions.iter().any(|sub| {
+        matches!(
+            sub,
+            Subscription::Block { .. } | Subscription::ChainLog { .. }
+        )
+    });
+    if subscribes_to_chain && !permitted.iter().any(|p| p == "chain") {
+        return Err(LoadRefusal::ChainSubscriptionNotPermitted {
+            id: id.to_owned(),
+            permitted: permitted_set(),
+        });
+    }
+    Ok(())
+}
+
 /// A failed `init` loads the module dead; the dispatcher skips it.
 pub(super) async fn module<T: RuntimeTypes>(
     shared: &Shared<T>,
     linker: &Linker<HostState<T>>,
     entry: &ModuleEntry,
     loaded_manifest: LoadedManifest,
-    limits_cfg: &ResolvedModuleLimits,
-    require_component_digest: bool,
+    resolved: ResolvedLimits,
+    env: &BootEnv<'_>,
 ) -> Result<LoadedModule<T>, Refusal> {
+    let BootEnv {
+        limits: limits_cfg,
+        policy,
+        require_component_digest,
+        ..
+    } = *env;
     let module_namespace: ModuleId = manifest_namespace(&loaded_manifest);
+    let effective = policy.for_component(&entry.id);
+    enforce_policy_capabilities(&entry.id, &loaded_manifest, effective.capabilities)
+        .with_refusal_context(|| format!("install refused for {}", entry.path.display()))?;
     let registry = capability_registry(&shared.extensions);
     let sections = &loaded_manifest.extensions;
     let ((), component, digest) = admit_and_verify(
@@ -235,9 +315,10 @@ pub(super) async fn module<T: RuntimeTypes>(
         fuel,
         memory,
         state_bytes,
-    } = resolve_module_limits(&loaded_manifest.resources, limits_cfg);
+    } = resolved;
     info!(
         module = %module_namespace,
+        id = %entry.id,
         fuel,
         memory_bytes = memory,
         state_bytes,
@@ -245,8 +326,10 @@ pub(super) async fn module<T: RuntimeTypes>(
     );
     let spec = StoreSpec {
         http_allowlist: loaded_manifest.http_allowlist.clone(),
+        http_operator_allow: effective.http_allow.map(<[_]>::to_vec),
         http_limits: limits_cfg.http,
         http_permitted: limits_cfg.http_permit_destinations.clone(),
+        http_denied: policy.http_deny.clone(),
         memory_limit: memory,
         fuel,
         chain_response_max_bytes: limits_cfg.chain_response_max_bytes.get(),

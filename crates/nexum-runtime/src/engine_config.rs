@@ -5,16 +5,19 @@
 //! Load order: `--engine-config` path, else `engine.toml` in the cwd,
 //! else defaults (no chains, `state_dir = ./data`).
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::net::IpAddr;
 use std::num::{NonZeroU32, NonZeroU64, NonZeroUsize};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use alloy_chains::Chain;
+use ipnet::IpNet;
 use serde::Deserialize;
 use thiserror::Error;
 use tracing::{info, warn};
+
+use crate::host_pattern::HostPattern;
 
 use crate::runtime::dispatch_rate::{
     DEFAULT_DISPATCH_BURST, DEFAULT_DISPATCH_REFILL_PER_SEC, DispatchRatePolicy,
@@ -161,6 +164,40 @@ pub enum EngineConfigError {
         #[source]
         source: RpcEndpointError,
     },
+    /// A `[limits]` scalar `[policy]` superseded.
+    #[error("engine config: {key} is retired; set {replacement}")]
+    RetiredKey {
+        /// The retired TOML path.
+        key: &'static str,
+        /// The `[policy]` path that replaces it.
+        replacement: &'static str,
+    },
+    /// `id` keys `[policy.component]`, so it cannot be blank.
+    #[error("engine config: [[modules]] entry {} needs a non-empty id", path.display())]
+    EmptyComponentId {
+        /// The entry's component path.
+        path: PathBuf,
+    },
+    /// A second claimant would make the policy join ambiguous.
+    #[error("engine config: [[modules]].id {id:?} is claimed twice")]
+    DuplicateComponentId {
+        /// The doubly claimed id.
+        id: String,
+    },
+    /// A policy row that binds to nothing is a typo, and an unapplied
+    /// narrowing row fails open.
+    #[error("engine config: [policy.component.{id}] matches no [[modules]].id")]
+    UnknownPolicyComponent {
+        /// The row's key as written.
+        id: String,
+    },
+    /// A `[policy].http_deny` entry that is neither an address nor a CIDR
+    /// block.
+    #[error("engine config: policy.http_deny entry {entry:?} is not an IP address or CIDR block")]
+    InvalidHttpDeny {
+        /// The entry as written.
+        entry: String,
+    },
 }
 
 /// Engine-side configuration loaded from `engine.toml`. Deserialization
@@ -171,9 +208,12 @@ pub enum EngineConfigError {
 pub struct EngineConfig {
     /// Process-wide settings: state directory, log level, metrics.
     pub engine: EngineSection,
-    /// Per-module wasmtime resource limits, resolved once at load and
-    /// applied uniformly.
+    /// Per-module limits other than the `[policy]` ceilings: deadlines,
+    /// transport bounds, retention, and rate thresholds.
     pub limits: ResolvedModuleLimits,
+    /// Operator resource and egress policy: per-component ceilings, the
+    /// aggregate cap, and `[policy.component.<id>]` overrides.
+    pub policy: PolicySection,
     /// Per-chain RPC config keyed by EIP-155 chain id. Numeric
     /// (`[chains.11155111]`) and named (`[chains.sepolia]`) keys both
     /// validate via `Chain`'s `FromStr` after the TOML parse.
@@ -197,6 +237,8 @@ struct RawEngineConfig {
     engine: EngineSection,
     #[serde(default)]
     limits: ModuleLimits,
+    #[serde(default)]
+    policy: RawPolicySection,
     #[serde(default)]
     chains: HashMap<String, RawChainConfig>,
     #[serde(default)]
@@ -235,9 +277,26 @@ impl TryFrom<RawEngineConfig> for EngineConfig {
                 Err(_) => return Err(EngineConfigError::InvalidChainKey { key }),
             }
         }
+        // The ids are the `[policy.component]` join column: non-empty and
+        // unique, checked before the policy rows that key on them.
+        let mut ids = HashSet::with_capacity(raw.modules.len());
+        for entry in &raw.modules {
+            if entry.id.trim().is_empty() {
+                return Err(EngineConfigError::EmptyComponentId {
+                    path: entry.path.clone(),
+                });
+            }
+            if !ids.insert(entry.id.as_str()) {
+                return Err(EngineConfigError::DuplicateComponentId {
+                    id: entry.id.clone(),
+                });
+            }
+        }
+        let policy = resolve_policy(raw.policy, &ids)?;
         Ok(Self {
             engine: raw.engine,
             limits: raw.limits.try_into()?,
+            policy,
             chains,
             extensions: raw.extensions,
             modules: raw.modules,
@@ -251,11 +310,236 @@ impl TryFrom<RawEngineConfig> for EngineConfig {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ModuleEntry {
+    /// Operator-written identity; the `[policy.component.<id>]` key. The
+    /// author-supplied `[component].name` never binds policy (ADR-0001).
+    pub id: String,
     /// Path to the compiled `.wasm` component.
     pub path: std::path::PathBuf,
     /// Path to the module's `component.toml`. Defaults to `<path-parent>/component.toml`.
     #[serde(default)]
     pub manifest: Option<std::path::PathBuf>,
+}
+
+/// Serde shape of `[policy]`; conversion into [`PolicySection`] fills
+/// defaults, refuses zeroes, and checks the component keys.
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawPolicySection {
+    max_memory_bytes: Option<usize>,
+    max_fuel_per_event: Option<u64>,
+    max_state_bytes: Option<u64>,
+    capabilities: Option<Vec<String>>,
+    #[serde(default)]
+    http_deny: Vec<String>,
+    #[serde(default)]
+    total: RawTotalPolicy,
+    #[serde(default)]
+    component: BTreeMap<String, RawComponentPolicy>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawTotalPolicy {
+    max_memory_bytes: Option<usize>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawComponentPolicy {
+    max_memory_bytes: Option<usize>,
+    max_fuel_per_event: Option<u64>,
+    max_state_bytes: Option<u64>,
+    capabilities: Option<Vec<String>>,
+    http_allow: Option<Vec<String>>,
+}
+
+/// `[policy]` resolved at load. Every value is an operator grant a
+/// manifest narrows and never widens; a component the operator never
+/// named gets [`Self::ceilings`] and still counts against [`Self::total`].
+#[derive(Debug, Clone, Default)]
+pub struct PolicySection {
+    /// Ceilings for a component without a `[policy.component]` row.
+    pub ceilings: PolicyCeilings,
+    /// Capability names any component may declare; `None` permits every
+    /// capability the runtime supports.
+    pub capabilities: Option<Vec<String>>,
+    /// Destination ranges no outbound HTTP request may reach, applied
+    /// after every allowlist.
+    pub http_deny: Vec<IpNet>,
+    /// `[policy.total]`: the aggregate cap over the component set.
+    pub total: TotalPolicy,
+    /// `[policy.component.<id>]` rows, keyed on `[[modules]].id`.
+    pub component: HashMap<String, ComponentPolicy>,
+}
+
+impl PolicySection {
+    /// The effective policy for the component the operator named `id`;
+    /// unset row fields and an absent row fall back to `[policy]`.
+    pub fn for_component(&self, id: &str) -> EffectivePolicy<'_> {
+        let row = self.component.get(id);
+        EffectivePolicy {
+            ceilings: PolicyCeilings {
+                max_memory_bytes: row
+                    .and_then(|r| r.max_memory_bytes)
+                    .unwrap_or(self.ceilings.max_memory_bytes),
+                max_fuel_per_event: row
+                    .and_then(|r| r.max_fuel_per_event)
+                    .unwrap_or(self.ceilings.max_fuel_per_event),
+                max_state_bytes: row
+                    .and_then(|r| r.max_state_bytes)
+                    .unwrap_or(self.ceilings.max_state_bytes),
+            },
+            capabilities: row
+                .and_then(|r| r.capabilities.as_deref())
+                .or(self.capabilities.as_deref()),
+            http_allow: row.and_then(|r| r.http_allow.as_deref()),
+        }
+    }
+}
+
+/// The `[policy]` scalar ceilings; a `[component.resources]` request
+/// narrows one and never widens it.
+#[derive(Debug, Clone, Copy)]
+pub struct PolicyCeilings {
+    /// Linear-memory cap in bytes per component store.
+    pub max_memory_bytes: NonZeroUsize,
+    /// Fuel budget granted per `on_event` invocation.
+    pub max_fuel_per_event: NonZeroU64,
+    /// Local-store on-disk byte quota; zero denies every write.
+    pub max_state_bytes: u64,
+}
+
+impl Default for PolicyCeilings {
+    fn default() -> Self {
+        Self {
+            max_memory_bytes: DEFAULT_MEMORY_LIMIT,
+            max_fuel_per_event: DEFAULT_FUEL_PER_EVENT,
+            max_state_bytes: DEFAULT_STATE_BYTES,
+        }
+    }
+}
+
+/// `[policy.total]`. Bounds declared reservations at boot, not measured
+/// usage.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct TotalPolicy {
+    /// Cap on the summed per-component memory reservations; `None`
+    /// leaves the sum unbounded.
+    pub max_memory_bytes: Option<NonZeroUsize>,
+}
+
+/// One `[policy.component.<id>]` row; each unset field falls back to
+/// `[policy]`.
+#[derive(Debug, Clone, Default)]
+pub struct ComponentPolicy {
+    /// Linear-memory ceiling override.
+    pub max_memory_bytes: Option<NonZeroUsize>,
+    /// Fuel ceiling override.
+    pub max_fuel_per_event: Option<NonZeroU64>,
+    /// Local-store quota override.
+    pub max_state_bytes: Option<u64>,
+    /// Capability allowlist override.
+    pub capabilities: Option<Vec<String>>,
+    /// Operator host allowlist; the effective host set is the manifest's
+    /// `hosts` intersected with this, minus `[policy].http_deny`.
+    pub http_allow: Option<Vec<HostPattern>>,
+}
+
+/// One component's resolved view of `[policy]`.
+#[derive(Debug, Clone, Copy)]
+pub struct EffectivePolicy<'a> {
+    /// Ceilings the component's manifest may narrow.
+    pub ceilings: PolicyCeilings,
+    /// Permitted capability names; `None` permits every capability.
+    pub capabilities: Option<&'a [String]>,
+    /// Operator host allowlist; `None` leaves the manifest `hosts` list
+    /// as the only name-level gate.
+    pub http_allow: Option<&'a [HostPattern]>,
+}
+
+/// A CIDR block, or a bare address as its full-length block.
+fn parse_http_deny(entry: &str) -> Result<IpNet, EngineConfigError> {
+    entry
+        .parse::<IpNet>()
+        .or_else(|_| entry.parse::<IpAddr>().map(IpNet::from))
+        .map_err(|_| EngineConfigError::InvalidHttpDeny {
+            entry: entry.to_owned(),
+        })
+}
+
+fn resolve_policy(
+    raw: RawPolicySection,
+    ids: &HashSet<&str>,
+) -> Result<PolicySection, EngineConfigError> {
+    let ceilings = PolicyCeilings {
+        max_memory_bytes: nonzero_usize(
+            "policy.max_memory_bytes",
+            raw.max_memory_bytes,
+            DEFAULT_MEMORY_LIMIT,
+        )?,
+        max_fuel_per_event: nonzero_u64(
+            "policy.max_fuel_per_event",
+            raw.max_fuel_per_event,
+            DEFAULT_FUEL_PER_EVENT,
+        )?,
+        // Zero stays legal: a zero quota denies every local-store write,
+        // which is an enforceable operator choice.
+        max_state_bytes: raw.max_state_bytes.unwrap_or(DEFAULT_STATE_BYTES),
+    };
+    let http_deny = raw
+        .http_deny
+        .iter()
+        .map(|entry| parse_http_deny(entry))
+        .collect::<Result<Vec<_>, _>>()?;
+    let total = TotalPolicy {
+        max_memory_bytes: raw
+            .total
+            .max_memory_bytes
+            .map(|v| {
+                NonZeroUsize::new(v).ok_or_else(|| zero_field("policy.total.max_memory_bytes"))
+            })
+            .transpose()?,
+    };
+    let mut component = HashMap::with_capacity(raw.component.len());
+    for (id, row) in raw.component {
+        if !ids.contains(id.as_str()) {
+            return Err(EngineConfigError::UnknownPolicyComponent { id });
+        }
+        let resolved = ComponentPolicy {
+            max_memory_bytes: row
+                .max_memory_bytes
+                .map(|v| {
+                    NonZeroUsize::new(v).ok_or_else(|| {
+                        zero_field(&format!("policy.component.{id}.max_memory_bytes"))
+                    })
+                })
+                .transpose()?,
+            max_fuel_per_event: row
+                .max_fuel_per_event
+                .map(|v| {
+                    NonZeroU64::new(v).ok_or_else(|| {
+                        zero_field(&format!("policy.component.{id}.max_fuel_per_event"))
+                    })
+                })
+                .transpose()?,
+            max_state_bytes: row.max_state_bytes,
+            capabilities: row.capabilities,
+            http_allow: row.http_allow.map(|hosts| {
+                hosts
+                    .iter()
+                    .map(|h| HostPattern::from(h.as_str()))
+                    .collect()
+            }),
+        };
+        component.insert(id, resolved);
+    }
+    Ok(PolicySection {
+        ceilings,
+        capabilities: raw.capabilities,
+        http_deny,
+        total,
+        component,
+    })
 }
 
 /// `[engine]`: settings that apply to the process, not to one module.
@@ -473,14 +757,13 @@ const DEFAULT_LOG_RUNS_RETAINED: NonZeroUsize = nz_usize(16);
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ModuleLimits {
-    /// Fuel budget granted per `on_event` invocation.
-    pub fuel_per_event: Option<u64>,
+    // Retired into `[policy]`; deserialized only to refuse naming the
+    // replacement.
+    pub(crate) fuel_per_event: Option<toml::Value>,
+    pub(crate) memory_bytes: Option<toml::Value>,
+    pub(crate) state_bytes: Option<toml::Value>,
     /// Wall-clock deadline (s) for a dispatch, covering host-call time fuel cannot meter.
     pub event_deadline_secs: Option<u64>,
-    /// Linear-memory cap in bytes per module store.
-    pub memory_bytes: Option<usize>,
-    /// Local-store on-disk byte quota per module.
-    pub state_bytes: Option<u64>,
     /// Outbound wasi:http limits.
     #[serde(default)]
     pub http: HttpLimitsSection,
@@ -509,15 +792,9 @@ pub struct ModuleLimits {
 /// refuses zeroes, so no consumer clamps on read.
 #[derive(Debug, Clone)]
 pub struct ResolvedModuleLimits {
-    /// Fuel budget granted per `on_event` invocation.
-    pub fuel_per_event: NonZeroU64,
     /// Wall-clock deadline for a dispatch, covering host-call time fuel
     /// cannot meter.
     pub event_deadline: Duration,
-    /// Linear-memory cap in bytes per module store.
-    pub memory_bytes: NonZeroUsize,
-    /// Local-store on-disk byte quota per module; zero denies every write.
-    pub state_bytes: u64,
     /// Cap on one chain JSON-RPC response body.
     pub chain_response_max_bytes: NonZeroUsize,
     /// Outbound wasi:http limits.
@@ -624,6 +901,27 @@ impl TryFrom<ModuleLimits> for ResolvedModuleLimits {
     /// Refuses every zero that would disable the mechanism its field
     /// bounds; any other override resolves to exactly the value written.
     fn try_from(raw: ModuleLimits) -> Result<Self, EngineConfigError> {
+        for (present, key, replacement) in [
+            (
+                raw.fuel_per_event.is_some(),
+                "limits.fuel_per_event",
+                "policy.max_fuel_per_event",
+            ),
+            (
+                raw.memory_bytes.is_some(),
+                "limits.memory_bytes",
+                "policy.max_memory_bytes",
+            ),
+            (
+                raw.state_bytes.is_some(),
+                "limits.state_bytes",
+                "policy.max_state_bytes",
+            ),
+        ] {
+            if present {
+                return Err(EngineConfigError::RetiredKey { key, replacement });
+            }
+        }
         let http = OutboundHttpLimits {
             connect_timeout_max: nonzero_ms_capped(
                 "limits.http.connect_timeout_max_ms",
@@ -716,24 +1014,11 @@ impl TryFrom<ModuleLimits> for ResolvedModuleLimits {
             )?,
         );
         Ok(Self {
-            fuel_per_event: nonzero_u64(
-                "limits.fuel_per_event",
-                raw.fuel_per_event,
-                DEFAULT_FUEL_PER_EVENT,
-            )?,
             event_deadline: nonzero_secs(
                 "limits.event_deadline_secs",
                 raw.event_deadline_secs,
                 DEFAULT_EVENT_DEADLINE,
             )?,
-            memory_bytes: nonzero_usize(
-                "limits.memory_bytes",
-                raw.memory_bytes,
-                DEFAULT_MEMORY_LIMIT,
-            )?,
-            // Zero stays legal: a zero quota denies every local-store
-            // write, which is an enforceable operator choice.
-            state_bytes: raw.state_bytes.unwrap_or(DEFAULT_STATE_BYTES),
             chain_response_max_bytes: nonzero_usize(
                 "limits.chain.response_body_max_bytes",
                 raw.chain.response_body_max_bytes.map(|b| b as usize),
@@ -1209,9 +1494,6 @@ request_timeout_secs = 0
     fn http_limits_parse_with_partial_overrides() {
         let cfg: EngineConfig = toml::from_str(
             r#"
-[limits]
-fuel_per_event = 7
-
 [limits.http]
 connect_timeout_max_ms  = 5_000
 total_deadline_ms       = 90_000
@@ -1219,7 +1501,6 @@ response_body_max_bytes = 1_024
 "#,
         )
         .expect("limits.http parses");
-        assert_eq!(cfg.limits.fuel_per_event.get(), 7);
         let http = cfg.limits.http;
         assert_eq!(http.connect_timeout_max, Duration::from_millis(5_000));
         assert_eq!(http.total_deadline, Duration::from_millis(90_000));
@@ -1242,7 +1523,11 @@ response_body_max_bytes = 1_024
             ),
             (
                 "key in a table entry",
-                "[[modules]]\npath = \"m.wasm\"\nmanifets = \"c.toml\"\n",
+                "[[modules]]\nid = \"m\"\npath = \"m.wasm\"\nmanifets = \"c.toml\"\n",
+            ),
+            (
+                "key in a policy row",
+                "[[modules]]\nid = \"m\"\npath = \"m.wasm\"\n[policy.component.m]\nmax_memory_byte = 1\n",
             ),
         ] {
             let err = toml::from_str::<EngineConfig>(toml)
@@ -1261,10 +1546,24 @@ response_body_max_bytes = 1_024
 state_dir = "./data"
 
 [limits]
-fuel_per_event = 7
+event_deadline_secs = 30
 
 [limits.http]
 total_deadline_ms = 1000
+
+[policy]
+max_memory_bytes   = 268435456
+max_fuel_per_event = 7
+max_state_bytes    = 1024
+capabilities       = ["chain", "logging", "http"]
+http_deny          = ["169.254.0.0/16"]
+
+[policy.total]
+max_memory_bytes = 4294967296
+
+[policy.component.m]
+max_memory_bytes = 1073741824
+http_allow       = ["api.cow.fi"]
 
 [chains.1]
 rpc_url = "https://example.test"
@@ -1273,12 +1572,14 @@ rpc_url = "https://example.test"
 anything = "goes here, the engine never reads it"
 
 [[modules]]
+id = "m"
 path = "m.wasm"
 "#,
         )
         .expect("every documented section parses under the guard");
-        assert_eq!(cfg.limits.fuel_per_event.get(), 7);
+        assert_eq!(cfg.policy.ceilings.max_fuel_per_event.get(), 7);
         assert_eq!(cfg.modules.len(), 1);
+        assert_eq!(cfg.modules[0].id, "m");
         assert!(
             cfg.extensions.contains_key("acme"),
             "an extension table stays opaque and unguarded",
@@ -1355,14 +1656,19 @@ response_body_max_bytes = 2_048
     }
 
     /// Pins the built-in numbers, not the constants, so a resolution that
-    /// pairs a field with the wrong default constant fails here.
+    /// pairs a field with the wrong default constant fails here. The parse
+    /// path fills its own fallbacks in `resolve_policy`, so it is pinned
+    /// separately from the `Default` impl.
     #[test]
     fn core_limits_default_when_absent() {
         let limits = ResolvedModuleLimits::default();
-        assert_eq!(limits.fuel_per_event.get(), 1_000_000_000);
         assert_eq!(limits.event_deadline, Duration::from_secs(120));
-        assert_eq!(limits.memory_bytes.get(), 64 * 1024 * 1024);
-        assert_eq!(limits.state_bytes, 50 * 1024 * 1024);
+        let parsed: EngineConfig = toml::from_str("").expect("empty config parses");
+        for ceilings in [PolicyCeilings::default(), parsed.policy.ceilings] {
+            assert_eq!(ceilings.max_fuel_per_event.get(), 1_000_000_000);
+            assert_eq!(ceilings.max_memory_bytes.get(), 64 * 1024 * 1024);
+            assert_eq!(ceilings.max_state_bytes, 50 * 1024 * 1024);
+        }
     }
 
     #[test]
@@ -1370,17 +1676,171 @@ response_body_max_bytes = 2_048
         let cfg: EngineConfig = toml::from_str(
             r#"
 [limits]
-fuel_per_event      = 7
 event_deadline_secs = 30
-memory_bytes        = 1_048_576
-state_bytes         = 2_048
+
+[policy]
+max_fuel_per_event = 7
+max_memory_bytes   = 1_048_576
+max_state_bytes    = 2_048
 "#,
         )
         .expect("top-level limits parse");
-        assert_eq!(cfg.limits.fuel_per_event.get(), 7);
         assert_eq!(cfg.limits.event_deadline, Duration::from_secs(30));
-        assert_eq!(cfg.limits.memory_bytes.get(), 1_048_576);
-        assert_eq!(cfg.limits.state_bytes, 2_048);
+        assert_eq!(cfg.policy.ceilings.max_fuel_per_event.get(), 7);
+        assert_eq!(cfg.policy.ceilings.max_memory_bytes.get(), 1_048_576);
+        assert_eq!(cfg.policy.ceilings.max_state_bytes, 2_048);
+    }
+
+    /// A retired `[limits]` scalar refuses and the message names the
+    /// `[policy]` key that replaces it.
+    #[test]
+    fn a_retired_limits_scalar_refuses_naming_the_replacement() {
+        for (toml, key, replacement) in [
+            (
+                "[limits]\nfuel_per_event = 7\n",
+                "limits.fuel_per_event",
+                "policy.max_fuel_per_event",
+            ),
+            (
+                "[limits]\nmemory_bytes = 7\n",
+                "limits.memory_bytes",
+                "policy.max_memory_bytes",
+            ),
+            (
+                "[limits]\nstate_bytes = 7\n",
+                "limits.state_bytes",
+                "policy.max_state_bytes",
+            ),
+        ] {
+            let raw = toml::from_str::<RawEngineConfig>(toml)
+                .expect("the raw parse only decides the TOML is well formed");
+            let err = EngineConfig::try_from(raw).expect_err("a retired key must not validate");
+            assert!(
+                matches!(
+                    err,
+                    EngineConfigError::RetiredKey { key: k, replacement: r }
+                        if k == key && r == replacement
+                ),
+                "{key}: {err:?}",
+            );
+            let err = toml::from_str::<EngineConfig>(toml).expect_err("must not parse");
+            assert!(err.to_string().contains(replacement), "{key}: {err}");
+        }
+    }
+
+    #[test]
+    fn policy_component_rows_override_and_fall_back() {
+        let cfg: EngineConfig = toml::from_str(
+            r#"
+[policy]
+max_memory_bytes = 1000
+capabilities     = ["chain", "http"]
+
+[policy.component.wallet]
+max_memory_bytes = 500
+http_allow       = ["api.cow.fi"]
+
+[[modules]]
+id   = "wallet"
+path = "w.wasm"
+
+[[modules]]
+id   = "tracker"
+path = "t.wasm"
+"#,
+        )
+        .expect("policy rows parse");
+        let wallet = cfg.policy.for_component("wallet");
+        assert_eq!(wallet.ceilings.max_memory_bytes.get(), 500);
+        // Unset row fields fall back to [policy].
+        assert_eq!(
+            wallet.ceilings.max_fuel_per_event.get(),
+            PolicyCeilings::default().max_fuel_per_event.get()
+        );
+        assert_eq!(
+            wallet.capabilities,
+            Some(&["chain".to_owned(), "http".to_owned()][..])
+        );
+        assert_eq!(
+            wallet.http_allow,
+            Some(&[HostPattern::from("api.cow.fi")][..])
+        );
+        // An unnamed component gets the [policy] defaults whole.
+        let tracker = cfg.policy.for_component("tracker");
+        assert_eq!(tracker.ceilings.max_memory_bytes.get(), 1000);
+        assert!(tracker.http_allow.is_none());
+    }
+
+    #[test]
+    fn an_absent_policy_permits_every_capability() {
+        let cfg: EngineConfig = toml::from_str("").expect("empty config parses");
+        assert!(cfg.policy.for_component("anything").capabilities.is_none());
+    }
+
+    #[test]
+    fn http_deny_parses_cidr_and_bare_addresses() {
+        let cfg: EngineConfig = toml::from_str(
+            r#"
+[policy]
+http_deny = ["169.254.0.0/16", "10.1.2.3", "fc00::/7"]
+"#,
+        )
+        .expect("http_deny parses");
+        assert_eq!(cfg.policy.http_deny.len(), 3);
+        assert_eq!(cfg.policy.http_deny[1].prefix_len(), 32);
+    }
+
+    #[test]
+    fn an_http_deny_entry_that_is_not_an_address_refuses() {
+        let raw = toml::from_str::<RawEngineConfig>("[policy]\nhttp_deny = [\"api.cow.fi\"]\n")
+            .expect("the raw parse only decides the TOML is well formed");
+        let err = EngineConfig::try_from(raw).expect_err("a hostname is not a CIDR block");
+        assert!(
+            matches!(err, EngineConfigError::InvalidHttpDeny { ref entry } if entry == "api.cow.fi"),
+            "{err:?}",
+        );
+    }
+
+    #[test]
+    fn a_modules_entry_without_an_id_refuses_at_parse() {
+        let err = toml::from_str::<EngineConfig>("[[modules]]\npath = \"m.wasm\"\n")
+            .expect_err("id is required");
+        assert!(err.to_string().contains("id"), "{err}");
+    }
+
+    #[test]
+    fn a_blank_or_duplicate_module_id_refuses() {
+        let raw = toml::from_str::<RawEngineConfig>("[[modules]]\nid = \" \"\npath = \"m.wasm\"\n")
+            .expect("raw parse");
+        let err = EngineConfig::try_from(raw).expect_err("a blank id must not validate");
+        assert!(
+            matches!(err, EngineConfigError::EmptyComponentId { .. }),
+            "{err:?}"
+        );
+
+        let raw = toml::from_str::<RawEngineConfig>(
+            "[[modules]]\nid = \"m\"\npath = \"a.wasm\"\n[[modules]]\nid = \"m\"\npath = \"b.wasm\"\n",
+        )
+        .expect("raw parse");
+        let err = EngineConfig::try_from(raw).expect_err("a duplicate id must not validate");
+        assert!(
+            matches!(err, EngineConfigError::DuplicateComponentId { ref id } if id == "m"),
+            "{err:?}",
+        );
+    }
+
+    #[test]
+    fn a_policy_row_matching_no_module_id_refuses() {
+        let raw = toml::from_str::<RawEngineConfig>(
+            "[policy.component.wallet]\nmax_memory_bytes = 1\n\
+             [[modules]]\nid = \"tracker\"\npath = \"t.wasm\"\n",
+        )
+        .expect("raw parse");
+        let err = EngineConfig::try_from(raw).expect_err("a dangling policy row must not validate");
+        assert!(
+            matches!(err, EngineConfigError::UnknownPolicyComponent { ref id } if id == "wallet"),
+            "{err:?}",
+        );
     }
 
     #[test]
@@ -1409,12 +1869,32 @@ window_secs = 30
     #[test]
     fn a_zero_limit_refuses_at_load_naming_the_field() {
         for (toml, field) in [
-            ("[limits]\nfuel_per_event = 0\n", "limits.fuel_per_event"),
             (
                 "[limits]\nevent_deadline_secs = 0\n",
                 "limits.event_deadline_secs",
             ),
-            ("[limits]\nmemory_bytes = 0\n", "limits.memory_bytes"),
+            (
+                "[policy]\nmax_fuel_per_event = 0\n",
+                "policy.max_fuel_per_event",
+            ),
+            (
+                "[policy]\nmax_memory_bytes = 0\n",
+                "policy.max_memory_bytes",
+            ),
+            (
+                "[policy.total]\nmax_memory_bytes = 0\n",
+                "policy.total.max_memory_bytes",
+            ),
+            (
+                "[policy.component.m]\nmax_memory_bytes = 0\n\
+                 [[modules]]\nid = \"m\"\npath = \"m.wasm\"\n",
+                "policy.component.m.max_memory_bytes",
+            ),
+            (
+                "[policy.component.m]\nmax_fuel_per_event = 0\n\
+                 [[modules]]\nid = \"m\"\npath = \"m.wasm\"\n",
+                "policy.component.m.max_fuel_per_event",
+            ),
             (
                 "[limits.chain]\nresponse_body_max_bytes = 0\n",
                 "limits.chain.response_body_max_bytes",
@@ -1497,8 +1977,8 @@ window_secs = 30
     fn a_zero_deny_cap_stays_legal_and_resolves_to_zero() {
         let cfg: EngineConfig = toml::from_str(
             r#"
-[limits]
-state_bytes = 0
+[policy]
+max_state_bytes = 0
 
 [limits.http]
 response_body_max_bytes = 0
@@ -1508,7 +1988,7 @@ max_charges = 0
 "#,
         )
         .expect("zero deny caps parse");
-        assert_eq!(cfg.limits.state_bytes, 0);
+        assert_eq!(cfg.policy.ceilings.max_state_bytes, 0);
         assert_eq!(cfg.limits.http.response_body_max_bytes, 0);
         assert_eq!(cfg.limits.quota.max_charges, 0);
     }
