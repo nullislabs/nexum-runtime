@@ -20,30 +20,30 @@ pub enum DrainOutcome {
     },
 }
 
-/// Cheap, clonable handle that fires the shutdown signal. Idempotent.
+/// Cheap, clonable handle that fires shutdown. Idempotent.
 #[derive(Debug, Clone)]
-pub struct ShutdownTrigger {
+pub struct ShutdownSignal {
     pub(crate) signal_tx: watch::Sender<bool>,
 }
 
-impl ShutdownTrigger {
-    /// Fire the shutdown signal. Latched, so a fire before the first
-    /// subscribe is not lost.
+impl ShutdownSignal {
+    /// Fire shutdown. Latched, so a fire before the first subscribe is not
+    /// lost.
     pub fn fire(&self) {
         self.signal_tx.send_replace(true);
     }
 }
 
-/// A shutdown signal a task awaits. Resolves once fired, already fired, or
-/// the manager is dropped.
+/// The receive side a task awaits shutdown on. Resolves once fired, already
+/// fired, or the manager is dropped.
 #[derive(Debug, Clone)]
 pub struct Shutdown {
     pub(crate) rx: watch::Receiver<bool>,
 }
 
 impl Shutdown {
-    /// Await the shutdown signal; resolves immediately if already fired and
-    /// is safe to await more than once.
+    /// Await shutdown; resolves immediately if already fired and is safe to
+    /// await more than once.
     pub async fn recv(&mut self) {
         if *self.rx.borrow_and_update() {
             return;

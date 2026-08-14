@@ -103,7 +103,7 @@ pub struct RuntimeHandle {
 impl RuntimeHandle {
     /// Signal the event loop to stop. The in-flight dispatch finishes first.
     pub fn shutdown(&mut self) {
-        self.tasks.trigger().fire();
+        self.tasks.shutdown_signal().fire();
     }
 
     /// The shared log pipeline: the read side for module runs and log pages.
@@ -309,16 +309,16 @@ impl<T: RuntimeTypes> AssembledRuntime<T> {
         }
 
         // The OS signal listener: SIGINT/SIGTERM ends it, and its end (or
-        // panic) fires the shutdown signal via the critical-task path. It
-        // also watches the signal itself so a programmatic shutdown or a
-        // handle drop winds it down rather than leaking it.
+        // panic) fires shutdown via the critical-task path. It also awaits
+        // shutdown itself so a programmatic shutdown or a handle drop winds
+        // it down rather than leaking it.
         let executor = tasks.executor();
         let mut listener_signal = tasks.subscribe();
         let mut fallback_signal = tasks.subscribe();
         executor.spawn_critical("os-signal-listener", async move {
             tokio::select! {
-                res = event_loop::wait_for_shutdown_signal() => match res {
-                    Ok(name) => info!(signal = %name, "shutdown signal received"),
+                res = event_loop::wait_for_os_signal() => match res {
+                    Ok(name) => info!(signal = %name, "OS signal received, shutting down"),
                     Err(err) => {
                         warn!(error = %err, "signal handler failed - programmatic shutdown only");
                         fallback_signal.recv().await;
@@ -1341,10 +1341,10 @@ mod tests {
             .expect("clean completion resolves Ok");
     }
 
-    /// Firing the shutdown trigger drives the loop to completion and `wait`
+    /// Firing the shutdown signal drives the loop to completion and `wait`
     /// returns.
     #[tokio::test]
-    async fn runtime_handle_shutdown_trigger_drives_wait_to_return() {
+    async fn runtime_handle_shutdown_signal_drives_wait_to_return() {
         let tasks = TaskManager::new();
         let event_loop = tasks.executor().spawn_graceful(|graceful| async move {
             drop(graceful.await);
@@ -1352,7 +1352,7 @@ mod tests {
         });
         let mut handle = handle_over(tasks, event_loop);
         handle.shutdown();
-        handle.wait().await.expect("wait returns after the trigger");
+        handle.wait().await.expect("wait returns after the signal");
     }
 
     /// An abnormally-stopped event loop surfaces an error from `wait`.

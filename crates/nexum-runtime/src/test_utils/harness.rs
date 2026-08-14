@@ -171,7 +171,7 @@ impl TestRuntimeBuilder {
 }
 
 /// A launched in-process runtime over the mock assembly; dropping it fires
-/// the shutdown trigger.
+/// the shutdown signal.
 pub struct TestRuntime {
     handle: RuntimeHandle,
     chain: FakeNode,

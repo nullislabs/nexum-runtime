@@ -11,6 +11,6 @@ mod task;
 
 pub use manager::{TaskExecutor, TaskManager};
 pub use shutdown::{
-    DrainOutcome, GracefulShutdown, GracefulShutdownGuard, Shutdown, ShutdownTrigger,
+    DrainOutcome, GracefulShutdown, GracefulShutdownGuard, Shutdown, ShutdownSignal,
 };
 pub use task::{TaskExit, TaskHandle, TaskSet};
