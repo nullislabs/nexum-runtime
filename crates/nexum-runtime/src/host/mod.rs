@@ -3,12 +3,10 @@
 //!
 //! [`provider_pool`] and [`local_store_redb`] are the capability backends;
 //! [`component`] is the backend-trait seam; [`extension`] wires in domain
-//! extensions; [`actor`] supervises provider instances; [`http`] gates
-//! outgoing wasi:http; [`logs`] is the module-log pipeline; [`error`] is the
-//! construction funnel for the WIT `chain-error` shapes; [`fault`] projects a
-//! `Fault` into log and metric fields.
+//! extensions; [`http`] gates outgoing wasi:http; [`logs`] is the module-log
+//! pipeline; [`error`] is the construction funnel for the WIT `chain-error`
+//! shapes; [`fault`] projects a `Fault` into log and metric fields.
 
-pub mod actor;
 pub mod component;
 pub mod error;
 pub mod extension;

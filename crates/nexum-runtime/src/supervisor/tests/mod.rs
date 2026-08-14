@@ -20,7 +20,7 @@ use super::artifact::read_verified_component;
 use super::cursors::{
     chainlog_cursor_key, commit_chain_log_cursor, progress_key, read_chain_log_cursor,
 };
-use super::dispatch::{DeadlineExceeded, with_dispatch_deadline};
+use super::dispatch::with_dispatch_deadline;
 use super::prepass::{NamespaceLedger, claim_namespace, unconfigured_chain};
 use super::store::resolve_module_limits;
 use super::subscriptions::build_alloy_filter;
@@ -28,7 +28,6 @@ use super::*;
 use crate::bindings::nexum;
 use crate::digest::{ContentDigest, DigestMismatch};
 use crate::engine_config::{ModuleLimits, ResolvedModuleLimits};
-use crate::host::extension::{HostService, Installed, ServiceInstance, ServiceKind};
 use crate::host::logs::LogSource;
 use crate::host::provider_pool::ProviderPool;
 use crate::manifest::{self, CapabilityError, CapabilityRegistry, ParseError, ResourceSection};
@@ -122,98 +121,4 @@ async fn try_boot_single(
     .await
     .map_err(anyhow::Error::from);
     (dir, result)
-}
-
-/// A stub extension registering the `acme-adapter` provider kind behind a
-/// unit service, for the boot-gate tests.
-struct AcmeService;
-impl crate::host::extension::HostService for AcmeService {}
-
-struct AcmeKind;
-
-#[async_trait::async_trait]
-impl ServiceKind<crate::test_utils::MockTypes> for AcmeKind {
-    fn kind(&self) -> &'static str {
-        "acme-adapter"
-    }
-
-    fn link(
-        &self,
-        _linker: &mut Linker<HostState<crate::test_utils::MockTypes>>,
-    ) -> anyhow::Result<()> {
-        Ok(())
-    }
-
-    async fn install(
-        &self,
-        _instance: ServiceInstance<'_, crate::test_utils::MockTypes>,
-        _service: &Arc<dyn HostService>,
-    ) -> anyhow::Result<Installed> {
-        Ok(Installed::Live)
-    }
-}
-
-struct AcmeExtension;
-
-impl Extension<crate::test_utils::MockTypes> for AcmeExtension {
-    fn namespace(&self) -> &'static str {
-        "acme"
-    }
-
-    fn capabilities(&self) -> manifest::NamespaceCaps {
-        manifest::NamespaceCaps {
-            prefix: "test:acme/",
-            ifaces: &[],
-        }
-    }
-
-    fn link(
-        &self,
-        _linker: &mut Linker<HostState<crate::test_utils::MockTypes>>,
-    ) -> anyhow::Result<()> {
-        Ok(())
-    }
-
-    fn service(&self) -> Option<Arc<dyn HostService>> {
-        Some(Arc::new(AcmeService))
-    }
-
-    fn provider(&self) -> Option<Box<dyn ServiceKind<crate::test_utils::MockTypes>>> {
-        Some(Box::new(AcmeKind))
-    }
-}
-
-fn acme_extensions() -> Vec<Arc<dyn Extension<crate::test_utils::MockTypes>>> {
-    vec![Arc::new(AcmeExtension)]
-}
-
-/// [`AcmeExtension`] minus its service, for the serviceless kind gate tests.
-struct ServicelessAcmeExtension;
-
-impl Extension<crate::test_utils::MockTypes> for ServicelessAcmeExtension {
-    fn namespace(&self) -> &'static str {
-        "acme"
-    }
-
-    fn capabilities(&self) -> manifest::NamespaceCaps {
-        manifest::NamespaceCaps {
-            prefix: "test:acme/",
-            ifaces: &[],
-        }
-    }
-
-    fn link(
-        &self,
-        _linker: &mut Linker<HostState<crate::test_utils::MockTypes>>,
-    ) -> anyhow::Result<()> {
-        Ok(())
-    }
-
-    fn provider(&self) -> Option<Box<dyn ServiceKind<crate::test_utils::MockTypes>>> {
-        Some(Box::new(AcmeKind))
-    }
-}
-
-fn serviceless_acme_extensions() -> Vec<Arc<dyn Extension<crate::test_utils::MockTypes>>> {
-    vec![Arc::new(ServicelessAcmeExtension)]
 }

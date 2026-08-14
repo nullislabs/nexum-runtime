@@ -12,7 +12,6 @@ use tracing_core::Level;
 use super::Supervisor;
 use super::cursors::{commit_chain_log_cursor, persist_progress_marker};
 use super::lifecycle::{revive_one, sweep};
-use super::role::{Role, report_poison};
 use crate::bindings::nexum;
 use crate::host::component::RuntimeTypes;
 use crate::host::extension::ExtensionEvent;
@@ -21,13 +20,6 @@ use crate::manifest::Subscription;
 use crate::module_id::ModuleId;
 
 impl<T: RuntimeTypes> Supervisor<T> {
-    /// Providers revive before modules: a module revived first would re-run
-    /// `init` against possibly-dead providers.
-    async fn sweep_all(&mut self, now: Instant) {
-        sweep(&self.shared, &mut self.providers, self.policy, now).await;
-        sweep(&self.shared, &mut self.modules, self.policy, now).await;
-    }
-
     /// The restart sweep runs first; returns the number of modules invoked.
     pub async fn dispatch_block(&mut self, block: nexum::host::types::Block) -> usize {
         let chain = Chain::from_id(block.chain_id);
@@ -35,7 +27,7 @@ impl<T: RuntimeTypes> Supervisor<T> {
         let block_number = block.number;
         let event = nexum::host::types::Event::Block(block);
         let now = Instant::now();
-        self.sweep_all(now).await;
+        sweep(&self.shared, &mut self.modules, now).await;
 
         let mut dispatched = 0;
         let candidate_indices: Vec<usize> = (0..self.modules.len())
@@ -77,7 +69,6 @@ impl<T: RuntimeTypes> Supervisor<T> {
         cursor_key: Option<&str>,
     ) -> bool {
         let now = Instant::now();
-        sweep(&self.shared, &mut self.providers, self.policy, now).await;
         let Some(idx) = self.modules.iter().position(|m| m.name == *module_name) else {
             warn!(module = %module_name, "no such module - dropping chain-log");
             return false;
@@ -131,7 +122,7 @@ impl<T: RuntimeTypes> Supervisor<T> {
     /// The restart sweep runs first; returns the number of modules invoked.
     pub async fn dispatch_extension_event(&mut self, event: ExtensionEvent) -> usize {
         let now = Instant::now();
-        self.sweep_all(now).await;
+        sweep(&self.shared, &mut self.modules, now).await;
 
         let candidate_indices: Vec<usize> = (0..self.modules.len())
             .filter(|&i| {
@@ -266,7 +257,7 @@ impl<T: RuntimeTypes> Supervisor<T> {
             Err(trap) => {
                 // The module died when the call ended, not at entry.
                 let died_at = start + elapsed;
-                let verdict = module.health.record_trap(died_at, died_at, poison_policy);
+                let verdict = module.health.record_trap(died_at, poison_policy);
                 error!(
                     module = %module.name,
                     chain_id,
@@ -293,18 +284,29 @@ impl<T: RuntimeTypes> Supervisor<T> {
                     format!("run terminated abnormally: {}", trap.root_cause()),
                 ));
                 if let Some(recent) = verdict.poisoned {
-                    report_poison(
-                        Role::Module,
-                        &module.name,
-                        recent,
-                        poison_policy.window,
-                        Some(trap.to_string()),
-                    );
+                    report_poison(&module.name, recent, poison_policy.window, trap.to_string());
                 }
                 DispatchOutcome::Trapped
             }
         }
     }
+}
+
+/// The poison-transition trio: quarantine warn plus gauge, with the trap
+/// that crossed the threshold.
+fn report_poison(name: &ModuleId, recent_failures: u32, window: Duration, last_error: String) {
+    warn!(
+        module = %name,
+        recent_failures,
+        window_secs = window.as_secs(),
+        last_error,
+        "module poisoned - quarantined; remove from engine.toml + restart to clear",
+    );
+    metrics::gauge!(
+        "nexum_runtime_module_poisoned",
+        "module" => name.clone(),
+    )
+    .set(1.0);
 }
 
 /// Distinct from a fuel trap, which bounds guest instructions; this bounds

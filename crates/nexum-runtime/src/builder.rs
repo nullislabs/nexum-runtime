@@ -46,8 +46,7 @@ pub enum LaunchRefusal {
     EventLoopGone,
     /// No module source at all: neither an override nor a config entry.
     #[error(
-        "no modules to run - set a module source or declare [[modules]] or \
-         [[services]] entries in engine.toml"
+        "no modules to run - set a module source or declare [[modules]] entries in engine.toml"
     )]
     NothingToRun,
     /// Every module died in `init`, and they came from a command-line
@@ -185,8 +184,8 @@ pub(crate) fn wasmtime_config() -> wasmtime::Config {
 pub struct AssembledRuntime<T: RuntimeTypes> {
     /// Shared backends threaded into every module store.
     pub components: Components<T>,
-    /// Extensions: namespaces, capabilities, linker hooks, services, and
-    /// provider kinds.
+    /// Extensions: namespaces, capabilities, linker hooks, and event
+    /// sources.
     pub extensions: Vec<Arc<dyn Extension<T>>>,
     /// Cross-cutting facilities installed before the engine boots.
     pub add_ons: AddOns,
@@ -256,7 +255,7 @@ impl<T: RuntimeTypes> AssembledRuntime<T> {
                 clocks,
             )
             .await?
-        } else if !engine_cfg.modules.is_empty() || !engine_cfg.services.is_empty() {
+        } else if !engine_cfg.modules.is_empty() {
             Supervisor::boot(
                 &engine,
                 &linker,
@@ -274,7 +273,6 @@ impl<T: RuntimeTypes> AssembledRuntime<T> {
         let plan = supervisor.subscription_plan();
         info!(
             modules = supervisor.module_count(),
-            services = supervisor.adapter_count(),
             alive,
             chains = plan.block_chains.len(),
             "supervisor ready"
@@ -312,15 +310,13 @@ impl<T: RuntimeTypes> AssembledRuntime<T> {
         // the components.
         let logs = components.logs.clone();
         // Extension event sources open only for subscription kinds some
-        // live module declares; each extension gates further on its own
-        // service state and returns no stream when it has nothing to
-        // observe.
+        // live module declares; an extension returns no stream when it has
+        // nothing to observe.
         let mut reconnect_tasks = TaskSet::new();
         let mut extension_streams = Vec::new();
         {
             let mut sources = EventSources::new(
                 engine_cfg,
-                supervisor.services(),
                 &plan.extension_kinds,
                 &executor,
                 &mut reconnect_tasks,
@@ -1161,7 +1157,7 @@ mod tests {
             Err(err) => err,
         };
         Refusal::from(err).variant::<BootRefusal>(|e| {
-            matches!(e, BootRefusal::UnconfiguredChain { noun: "module", name, chain_id: 424_242, .. }
+            matches!(e, BootRefusal::UnconfiguredChain { name, chain_id: 424_242, .. }
                 if name == "example")
         });
     }

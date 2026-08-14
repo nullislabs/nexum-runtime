@@ -70,21 +70,6 @@ pub const METRICS: &[Metric] = &[
         help: "Module restarts after a trap.",
     },
     Metric {
-        name: "nexum_runtime_service_errors_total",
-        kind: Kind::Counter,
-        help: "Service traps by fault label.",
-    },
-    Metric {
-        name: "nexum_runtime_service_poisoned",
-        kind: Kind::Gauge,
-        help: "Services quarantined by the poison policy.",
-    },
-    Metric {
-        name: "nexum_runtime_service_restarts_total",
-        kind: Kind::Counter,
-        help: "Service reinstalls after a trap.",
-    },
-    Metric {
         name: "nexum_runtime_stream_reconnects_total",
         kind: Kind::Counter,
         help: "Chain subscription reconnects by chain.",

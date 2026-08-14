@@ -9,7 +9,6 @@ use strum::{IntoStaticStr, VariantNames};
 use thiserror::Error;
 use tracing::{info, warn};
 
-use super::role::Role;
 use crate::engine_config::EngineConfig;
 use crate::manifest::{self, CapabilityRegistry, LoadedManifest, ParseError, Subscription};
 use crate::module_id::ModuleId;
@@ -22,23 +21,19 @@ use crate::refusal::{Refusal, RefusalContext as _};
 #[strum(serialize_all = "snake_case")]
 #[non_exhaustive]
 pub enum BootRefusal {
-    /// Both roles derive one keccak local-store namespace from the name,
+    /// Every module derives one keccak local-store namespace from the name,
     /// so a second claimant would alias the first one's state.
     #[error(
-        "name {name} is claimed twice: {held_role} {} and {role} {}; \
-         [component].name must be unique across [[modules]] and [[services]]",
+        "name {name} is claimed twice: {} and {}; \
+         [component].name must be unique across [[modules]]",
         held.display(),
         path.display()
     )]
     NamespaceClaimed {
         /// The claimed name.
         name: String,
-        /// The holding entry's role label.
-        held_role: &'static str,
         /// The holding entry's path.
         held: PathBuf,
-        /// The second claimant's role label.
-        role: &'static str,
         /// The second claimant's path.
         path: PathBuf,
     },
@@ -73,13 +68,11 @@ pub enum BootRefusal {
     /// [`Self::UnconfiguredChain`] for a run on defaults: the fix is
     /// creating engine.toml, not editing it.
     #[error(
-        "{noun} {name} subscribes to chain {chain_id} but no engine.toml was found \
+        "module {name} subscribes to chain {chain_id} but no engine.toml was found \
          (running on defaults, no chains configured); create engine.toml with a \
          [chains.{chain_id}] entry"
     )]
     UnconfiguredChainDefaulted {
-        /// The role label, `module` or `service`.
-        noun: &'static str,
         /// The subscriber's `[component].name`.
         name: String,
         /// The chain the subscription names.
@@ -88,13 +81,11 @@ pub enum BootRefusal {
     /// Chain access is an operator grant, so a manifest subscription
     /// cannot widen the `[chains]` set from its side of the boundary.
     #[error(
-        "{noun} {name} subscribes to chain {chain_id} but engine.toml declares no \
+        "module {name} subscribes to chain {chain_id} but engine.toml declares no \
          [chains.{chain_id}] entry; configured chains: {}",
         fmt_chain_ids(configured)
     )]
     UnconfiguredChain {
-        /// The role label, `module` or `service`.
-        noun: &'static str,
         /// The subscriber's `[component].name`.
         name: String,
         /// The chain the subscription names.
@@ -115,26 +106,23 @@ fn fmt_chain_ids(ids: &BTreeSet<u64>) -> String {
         .join(", ")
 }
 
-/// One ledger spans both roles: they derive the same keccak local-store namespace.
-pub(super) type NamespaceLedger = BTreeMap<String, (&'static str, PathBuf)>;
+/// Claimed names, each with the claiming entry's path.
+pub(super) type NamespaceLedger = BTreeMap<String, PathBuf>;
 
 /// Claim `name` for `path`, refusing a second claimant.
 pub(super) fn claim_namespace(
     ledger: &mut NamespaceLedger,
     name: &str,
-    role: &'static str,
     path: &Path,
 ) -> Result<(), BootRefusal> {
-    if let Some((held_role, held_path)) = ledger.get(name) {
+    if let Some(held_path) = ledger.get(name) {
         return Err(BootRefusal::NamespaceClaimed {
             name: name.to_owned(),
-            held_role,
             held: held_path.clone(),
-            role,
             path: path.to_path_buf(),
         });
     }
-    ledger.insert(name.to_owned(), (role, path.to_path_buf()));
+    ledger.insert(name.to_owned(), path.to_path_buf());
     Ok(())
 }
 
@@ -148,11 +136,10 @@ pub(super) fn load_required_manifest(
     component: &Path,
     explicit: Option<&Path>,
     registry: &CapabilityRegistry,
-    role: &'static str,
 ) -> Result<LoadedManifest, BootRefusal> {
     match resolve_manifest_path(component, explicit).as_deref() {
         Some(p) if p.exists() => {
-            info!(manifest = %p.display(), role, "loading component manifest");
+            info!(manifest = %p.display(), "loading component manifest");
             Ok(manifest::load(p, registry)?)
         }
         // Explicit paths only: sibling discovery requires `.exists()`.
@@ -218,7 +205,6 @@ impl ConfiguredChains {
 /// Refuse any subscription naming a chain absent from `[chains]`, before any
 /// guest code runs.
 pub(super) fn enforce_subscriptions(
-    role: Role,
     name: &str,
     loaded: &LoadedManifest,
     chains: &ConfiguredChains,
@@ -229,28 +215,24 @@ pub(super) fn enforce_subscriptions(
             continue;
         };
         if !chains.contains(*chain_id) {
-            return Err(unconfigured_chain(role, name, *chain_id, chains));
+            return Err(unconfigured_chain(name, *chain_id, chains));
         }
     }
     Ok(())
 }
 
 pub(super) fn unconfigured_chain(
-    role: Role,
     name: &str,
     chain_id: u64,
     chains: &ConfiguredChains,
 ) -> BootRefusal {
-    let noun = role.label();
     if chains.defaulted {
         return BootRefusal::UnconfiguredChainDefaulted {
-            noun,
             name: name.to_owned(),
             chain_id,
         };
     }
     BootRefusal::UnconfiguredChain {
-        noun,
         name: name.to_owned(),
         chain_id,
         configured: chains.ids.clone(),
@@ -259,69 +241,20 @@ pub(super) fn unconfigured_chain(
 
 /// Every manifest loaded, every name claimed, every subscribed chain gated,
 /// in `engine.toml` order.
-pub(super) struct Prepass {
-    pub(super) adapter_manifests: Vec<LoadedManifest>,
-    pub(super) module_manifests: Vec<LoadedManifest>,
-}
-
-/// Services first, then modules; every refusal lands before any compile.
 pub(super) fn run(
     engine_cfg: &EngineConfig,
     registry: &CapabilityRegistry,
-) -> Result<Prepass, Refusal> {
-    let provider_registry = CapabilityRegistry::provider();
+) -> Result<Vec<LoadedManifest>, Refusal> {
     let mut ledger = NamespaceLedger::new();
     let configured_chains = ConfiguredChains::from_config(engine_cfg);
-    let adapter_manifests = load_role_manifests(
-        engine_cfg
-            .services
-            .iter()
-            .map(|e| (&e.path, e.manifest.as_deref())),
-        &provider_registry,
-        RolePass {
-            role: Role::Service,
-            chains: &configured_chains,
-        },
-        &mut ledger,
-    )?;
-    let module_manifests = load_role_manifests(
-        engine_cfg
-            .modules
-            .iter()
-            .map(|e| (&e.path, e.manifest.as_deref())),
-        registry,
-        RolePass {
-            role: Role::Module,
-            chains: &configured_chains,
-        },
-        &mut ledger,
-    )?;
-    Ok(Prepass {
-        adapter_manifests,
-        module_manifests,
-    })
-}
-
-struct RolePass<'a> {
-    role: Role,
-    chains: &'a ConfiguredChains,
-}
-
-/// In declaration order.
-fn load_role_manifests<'a>(
-    entries: impl Iterator<Item = (&'a PathBuf, Option<&'a Path>)>,
-    registry: &CapabilityRegistry,
-    pass: RolePass<'_>,
-    ledger: &mut NamespaceLedger,
-) -> Result<Vec<LoadedManifest>, Refusal> {
     let mut manifests = Vec::new();
-    for (path, explicit) in entries {
-        let loaded = load_required_manifest(path, explicit, registry, pass.role.label())
-            .with_refusal_context(|| format!("{} {}", pass.role.load_context(), path.display()))?;
+    for entry in &engine_cfg.modules {
+        let loaded = load_required_manifest(&entry.path, entry.manifest.as_deref(), registry)
+            .with_refusal_context(|| format!("load module {}", entry.path.display()))?;
         let namespace = manifest_namespace(&loaded);
-        claim_namespace(ledger, namespace.as_str(), pass.role.label(), path)?;
-        enforce_subscriptions(pass.role, namespace.as_str(), &loaded, pass.chains)
-            .with_refusal_context(|| format!("{} {}", pass.role.load_context(), path.display()))?;
+        claim_namespace(&mut ledger, namespace.as_str(), &entry.path)?;
+        enforce_subscriptions(namespace.as_str(), &loaded, &configured_chains)
+            .with_refusal_context(|| format!("load module {}", entry.path.display()))?;
         manifests.push(loaded);
     }
     Ok(manifests)

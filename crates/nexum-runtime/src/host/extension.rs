@@ -1,22 +1,18 @@
 //! Extension seam: what one extension contributes to the host (namespace,
-//! capabilities, linker hook, optional service, provider kind, event sources,
-//! and manifest-section install predicates).
+//! capabilities, linker hook, event sources, and manifest-section install
+//! predicates).
 
-use std::any::Any;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use async_trait::async_trait;
 use futures::Stream;
 use nexum_tasks::{TaskExecutor, TaskExit, TaskSet};
-use wasmtime::Store;
-use wasmtime::component::{Component, Linker};
+use wasmtime::component::Linker;
 pub use wasmtime_wasi::HostWallClock;
 
 use crate::bindings::nexum::host::types::Event;
 use crate::engine_config::EngineConfig;
-use crate::host::actor::Liveness;
 use crate::host::component::RuntimeTypes;
 use crate::host::state::HostState;
 use crate::manifest::{ExtensionSections, NamespaceCaps};
@@ -25,7 +21,7 @@ use crate::supervisor::WasiClockOverride;
 /// One runtime extension; a module importing its interface boots only if both
 /// the linker entry and the capability namespace are registered.
 pub trait Extension<T: RuntimeTypes>: Send + Sync + 'static {
-    /// Namespace this extension owns; keys its service in [`HostServices`].
+    /// Namespace this extension owns.
     fn namespace(&self) -> &'static str;
 
     /// Capability namespace merged into enforcement.
@@ -41,38 +37,16 @@ pub trait Extension<T: RuntimeTypes>: Send + Sync + 'static {
         let _ = wall;
     }
 
-    /// Host service this extension owns, published under its namespace.
-    fn service(&self) -> Option<Arc<dyn HostService>> {
-        None
-    }
-
-    /// Provider kind this extension installs.
-    fn provider(&self) -> Option<Box<dyn ServiceKind<T>>> {
-        None
-    }
-
     /// Manifest section names this extension claims; an unclaimed non-core
     /// section is refused at boot.
     fn manifest_sections(&self) -> &'static [&'static str] {
         &[]
     }
 
-    /// Admit one provider at install over its manifest sections; `Err`
+    /// Admit one worker at install over its manifest sections; `Err`
     /// refuses fail-fast.
-    fn admit_provider(&self, provider: &str, sections: &ExtensionSections) -> anyhow::Result<()> {
-        let _ = (provider, sections);
-        Ok(())
-    }
-
-    /// Admit one worker at install over its and the loaded providers'
-    /// sections; `Err` refuses fail-fast.
-    fn admit_worker(
-        &self,
-        worker: &str,
-        sections: &ExtensionSections,
-        providers: &[ServiceManifest],
-    ) -> anyhow::Result<()> {
-        let _ = (worker, sections, providers);
+    fn admit_worker(&self, worker: &str, sections: &ExtensionSections) -> anyhow::Result<()> {
+        let _ = (worker, sections);
         Ok(())
     }
 
@@ -120,8 +94,6 @@ pub type ExtensionEventStream = Pin<Box<dyn Stream<Item = ExtensionEvent> + Send
 pub struct EventSources<'a> {
     /// The loaded engine config.
     pub config: &'a EngineConfig,
-    /// Extension-owned services, as booted.
-    pub services: &'a HostServices,
     /// Extension subscription kinds declared by at least one module.
     pub subscribed: &'a BTreeSet<String>,
     executor: &'a TaskExecutor,
@@ -132,14 +104,12 @@ impl<'a> EventSources<'a> {
     /// Bundle the launch inputs for one [`Extension::events`] pass.
     pub fn new(
         config: &'a EngineConfig,
-        services: &'a HostServices,
         subscribed: &'a BTreeSet<String>,
         executor: &'a TaskExecutor,
         tasks: &'a mut TaskSet,
     ) -> Self {
         Self {
             config,
-            services,
             subscribed,
             executor,
             tasks,
@@ -153,219 +123,5 @@ impl<'a> EventSources<'a> {
             task.await;
             TaskExit::ReceiverGone
         }));
-    }
-}
-
-/// Type-erased host service an extension owns, downcast at the call site.
-pub trait HostService: Any + Send + Sync + 'static {}
-
-/// A provider component kind; the host holds an instance behind the owning
-/// extension's serialized service.
-#[async_trait]
-pub trait ServiceKind<T: RuntimeTypes>: Send + Sync + 'static {
-    /// Manifest kind this provider answers for.
-    fn kind(&self) -> &'static str;
-
-    /// Adds the provider's imports to a provider linker.
-    fn link(&self, linker: &mut Linker<HostState<T>>) -> anyhow::Result<()>;
-
-    /// Instantiate and install one provider; [`Installed::Dead`] is a failed
-    /// guest `init`, `Err` a boot error.
-    /// The host bounds this call by the dispatch deadline and drops the future
-    /// at its next await, so publish into `service` only after the last await.
-    async fn install(
-        &self,
-        instance: ServiceInstance<'_, T>,
-        service: &Arc<dyn HostService>,
-    ) -> anyhow::Result<Installed>;
-}
-
-/// One provider instance ready to install.
-pub struct ServiceInstance<'a, T: RuntimeTypes> {
-    /// Compiled provider component.
-    pub component: &'a Component,
-    /// Linker carrying the kind's imports plus the WASI base.
-    pub linker: &'a Linker<HostState<T>>,
-    /// Store the instance runs in; the kind takes ownership.
-    pub store: Store<HostState<T>>,
-    /// Manifest `[config]` handed to the guest `init`.
-    pub config: Vec<(String, String)>,
-    /// The provider's extension-owned manifest sections.
-    pub sections: &'a ExtensionSections,
-    /// Fuel budget applied before each routed guest call.
-    pub fuel_per_call: u64,
-    /// Shared liveness the instance reports traps on.
-    pub liveness: Liveness,
-}
-
-/// One loaded provider as [`Extension::admit_worker`] sees it.
-#[derive(Clone, Debug)]
-pub struct ServiceManifest {
-    /// The provider's namespace (its manifest name).
-    pub name: String,
-    /// Registered kind spelling.
-    pub kind: &'static str,
-    /// The provider's extension-owned manifest sections.
-    pub sections: ExtensionSections,
-    /// sha256 of the loaded provider artifact.
-    pub component_digest: crate::digest::ContentDigest,
-}
-
-/// Outcome of one provider install.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum Installed {
-    /// `init` succeeded; the instance is installed and routable.
-    Live,
-    /// `init` returned a fault; the instance is loaded but not routable.
-    Dead,
-}
-
-/// Downcast a type-erased service to `S`. `None` when the type differs.
-pub fn downcast_service<S: HostService>(service: &Arc<dyn HostService>) -> Option<Arc<S>> {
-    let service = Arc::clone(service);
-    let erased: Arc<dyn Any + Send + Sync> = service;
-    erased.downcast().ok()
-}
-
-/// Two wired extensions claim one service namespace.
-#[derive(Debug, thiserror::Error)]
-#[error("duplicate extension service namespace {namespace}")]
-pub struct DuplicateServiceNamespace {
-    /// The namespace both extensions claimed.
-    pub namespace: &'static str,
-}
-
-/// Immutable per-namespace service map, built once at boot.
-#[derive(Clone, Default)]
-pub struct HostServices(Arc<BTreeMap<&'static str, Arc<dyn HostService>>>);
-
-impl std::fmt::Debug for HostServices {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_set().entries(self.0.keys()).finish()
-    }
-}
-
-impl HostServices {
-    /// Collect each extension's service under its namespace; refuses a
-    /// duplicate.
-    pub fn from_extensions<T: RuntimeTypes>(
-        extensions: &[Arc<dyn Extension<T>>],
-    ) -> Result<Self, DuplicateServiceNamespace> {
-        let mut map = BTreeMap::new();
-        for ext in extensions {
-            let Some(service) = ext.service() else {
-                continue;
-            };
-            let namespace = ext.namespace();
-            if map.insert(namespace, service).is_some() {
-                return Err(DuplicateServiceNamespace { namespace });
-            }
-        }
-        Ok(Self(Arc::new(map)))
-    }
-
-    /// Service under `namespace` downcast to `S`; `None` if absent or
-    /// mismatched.
-    pub fn get<S: HostService>(&self, namespace: &str) -> Option<Arc<S>> {
-        downcast_service(self.0.get(namespace)?)
-    }
-
-    /// The raw type-erased service under `namespace`.
-    pub fn raw(&self, namespace: &str) -> Option<&Arc<dyn HostService>> {
-        self.0.get(namespace)
-    }
-
-    /// Publish `service` under `namespace`, refusing a duplicate.
-    pub fn with_service(
-        self,
-        namespace: &'static str,
-        service: Arc<dyn HostService>,
-    ) -> Result<Self, DuplicateServiceNamespace> {
-        let mut map = Arc::unwrap_or_clone(self.0);
-        if map.insert(namespace, service).is_some() {
-            return Err(DuplicateServiceNamespace { namespace });
-        }
-        Ok(Self(Arc::new(map)))
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::preset::CoreRuntime;
-
-    struct Registry(u64);
-    impl HostService for Registry {}
-
-    struct Clockwork;
-    impl HostService for Clockwork {}
-
-    struct ServiceExt {
-        namespace: &'static str,
-        service: Option<Arc<dyn HostService>>,
-    }
-
-    impl Extension<CoreRuntime> for ServiceExt {
-        fn namespace(&self) -> &'static str {
-            self.namespace
-        }
-        fn capabilities(&self) -> NamespaceCaps {
-            NamespaceCaps {
-                prefix: "test:ext/",
-                ifaces: &[],
-            }
-        }
-        fn link(&self, _linker: &mut Linker<HostState<CoreRuntime>>) -> anyhow::Result<()> {
-            Ok(())
-        }
-        fn service(&self) -> Option<Arc<dyn HostService>> {
-            self.service.as_ref().map(Arc::clone)
-        }
-    }
-
-    fn ext(
-        namespace: &'static str,
-        service: Arc<dyn HostService>,
-    ) -> Arc<dyn Extension<CoreRuntime>> {
-        Arc::new(ServiceExt {
-            namespace,
-            service: Some(service),
-        })
-    }
-
-    /// A registered service comes back under its namespace, downcast to
-    /// its concrete type; a wrong type or an absent namespace is `None`.
-    #[test]
-    fn get_downcasts_by_namespace() {
-        let services =
-            HostServices::from_extensions(&[ext("acme", Arc::new(Registry(7)))]).expect("build");
-
-        let registry = services.get::<Registry>("acme").expect("registered");
-        assert_eq!(registry.0, 7);
-        assert!(services.get::<Clockwork>("acme").is_none());
-        assert!(services.get::<Registry>("absent").is_none());
-        assert!(services.raw("acme").is_some());
-    }
-
-    /// A serviceless extension contributes nothing to the map.
-    #[test]
-    fn serviceless_extension_is_absent() {
-        let serviceless: Arc<dyn Extension<CoreRuntime>> = Arc::new(ServiceExt {
-            namespace: "quiet",
-            service: None,
-        });
-        let services = HostServices::from_extensions(&[serviceless]).expect("build");
-        assert!(services.raw("quiet").is_none());
-    }
-
-    /// Two services under one namespace refuse to build.
-    #[test]
-    fn duplicate_namespace_is_refused() {
-        let err = HostServices::from_extensions(&[
-            ext("acme", Arc::new(Registry(1))),
-            ext("acme", Arc::new(Clockwork)),
-        ])
-        .expect_err("duplicate namespace");
-        assert_eq!(err.namespace, "acme");
     }
 }

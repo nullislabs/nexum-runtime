@@ -8,7 +8,6 @@ use wasmtime_wasi::{WasiCtx, WasiCtxView, WasiView};
 use wasmtime_wasi_http::WasiHttpCtx;
 
 use super::component::{Handle, RuntimeTypes};
-use super::extension::HostServices;
 use super::http::HttpGate;
 use super::logs::{LogRouter, RunId};
 use super::provider_pool::ProviderPool;
@@ -39,9 +38,6 @@ pub struct HostState<T: RuntimeTypes> {
     pub chain_response_max_bytes: usize,
     /// `local-store` backend: per-module handle with keccak256 prefix.
     pub store: Handle<T>,
-    /// Extension-owned host services, keyed by namespace; a provider store
-    /// carries an empty map.
-    pub services: HostServices,
 }
 
 // `WasiView: Send`, so the backends must be `Send` too; the lattice

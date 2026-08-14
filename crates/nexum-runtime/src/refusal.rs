@@ -194,10 +194,6 @@ mod tests {
         "extension_namespace_claimed",
         "subscription_kind_claimed",
         "section_claimed",
-        "kind_registered_twice",
-        "serviceless_kind",
-        "worker_kind_adapter",
-        "unregistered_kind",
         "unknown_event_kind",
         "digest_unpinned",
         // LaunchRefusal, less the wait-time `event_loop_gone`, which is

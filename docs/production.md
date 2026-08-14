@@ -8,7 +8,7 @@ A downstream composition root that registers extensions runs the same way, under
 
 - The engine built in release: `cargo build -p nexum-cli --release` gives `target/release/nexum`.
 - Every component `.wasm` artifact present on a path the service user can read.
-- An `engine.toml` with `state_dir` on a persistent path (never `/tmp`), `log_level = "info"`, `[engine.metrics] enabled = true` with `bind_addr = "127.0.0.1:9100"`, one `[chains.<id>]` per subscribed chain with a paid RPC URL, one `[[modules]]` per module, and one `[[services]]` per service component.
+- An `engine.toml` with `state_dir` on a persistent path (never `/tmp`), `log_level = "info"`, `[engine.metrics] enabled = true` with `bind_addr = "127.0.0.1:9100"`, one `[chains.<id>]` per subscribed chain with a paid RPC URL, and one `[[modules]]` per module.
 - `require_component_digest = true` under `[engine]`, with every manifest carrying a `[component].digest` pin.
 - The `state_dir` exists and is writable by the service user.
 - A Prometheus instance scraping `/metrics` (section 6) with the alert rules in section 7.
@@ -165,9 +165,6 @@ With `enabled = false` the recorder is still installed, so call sites stay live,
 | `nexum_runtime_module_errors_total` | counter | `module`, `error_kind` | Module faults and traps. `error_kind = "trap"` is a wasmtime trap; other values are fault labels. |
 | `nexum_runtime_module_restarts_total` | counter | `module` | Module restart attempts. |
 | `nexum_runtime_module_poisoned` | gauge | `module` | `1` once a module crosses `[limits.poison]` (default 5 failures in 600 s). Stays `1` until the process restarts. |
-| `nexum_runtime_service_errors_total` | counter | `service`, `error_kind` | Service faults and traps. |
-| `nexum_runtime_service_restarts_total` | counter | `service` | Service reinstall attempts. |
-| `nexum_runtime_service_poisoned` | gauge | `service` | `1` once a service is quarantined. |
 | `nexum_runtime_chain_request_total` | counter | `chain_id`, `method`, `outcome` | Every `chain::request`. A method outside the read surface is counted as `method="<denied>"` with `outcome="err"`. The `outcome="err"` rate is the RPC-degraded signal. |
 | `nexum_runtime_chain_response_capped_total` | counter | `chain_id`, `method` | Responses rejected for exceeding `[limits.chain] response_body_max_bytes` (default 1 MiB). |
 | `nexum_runtime_stream_reconnects_total` | counter | `kind`, `chain_id`, `module` | Stream reconnects. `kind="block"` is per chain; `kind="chain-log"` also carries `module`. |
@@ -193,12 +190,12 @@ groups:
   - name: nexum
     interval: 30s
     rules:
-      - alert: NexumComponentPoisoned
-        expr: nexum_runtime_module_poisoned > 0 or nexum_runtime_service_poisoned > 0
+      - alert: NexumModulePoisoned
+        expr: nexum_runtime_module_poisoned > 0
         for: 1m
         labels: { severity: page }
         annotations:
-          summary: "Nexum {{ $labels.module }}{{ $labels.service }} is poisoned"
+          summary: "Nexum module {{ $labels.module }} is poisoned"
 
       - alert: NexumModuleTraps
         expr: rate(nexum_runtime_module_errors_total{error_kind="trap"}[5m]) > 0
@@ -270,7 +267,7 @@ journalctl -u nexum -f --output=json \
 
 Recover a poisoned component: fix the underlying bug, rebuild the artifact, update the `[component].digest` pin, then `sudo systemctl restart nexum`.
 The failure ring is in memory and clears at boot.
-The engine reads `[[modules]]` and `[[services]]` at boot only, and it detects no artifact change while running, so adding, changing, or removing a component means editing `engine.toml` and restarting.
+The engine reads `[[modules]]` at boot only, and it detects no artifact change while running, so adding, changing, or removing a component means editing `engine.toml` and restarting.
 A logging-level change also needs a restart.
 
 ## 10. Pre-upgrade

@@ -95,7 +95,7 @@ A handler that wants the alloy provider builds it with `host.provider(chain)` an
 ## Order submission is not a chain namespace
 
 Submitting an order or an intent is a downstream concern, not part of `nexum:host/chain`.
-A downstream layer adds it as an extension: it registers its own WIT interface through the seam in `docs/design/linker-extension-seam.md`, and installs the component that speaks the wire format as a `[[services]]` entry.
+A downstream layer adds it as an extension: it registers its own WIT interface through the seam in `docs/design/linker-extension-seam.md`.
 The runtime ships no such interface and no venue.
 
 ## Testing

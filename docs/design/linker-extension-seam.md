@@ -11,21 +11,18 @@ It plugs into the host through an extension assembled at the composition root, s
 One trait, `Extension<T: RuntimeTypes>` in `crates/nexum-runtime/src/host/extension.rs`, is what a domain contributes.
 Its members:
 
-- `namespace()`: the namespace it owns, which keys its service on `HostServices`.
+- `namespace()`: the namespace it owns.
 - `capabilities() -> NamespaceCaps`: the `{ prefix, ifaces }` merged into enforcement, so a component importing its interfaces still validates.
 - `link(&mut Linker<HostState<T>>)`: adds its WIT imports to each worker linker, after the core interfaces and before instantiation.
   It takes only `&mut Linker` and never the wasmtime `Store`, which is not `Sync`, so the seam stays compatible with a future per-extension call router that serializes access to a `Store`.
 - `attach_clock(Arc<dyn HostWallClock>)`: receives the effective host wall clock once per launch, before `link`.
   The clock is the WASI override's wall clock when a test sets one, else the real host clock, so extension time and guest time share one source.
-- `service() -> Option<Arc<dyn HostService>>`: a type-erased service published under the namespace on the shared `HostServices` map and downcast at the call site.
-- `provider() -> Option<Box<dyn ServiceKind<T>>>`: a service component kind the extension installs.
-- `manifest_sections`, `admit_provider`, `admit_worker`: the non-core manifest sections it claims and its install-time predicates over them.
+- `manifest_sections`, `admit_worker`: the non-core manifest sections it claims and its install-time predicate over them.
   An `Err` refuses the install fail-fast.
 - `subscriptions`, `events`: the manifest subscription kinds it emits and the event sources it opens once the engine is booted.
 
 An extension defines its own `bindgen!` for its world, which generates a `Host` trait local to the extension, and implements it for the foreign `HostState<T>`.
 That is orphan-legal, because the trait is local.
-It reaches its backend through the `HostServices` map: `state.services.get::<S>(namespace)`, downcast with `downcast_service`.
 The bindgen shares `nexum:host/types` with the core bindings through `with`, so the extension's `fault` is the same type the core host constructs.
 
 ## Registration and enforcement
@@ -46,7 +43,6 @@ The runtime carries no dependency on any extension crate, so a domain cone stays
 `engine.toml` stays domain-free.
 The engine deserializes every `[extensions.<name>]` table into an opaque `toml::Value` (`EngineConfig::extensions`) and never interprets it.
 The composition root hands each extension its own entry to parse.
-Service components install from the `[[services]]` table, where the operator, not the author, scopes the transport grant.
 
 Two different files use the `[extensions.<name>]` heading, and they are unrelated.
 The `engine.toml` table above is operator config, read at runtime and left opaque.

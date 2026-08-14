@@ -862,8 +862,8 @@ mod tests {
         rt.wait().await.expect("clean shutdown");
     }
 
-    /// [`TestRuntimeBuilder::boot_supervisor`] reaches services, the alive
-    /// count and dispatch without a boot entry or an event loop.
+    /// [`TestRuntimeBuilder::boot_supervisor`] reaches the alive count and
+    /// dispatch without a boot entry or an event loop.
     #[tokio::test]
     async fn boot_supervisor_exposes_the_booted_supervisor() {
         let Some(wasm) = example_wasm_or_skip() else {
@@ -878,7 +878,6 @@ mod tests {
 
         assert_eq!(booted.supervisor.module_count(), 1);
         assert_eq!(booted.supervisor.alive_count(), 1);
-        let _services = booted.supervisor.services();
 
         assert_eq!(
             booted.dispatch_block_on(1).await,

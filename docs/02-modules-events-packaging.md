@@ -106,7 +106,7 @@ twap-monitor/
 `-- component.wasm         # compiled component
 ```
 
-The engine reads the artifact from the local filesystem path in the `[[modules]]` or `[[services]]` entry.
+The engine reads the artifact from the local filesystem path in the `[[modules]]` entry.
 The manifest defaults to a `component.toml` beside the artifact, and the `manifest` key names one elsewhere.
 An operator-owned manifest from outside the artifact directory, combined with `require_component_digest = true`, is what closes the gap against a compromised artifact store: the default sibling manifest sits in the same trust domain as the artifact it pins.
 
@@ -143,8 +143,7 @@ stateDiagram-v2
 | **Dead** | The boot-time `init` returned a fault. Permanent: the supervisor never restarts it. |
 | **Poisoned** | Too many failures inside the poison window. Terminal for the process; only an operator restart clears it. |
 
-Load itself is ordered: the prepass resolves every manifest, claims namespaces, and gates subscribed chains against `[chains]`; then services load; then modules load.
-Services load first so that a module depending on one finds it registered.
+Load itself is ordered: the prepass resolves every manifest, claims namespaces, and gates subscribed chains against `[chains]`; then modules load.
 
 The backoff schedule doubles from 1 s and caps at 300 s: 1, 2, 4, 8, 16, 32, 64, 128, 256, then 300 s.
 The poison policy is 5 failures inside 600 s by default, configurable under `[limits.poison]`.

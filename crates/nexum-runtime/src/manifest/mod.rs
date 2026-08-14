@@ -14,8 +14,10 @@ pub(crate) use capabilities::enforce_capabilities;
 pub use capabilities::{CapabilityRegistry, NamespaceCaps};
 pub(crate) use error::{CapabilityError, ParseError};
 pub(crate) use load::load;
+#[cfg(test)]
+pub(crate) use types::ComponentKind;
 pub use types::ExtensionSections;
-pub(crate) use types::{ComponentKind, LoadedManifest, ResourceSection, Subscription};
+pub(crate) use types::{LoadedManifest, ResourceSection, Subscription};
 // CapabilityViolation and the *Section structs are
 // reachable through these functions' return / argument types;
 // consumers that need to name them directly do so via

@@ -32,7 +32,7 @@ async fn boot_refuses_a_subscription_on_an_unconfigured_chain() {
             .expect_refusal()
             .await
             .variant::<BootRefusal>(|e| {
-                matches!(e, BootRefusal::UnconfiguredChain { noun: "module", name, chain_id: 424_242, .. }
+                matches!(e, BootRefusal::UnconfiguredChain { name, chain_id: 424_242, .. }
                     if name == "example")
             })
             // Operator wording pin.
@@ -60,39 +60,13 @@ async fn boot_single_refuses_a_subscription_on_an_unconfigured_chain() {
             .expect("an unconfigured chain must refuse the boot"),
     )
     .variant::<BootRefusal>(|e| {
-        matches!(e, BootRefusal::UnconfiguredChain { noun: "module", name, chain_id: 424_242, .. }
+        matches!(e, BootRefusal::UnconfiguredChain { name, chain_id: 424_242, .. }
             if name == "gated")
     })
     // Operator wording pin.
     .names("module gated subscribes to chain 424242")
     .names("configured chains: 1, 100, 11155111")
     .lacks("compile");
-}
-
-/// The gate covers `[[services]]` entries too: a provider manifest cannot
-/// subscribe past the operator's `[chains]` set.
-#[tokio::test]
-async fn boot_refuses_an_adapter_subscription_on_an_unconfigured_chain() {
-    BootScenario::over(mock_components())
-        .extensions(acme_extensions())
-        .adapter(
-            TestManifest::new("acme-adapter")
-                .kind("service")
-                .cap("chain")
-                .block_sub(424_242),
-        )
-        .expect_refusal()
-        .await
-        .variant::<BootRefusal>(|e| {
-            matches!(e, BootRefusal::UnconfiguredChain { noun: "service", name, chain_id: 424_242, .. }
-                if name == "acme-adapter")
-        })
-        // Operator wording pin.
-        .names("load service")
-        .names("service acme-adapter subscribes to chain 424242")
-        .names("[chains.424242]")
-        .lacks("read component")
-        .lacks("compile");
 }
 
 /// Filter values fail closed at manifest parse: an unparseable address or
@@ -211,7 +185,7 @@ async fn an_unconfigured_chain_refuses_boot_before_an_earlier_module_loads() {
         .expect_refusal()
         .await
         .variant::<BootRefusal>(|e| {
-            matches!(e, BootRefusal::UnconfiguredChain { noun: "module", name, chain_id: 424_242, .. }
+            matches!(e, BootRefusal::UnconfiguredChain { name, chain_id: 424_242, .. }
                 if name == "example")
         })
         // Operator wording pin.
@@ -234,7 +208,7 @@ async fn boot_refusal_names_the_missing_engine_toml_on_the_defaulted_path() {
         .expect_refusal()
         .await
         .variant::<BootRefusal>(|e| {
-            matches!(e, BootRefusal::UnconfiguredChainDefaulted { noun: "module", name, chain_id: 424_242 }
+            matches!(e, BootRefusal::UnconfiguredChainDefaulted { name, chain_id: 424_242 }
                 if name == "example")
         })
         // Operator wording pin.
@@ -256,7 +230,7 @@ fn configured_chains_normalise_named_and_numeric_spellings() {
 #[test]
 fn unconfigured_chain_message_says_none_when_engine_toml_declares_no_chains() {
     let chains = ConfiguredChains::from_config(&EngineConfig::default());
-    let msg = unconfigured_chain(Role::Module, "example", 424_242, &chains).to_string();
+    let msg = unconfigured_chain("example", 424_242, &chains).to_string();
     // Operator wording pin.
     assert!(msg.contains("configured chains: none"), "{msg}");
     assert!(!msg.contains("no engine.toml was found"), "{msg}");
