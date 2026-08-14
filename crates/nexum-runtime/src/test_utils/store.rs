@@ -84,9 +84,16 @@ impl StateHandle for MockStateHandle {
             let used: u64 = ns.iter().map(|(k, v)| (k.len() + v.len()) as u64).sum();
             let projected = used.saturating_sub(old) + entry;
             if projected > quota {
-                return Err(StorageError::QuotaExceeded {
-                    needed: projected,
-                    quota,
+                return Err(if entry > quota {
+                    StorageError::QuotaUnsatisfiable {
+                        needed: entry,
+                        quota,
+                    }
+                } else {
+                    StorageError::QuotaExceeded {
+                        needed: projected,
+                        quota,
+                    }
                 });
             }
         }
@@ -159,9 +166,16 @@ impl StateHandle for MockStateHandle {
             }
             let projected = used.saturating_sub(released) + charged;
             if projected > quota {
-                return Err(StorageError::QuotaExceeded {
-                    needed: projected,
-                    quota,
+                return Err(if charged > quota {
+                    StorageError::QuotaUnsatisfiable {
+                        needed: charged,
+                        quota,
+                    }
+                } else {
+                    StorageError::QuotaExceeded {
+                        needed: projected,
+                        quota,
+                    }
                 });
             }
         }

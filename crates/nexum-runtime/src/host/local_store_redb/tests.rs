@@ -192,11 +192,22 @@ fn quota_rejects_over_budget_write_leaving_store_unchanged() {
 }
 
 #[test]
-fn quota_rejects_single_oversize_value() {
+fn quota_rejects_single_oversize_value_as_unsatisfiable() {
     let (_dir, store) = fresh();
     let ms = store.module("m").unwrap().with_quota(4);
+    // The entry alone exceeds the whole quota: no delete could help, so
+    // the refusal is distinct from a footprint overflow.
     let err = ms.set("k", b"toolong").unwrap_err();
-    assert!(matches!(err, StorageError::QuotaExceeded { .. }));
+    assert!(matches!(err, StorageError::QuotaUnsatisfiable { .. }));
+    assert!(ms.get("k").unwrap().is_none());
+}
+
+#[test]
+fn apply_batch_that_alone_exceeds_the_quota_is_unsatisfiable() {
+    let (_dir, store) = fresh();
+    let ms = store.module("m").unwrap().with_quota(4);
+    let err = ms.apply(&[set_op("k", b"toolong")]).unwrap_err();
+    assert!(matches!(err, StorageError::QuotaUnsatisfiable { .. }));
     assert!(ms.get("k").unwrap().is_none());
 }
 
@@ -239,10 +250,12 @@ fn quota_counts_across_short_lived_handles_of_one_namespace() {
         .with_quota(cost("a", b"1234") + cost("b", b"5678"))
         .set("a", b"1234")
         .unwrap();
+    // Room for the write alone, so only the first handle's footprint can
+    // push it over.
     let err = store
         .module("m")
         .unwrap()
-        .with_quota(8)
+        .with_quota(cost("b", b"5678"))
         .set("b", b"5678")
         .unwrap_err();
     assert!(matches!(err, StorageError::QuotaExceeded { .. }));

@@ -189,9 +189,16 @@ impl ModuleStore {
                     && projected > quota
                 {
                     // Returning aborts the write transaction: nothing lands.
-                    return Err(StorageError::QuotaExceeded {
-                        needed: projected,
-                        quota,
+                    return Err(if entry > quota {
+                        StorageError::QuotaUnsatisfiable {
+                            needed: entry,
+                            quota,
+                        }
+                    } else {
+                        StorageError::QuotaExceeded {
+                            needed: projected,
+                            quota,
+                        }
                     });
                 }
             }
@@ -267,9 +274,16 @@ impl ModuleStore {
                     && projected > quota
                 {
                     // Returning aborts the write transaction: nothing lands.
-                    return Err(StorageError::QuotaExceeded {
-                        needed: projected,
-                        quota,
+                    return Err(if charged > quota {
+                        StorageError::QuotaUnsatisfiable {
+                            needed: charged,
+                            quota,
+                        }
+                    } else {
+                        StorageError::QuotaExceeded {
+                            needed: projected,
+                            quota,
+                        }
                     });
                 }
             }
@@ -414,6 +428,15 @@ pub enum StorageError {
         /// The module's byte quota.
         quota: u64,
     },
+    /// The write alone exceeds the whole quota, so no deletes can make
+    /// it fit.
+    #[error("local-store write needs {needed} B alone but the quota is {quota} B")]
+    QuotaUnsatisfiable {
+        /// On-disk cost of just this write's entries.
+        needed: u64,
+        /// The module's byte quota.
+        quota: u64,
+    },
     /// The batch declares more operations than one `apply` may carry.
     #[error("apply batch has {ops} ops but the cap is {cap}")]
     ApplyOpsExceeded {
@@ -431,18 +454,6 @@ pub enum StorageError {
         /// Per-batch value-byte cap.
         cap: u64,
     },
-}
-
-impl From<StorageError> for crate::bindings::nexum::host::types::Fault {
-    fn from(err: StorageError) -> Self {
-        match err {
-            StorageError::QuotaExceeded { .. } => Self::Denied(err.to_string()),
-            StorageError::ApplyOpsExceeded { .. } | StorageError::ApplyBytesExceeded { .. } => {
-                Self::InvalidInput(err.to_string())
-            }
-            _ => Self::Internal(err.to_string()),
-        }
-    }
 }
 
 #[cfg(test)]
