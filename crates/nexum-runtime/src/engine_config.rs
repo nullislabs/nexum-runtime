@@ -16,7 +16,6 @@ use serde::Deserialize;
 use thiserror::Error;
 use tracing::{info, warn};
 
-use crate::host_pattern::HostPattern;
 use crate::runtime::dispatch_rate::{
     DEFAULT_DISPATCH_BURST, DEFAULT_DISPATCH_REFILL_PER_SEC, DispatchRatePolicy,
 };
@@ -185,9 +184,6 @@ pub struct EngineConfig {
     /// Modules the supervisor boots; each resolves a
     /// `(component.wasm, component.toml)` pair.
     pub modules: Vec<ModuleEntry>,
-    /// Service components the supervisor boots alongside modules. Like a
-    /// module, but the operator, not the author, scopes its transport here.
-    pub services: Vec<ServiceEntry>,
     /// True when [`load_or_default`] found no engine.toml.
     pub defaulted: bool,
 }
@@ -207,8 +203,6 @@ struct RawEngineConfig {
     extensions: HashMap<String, toml::Value>,
     #[serde(default)]
     modules: Vec<ModuleEntry>,
-    #[serde(default)]
-    services: Vec<ServiceEntry>,
 }
 
 impl TryFrom<RawEngineConfig> for EngineConfig {
@@ -247,7 +241,6 @@ impl TryFrom<RawEngineConfig> for EngineConfig {
             chains,
             extensions: raw.extensions,
             modules: raw.modules,
-            services: raw.services,
             defaulted: false,
         })
     }
@@ -263,23 +256,6 @@ pub struct ModuleEntry {
     /// Path to the module's `component.toml`. Defaults to `<path-parent>/component.toml`.
     #[serde(default)]
     pub manifest: Option<std::path::PathBuf>,
-}
-
-/// One `[[services]]` table. `path`/`manifest` mirror [`ModuleEntry`].
-/// `http_allow` is the operator's transport grant: an empty list denies all
-/// outbound HTTP.
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct ServiceEntry {
-    /// Path to the compiled `.wasm` service component.
-    pub path: std::path::PathBuf,
-    /// Path to the service's `component.toml`. Defaults to `<path-parent>/component.toml`.
-    #[serde(default)]
-    pub manifest: Option<std::path::PathBuf>,
-    /// Outbound HTTP host allowlist: exact hostname or `*.suffix` wildcard,
-    /// parsed to [`HostPattern`] as the config loads.
-    #[serde(default)]
-    pub http_allow: Vec<HostPattern>,
 }
 
 /// `[engine]`: settings that apply to the process, not to one module.
@@ -1298,20 +1274,25 @@ anything = "goes here, the engine never reads it"
 
 [[modules]]
 path = "m.wasm"
-
-[[services]]
-path = "s.wasm"
-http_allow = ["api.acme.example"]
 "#,
         )
         .expect("every documented section parses under the guard");
         assert_eq!(cfg.limits.fuel_per_event.get(), 7);
         assert_eq!(cfg.modules.len(), 1);
-        assert_eq!(cfg.services.len(), 1);
         assert!(
             cfg.extensions.contains_key("acme"),
             "an extension table stays opaque and unguarded",
         );
+    }
+
+    /// The install path for `[[services]]` is gone, so the table refuses at
+    /// parse rather than surviving as an entry nothing loads.
+    #[test]
+    fn a_services_table_refuses_at_parse() {
+        let err = toml::from_str::<EngineConfig>("[[services]]\npath = \"s.wasm\"\n")
+            .expect_err("a [[services]] table must refuse");
+        let msg = err.to_string();
+        assert!(msg.contains("unknown") && msg.contains("services"), "{msg}");
     }
 
     #[test]
@@ -1592,51 +1573,6 @@ window_secs  = 60
         let poison = cfg.limits.poison;
         assert_eq!(poison.max_failures.get(), 3);
         assert_eq!(poison.window, Duration::from_secs(60));
-    }
-
-    #[test]
-    fn adapters_parse_with_scoped_transport_grants() {
-        let cfg: EngineConfig = toml::from_str(
-            r#"
-[[services]]
-path = "providers/acme/acme_provider.wasm"
-http_allow = ["api.acme.example", "*.acme.example"]
-
-[[services]]
-path = "services/bare/bare.wasm"
-manifest = "services/bare/component.toml"
-"#,
-        )
-        .expect("services parse");
-        assert_eq!(cfg.services.len(), 2);
-        let first = &cfg.services[0];
-        assert_eq!(
-            first.path,
-            PathBuf::from("providers/acme/acme_provider.wasm")
-        );
-        assert!(first.manifest.is_none(), "manifest defaults to sibling");
-        assert_eq!(
-            first.http_allow,
-            vec![
-                HostPattern::from("api.acme.example"),
-                HostPattern::from("*.acme.example"),
-            ]
-        );
-        let second = &cfg.services[1];
-        assert_eq!(
-            second.manifest.as_deref(),
-            Some(Path::new("services/bare/component.toml"))
-        );
-        assert!(
-            second.http_allow.is_empty(),
-            "unset scope grants default empty",
-        );
-    }
-
-    #[test]
-    fn adapters_default_empty_when_absent() {
-        let cfg = EngineConfig::default();
-        assert!(cfg.services.is_empty());
     }
 
     #[test]

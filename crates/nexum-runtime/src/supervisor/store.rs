@@ -9,11 +9,10 @@ use wasmtime::{Engine, Store};
 use wasmtime_wasi::{HostMonotonicClock, HostWallClock, WasiCtxBuilder};
 
 use super::Shared;
-use super::role::Role;
 use crate::bindings::EventModule;
 use crate::engine_config::{OutboundHttpLimits, ResolvedModuleLimits};
 use crate::host::component::{RuntimeTypes, StateHandle, StateStore};
-use crate::host::extension::{Extension, HostServices, ServiceKind};
+use crate::host::extension::Extension;
 use crate::host::http::HttpGate;
 use crate::host::logs::{LogSource, RunId, StdioStream};
 use crate::host::state::HostState;
@@ -147,26 +146,17 @@ pub(super) fn fresh_run_store<T: RuntimeTypes>(
     name: &ModuleId,
     seq: u64,
     spec: &StoreSpec,
-    role: Role,
 ) -> Result<(RunId, HostStore<T>)> {
     let run = RunId::new(name.clone(), seq);
-    let store = build(shared, spec, run.clone(), role)?;
+    let store = build(shared, spec, run.clone())?;
     Ok((run, store))
 }
 
-/// Takes a freshly minted [`RunId`]; `role` picks the service map.
 fn build<T: RuntimeTypes>(
     shared: &Shared<T>,
     spec: &StoreSpec,
     run: RunId,
-    role: Role,
 ) -> Result<HostStore<T>> {
-    // A provider store carries an empty service map: the shared map holds
-    // the registry that owns this store, and carrying it here would cycle.
-    let services = match role {
-        Role::Module => shared.services.clone(),
-        Role::Service => HostServices::default(),
-    };
     let namespace: &str = run.module.as_str();
     // Stdio is captured as tagged log records, stdin stays closed; the ctx
     // grants no network, so the allowlisted wasi:http gate is the only live path.
@@ -214,10 +204,7 @@ fn build<T: RuntimeTypes>(
             log_router: router,
             chain: shared.components.chain.clone(),
             chain_response_max_bytes: spec.chain_response_max_bytes,
-            // Provider guests never reach this: `build_provider_linker`
-            // links only `kind.link` plus WASI.
             store: module_store,
-            services,
         },
     );
     store.limiter(|state| &mut state.limits);
@@ -240,19 +227,6 @@ pub fn build_linker<T: RuntimeTypes>(
     for ext in extensions {
         ext.link(&mut linker)?;
     }
-    Ok(linker)
-}
-
-/// Core `nexum:host` interfaces are withheld, so a provider importing one
-/// fails to instantiate; extensions are never linked into providers.
-pub fn build_provider_linker<T: RuntimeTypes>(
-    engine: &Engine,
-    kind: &dyn ServiceKind<T>,
-) -> anyhow::Result<Linker<HostState<T>>> {
-    let mut linker = Linker::<HostState<T>>::new(engine);
-    kind.link(&mut linker)?;
-    wasmtime_wasi::p2::add_to_linker_async(&mut linker)?;
-    wasmtime_wasi_http::p2::add_only_http_to_linker_async(&mut linker)?;
     Ok(linker)
 }
 

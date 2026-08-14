@@ -180,51 +180,6 @@ async fn e2e_boot_single_accepts_a_matching_pinned_digest() {
 }
 
 #[tokio::test]
-async fn boot_refuses_a_provider_with_a_mismatched_digest() {
-    let scenario = BootScenario::over(mock_components()).extensions(acme_extensions());
-    let wasm = scenario.dir().join("acme.wasm");
-    std::fs::write(&wasm, b"drifted provider bytes").expect("write artifact");
-    scenario
-        .adapter(
-            Entry::new(
-                TestManifest::new("acme-adapter")
-                    .kind("service")
-                    .cap("chain")
-                    .component_digest(wrong_digest().to_string()),
-            )
-            .wasm(wasm),
-        )
-        .expect_refusal()
-        .await
-        .variant::<DigestMismatch>(|e| {
-            e.declared == wrong_digest()
-                && e.actual == ContentDigest::of_bytes(b"drifted provider bytes")
-        })
-        .lacks("compile");
-}
-
-#[tokio::test]
-async fn boot_requires_a_provider_digest_when_the_engine_flag_is_set() {
-    let scenario = BootScenario::over(mock_components())
-        .extensions(acme_extensions())
-        .require_digest();
-    let wasm = scenario.dir().join("acme.wasm");
-    std::fs::write(&wasm, b"unpinned provider bytes").expect("write artifact");
-    scenario
-        .adapter(
-            Entry::new(
-                TestManifest::new("acme-adapter")
-                    .kind("service")
-                    .cap("chain"),
-            )
-            .wasm(wasm),
-        )
-        .expect_refusal()
-        .await
-        .variant::<LoadRefusal>(|e| matches!(e, LoadRefusal::DigestUnpinned { .. }));
-}
-
-#[tokio::test]
 async fn boot_requires_a_module_digest_when_the_engine_flag_is_set() {
     let scenario = BootScenario::new().require_digest();
     let wasm = scenario.dir().join("module.wasm");

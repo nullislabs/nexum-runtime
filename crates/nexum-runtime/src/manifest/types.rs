@@ -189,9 +189,8 @@ impl Subscription {
 
 #[derive(Debug, Deserialize, Default)]
 pub(crate) struct ComponentSection {
-    /// Instance identity. A service's name is also what a dependant
-    /// writes, and both roles share one keccak local-store namespace, so
-    /// it is unique across `[[modules]]` and `[[services]]`.
+    /// Instance identity; keys the keccak local-store namespace, so it is
+    /// unique across `[[modules]]`.
     #[serde(default)]
     pub name: String,
     #[allow(dead_code)] // Parsed but has no reader.
@@ -278,6 +277,7 @@ pub struct LoadedManifest {
     /// `[component].name` parsed into the namespace.
     pub name: crate::module_id::ModuleId,
     /// `[component].kind`.
+    #[allow(dead_code)] // Validated at parse but has no reader.
     pub kind: ComponentKind,
     /// `[component].digest` parsed to its typed digest.
     pub component_digest: Option<crate::digest::ContentDigest>,

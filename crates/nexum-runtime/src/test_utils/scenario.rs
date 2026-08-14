@@ -10,22 +10,20 @@ use tempfile::TempDir;
 
 use super::manifest::{ManifestSource, TestManifest};
 use super::{in_memory_logs, test_chain_configs};
-use crate::engine_config::{ChainConfig, EngineConfig, ModuleEntry, ModuleLimits, ServiceEntry};
+use crate::engine_config::{ChainConfig, EngineConfig, ModuleEntry, ModuleLimits};
 use crate::host::component::{Components, RuntimeTypes};
 use crate::host::extension::{Extension, attach_wall_clock};
 use crate::host::local_store_redb::LocalStore;
 use crate::host::logs::{LogPipeline, LogRecord};
 use crate::host::provider_pool::ProviderPool;
-use crate::host_pattern::HostPattern;
 use crate::preset::CoreRuntime;
 use crate::supervisor::{Supervisor, WasiClockOverride, build_linker};
 use crate::test_utils::wasm::test_wasmtime_engine;
 
-/// One `[[modules]]` or `[[services]]` entry.
+/// One `[[modules]]` entry.
 pub struct Entry {
     wasm: Option<PathBuf>,
     manifest: ManifestSource,
-    http_allow: Vec<HostPattern>,
 }
 
 impl Entry {
@@ -34,19 +32,12 @@ impl Entry {
         Self {
             wasm: None,
             manifest: manifest.into(),
-            http_allow: Vec::new(),
         }
     }
 
     /// Load this entry from `wasm` rather than the scenario-wide component.
     pub fn wasm(mut self, wasm: impl Into<PathBuf>) -> Self {
         self.wasm = Some(wasm.into());
-        self
-    }
-
-    /// Operator HTTP grant; only an `[[services]]` entry carries one.
-    pub fn http_allow(mut self, hosts: impl IntoIterator<Item = impl Into<HostPattern>>) -> Self {
-        self.http_allow.extend(hosts.into_iter().map(Into::into));
         self
     }
 }
@@ -78,7 +69,6 @@ pub struct BootScenario<T: RuntimeTypes = CoreRuntime> {
     chains: HashMap<Chain, ChainConfig>,
     wasm: Option<PathBuf>,
     modules: Vec<Entry>,
-    services: Vec<Entry>,
     clocks: Option<WasiClockOverride>,
     require_digest: bool,
     defaulted: bool,
@@ -115,7 +105,6 @@ impl<T: RuntimeTypes> BootScenario<T> {
             chains: test_chain_configs(),
             wasm: None,
             modules: Vec::new(),
-            services: Vec::new(),
             clocks: None,
             require_digest: false,
             defaulted: false,
@@ -136,12 +125,6 @@ impl<T: RuntimeTypes> BootScenario<T> {
     /// Add a `[[modules]]` entry.
     pub fn module(mut self, entry: impl Into<Entry>) -> Self {
         self.modules.push(entry.into());
-        self
-    }
-
-    /// Add a `[[services]]` entry.
-    pub fn adapter(mut self, entry: impl Into<Entry>) -> Self {
-        self.services.push(entry.into());
         self
     }
 
@@ -230,12 +213,11 @@ impl<T: RuntimeTypes> BootScenario<T> {
     fn split(self) -> (EngineConfig, Launch<T>) {
         let dir = self.dir.path().to_path_buf();
         let default_wasm = self.wasm.unwrap_or_else(|| dir.join("component.wasm"));
-        let resolve = |role: &str, i: usize, entry: Entry| {
-            let at = dir.join(format!("{role}-{i}.toml"));
+        let resolve = |i: usize, entry: Entry| {
+            let at = dir.join(format!("module-{i}.toml"));
             (
                 entry.wasm.unwrap_or_else(|| default_wasm.clone()),
                 entry.manifest.resolve(&at),
-                entry.http_allow,
             )
         };
 
@@ -251,16 +233,8 @@ impl<T: RuntimeTypes> BootScenario<T> {
         config.engine.require_component_digest = self.require_digest;
         config.defaulted = self.defaulted;
         for (i, entry) in self.modules.into_iter().enumerate() {
-            let (path, manifest, ..) = resolve("module", i, entry);
+            let (path, manifest) = resolve(i, entry);
             config.modules.push(ModuleEntry { path, manifest });
-        }
-        for (i, entry) in self.services.into_iter().enumerate() {
-            let (path, manifest, http_allow) = resolve("adapter", i, entry);
-            config.services.push(ServiceEntry {
-                path,
-                manifest,
-                http_allow,
-            });
         }
         (
             config,
@@ -583,18 +557,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn an_unregistered_adapter_kind_refuses_before_any_compile() {
-        BootScenario::new()
-            .adapter(TestManifest::new("acme-feed").kind("service"))
-            .expect_refusal()
-            .await
-            .variant::<LoadRefusal>(
-                |e| matches!(e, LoadRefusal::UnregisteredKind { kind, .. } if kind == "acme-feed"),
-            )
-            .lacks("compile");
-    }
-
-    #[tokio::test]
     async fn a_component_without_any_manifest_refuses_on_discovery() {
         let scenario = BootScenario::new();
         let orphan = scenario.dir().join("orphan.wasm");
@@ -663,7 +625,7 @@ mod tests {
     }
 
     #[test]
-    fn entries_carry_their_component_manifest_and_operator_grants() {
+    fn entries_carry_their_component_manifest_and_operator_limits() {
         let scenario = BootScenario::new()
             .wasm("guest.wasm")
             .limits(ModuleLimits {
@@ -674,11 +636,7 @@ mod tests {
                 ..Default::default()
             })
             .module(TestManifest::new("a").cap("logging"))
-            .module(Entry::new(TestManifest::new("b").cap("logging")).wasm("other.wasm"))
-            .adapter(
-                Entry::new(TestManifest::new("acme-feed").kind("service"))
-                    .http_allow(["api.acme.example"]),
-            );
+            .module(Entry::new(TestManifest::new("b").cap("logging")).wasm("other.wasm"));
         // Holding _launch keeps the manifest tempdir alive for the asserts.
         let (config, _launch) = scenario.split();
 
@@ -701,17 +659,7 @@ mod tests {
             Path::new("other.wasm"),
             "a per-entry component overrides the scenario default",
         );
-        assert_eq!(config.services.len(), 1);
-        assert_eq!(
-            config.services[0].http_allow,
-            [HostPattern::from("api.acme.example")]
-        );
-        for manifest in config
-            .modules
-            .iter()
-            .map(|m| &m.manifest)
-            .chain(config.services.iter().map(|a| &a.manifest))
-        {
+        for manifest in config.modules.iter().map(|m| &m.manifest) {
             assert!(
                 manifest.as_deref().is_some_and(Path::is_file),
                 "manifest written: {manifest:?}",

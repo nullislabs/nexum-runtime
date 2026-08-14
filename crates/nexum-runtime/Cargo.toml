@@ -22,7 +22,6 @@ wasmtime-wasi-http.workspace = true
 # Async + error plumbing.
 anyhow.workspace = true
 thiserror.workspace = true
-async-trait.workspace = true
 # Newtype boilerplate (`Display`, `AsRef`, `From`) for identity wrappers.
 derive_more.workspace = true
 # `strum::IntoStaticStr`: the snake_case variant name is the tracing

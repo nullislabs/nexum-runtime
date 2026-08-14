@@ -1,7 +1,6 @@
-//! The outbound-HTTP allowlist pattern and its matcher, shared by the
-//! author manifest (`[dependencies.http].hosts`) and the operator config
-//! (`[[services]].http_allow`). Owned by neither side, so both parse once
-//! at load and match through the same code.
+//! The outbound-HTTP allowlist pattern and its matcher, parsed once from
+//! the author manifest (`[dependencies.http].hosts`) at load and matched
+//! at request time.
 
 use std::convert::Infallible;
 use std::fmt;

@@ -65,7 +65,7 @@ A manifest may pin its artifact with `digest = "sha256:<64 hex chars>"` in `[com
 A present pin is strictly verified against the loaded bytes before compilation; a mismatch or a malformed pin refuses the boot.
 An absent pin loads with a warning that logs the computed digest; set `require_component_digest = true` under `[engine]` in `engine.toml` to make an absent pin a boot error.
 The default sibling `component.toml` lives in the same trust domain as the artifact, so an author-side pin closes accidental drift only.
-Against a compromised artifact store, supply an operator-owned manifest from outside the artifact directory via the `manifest` key on `[[modules]]`/`[[services]]`, combined with `require_component_digest = true`.
+Against a compromised artifact store, supply an operator-owned manifest from outside the artifact directory via the `manifest` key on `[[modules]]`, combined with `require_component_digest = true`.
 
 ## Licence
 

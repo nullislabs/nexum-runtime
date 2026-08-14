@@ -3310,7 +3310,6 @@ dependencies = [
  "alloy-transport",
  "alloy-transport-ws",
  "anyhow",
- "async-trait",
  "bytes",
  "derive_more",
  "futures",
