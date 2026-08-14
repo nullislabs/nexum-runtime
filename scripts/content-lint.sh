@@ -39,7 +39,8 @@ SUBJECT='^(build|chore|ci|docs|feat|fix|perf|refactor|revert|style|test)(\([a-z0
 # Oxford spelling takes -ize. Each stem requires a suffix, so the nouns
 # "synthesis" and "analysis" cannot match; words with no -ize form (supervise,
 # exercise, otherwise, promise) are absent by construction, not excluded after
-# the fact.
+# the fact. Every match is case-insensitive, because a sentence-initial
+# capital is the same violation.
 IZE_STEMS='authoris|capitalis|categoris|centralis|customis|decentralis|deserialis|formalis|generalis|initialis|materialis|maximis|minimis|normalis|optimis|organis|prioritis|realis|recognis|sanitis|serialis|stabilis|standardis|summaris|synthesis|tokenis|utilis'
 ISE='('"$IZE_STEMS"')(e|es|ed|ing|ation|ations)\b'
 
@@ -57,7 +58,7 @@ fi
 
 # CONTRIBUTING.md is exempt: stating the rule means quoting the spelling it
 # rejects.
-hits=$(git grep -nIP "$ISE" -- . ':!CONTRIBUTING.md' || true)
+hits=$(git grep -nIPi "$ISE" -- . ':!CONTRIBUTING.md' || true)
 if [ -n "$hits" ]; then
     fail "Oxford spelling takes -ize, not -ise:"
     printf '%s\n' "$hits" | sed 's/^/    /' >&2
@@ -80,7 +81,7 @@ if [ -n "${1:-}" ]; then
         if printf '%s' "$body" | grep -qiE "$FORBIDDEN"; then
             fail "$short message carries a forbidden attribution trailer"
         fi
-        if printf '%s' "$body" | grep -qP "$ISE"; then
+        if printf '%s' "$body" | grep -qPi "$ISE"; then
             fail "$short message uses -ise where Oxford spelling takes -ize"
         fi
     done < <(git rev-list "$1")
@@ -95,7 +96,7 @@ if [ -n "${PR_BODY:-}" ]; then
     if printf '%s' "$prose" | grep -qiE "$FORBIDDEN"; then
         fail "pull-request body carries a forbidden attribution trailer"
     fi
-    if printf '%s' "$prose" | grep -qP "$ISE"; then
+    if printf '%s' "$prose" | grep -qPi "$ISE"; then
         fail "pull-request body uses -ise where Oxford spelling takes -ize"
     fi
 fi

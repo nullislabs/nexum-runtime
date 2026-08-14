@@ -21,7 +21,7 @@ use clap::{CommandFactory, FromArgMatches, Parser};
     version,
 )]
 pub struct Cli {
-    /// Optional positional path to a Wasm Component file. Synthesises
+    /// Optional positional path to a Wasm Component file. Synthesizes
     /// a one-module engine config when no `--engine-config` is given.
     pub wasm: Option<PathBuf>,
 

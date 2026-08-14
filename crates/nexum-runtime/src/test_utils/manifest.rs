@@ -17,7 +17,7 @@ pub enum ManifestSource {
 }
 
 impl ManifestSource {
-    /// Materialise inline text at `path`; [`Beside`](Self::Beside) resolves to nothing.
+    /// Materialize inline text at `path`; [`Beside`](Self::Beside) resolves to nothing.
     pub fn resolve(&self, path: &Path) -> Option<PathBuf> {
         match self {
             Self::Beside => None,
@@ -45,7 +45,6 @@ pub fn manifest(name: impl Into<String>) -> TestManifest {
 #[derive(Debug, Clone)]
 pub struct TestManifest {
     name: String,
-    kind: Option<String>,
     component: Option<String>,
     caps: Vec<String>,
     http_allow: Vec<String>,
@@ -58,19 +57,12 @@ impl TestManifest {
     pub fn new(name: impl Into<String>) -> Self {
         Self {
             name: name.into(),
-            kind: None,
             component: None,
             caps: Vec::new(),
             http_allow: Vec::new(),
             config: Vec::new(),
             subscriptions: Vec::new(),
         }
-    }
-
-    /// Set `[component].kind`; unset defaults to a module at load.
-    pub fn kind(mut self, kind: impl Into<String>) -> Self {
-        self.kind = Some(kind.into());
-        self
     }
 
     /// Set `[component].digest` to a content-digest pin.
@@ -151,9 +143,6 @@ impl TestManifest {
     pub fn to_toml(&self) -> String {
         let mut component = toml::Table::new();
         component.insert("name".into(), self.name.clone().into());
-        if let Some(kind) = &self.kind {
-            component.insert("kind".into(), kind.clone().into());
-        }
         if let Some(digest) = &self.component {
             component.insert("digest".into(), digest.clone().into());
         }
@@ -218,7 +207,7 @@ fn subscription(kind: &str, chain_id: u64) -> toml::Table {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::manifest::{CapabilityRegistry, ComponentKind, Subscription, load};
+    use crate::manifest::{CapabilityRegistry, Subscription, load};
 
     /// Load through the real write-then-parse path with the core registry.
     fn load_core(manifest: &TestManifest) -> crate::manifest::LoadedManifest {
@@ -242,7 +231,6 @@ mod tests {
         );
 
         assert_eq!(loaded.name.as_str(), "example");
-        assert_eq!(loaded.kind, ComponentKind::Module);
         assert_eq!(
             loaded
                 .dependencies
@@ -268,19 +256,17 @@ mod tests {
     }
 
     #[test]
-    fn kind_component_and_config_reach_the_loaded_manifest() {
+    fn digest_and_config_reach_the_loaded_manifest() {
         const DIGEST: &str =
             "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
         let loaded = load_core(
             &TestManifest::new("price-provider")
-                .kind("service")
                 .component_digest(DIGEST)
                 .cap("logging")
                 .config("threshold", "2500.00")
                 .config("quoted", "a \"quoted\" value"),
         );
 
-        assert_eq!(loaded.kind, ComponentKind::Service);
         assert_eq!(loaded.name.as_str(), "price-provider");
         assert_eq!(
             loaded.component_digest.expect("digest parsed").to_string(),
@@ -398,7 +384,6 @@ mod tests {
     #[test]
     fn to_toml_emits_the_exact_golden_text() {
         let toml = TestManifest::new("golden")
-            .kind("service")
             .cap("logging")
             .cap("http")
             .http_allow("127.0.0.1")
@@ -407,7 +392,6 @@ mod tests {
             .chain_log_sub_filtered(11_155_111, Some("0xabc"), None)
             .to_toml();
         let golden = r#"[component]
-kind = "service"
 name = "golden"
 
 [config]

@@ -1,8 +1,12 @@
 ---
-status: superseded in part by 0017-capabilities-and-services.md and 0019-modules-react-to-triggers.md
+status: superseded in part by 0017-capabilities-and-services.md, 0019-modules-react-to-triggers.md, and 0020-retire-component-kind.md
 ---
 
 # A component declares a kind and its dependencies
+
+> Amendment: this record was edited after acceptance.
+> [ADR-0020](0020-retire-component-kind.md) retired the `[component].kind` field: a component states its identity and its dependencies, and nothing classifies the component itself.
+> The word `kind` in the title is superseded, and the `kind` rule and examples in the Decision and the two Consequences that turn on the kind carry marks in place.
 
 ## Context
 
@@ -47,6 +51,7 @@ acme-status = {}
 ```
 
 `kind` is `module` or `service`.
+Superseded by [ADR-0020](0020-retire-component-kind.md): the examples above and below carry a field that no longer parses.
 A module consumes.
 A service also registers a name other components may depend on.
 
@@ -87,6 +92,7 @@ The manifest file is `component.toml`, and `[[adapters]]` in `engine.toml` becom
   This is a schema break, and the manifest schema version records it.
 - The direction of every key is legible.
   A component states its identity, its kind, and what it depends on, and nothing else in the file is a demand on the engine.
+  Superseded in part by [ADR-0020](0020-retire-component-kind.md): the kind is no longer stated.
 - Naming a service and naming a host capability read the same, because the engine already treats them the same.
   Superseded by [ADR-0017](0017-capabilities-and-services.md): the engine treating them the same was the conflation, not evidence they are alike.
 - `nexum-module-macros` and the `#[module]` attribute keep their names.
@@ -94,3 +100,4 @@ The manifest file is `component.toml`, and `[[adapters]]` in `engine.toml` becom
 - The WIT worlds spell the worker kind `event-module`.
   Aligning those spellings is a separate WIT change and is not carried here.
   Superseded in part by [ADR-0019](0019-modules-react-to-triggers.md): the `event` adjective is retired for `trigger`, and the `module` versus `service` half of the spelling deferral stays open.
+  Superseded in full by [ADR-0020](0020-retire-component-kind.md): the manifest spells no kind, so that half is discharged and no deferral remains.
