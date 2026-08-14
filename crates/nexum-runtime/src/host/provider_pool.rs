@@ -78,7 +78,7 @@ impl ProviderPool {
             let endpoint = &chain_cfg.rpc_url;
             info!(
                 chain_id = chain.id(),
-                url = %endpoint,
+                url = %endpoint.url(),
                 "opening chain RPC provider",
             );
             let timeout = Duration::from_secs(chain_cfg.request_timeout_secs);
@@ -87,7 +87,7 @@ impl ProviderPool {
                 // WS has no client-level timeout; only `request` bounds its calls.
                 let client = ClientBuilder::default()
                     .layer(retry_layer())
-                    .ws(WsConnect::new(endpoint.unredacted_dial_url().as_str()))
+                    .ws(WsConnect::new(endpoint.url().as_str()))
                     .await
                     .with_context(|| format!("connect chain {chain}"))?;
                 ProviderBuilder::new().connect_client(client).erased()
@@ -98,7 +98,7 @@ impl ProviderPool {
                     .with_context(|| format!("connect chain {chain}"))?;
                 let client = ClientBuilder::default()
                     .layer(retry_layer())
-                    .http_with_client(http, endpoint.unredacted_dial_url().clone());
+                    .http_with_client(http, endpoint.url().clone());
                 ProviderBuilder::new().connect_client(client).erased()
             };
             providers.insert(

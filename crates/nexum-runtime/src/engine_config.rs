@@ -6,7 +6,6 @@
 //! else defaults (no chains, `state_dir = ./data`).
 
 use std::collections::HashMap;
-use std::fmt;
 use std::net::IpAddr;
 use std::num::{NonZeroU32, NonZeroU64, NonZeroUsize};
 use std::path::{Path, PathBuf};
@@ -195,7 +194,6 @@ pub struct EngineConfig {
 
 /// Raw deserialized engine config; the `[chains]` keys stay as written
 /// until the `TryFrom` conversion into [`EngineConfig`] validates them.
-/// No `Debug`: the raw `rpc_url` strings may carry credentials.
 #[derive(Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawEngineConfig {
@@ -364,8 +362,7 @@ pub struct ChainConfig {
 }
 
 /// Raw `[chains.<id>]` shape; `rpc_url` stays a string until the
-/// `TryFrom` conversion into [`EngineConfig`] validates it. No `Debug`:
-/// the raw string may carry a credential.
+/// `TryFrom` conversion into [`EngineConfig`] validates it.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawChainConfig {
@@ -387,11 +384,11 @@ pub enum RpcTransport {
     WebSocket,
 }
 
-/// `Debug` and `Display` print the redacted form;
-/// [`unredacted_dial_url`](Self::unredacted_dial_url) is the only way to
-/// the credential. Deliberately not `Deserialize`: a field-level serde
-/// refusal would echo the raw source line.
-#[derive(Clone)]
+/// A `[chains]` RPC endpoint, parsed once at load so a malformed
+/// `rpc_url` refuses at boot rather than at the first chain call.
+/// Deliberately not `Deserialize`: a field-level serde refusal would
+/// bypass the typed [`EngineConfigError`] path.
+#[derive(Debug, Clone)]
 pub struct RpcEndpoint {
     url: url::Url,
     transport: RpcTransport,
@@ -408,29 +405,9 @@ impl RpcEndpoint {
         matches!(self.transport, RpcTransport::WebSocket)
     }
 
-    /// Never log this: `Display` is the redacted form.
-    pub fn unredacted_dial_url(&self) -> &url::Url {
+    /// The URL as configured, credentials included.
+    pub fn url(&self) -> &url::Url {
         &self.url
-    }
-
-    /// What `Display` and `Debug` print.
-    pub fn redacted(&self) -> String {
-        redact_parsed(self.url.clone())
-    }
-}
-
-impl fmt::Debug for RpcEndpoint {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("RpcEndpoint")
-            .field("url", &self.redacted())
-            .field("transport", &self.transport)
-            .finish()
-    }
-}
-
-impl fmt::Display for RpcEndpoint {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.redacted())
     }
 }
 
@@ -460,7 +437,7 @@ impl TryFrom<&str> for RpcEndpoint {
     }
 }
 
-/// Neither variant carries the input: it may hold the credential.
+/// Why a `rpc_url` refused at load.
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum RpcEndpointError {
@@ -1065,80 +1042,6 @@ pub enum EnvVarError {
     },
 }
 
-/// Blank the credential-bearing parts of a URL (userinfo, query, fragment,
-/// long API-key path segments) so it is safe to log. Unparseable input
-/// yields a placeholder.
-pub fn redact_url(url: &str) -> String {
-    let Ok(parsed) = url::Url::parse(url) else {
-        return "<unparseable-url>".to_owned();
-    };
-    redact_parsed(parsed)
-}
-
-/// [`redact_url`] over an already-parsed URL; no re-parse.
-fn redact_parsed(mut parsed: url::Url) -> String {
-    if !parsed.username().is_empty() {
-        let _ = parsed.set_username("REDACTED");
-    }
-    if parsed.password().is_some() {
-        let _ = parsed.set_password(Some("REDACTED"));
-    }
-    // Key-in-path shape (Alchemy/Infura): a >20-char segment with no '.'/':' is
-    // an API key. Collect owned first - can't hold the read + write borrows.
-    let redacted: Option<Vec<String>> = parsed.path_segments().map(|segs| {
-        segs.map(|seg| {
-            if seg.len() > 20 && !seg.contains('.') && !seg.contains(':') {
-                "KEY".to_owned()
-            } else {
-                seg.to_owned()
-            }
-        })
-        .collect()
-    });
-    if let Some(segments) = redacted
-        && let Ok(mut pm) = parsed.path_segments_mut()
-    {
-        pm.clear();
-        for seg in &segments {
-            pm.push(seg);
-        }
-    }
-    if parsed.query().is_some() {
-        parsed.set_query(Some("REDACTED"));
-    }
-    if parsed.fragment().is_some() {
-        parsed.set_fragment(Some("REDACTED"));
-    }
-    parsed.to_string()
-}
-
-/// For text an untrusted reader sees. [`redact_url`] is not enough: it keeps
-/// the authority and short path segments, either of which can hold the key.
-pub fn redact_urls_in_text(text: &str) -> String {
-    const PLACEHOLDER: &str = "<redacted-url>";
-    let mut out = String::with_capacity(text.len());
-    let mut rest = text;
-    while let Some(sep) = rest.find("://") {
-        // Cut past the whole char: the text is server-controlled, and
-        // `panic = "abort"` makes a mid-codepoint slice fatal to the host.
-        let scheme_start = rest[..sep]
-            .char_indices()
-            .rev()
-            .find(|&(_, c)| !(c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.')))
-            .map_or(0, |(i, c)| i + c.len_utf8());
-        let after = &rest[sep + 3..];
-        let token_end = sep + 3 + after.find(char::is_whitespace).unwrap_or(after.len());
-        let token = &rest[scheme_start..token_end];
-        let url = token.trim_end_matches([')', ']', '}', '.', ',', ';', '\'', '"', '>']);
-        out.push_str(&rest[..scheme_start]);
-        out.push_str(PLACEHOLDER);
-        out.push_str(&token[url.len()..]);
-        rest = &rest[token_end..];
-    }
-    out.push_str(rest);
-    out
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1164,10 +1067,7 @@ rpc_url = "wss://example.test/sepolia"
             .get(&Chain::sepolia())
             .expect("sepolia entry")
             .rpc_url;
-        assert_eq!(
-            endpoint.unredacted_dial_url().as_str(),
-            "wss://example.test/sepolia",
-        );
+        assert_eq!(endpoint.url().as_str(), "wss://example.test/sepolia");
         assert!(
             endpoint.supports_pubsub(),
             "wss selects the pubsub transport"
@@ -1176,36 +1076,18 @@ rpc_url = "wss://example.test/sepolia"
     }
 
     #[test]
-    fn debug_and_display_of_a_credentialed_config_redact_the_credential() {
-        // `{:?}` of the whole config is the leak the type exists to close:
-        // no derived or hand-written formatting path may print the key.
-        let cfg = toml::from_str::<EngineConfig>(
-            "[chains.1]\nrpc_url = \"https://user:hunter2secret@rpc.example.com\
-             /AnOfyGnZ0nWpSOOwQzqAnFjNaa0sR8ZxkVjewFaCJ?apikey=querysecret#fragsecret\"\n",
-        )
-        .expect("credentialed URL parses");
-        let debugged = format!("{cfg:?}");
-        for secret in ["hunter2secret", "AnOfyGnZ", "querysecret", "fragsecret"] {
-            assert!(!debugged.contains(secret), "{secret} leaked: {debugged}");
-        }
-        assert!(
-            debugged.contains("rpc.example.com"),
-            "host kept: {debugged}"
-        );
-
+    fn a_credentialed_endpoint_keeps_full_fidelity_host_side() {
+        // The secrecy boundary is the WIT edge, not the operator log:
+        // host-side `Debug` and the dial path carry the URL as configured.
+        const URL: &str = "https://user:hunter2secret@rpc.example.com\
+             /AnOfyGnZ0nWpSOOwQzqAnFjNaa0sR8ZxkVjewFaCJ?apikey=querysecret#fragsecret";
+        let cfg = toml::from_str::<EngineConfig>(&format!("[chains.1]\nrpc_url = \"{URL}\"\n"))
+            .expect("credentialed URL parses");
         let endpoint = &cfg.chains.get(&Chain::from_id(1)).expect("entry").rpc_url;
-        let displayed = endpoint.to_string();
-        for secret in ["hunter2secret", "AnOfyGnZ", "querysecret", "fragsecret"] {
-            assert!(!displayed.contains(secret), "{secret} leaked: {displayed}");
-        }
-        assert_eq!(displayed, endpoint.redacted());
-        // The dial path still gets the real URL.
+        assert_eq!(endpoint.url().as_str(), URL);
         assert!(
-            endpoint
-                .unredacted_dial_url()
-                .as_str()
-                .contains("hunter2secret"),
-            "the dial accessor must return the credentialed URL",
+            format!("{cfg:?}").contains("hunter2secret"),
+            "Debug keeps the credential for host diagnostics",
         );
     }
 
@@ -1826,157 +1708,6 @@ key = "value"
         .expect("extensions table parses");
         let section = cfg.extensions.get("example").expect("example table");
         assert_eq!(section.get("key").and_then(|v| v.as_str()), Some("value"));
-    }
-
-    #[test]
-    fn redact_replaces_long_path_segments() {
-        let redacted =
-            redact_url("https://lb.drpc.live/sepolia/AnOfyGnZ_0nWpS-OOwQzqAnFj_Naa0sR8ZxkVjewFaCJ");
-        assert!(
-            redacted.contains("KEY"),
-            "long segment redacted: {redacted}"
-        );
-        assert!(
-            !redacted.contains("AnOfyGnZ"),
-            "the key must be gone: {redacted}",
-        );
-    }
-
-    #[test]
-    fn redact_keeps_short_segments_intact() {
-        // Hostnames + "v2" path bits must not be redacted.
-        let redacted = redact_url("https://eth-mainnet.g.alchemy.com/v2/abc");
-        assert!(redacted.contains("eth-mainnet.g.alchemy.com"));
-        assert!(redacted.contains("v2"));
-    }
-
-    #[test]
-    fn redact_strips_userinfo_credentials() {
-        // url renders userinfo as REDACTED:REDACTED@ when both parts are
-        // present; assert the secret is gone rather than an exact string.
-        let redacted = redact_url("https://user:pass@rpc.example.com/path");
-        assert!(!redacted.contains("user:pass"), "userinfo gone: {redacted}");
-        assert!(!redacted.contains("pass"), "password gone: {redacted}");
-        assert!(
-            redacted.contains("rpc.example.com"),
-            "host kept: {redacted}"
-        );
-        assert!(redacted.contains("REDACTED"));
-    }
-
-    #[test]
-    fn redact_strips_query_param_values() {
-        let redacted = redact_url("https://rpc.example.com/v1?key=supersecret");
-        assert!(
-            !redacted.contains("supersecret"),
-            "query secret gone: {redacted}"
-        );
-        assert!(redacted.contains("rpc.example.com"));
-    }
-
-    #[test]
-    fn redact_strips_bare_query_flag() {
-        // A bare `?token` flag (no `=`) is the whole query string; blanking
-        // the query removes it. This is the gap string heuristics missed.
-        let redacted = redact_url("https://rpc.example.com/v1?myapitoken");
-        assert!(
-            !redacted.contains("myapitoken"),
-            "bare flag gone: {redacted}"
-        );
-        assert!(redacted.contains("rpc.example.com"));
-    }
-
-    #[test]
-    fn redact_strips_fragment() {
-        // OAuth-style bearer tokens can ride in the fragment.
-        let redacted = redact_url("https://rpc.example.com/v1#bearertoken");
-        assert!(
-            !redacted.contains("bearertoken"),
-            "fragment gone: {redacted}"
-        );
-        assert!(redacted.contains("rpc.example.com"));
-    }
-
-    #[test]
-    fn redact_at_in_path_is_not_treated_as_userinfo() {
-        // An `@` inside a path segment must not be parsed as userinfo; the
-        // host stays intact.
-        let redacted = redact_url("https://rpc.example.com/foo@bar/baz");
-        assert!(
-            redacted.contains("rpc.example.com"),
-            "host kept: {redacted}"
-        );
-    }
-
-    #[test]
-    fn redact_leaves_clean_wss_url_intact() {
-        // A url with no secret survives materially unchanged.
-        let redacted = redact_url("wss://rpc.example.com/v1");
-        assert!(redacted.contains("rpc.example.com"));
-        assert!(redacted.contains("v1"));
-        assert!(!redacted.contains("REDACTED"));
-        assert!(!redacted.contains("KEY"));
-    }
-
-    #[test]
-    fn redact_returns_placeholder_for_unparseable_url() {
-        assert_eq!(redact_url("not a url"), "<unparseable-url>");
-    }
-
-    #[test]
-    fn redact_text_handles_reqwest_parenthesized_form() {
-        let text = "error sending request for url \
-                    (https://lb.example.com/v2/AnOfyGnZ0nWpSOOwQzqAnFjNaa0s?apikey=qsecret)";
-        let redacted = redact_urls_in_text(text);
-        assert_eq!(redacted, "error sending request for url (<redacted-url>)");
-    }
-
-    #[test]
-    fn redact_text_without_url_is_unchanged() {
-        let text = "backend connection task has stopped";
-        assert_eq!(redact_urls_in_text(text), text);
-    }
-
-    #[test]
-    fn redact_text_replaces_unparseable_url_wholesale() {
-        let redacted = redact_urls_in_text("connect to http://[secret failed");
-        assert_eq!(redacted, "connect to <redacted-url> failed");
-    }
-
-    #[test]
-    fn redact_text_handles_every_url_occurrence() {
-        let text = "tried https://a.example/?k=one then wss://user:two@b.example/ws";
-        let redacted = redact_urls_in_text(text);
-        assert_eq!(redacted, "tried <redacted-url> then <redacted-url>");
-    }
-
-    #[test]
-    fn redact_text_drops_host_borne_and_short_path_keys() {
-        for text in [
-            "error sending request for url (https://k7fQz2m9Xd.eth.rpc.example.com/)",
-            "error sending request for url (https://rpc.example.com/k7fQz2m9Xd)",
-        ] {
-            let redacted = redact_urls_in_text(text);
-            assert!(!redacted.contains("k7fQz2m9Xd"), "key gone: {redacted}");
-            assert!(
-                !redacted.contains("rpc.example.com"),
-                "host gone: {redacted}"
-            );
-            assert_eq!(redacted, "error sending request for url (<redacted-url>)");
-        }
-    }
-
-    #[test]
-    fn redact_text_survives_a_multibyte_char_abutting_the_url() {
-        for text in [
-            "upstream \u{201c}https://rpc.example/v2/KEY\u{201d} is down",
-            "upstream\u{a0}https://rpc.example/v2/KEY unavailable",
-            "\u{9519}\u{8bef}\u{ff1a}https://rpc.example/v2/KEY",
-            "caf\u{e9}://rpc.example/v2/KEY",
-        ] {
-            let redacted = redact_urls_in_text(text);
-            assert!(!redacted.contains("rpc.example"), "url gone: {redacted}");
-        }
     }
 
     //

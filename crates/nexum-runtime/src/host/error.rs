@@ -7,20 +7,47 @@ use alloy_transport::TransportError;
 
 use crate::bindings::nexum::host::chain::{ChainError, RpcError};
 use crate::bindings::nexum::host::types::{Fault, RateLimit};
-use crate::engine_config::redact_urls_in_text;
 use crate::host::local_store_redb::StorageError;
 use crate::host::provider_pool::PoolError;
 
-/// The guest reads this, so every URL goes: reqwest appends `for url
-/// (<url>)` and the endpoint carries the operator's key. Host logs render
-/// `source` directly and keep it.
-fn guest_text(source: &TransportError) -> String {
-    redact_urls_in_text(&source.to_string())
+/// The complete guest-visible chain fault vocabulary. Fieldless on
+/// purpose: [`text`](Self::text) maps each case to a fixed `&'static str`,
+/// so neither upstream error text nor anything derived from operator
+/// configuration can cross the WIT boundary through a chain fault. The
+/// caller logs the full upstream error host-side before converting.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, strum::VariantArray)]
+pub(crate) enum ChainFaultMessage {
+    ChainNotConfigured,
+    MethodNotPermitted,
+    UpstreamUnavailable,
+    InvalidParams,
+    ResponseOverCap,
+    UpstreamErrorResponse,
 }
 
-/// `Denied` chain fault for a request the host policy refused.
-pub(crate) fn chain_denied(detail: impl Into<String>) -> ChainError {
-    ChainError::Fault(Fault::Denied(detail.into()))
+impl ChainFaultMessage {
+    pub(crate) const fn text(self) -> &'static str {
+        match self {
+            Self::ChainNotConfigured => "chain has no configured RPC endpoint",
+            Self::MethodNotPermitted => "method is outside the permitted read-only surface",
+            Self::UpstreamUnavailable => "upstream RPC endpoint unavailable",
+            Self::InvalidParams => "request params are not valid JSON",
+            Self::ResponseOverCap => "chain response exceeds the configured cap",
+            Self::UpstreamErrorResponse => "upstream node returned an error response",
+        }
+    }
+}
+
+pub(crate) fn method_denied() -> ChainError {
+    ChainError::Fault(Fault::Denied(
+        ChainFaultMessage::MethodNotPermitted.text().to_owned(),
+    ))
+}
+
+pub(crate) fn response_over_cap() -> ChainError {
+    ChainError::Fault(Fault::InvalidInput(
+        ChainFaultMessage::ResponseOverCap.text().to_owned(),
+    ))
 }
 
 /// Stable snake_case label for a [`Fault`], for metric and log `kind` fields.
@@ -60,9 +87,9 @@ pub fn fault_message(fault: &Fault) -> std::borrow::Cow<'_, str> {
 impl From<PoolError> for ChainError {
     fn from(err: PoolError) -> Self {
         match err {
-            PoolError::UnknownChain(id) => ChainError::Fault(Fault::Unsupported(format!(
-                "chain {id} has no engine.toml RPC entry"
-            ))),
+            PoolError::UnknownChain(_) => ChainError::Fault(Fault::Unsupported(
+                ChainFaultMessage::ChainNotConfigured.text().to_owned(),
+            )),
             // The configured per-request timeout elapsed. The dedicated
             // timeout fault lets a guest tell a slow node apart from a
             // revert or an unreachable endpoint.
@@ -74,7 +101,8 @@ impl From<PoolError> for ChainError {
 
 /// Classify an alloy RPC failure: a structured `ErrorResp` keeps its code and
 /// decoded revert bytes, a malformed request is `invalid-input`, everything
-/// else a transport [`Fault`].
+/// else a transport [`Fault`]. The node's message text stays host-side; the
+/// guest classifies on the code and the revert bytes.
 fn classify_rpc(source: &TransportError) -> ChainError {
     // A structured error response (typically an `eth_call` revert) keeps the
     // node's code and revert body so a guest can classify via `decode_revert`.
@@ -83,7 +111,7 @@ fn classify_rpc(source: &TransportError) -> ChainError {
             // A code outside `i32` is a JSON-RPC spec violation, clamped
             // to `-32603` Internal error.
             code: i32::try_from(payload.code).unwrap_or(-32603),
-            message: guest_text(source),
+            message: ChainFaultMessage::UpstreamErrorResponse.text().to_owned(),
             // alloy decodes the hex `error.data` into `Bytes`; non-hex or
             // structured data decodes to `None`.
             data: payload
@@ -95,9 +123,9 @@ fn classify_rpc(source: &TransportError) -> ChainError {
     match source {
         // The request body was malformed before it reached the node;
         // alloy's own retry layer treats this variant as terminal.
-        alloy_transport::RpcError::SerError(err) => {
-            ChainError::Fault(Fault::InvalidInput(err.to_string()))
-        }
+        alloy_transport::RpcError::SerError(_) => ChainError::Fault(Fault::InvalidInput(
+            ChainFaultMessage::InvalidParams.text().to_owned(),
+        )),
         _ => ChainError::Fault(transport_fault(source)),
     }
 }
@@ -106,6 +134,8 @@ fn classify_rpc(source: &TransportError) -> ChainError {
 /// backend to `unavailable`, a timeout to `timeout`, else `unavailable`.
 fn transport_fault(source: &TransportError) -> Fault {
     use alloy_transport::TransportErrorKind;
+    let unavailable =
+        || Fault::Unavailable(ChainFaultMessage::UpstreamUnavailable.text().to_owned());
     if let Some(kind) = source.as_transport_err() {
         match kind {
             TransportErrorKind::HttpError(http) if http.status == 429 => {
@@ -114,10 +144,10 @@ fn transport_fault(source: &TransportError) -> Fault {
                 });
             }
             TransportErrorKind::HttpError(http) if http.status == 503 => {
-                return Fault::Unavailable(guest_text(source));
+                return unavailable();
             }
             TransportErrorKind::BackendGone | TransportErrorKind::PubsubUnavailable => {
-                return Fault::Unavailable(guest_text(source));
+                return unavailable();
             }
             _ => {}
         }
@@ -129,14 +159,12 @@ fn transport_fault(source: &TransportError) -> Fault {
         return Fault::Timeout;
     }
     // Last resort for transports that only surface a timeout in the message.
-    // The sniff runs on the unredacted text so redaction cannot change the
-    // classification; only the guest-visible string is redacted.
-    let msg = source.to_string();
-    let lower = msg.to_ascii_lowercase();
+    // The text is only sniffed, never forwarded.
+    let lower = source.to_string().to_ascii_lowercase();
     if lower.contains("timed out") || lower.contains("timeout") {
         Fault::Timeout
     } else {
-        Fault::Unavailable(redact_urls_in_text(&msg))
+        unavailable()
     }
 }
 
@@ -185,34 +213,70 @@ mod tests {
         TransportErrorKind::custom_str(msg)
     }
 
-    /// reqwest strips userinfo before rendering, so that leg only bites on
-    /// text echoing the URL as configured.
+    /// A credential-bearing endpoint as an upstream error might echo it.
     const CREDENTIALED_URL: &str =
         "http://user:passsecret@127.0.0.1:1/v2/THISISALONGAPIKEY1234567890?apikey=qsecret";
 
-    fn assert_no_endpoint(payload: &str) {
-        for secret in [
-            "passsecret",
-            "THISISALONGAPIKEY1234567890",
-            "qsecret",
-            "127.0.0.1",
-        ] {
-            assert!(
-                !payload.contains(secret),
-                "`{secret}` leaked into the fault payload: {payload}"
-            );
+    fn vocabulary() -> Vec<&'static str> {
+        use strum::VariantArray as _;
+        ChainFaultMessage::VARIANTS
+            .iter()
+            .map(|m| m.text())
+            .collect()
+    }
+
+    /// The message `err` would carry across the WIT boundary, if any.
+    fn guest_message(err: &ChainError) -> Option<&str> {
+        match err {
+            ChainError::Fault(
+                Fault::Unsupported(m)
+                | Fault::Unavailable(m)
+                | Fault::Denied(m)
+                | Fault::InvalidInput(m)
+                | Fault::Internal(m),
+            ) => Some(m),
+            ChainError::Fault(Fault::RateLimited(_) | Fault::Timeout) => None,
+            ChainError::Rpc(rpc) => Some(&rpc.message),
+        }
+    }
+
+    /// Every message a chain fault can carry is one of the seven fixed
+    /// texts. `VARIANTS` is compiler-derived, so a new `ChainFaultMessage`
+    /// case joins the enumeration on its own and the equality fails until
+    /// the pinned list is consciously extended; and because `text` maps a
+    /// fieldless `Copy` enum to `&'static str`, no runtime string
+    /// (upstream text, operator configuration) can enter the set at all.
+    #[test]
+    fn the_guest_vocabulary_is_pinned_and_closed() {
+        assert_eq!(
+            vocabulary(),
+            [
+                "chain has no configured RPC endpoint",
+                "method is outside the permitted read-only surface",
+                "upstream RPC endpoint unavailable",
+                "request params are not valid JSON",
+                "chain response exceeds the configured cap",
+                "chain batch aggregate exceeds the configured cap",
+                "upstream node returned an error response",
+            ],
+        );
+    }
+
+    #[test]
+    fn the_chain_fault_constructors_stay_inside_the_vocabulary() {
+        for err in [method_denied(), response_over_cap()] {
+            let msg = guest_message(&err).expect("each constructor carries a message");
+            assert!(vocabulary().contains(&msg), "outside the vocabulary: {msg}");
         }
     }
 
     #[test]
     fn unknown_chain_is_unsupported_fault() {
-        // Use an id with no `NamedChain` mapping so `Chain`'s `Display`
-        // prints the number and the message assertion stays meaningful.
         let chain_err = ChainError::from(PoolError::UnknownChain(Chain::from_id(424242)));
         let ChainError::Fault(Fault::Unsupported(msg)) = chain_err else {
             panic!("expected Unsupported fault, got {chain_err:?}");
         };
-        assert!(msg.contains("424242"));
+        assert_eq!(msg, ChainFaultMessage::ChainNotConfigured.text());
     }
 
     #[test]
@@ -277,7 +341,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn unreachable_endpoint_fault_redacts_the_credentialed_url() {
+    async fn unreachable_endpoint_fault_carries_only_vocabulary_text() {
         let err = reqwest::Client::new()
             .post(CREDENTIALED_URL)
             .send()
@@ -287,69 +351,41 @@ mod tests {
         let ChainError::Fault(Fault::Unavailable(msg)) = chain_err else {
             panic!("expected Unavailable fault, got {chain_err:?}");
         };
-        assert_no_endpoint(&msg);
-        assert!(
-            msg.contains("error sending request"),
-            "diagnosis kept: {msg}"
-        );
+        assert_eq!(msg, ChainFaultMessage::UpstreamUnavailable.text());
     }
 
+    /// Upstream text is attacker-influenced; equality with the fixed
+    /// vocabulary text proves none of it is forwarded, whatever it embeds.
     #[test]
-    fn http_503_fault_redacts_an_echoed_endpoint() {
-        let body = format!("upstream {CREDENTIALED_URL} refused");
-        let chain_err = ChainError::from(PoolError::Rpc(TransportErrorKind::http_error(503, body)));
-        let ChainError::Fault(Fault::Unavailable(msg)) = chain_err else {
-            panic!("expected Unavailable fault, got {chain_err:?}");
-        };
-        assert_no_endpoint(&msg);
-        assert!(msg.contains("503"), "status kept: {msg}");
-    }
-
-    #[test]
-    fn fault_drops_a_host_borne_or_short_path_key() {
-        for url in [
-            "https://k7fQz2m9Xd.eth.rpc.example.com/",
-            "https://rpc.example.com/k7fQz2m9Xd",
-        ] {
-            let msg = format!("error sending request for url ({url})");
-            let chain_err = ChainError::from(PoolError::Rpc(transport_err(&msg)));
-            let ChainError::Fault(Fault::Unavailable(msg)) = chain_err else {
-                panic!("expected Unavailable fault, got {chain_err:?}");
-            };
-            assert!(!msg.contains("k7fQz2m9Xd"), "key gone: {msg}");
-            assert!(!msg.contains("rpc.example.com"), "endpoint gone: {msg}");
-        }
-    }
-
-    #[test]
-    fn fault_redaction_survives_multibyte_server_text() {
-        let body = format!("upstream \u{201c}{CREDENTIALED_URL}\u{201d} refused");
-        let chain_err = ChainError::from(PoolError::Rpc(TransportErrorKind::http_error(503, body)));
-        let ChainError::Fault(Fault::Unavailable(msg)) = chain_err else {
-            panic!("expected Unavailable fault, got {chain_err:?}");
-        };
-        assert_no_endpoint(&msg);
-    }
-
-    #[test]
-    fn dropped_backend_fault_carries_no_endpoint() {
-        // These render constants, so this pins the constants, not the
-        // redaction.
-        for source in [
+    fn upstream_text_never_reaches_the_guest() {
+        let adversarial = [
+            TransportErrorKind::http_error(503, format!("upstream {CREDENTIALED_URL} refused")),
+            TransportErrorKind::http_error(
+                503,
+                format!("upstream \u{201c}{CREDENTIALED_URL}\u{201d} refused"),
+            ),
+            transport_err(&format!(
+                "error sending request for url ({CREDENTIALED_URL})"
+            )),
+            transport_err(
+                "error sending request for url (https://k7fQz2m9Xd.eth.rpc.example.com/)",
+            ),
             TransportErrorKind::backend_gone(),
             TransportErrorKind::pubsub_unavailable(),
-        ] {
+        ];
+        for source in adversarial {
             let chain_err = ChainError::from(PoolError::Rpc(source));
             let ChainError::Fault(Fault::Unavailable(msg)) = chain_err else {
                 panic!("expected Unavailable fault, got {chain_err:?}");
             };
-            assert_no_endpoint(&msg);
-            assert!(!msg.is_empty(), "the fault still carries a diagnosis");
+            assert_eq!(msg, ChainFaultMessage::UpstreamUnavailable.text());
         }
     }
 
     #[test]
-    fn error_resp_message_redacts_an_echoed_endpoint() {
+    fn error_resp_message_is_vocabulary_text() {
+        // The node's message echoes the endpoint; only the fixed text, the
+        // code, and the decoded revert bytes cross the boundary.
         let payload: ErrorPayload = serde_json::from_str(&format!(
             r#"{{"code":-32005,"message":"daily limit reached for {CREDENTIALED_URL}"}}"#
         ))
@@ -358,17 +394,12 @@ mod tests {
         let ChainError::Rpc(rpc) = chain_err else {
             panic!("expected ChainError::Rpc, got {chain_err:?}");
         };
-        assert_no_endpoint(&rpc.message);
+        assert_eq!(rpc.message, ChainFaultMessage::UpstreamErrorResponse.text());
         assert_eq!(rpc.code, -32005);
-        assert!(
-            rpc.message.contains("daily limit reached"),
-            "node message kept: {}",
-            rpc.message
-        );
     }
 
     #[test]
-    fn timeout_sniff_classifies_before_redaction() {
+    fn timeout_sniff_still_classifies_url_bearing_text() {
         let msg = format!("request to {CREDENTIALED_URL} timed out");
         let chain_err = ChainError::from(PoolError::Rpc(transport_err(&msg)));
         assert!(matches!(chain_err, ChainError::Fault(Fault::Timeout)));
@@ -391,7 +422,7 @@ mod tests {
             rpc.data,
             Some(vec![0x08, 0xc3, 0x79, 0xa0, 0xde, 0xad, 0xbe, 0xef]),
         );
-        assert!(rpc.message.contains("execution reverted"));
+        assert_eq!(rpc.message, ChainFaultMessage::UpstreamErrorResponse.text());
     }
 
     #[test]
@@ -430,9 +461,9 @@ mod tests {
         let source = serde_json::from_str::<serde_json::Value>("not json")
             .expect_err("`not json` is not valid JSON");
         let chain_err = ChainError::from(PoolError::Rpc(AlloyRpcError::SerError(source)));
-        assert!(matches!(
-            chain_err,
-            ChainError::Fault(Fault::InvalidInput(_))
-        ));
+        let ChainError::Fault(Fault::InvalidInput(msg)) = chain_err else {
+            panic!("expected InvalidInput fault, got {chain_err:?}");
+        };
+        assert_eq!(msg, ChainFaultMessage::InvalidParams.text());
     }
 }
