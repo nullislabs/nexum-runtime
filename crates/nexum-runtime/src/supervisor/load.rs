@@ -9,12 +9,13 @@ use anyhow::{Context, Error, Result};
 use strum::{IntoStaticStr, VariantNames};
 use thiserror::Error as ThisError;
 use tracing::{info, warn};
+use wasmtime::component::types::ComponentItem;
 use wasmtime::component::{Component, Linker};
 
 use super::admission::{
     capability_registry, enforce_extension_sections, extension_subscription_vocabulary,
 };
-use super::artifact::read_verified_component;
+use super::artifact::{DigestPolicy, read_verified_component};
 use super::dispatch::with_dispatch_deadline;
 use super::lifecycle::Health;
 use super::prepass::manifest_namespace;
@@ -23,10 +24,11 @@ use super::{BootEnv, Shared};
 use crate::bindings::nexum::host::types::Fault;
 use crate::bindings::{Config, EventModule};
 use crate::digest::ContentDigest;
-use crate::engine_config::ModuleEntry;
+use crate::engine_config::{ImplementsSection, ModuleEntry};
 use crate::host::component::RuntimeTypes;
 use crate::host::logs::RunId;
 use crate::host::state::HostState;
+use crate::interface_id::{InterfaceId, InterfaceTrack};
 use crate::manifest::{self, CapabilityRegistry, LoadedManifest, Subscription};
 use crate::module_id::ModuleId;
 use crate::refusal::{Refusal, RefusalContext as _};
@@ -118,6 +120,68 @@ pub enum LoadRefusal {
         /// The permitted set, for the fix.
         permitted: String,
     },
+    /// The `provides` claim is author-supplied (ADR-0001); a component
+    /// that does not export it must not enter the tree as its implementer.
+    #[error(
+        "component {id} ({}) claims provides = {claimed} but exports no \
+         satisfying interface instance; interface exports: {exported}",
+        path.display()
+    )]
+    ProvidesNotExported {
+        /// The entry's operator-written id.
+        id: String,
+        /// The artifact whose exports were walked.
+        path: PathBuf,
+        /// The claimed interface id.
+        claimed: String,
+        /// The interface-instance exports found, so a version near-miss
+        /// is legible; `none` when there are none.
+        exported: String,
+    },
+    /// A genuine export is still not authorization: binding an
+    /// implementer is an operator act, written in `[implements]`
+    /// (ADR-0001), and there is no permissive default.
+    #[error(
+        "component {id} provides {interface} but [implements].\"{interface}\" \
+         authorizes: {bound}; bind the interface to this entry's [[modules]].id \
+         in engine.toml"
+    )]
+    ImplementerUnbound {
+        /// The entry's operator-written id.
+        id: String,
+        /// The claim's compatibility track, as the `[implements]` key.
+        interface: String,
+        /// What the row authorizes today: another id, or `nothing`.
+        bound: String,
+    },
+    /// The binding names an id, not bytes; only the digest fixes the
+    /// artifact, so an unpinned implementer does not load.
+    #[error(
+        "component {id} is bound to {interface} without a digest; \
+         pin the artifact's sha256 in [implements].\"{interface}\""
+    )]
+    ImplementerUnpinned {
+        /// The entry's operator-written id.
+        id: String,
+        /// The claim's compatibility track, as the `[implements]` key.
+        interface: String,
+    },
+    /// The row's digest is the only operator-written pin on the artifact.
+    /// Were an unmatched row inert, deleting one line of the untrusted
+    /// manifest would delete the operator's pin with it.
+    #[error(
+        "[implements].\"{interface}\" authorizes component {id}, whose manifest \
+         provides {claimed}; the row pins no artifact as written, so drop it or \
+         restore the claim"
+    )]
+    ImplementerNotClaiming {
+        /// The entry's operator-written id.
+        id: String,
+        /// The row's key, which the entry does not claim.
+        interface: String,
+        /// The entry's claim as a track, or `nothing`.
+        claimed: String,
+    },
 }
 
 /// Restarts reuse the cache, so the boot-time digest holds for every run.
@@ -160,17 +224,12 @@ fn admit_and_verify<T: RuntimeTypes, R>(
     path: &Path,
     loaded_manifest: &LoadedManifest,
     registry: &CapabilityRegistry,
-    require_component_digest: bool,
+    pins: DigestPolicy<'_>,
     admit: impl FnOnce() -> Result<R, Refusal>,
 ) -> Result<(R, Component, ContentDigest), Refusal> {
     enforce_extension_sections(owner, &loaded_manifest.extensions, &shared.extensions)?;
     let admitted = admit()?;
-    let (component, digest) = read_verified_component(
-        &shared.engine,
-        path,
-        loaded_manifest.component_digest.as_ref(),
-        require_component_digest,
-    )?;
+    let (component, digest) = read_verified_component(&shared.engine, path, pins)?;
     manifest::enforce_capabilities(
         loaded_manifest,
         component
@@ -271,6 +330,89 @@ fn enforce_policy_capabilities(
     Ok(())
 }
 
+/// A `provides` claim loads only for the entry `[implements]` binds and
+/// pins; the returned pin is verified on the exact bytes the compiler
+/// receives. `None` claim is the common case and needs no row.
+///
+/// The sweep over every row runs first, and it is what stops the author
+/// from switching the operator's pin off: a row naming this entry must be
+/// matched by the entry's claim, so deleting the manifest's `provides`
+/// line refuses instead of dropping the operator's digest with it.
+fn enforce_implements<'a>(
+    entry: &ModuleEntry,
+    claim: Option<&InterfaceId>,
+    implements: &'a ImplementsSection,
+) -> Result<Option<&'a ContentDigest>, LoadRefusal> {
+    let claimed = claim.map(InterfaceId::track);
+    for (row_track, row) in implements {
+        if row.component == entry.id && Some(row_track) != claimed.as_ref() {
+            return Err(LoadRefusal::ImplementerNotClaiming {
+                id: entry.id.clone(),
+                interface: row_track.to_string(),
+                claimed: claimed
+                    .as_ref()
+                    .map_or_else(|| "nothing".to_owned(), InterfaceTrack::to_string),
+            });
+        }
+    }
+    let Some(track) = claimed else {
+        return Ok(None);
+    };
+    let row = implements.get(&track);
+    // A row alone is a presence test; the binding is the id comparison.
+    let Some(row) = row.filter(|row| row.component == entry.id) else {
+        return Err(LoadRefusal::ImplementerUnbound {
+            id: entry.id.clone(),
+            interface: track.to_string(),
+            bound: row.map_or_else(|| "nothing".to_owned(), |row| row.component.clone()),
+        });
+    };
+    let Some(digest) = row.digest.as_ref() else {
+        return Err(LoadRefusal::ImplementerUnpinned {
+            id: entry.id.clone(),
+            interface: track.to_string(),
+        });
+    };
+    Ok(Some(digest))
+}
+
+/// The claim is satisfied only by an interface-instance export: a bare
+/// func under a matching name must not pass, and `synthesize` gives every
+/// module `init` and `on-event` funcs.
+///
+/// The match is nominal: name, kind and version, never the interface's
+/// surface, so an empty instance under the claimed name passes. Nothing
+/// in the engine holds the interface's WIT to compare against until WIT
+/// distribution lands with the consumer side (#205), which is also when a
+/// caller could first be misled by the gap.
+pub(super) fn enforce_provides<'a>(
+    id: &str,
+    path: &Path,
+    claim: &InterfaceId,
+    exports: impl Iterator<Item = (&'a str, ComponentItem)>,
+) -> Result<(), LoadRefusal> {
+    let mut instance_exports = Vec::new();
+    for (name, item) in exports {
+        if !matches!(item, ComponentItem::ComponentInstance(_)) {
+            continue;
+        }
+        if claim.matches_export(name) {
+            return Ok(());
+        }
+        instance_exports.push(name.to_owned());
+    }
+    Err(LoadRefusal::ProvidesNotExported {
+        id: id.to_owned(),
+        path: path.to_path_buf(),
+        claimed: claim.to_string(),
+        exported: if instance_exports.is_empty() {
+            "none".to_owned()
+        } else {
+            instance_exports.join(", ")
+        },
+    })
+}
+
 /// A failed `init` loads the module dead; the dispatcher skips it.
 pub(super) async fn module<T: RuntimeTypes>(
     shared: &Shared<T>,
@@ -283,6 +425,7 @@ pub(super) async fn module<T: RuntimeTypes>(
     let BootEnv {
         limits: limits_cfg,
         policy,
+        implements,
         require_component_digest,
         ..
     } = *env;
@@ -290,15 +433,23 @@ pub(super) async fn module<T: RuntimeTypes>(
     let effective = policy.for_component(&entry.id);
     enforce_policy_capabilities(&entry.id, &loaded_manifest, effective.capabilities)
         .with_refusal_context(|| format!("install refused for {}", entry.path.display()))?;
+    // Before any artifact byte is read: authorization precedes verification.
+    let operator_pin = enforce_implements(entry, loaded_manifest.provides.as_ref(), implements)
+        .with_refusal_context(|| format!("install refused for {}", entry.path.display()))?;
     let registry = capability_registry(&shared.extensions);
     let sections = &loaded_manifest.extensions;
+    let pins = DigestPolicy {
+        operator: operator_pin,
+        author: loaded_manifest.component_digest.as_ref(),
+        require_author: require_component_digest,
+    };
     let ((), component, digest) = admit_and_verify(
         shared,
         module_namespace.as_str(),
         &entry.path,
         &loaded_manifest,
         &registry,
-        require_component_digest,
+        pins,
         || {
             for ext in &shared.extensions {
                 ext.admit_worker(module_namespace.as_str(), sections)
@@ -310,6 +461,20 @@ pub(super) async fn module<T: RuntimeTypes>(
             Ok(())
         },
     )?;
+    // Post-compile, pre-instantiation, exactly as the import walk above:
+    // a false claim never reaches `instantiate` or `init`.
+    if let Some(claim) = &loaded_manifest.provides {
+        enforce_provides(
+            &entry.id,
+            &entry.path,
+            claim,
+            component
+                .component_type()
+                .exports(&shared.engine)
+                .map(|(name, export)| (name, export.ty)),
+        )
+        .with_refusal_context(|| format!("install refused for {}", entry.path.display()))?;
+    }
 
     let ResolvedLimits {
         fuel,

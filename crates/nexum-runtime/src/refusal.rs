@@ -169,6 +169,7 @@ mod tests {
     const PINNED_LABELS: &[&str] = &[
         // BootRefusal, with `manifest` split into the ParseError classes.
         "namespace_claimed",
+        "interface_claimed",
         "manifest_not_found",
         "manifest_missing",
         "unconfigured_chain_defaulted",
@@ -184,6 +185,7 @@ mod tests {
         "missing_capabilities",
         "misplaced_dependency_attribute",
         "invalid_component_digest",
+        "invalid_interface_id",
         "missing_subscription_kind",
         "invalid_subscription",
         "invalid_chain_log_address",
@@ -198,6 +200,10 @@ mod tests {
         "digest_unpinned",
         "capability_not_permitted",
         "chain_subscription_not_permitted",
+        "provides_not_exported",
+        "implementer_unbound",
+        "implementer_unpinned",
+        "implementer_not_claiming",
         // LaunchRefusal, less the wait-time `event_loop_gone`, which is
         // raised after a successful boot and never counted.
         "nothing_to_run",
@@ -272,6 +278,7 @@ mod tests {
             "Digest" => (
                 DigestMismatch {
                     path: PathBuf::from("pinned.wasm"),
+                    pin: crate::digest::DigestPin::Author,
                     declared: crate::digest::ContentDigest::of_bytes(b"declared"),
                     actual: crate::digest::ContentDigest::of_bytes(b"actual"),
                 }

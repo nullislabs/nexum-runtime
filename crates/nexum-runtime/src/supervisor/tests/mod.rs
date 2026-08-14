@@ -8,6 +8,7 @@ mod dispatch;
 mod e2e;
 mod ledger;
 mod lifecycle;
+mod provides;
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -16,7 +17,7 @@ use alloy_chains::Chain;
 use tracing_core::Level;
 
 use super::admission::enforce_extension_sections;
-use super::artifact::read_verified_component;
+use super::artifact::{DigestPolicy, read_verified_component};
 use super::cursors::{
     chainlog_cursor_key, commit_chain_log_cursor, progress_key, read_chain_log_cursor,
 };
@@ -110,10 +111,12 @@ async fn try_boot_single(
     };
     let limits = ResolvedModuleLimits::default();
     let policy = PolicySection::default();
+    let implements = crate::engine_config::ImplementsSection::default();
     let env = BootEnv {
         limits: &limits,
         policy: &policy,
         configured_chains: test_chains(),
+        implements: &implements,
         require_component_digest: require_digest,
     };
     let result = Supervisor::boot_single(

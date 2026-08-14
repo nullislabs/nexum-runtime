@@ -87,17 +87,32 @@ pub enum DigestParseError {
     Uncommitted,
 }
 
-/// A loaded artifact hashing differently from its manifest's pin.
+/// Which pin the artifact disagrees with. The two live in different
+/// files under different owners, so a refusal that named neither would
+/// send the operator to edit the wrong one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, derive_more::Display)]
+pub enum DigestPin {
+    /// `[implements].<track>.digest`, in the trusted `engine.toml`.
+    #[display("[implements] digest in engine.toml")]
+    Operator,
+    /// `[component].digest`, in the author-supplied manifest.
+    #[display("[component].digest in the manifest")]
+    Author,
+}
+
+/// A loaded artifact hashing differently from a pin.
 #[derive(Debug, Error)]
 #[error(
-    "component digest mismatch for {}: manifest declares {declared}, \
+    "component digest mismatch for {}: the {pin} pins {declared}, \
      artifact hashes to {actual}",
     path.display()
 )]
 pub struct DigestMismatch {
     /// The artifact that was read.
     pub path: PathBuf,
-    /// What the manifest pinned.
+    /// Which of the two pins the bytes disagree with.
+    pub pin: DigestPin,
+    /// What the pin declares.
     pub declared: ContentDigest,
     /// What the bytes on disk hash to.
     pub actual: ContentDigest,
@@ -192,18 +207,27 @@ mod tests {
     }
 
     #[test]
-    fn mismatch_message_names_both_digests_and_the_path() {
+    fn mismatch_message_names_both_digests_the_path_and_the_failing_pin() {
         let declared: ContentDigest = ABC_DIGEST.parse().expect("parse");
         let actual = ContentDigest::of_bytes(b"tampered");
-        let err = DigestMismatch {
-            path: PathBuf::from("modules/example.wasm"),
-            declared,
-            actual,
+        let message = |pin| {
+            DigestMismatch {
+                path: PathBuf::from("modules/example.wasm"),
+                pin,
+                declared,
+                actual,
+            }
+            .to_string()
         };
-        let msg = err.to_string();
         // Operator wording pin.
+        let msg = message(DigestPin::Author);
         assert!(msg.contains("modules/example.wasm"), "{msg}");
         assert!(msg.contains(&declared.to_string()), "{msg}");
         assert!(msg.contains(&actual.to_string()), "{msg}");
+        // The two pins have different owners and different files, so one
+        // wording must not serve both.
+        assert!(msg.contains("[component].digest in the manifest"), "{msg}");
+        let msg = message(DigestPin::Operator);
+        assert!(msg.contains("[implements] digest in engine.toml"), "{msg}");
     }
 }

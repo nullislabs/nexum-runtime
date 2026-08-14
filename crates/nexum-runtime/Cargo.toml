@@ -27,6 +27,8 @@ derive_more.workspace = true
 # `strum::IntoStaticStr`: the snake_case variant name is the tracing
 # `source` field (`LogSource`) and the boot-refusal `error_kind` label.
 strum.workspace = true
+# Full-semver `provides` versions and their compatibility tracks.
+semver.workspace = true
 # No `rt`: spawning belongs to `nexum-tasks`. Omitting it enforces nothing,
 # since `nexum-tasks` unifies `rt` back in; the `clippy.toml` ban does.
 tokio = { workspace = true, features = [

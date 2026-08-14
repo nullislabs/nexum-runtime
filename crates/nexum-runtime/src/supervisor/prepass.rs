@@ -11,6 +11,7 @@ use tracing::{info, warn};
 
 use super::store::{ResolvedLimits, resolve_module_limits};
 use crate::engine_config::{EngineConfig, PolicySection};
+use crate::interface_id::{InterfaceId, InterfaceTrack};
 use crate::manifest::{self, CapabilityRegistry, LoadedManifest, ParseError, Subscription};
 use crate::module_id::ModuleId;
 use crate::refusal::{Refusal, RefusalContext as _};
@@ -33,6 +34,24 @@ pub enum BootRefusal {
     NamespaceClaimed {
         /// The claimed name.
         name: String,
+        /// The holding entry's path.
+        held: PathBuf,
+        /// The second claimant's path.
+        path: PathBuf,
+    },
+    /// A second claimant would make the `[implements]` binding ambiguous,
+    /// so it refuses before either artifact compiles. Keyed on the
+    /// compatibility track, as `[implements]` is, so two full versions of
+    /// one track still collide.
+    #[error(
+        "interface {interface} is claimed twice: {} and {}; \
+         one [implements] row authorizes one implementer",
+        held.display(),
+        path.display()
+    )]
+    InterfaceClaimed {
+        /// The claimed compatibility track.
+        interface: InterfaceTrack,
         /// The holding entry's path.
         held: PathBuf,
         /// The second claimant's path.
@@ -138,6 +157,27 @@ pub(super) fn claim_namespace(
         });
     }
     ledger.insert(name.to_owned(), path.to_path_buf());
+    Ok(())
+}
+
+/// Claimed interface tracks, each with the claiming entry's path.
+pub(super) type InterfaceLedger = BTreeMap<InterfaceTrack, PathBuf>;
+
+/// Claim the interface's track for `path`, refusing a second claimant.
+pub(super) fn claim_interface(
+    ledger: &mut InterfaceLedger,
+    claim: &InterfaceId,
+    path: &Path,
+) -> Result<(), BootRefusal> {
+    let track = claim.track();
+    if let Some(held_path) = ledger.get(&track) {
+        return Err(BootRefusal::InterfaceClaimed {
+            interface: track,
+            held: held_path.clone(),
+            path: path.to_path_buf(),
+        });
+    }
+    ledger.insert(track, path.to_path_buf());
     Ok(())
 }
 
@@ -287,6 +327,7 @@ pub(super) fn run(
     registry: &CapabilityRegistry,
 ) -> Result<Vec<(LoadedManifest, ResolvedLimits)>, Refusal> {
     let mut ledger = NamespaceLedger::new();
+    let mut interfaces = InterfaceLedger::new();
     let configured_chains = ConfiguredChains::from_config(engine_cfg);
     let mut manifests = Vec::new();
     for entry in &engine_cfg.modules {
@@ -294,6 +335,9 @@ pub(super) fn run(
             .with_refusal_context(|| format!("load module {}", entry.path.display()))?;
         let namespace = manifest_namespace(&loaded);
         claim_namespace(&mut ledger, namespace.as_str(), &entry.path)?;
+        if let Some(claim) = &loaded.provides {
+            claim_interface(&mut interfaces, claim, &entry.path)?;
+        }
         enforce_subscriptions(namespace.as_str(), &loaded, &configured_chains)
             .with_refusal_context(|| format!("load module {}", entry.path.display()))?;
         let limits = resolve_module_limits(

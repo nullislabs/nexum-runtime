@@ -73,6 +73,39 @@ pub enum EngineConfigError {
         /// The entry as written.
         entry: String,
     },
+    /// Refused rather than dropped: an ignored row loses an authorization
+    /// and its claimant then refuses at load with the wrong message.
+    #[error(
+        "engine config: [implements] key {key:?} is not an interface track \
+         (namespace:package/interface@major, or @0.minor below 1.0)"
+    )]
+    InvalidInterfaceTrack {
+        /// The key as written.
+        key: String,
+    },
+    /// A row binding to nothing is a typo, and an unapplied binding fails
+    /// closed at load with a message that points away from the typo.
+    #[error(
+        "engine config: [implements].{interface:?} names component {id:?}, \
+         which matches no [[modules]].id"
+    )]
+    UnknownImplementsComponent {
+        /// The row's key as written.
+        interface: String,
+        /// The dangling component value.
+        id: String,
+    },
+    /// Refused at load, as the `[component].digest` grammar is.
+    #[error("engine config: [implements].{interface:?} digest {value:?}: {source}")]
+    InvalidImplementerDigest {
+        /// The row's key as written.
+        interface: String,
+        /// The digest as written.
+        value: String,
+        /// Why the digest refused.
+        #[source]
+        source: crate::digest::DigestParseError,
+    },
 }
 
 /// Errors from `${VAR}` substitution in `engine.toml`.

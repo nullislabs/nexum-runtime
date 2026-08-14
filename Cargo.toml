@@ -47,6 +47,8 @@ futures = "0.3"
 
 # Serde + config.
 serde = { version = "1", features = ["derive"] }
+# Interface-id versions; already in the graph via wasmtime's wit-parser.
+semver = "1"
 serde_json = { version = "1", default-features = false, features = ["alloc"] }
 
 # Borsh wire codec behind the venue SDK's versioned `IntentBody` bodies.

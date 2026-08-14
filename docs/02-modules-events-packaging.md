@@ -20,6 +20,11 @@ version = "0.3.0"
 # Optional content pin: one sha256sum of the compiled .wasm.
 digest = "sha256:9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
 
+# Optional interface claim: the full id of one interface this component
+# exports. The engine verifies the claim against the compiled exports,
+# and only an [implements] row in engine.toml authorizes the load.
+provides = "acme:pool/quoter@2.0.0"
+
 # Per-component resource requests. Each field narrows the engine [policy]
 # ceiling and never widens it.
 [component.resources]
@@ -62,6 +67,8 @@ Key design points:
 - **`digest` is a verification pin, not a locator.**
   The engine hashes the bytes it read and compares them to the pin before it compiles them (`crates/nexum-runtime/src/supervisor/artifact.rs`).
   The pin is optional: an absent pin loads with a warning, unless `require_component_digest = true` under `[engine]` in `engine.toml` makes it a boot error.
+  The warning is silent when an `[implements]` row already pins the same artifact, because the bytes are verified either way.
+  A refusal names which of the two pins the bytes disagree with, so the operator knows which file to edit.
 - **`[[subscription]]` blocks are declarative.**
   A component does not set up its own subscriptions imperatively.
   The runtime loads each component and runs its `init` first, then derives the subscription plan from the booted supervisor and opens the event sources.
@@ -70,6 +77,11 @@ Key design points:
   Each key names a core host capability or another component's service, and its table carries the attributes that qualify it.
   A component that declares `http` imports `wasi:http/outgoing-handler`, the SDK's `http::fetch` helper wraps it, and the host checks every outgoing request against the `hosts` list on the `http` dependency.
   See `modules/examples/http-probe` for a complete example.
+- **`provides` is a claim, not authorization.**
+  The engine walks the compiled component's exports before instantiation and refuses a claim no interface-instance export satisfies.
+  A verified claim still does not load on its own: the operator binds the interface's compatibility track to one `[[modules]].id` in the `engine.toml` `[implements]` table, with a digest pin for the artifact, and an unbound or unpinned implementer refuses at boot.
+  A row whose component makes no matching claim refuses too, so deleting `provides` cannot disarm the operator's pin.
+  See [ADR-0021](adr/0021-provides-and-implements.md).
 - **The `[dependencies]` table is mandatory.**
   A manifest with no table at all is refused; an empty table is valid and grants nothing.
   `hosts` qualifies the `http` dependency and nothing else, and it is refused anywhere else rather than silently dropped.

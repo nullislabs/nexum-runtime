@@ -22,7 +22,9 @@ use tracing::info;
 use wasmtime::Engine;
 use wasmtime::component::Linker;
 
-use crate::engine_config::{EngineConfig, ModuleEntry, PolicySection, ResolvedModuleLimits};
+use crate::engine_config::{
+    EngineConfig, ImplementsSection, ModuleEntry, PolicySection, ResolvedModuleLimits,
+};
 use crate::host::component::{Components, RuntimeTypes};
 use crate::host::extension::Extension;
 use crate::host::state::HostState;
@@ -51,6 +53,9 @@ pub struct BootEnv<'a> {
     pub policy: &'a PolicySection,
     /// Chains with an `engine.toml` entry; a subscription elsewhere refuses.
     pub configured_chains: ConfiguredChains,
+    /// The operator's `[implements]` bindings; a `provides` claimant
+    /// outside them refuses.
+    pub implements: &'a ImplementsSection,
     /// Refuse a component whose manifest declares no digest.
     pub require_component_digest: bool,
 }
@@ -62,6 +67,7 @@ impl<'a> BootEnv<'a> {
             limits: &cfg.limits,
             policy: &cfg.policy,
             configured_chains: ConfiguredChains::from_config(cfg),
+            implements: &cfg.implements,
             require_component_digest: cfg.engine.require_component_digest,
         }
     }

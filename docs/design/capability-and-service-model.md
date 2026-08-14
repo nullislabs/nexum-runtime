@@ -9,7 +9,10 @@ status: superseded by ADR-0017; historical
 > [ADR-0020](../adr/0020-retire-component-kind.md) retired the manifest `kind` field after this document was written.
 > The "`kind` is required" rule and the `kind = "backend"` spelling below belong to the superseded argument, not to the current manifest, and must not be reintroduced by the `provides` work.
 > `wit/nexum-host/query-module.wit`, cited in the migration below, was deleted with it; git history preserves its shape.
-> Read this document for the reasoning, not for the current names.
+> [ADR-0021](../adr/0021-provides-and-implements.md) fixed the `[implements]` row shape after this document was written.
+> A row is a table with `component` and `digest`, not the bare `key = "id"` string the `engine.toml` sketch below shows, and the sketch's shape now fails the config parse.
+> The track spelling below is also incomplete: below 0.1 the track is the full version, because every `0.0.z` release is a distinct interface.
+> Read this document for the reasoning, not for the current names or shapes.
 
 A **host capability** is a WIT interface the runtime implements in Rust, named in a namespace the runtime owns, bound into a component's world at build time, and bounded by an operator dial.
 An **extension capability** is the same thing with the Rust written by a composition root behind the `Extension` seam, registered at boot instead of compiled into the `CORE` table.
