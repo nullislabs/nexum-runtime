@@ -49,7 +49,7 @@ pub fn load_or_default(path: Option<&Path>) -> Result<EngineConfig, EngineConfig
 }
 
 /// Replace every `${VAR_NAME}` token in `raw` with its environment value,
-/// erroring on any missing variable. Recognised names match
+/// erroring on any missing variable. Recognized names match
 /// `[A-Z_][A-Z0-9_]*`; anything else inside `${...}` is rejected.
 fn substitute_env_vars(raw: &str) -> Result<String, EnvVarError> {
     let mut out = String::with_capacity(raw.len());

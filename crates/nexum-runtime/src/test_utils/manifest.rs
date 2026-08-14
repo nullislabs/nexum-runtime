@@ -17,7 +17,7 @@ pub enum ManifestSource {
 }
 
 impl ManifestSource {
-    /// Materialise inline text at `path`; [`Beside`](Self::Beside) resolves to nothing.
+    /// Materialize inline text at `path`; [`Beside`](Self::Beside) resolves to nothing.
     pub fn resolve(&self, path: &Path) -> Option<PathBuf> {
         match self {
             Self::Beside => None,
