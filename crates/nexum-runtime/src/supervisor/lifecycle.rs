@@ -211,8 +211,8 @@ impl<T: RuntimeTypes> Sweepable<T> for LoadedModule<T> {
         if let Err(e) = init {
             return Err(anyhow!(
                 "init returned fault on restart: {} ({})",
-                crate::host::error::fault_message(&e),
-                crate::host::error::fault_label(&e),
+                crate::host::fault::fault_message(&e),
+                crate::host::fault::fault_label(&e),
             ));
         }
         self.live.bindings = bindings;

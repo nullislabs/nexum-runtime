@@ -7,17 +7,14 @@ use alloy_chains::Chain;
 use crate::bindings::nexum;
 use crate::bindings::nexum::host::chain::ChainError;
 use crate::host::component::{ChainMethod, RuntimeTypes};
-use crate::host::error::chain_denied;
+use crate::host::error::{method_denied, response_over_cap};
+use crate::host::provider_pool::PoolError;
 use crate::host::state::HostState;
 
 /// Resolve a guest method string into the permitted read surface; an unknown
 /// or mutating method is a `Denied` fault.
 fn resolve_method(method: &str) -> Result<ChainMethod, ChainError> {
-    ChainMethod::try_from(method).map_err(|_| {
-        chain_denied(format!(
-            "method `{method}` is not in the permitted read-only surface"
-        ))
-    })
+    ChainMethod::try_from(method).map_err(|_| method_denied())
 }
 
 /// Error if `body` exceeds `cap` bytes, checked before the copy into the
@@ -42,13 +39,7 @@ fn check_response_cap(
             "method" => method.to_owned(),
         )
         .increment(1);
-        return Err(ChainError::Fault(
-            crate::bindings::nexum::host::types::Fault::InvalidInput(format!(
-                "chain response ({} bytes) exceeds the configured cap ({} bytes)",
-                body.len(),
-                cap,
-            )),
-        ));
+        return Err(response_over_cap());
     }
     Ok(())
 }
@@ -82,15 +73,34 @@ impl<T: RuntimeTypes> nexum::host::chain::Host for HostState<T> {
         };
         let name = method.as_str();
         tracing::debug!(chain_id, method = name, "chain::request");
-        let result = self
-            .chain
-            .request(chain, method, params)
-            .await
-            .map_err(ChainError::from)
-            .and_then(|body| {
-                check_response_cap(&body, self.chain_response_max_bytes, chain_id, name)?;
-                Ok(body)
-            });
+        let result = self.chain.request(chain, method, params).await;
+        if let Err(err) = &result {
+            // The one place the upstream error is recorded in full: the
+            // guest fault about to be built carries only vocabulary text.
+            // Below WARN: a reverting poll would otherwise flood the
+            // operator log with node-controlled text.
+            if matches!(err, PoolError::Rpc(e) if e.as_error_resp().is_some()) {
+                tracing::debug!(
+                    module = %self.run.module,
+                    chain_id,
+                    method = name,
+                    error = %err,
+                    "chain request returned an error response"
+                );
+            } else {
+                tracing::warn!(
+                    module = %self.run.module,
+                    chain_id,
+                    method = name,
+                    error = %err,
+                    "chain request failed"
+                );
+            }
+        }
+        let result = result.map_err(ChainError::from).and_then(|body| {
+            check_response_cap(&body, self.chain_response_max_bytes, chain_id, name)?;
+            Ok(body)
+        });
         tracing::trace!(elapsed_ms = ?start.elapsed(), "chain::request done");
         let outcome = if result.is_ok() { "ok" } else { "err" };
         metrics::counter!(

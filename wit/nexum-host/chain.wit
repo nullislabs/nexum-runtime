@@ -5,9 +5,9 @@ interface chain {
 
     /// A JSON-RPC error response from the upstream node. `code` is the
     /// node-reported numeric (typically `-32000` for an `eth_call`
-    /// revert). `data` is the decoded `error.data` payload: the host
-    /// hex-decodes the upstream JSON string once, so a guest receives
-    /// the raw abi-encoded revert bytes without any string handling.
+    /// revert). Classify on `code` and `data`, not `message`. `data` is
+    /// the decoded `error.data` payload: the host hex-decodes the upstream
+    /// JSON string once.
     record rpc-error {
         code: s32,
         message: string,
@@ -17,6 +17,10 @@ interface chain {
     /// Failure of a chain call: either a shared host `fault` (transport
     /// down, timed out, denied, ...) or a structured JSON-RPC error
     /// carrying the node code and any decoded revert payload.
+    ///
+    /// A host implementation MUST NOT put upstream error text, or anything
+    /// derived from its own configuration, in a `fault` detail or an
+    /// `rpc-error.message`.
     variant chain-error {
         fault(fault),
         rpc(rpc-error),
