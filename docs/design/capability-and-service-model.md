@@ -294,7 +294,7 @@ The authorization row names `@2`, so a provider patch bump does not force an edi
 The digest pin, not the version, fixes the exact artifact.
 
 `[policy]` supersedes the three scalar fields `fuel_per_event`, `memory_bytes` and `state_bytes` on `[limits]`.
-The `[limits]` subsections `http`, `chain`, `logs`, `poison`, `quota`, `watch` and `dispatch` stay where they are.
+The `[limits]` subsections `http`, `chain`, `logs`, `poison` and `dispatch` stay where they are.
 `EngineConfig` carries `deny_unknown_fields`, so this is one breaking config change and it must be made once.
 
 Egress: the effective host set is the author's `hosts`, intersected with `[policy.component.<id>].http_allow` where one is present, minus `[policy].http_deny`.

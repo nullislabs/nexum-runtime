@@ -14,11 +14,9 @@ mod policy;
 pub use chain::{ChainConfig, RpcEndpoint, RpcEndpointError, RpcTransport};
 pub use error::{EngineConfigError, EnvVarError};
 pub use limits::{
-    ChainLimitsSection, DEFAULT_QUOTA_MAX_CHARGES, DEFAULT_QUOTA_WINDOW, DEFAULT_WATCH_EXPIRY,
-    DEFAULT_WATCH_MAX_ENTRIES, DispatchLimitsSection, HttpLimitsSection, LogLimitsSection,
-    LogRetentionLimits, ModuleLimits, OutboundHttpLimits, PoisonLimitsSection, QuotaLimitsSection,
-    ResolvedModuleLimits, SubmitQuota, WATCH_GRACE_MAX, WATCH_GRACE_MULTIPLIER, WatchLimit,
-    WatchLimitsSection,
+    ChainLimitsSection, DispatchLimitsSection, HttpLimitsSection, LogLimitsSection,
+    LogRetentionLimits, ModuleLimits, OutboundHttpLimits, PoisonLimitsSection,
+    ResolvedModuleLimits,
 };
 pub use load::load_or_default;
 pub use policy::{ComponentPolicy, EffectivePolicy, PolicyCeilings, PolicySection, TotalPolicy};
@@ -384,6 +382,18 @@ request_timeout_secs = 0
                 "key in a policy row",
                 "[[modules]]\nid = \"m\"\npath = \"m.wasm\"\n[policy.component.m]\nmax_memory_byte = 1\n",
             ),
+            (
+                "retired [limits.watch] section",
+                "[limits.watch]\nmax_entries = 1\n",
+            ),
+            (
+                "retired [limits.quota] section",
+                "[limits.quota]\nmax_charges = 1\n",
+            ),
+            (
+                "retired [limits] deadline key",
+                "[limits]\nevent_deadline_secs = 30\n",
+            ),
         ] {
             let err = toml::from_str::<EngineConfig>(toml)
                 .expect_err(&format!("{label} must refuse an unknown key"));
@@ -400,8 +410,8 @@ request_timeout_secs = 0
 [engine]
 state_dir = "./data"
 
-[limits]
-event_deadline_secs = 30
+[limits.dispatch]
+deadline_secs = 30
 
 [limits.http]
 total_deadline_ms = 1000
@@ -458,7 +468,7 @@ path = "m.wasm"
     #[test]
     fn core_limits_default_when_absent() {
         let limits = ResolvedModuleLimits::default();
-        assert_eq!(limits.event_deadline, Duration::from_secs(120));
+        assert_eq!(limits.dispatch_deadline, Duration::from_secs(120));
         let parsed: EngineConfig = toml::from_str("").expect("empty config parses");
         for ceilings in [PolicyCeilings::default(), parsed.policy.ceilings] {
             assert_eq!(ceilings.max_fuel_per_dispatch.get(), 1_000_000_000);
@@ -471,8 +481,8 @@ path = "m.wasm"
     fn core_limits_parse_with_overrides() {
         let cfg: EngineConfig = toml::from_str(
             r#"
-[limits]
-event_deadline_secs = 30
+[limits.dispatch]
+deadline_secs = 30
 
 [policy]
 max_fuel_per_dispatch = 7
@@ -481,7 +491,7 @@ max_state_bytes       = 2_048
 "#,
         )
         .expect("top-level limits parse");
-        assert_eq!(cfg.limits.event_deadline, Duration::from_secs(30));
+        assert_eq!(cfg.limits.dispatch_deadline, Duration::from_secs(30));
         assert_eq!(cfg.policy.ceilings.max_fuel_per_dispatch.get(), 7);
         assert_eq!(cfg.policy.ceilings.max_memory_bytes.get(), 1_048_576);
         assert_eq!(cfg.policy.ceilings.max_state_bytes, 2_048);
@@ -535,8 +545,8 @@ max_state_bytes       = 2_048
     fn a_zero_limit_refuses_at_load_naming_the_field() {
         for (toml, field) in [
             (
-                "[limits]\nevent_deadline_secs = 0\n",
-                "limits.event_deadline_secs",
+                "[limits.dispatch]\ndeadline_secs = 0\n",
+                "limits.dispatch.deadline_secs",
             ),
             (
                 "[policy]\nmax_fuel_per_dispatch = 0\n",
@@ -596,22 +606,6 @@ max_state_bytes       = 2_048
                 "[limits.poison]\nwindow_secs = 0\n",
                 "limits.poison.window_secs",
             ),
-            (
-                "[limits.quota]\nwindow_secs = 0\n",
-                "limits.quota.window_secs",
-            ),
-            (
-                "[limits.watch]\nmax_entries = 0\n",
-                "limits.watch.max_entries",
-            ),
-            (
-                "[limits.watch]\nexpiry_secs = 0\n",
-                "limits.watch.expiry_secs",
-            ),
-            (
-                "[limits.watch]\ngrace_secs = 0\n",
-                "limits.watch.grace_secs",
-            ),
             ("[limits.dispatch]\nburst = 0\n", "limits.dispatch.burst"),
             (
                 "[limits.dispatch]\nrefill_per_sec = 0\n",
@@ -637,7 +631,7 @@ max_state_bytes       = 2_048
     }
 
     /// Zero stays legal where it is an enforceable cap rather than a
-    /// wedge: a zero quota denies, it does not misconfigure.
+    /// wedge: a zero cap denies, it does not misconfigure.
     #[test]
     fn a_zero_deny_cap_stays_legal_and_resolves_to_zero() {
         let cfg: EngineConfig = toml::from_str(
@@ -647,15 +641,11 @@ max_state_bytes = 0
 
 [limits.http]
 response_body_max_bytes = 0
-
-[limits.quota]
-max_charges = 0
 "#,
         )
         .expect("zero deny caps parse");
         assert_eq!(cfg.policy.ceilings.max_state_bytes, 0);
         assert_eq!(cfg.limits.http.response_body_max_bytes, 0);
-        assert_eq!(cfg.limits.quota.max_charges, 0);
     }
 
     #[test]

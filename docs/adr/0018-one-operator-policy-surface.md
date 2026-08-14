@@ -6,7 +6,7 @@ status: accepted
 
 > Amendment: this record was edited after acceptance.
 > The per-dispatch fuel key was renamed, and the Decision text below carries the current name, `max_fuel_per_dispatch`.
-> The `[limits]` subsections and `event_deadline_secs` stay in `[limits]`; this record does not fix their names, and later config work may rename them.
+> `[limits.watch]` and `[limits.quota]` were retired and the per-dispatch deadline moved to `[limits.dispatch].deadline_secs`; the Decision text below carries the current names.
 > [ADR-0019](0019-modules-react-to-triggers.md) retired the export name `on-event`, and the Capabilities text below carries the decided name, `on-trigger`.
 > The WIT rename lands in a later code issue, so the export in the tree may still read `on-event`.
 
@@ -36,7 +36,7 @@ The author-supplied `[component].name` never binds policy, because an author ren
 A `[component.resources]` value narrows the component's `[policy]` ceiling and never widens it.
 A request above the ceiling is capped to the ceiling and logged.
 `[policy]` supersedes the three retired `[limits]` scalars `fuel_per_event`, `memory_bytes`, and `state_bytes`.
-The `[limits]` subsections and `event_deadline_secs` stay in `[limits]`.
+The `[limits]` subsections and the dispatch deadline stay in `[limits]`.
 A retired key refuses at load with a message that names its `[policy]` replacement.
 
 ### The aggregate cap

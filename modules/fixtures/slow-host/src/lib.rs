@@ -3,10 +3,10 @@
 //! Issues one `chain::request` per event and returns `Ok` regardless of
 //! its result. Fuel and epoch interruption only meter wasm instructions,
 //! not time suspended inside a host call, so the test parks the first
-//! `request` past a short `event_deadline_secs`: the wall-clock deadline
-//! must fire, the supervisor drop the suspended call, mark the module
-//! dead, and reinstantiate it. The next dispatch answers promptly and
-//! recovers. Test-only.
+//! `request` past a short `[limits.dispatch].deadline_secs`: the
+//! wall-clock deadline must fire, the supervisor drop the suspended
+//! call, mark the module dead, and reinstantiate it. The next dispatch
+//! answers promptly and recovers. Test-only.
 
 #![cfg_attr(not(test), warn(unused_crate_dependencies))]
 #![allow(clippy::too_many_arguments)]

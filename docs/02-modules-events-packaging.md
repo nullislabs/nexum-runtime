@@ -92,7 +92,7 @@ Any other `wasi:` import is refused fail-closed.
 An extension registers further names under its own namespace: see [the linker extension seam](design/linker-extension-seam.md).
 
 > Resource ceilings are set in `engine.toml` `[policy]`: `max_fuel_per_dispatch` (default 1e9), `max_memory_bytes` (default 64 MiB), and `max_state_bytes` (default 50 MiB).
-> The dispatch deadline is `[limits].event_deadline_secs` (default 120); the key stays under `[limits]` and its name is open to later config work.
+> The dispatch deadline is `[limits.dispatch].deadline_secs` (default 120).
 > A `[policy.component.<id>]` row overrides them for one component, keyed on the `[[modules]].id` the operator writes.
 > They resolve in `crates/nexum-runtime/src/engine_config/`.
 > A `[component.resources]` field narrows one of them.
@@ -245,7 +245,7 @@ Two mechanisms, and no others:
 1. **Fuel.**
    `consume_fuel` is on in `wasmtime_config` (`crates/nexum-runtime/src/builder.rs`), and `dispatch` refuels the store to the resolved budget before every dispatch (`crates/nexum-runtime/src/supervisor/dispatch.rs`).
 2. **A wall-clock deadline.**
-   The dispatch runs under `event_deadline_secs`, which covers the host-call time fuel cannot meter.
+   The dispatch runs under `[limits.dispatch].deadline_secs`, which covers the host-call time fuel cannot meter.
    A deadline hit leaves the store unusable, so it is treated like a trap: the run ends and the component restarts.
 
 The host does not use epoch interruption.
