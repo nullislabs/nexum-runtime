@@ -72,14 +72,14 @@ fn default_apply_fallback_is_per_op_so_a_mid_batch_fault_leaves_earlier_ops() {
 #[test]
 fn clear_prefix_deletes_only_the_prefix_and_counts() {
     let store = MockLocalStore::default();
-    store.set("watch:a", b"1").unwrap();
-    store.set("watch:b", b"2").unwrap();
+    store.set("row:a", b"1").unwrap();
+    store.set("row:b", b"2").unwrap();
     store.set("gate:a", b"3").unwrap();
 
-    assert_eq!(clear_prefix(&store, "watch:").unwrap(), 2);
+    assert_eq!(clear_prefix(&store, "row:").unwrap(), 2);
     assert_eq!(store.len(), 1);
     assert_eq!(store.get("gate:a").unwrap(), Some(b"3".to_vec()));
-    assert_eq!(clear_prefix(&store, "watch:").unwrap(), 0);
+    assert_eq!(clear_prefix(&store, "row:").unwrap(), 0);
 }
 
 #[test]
