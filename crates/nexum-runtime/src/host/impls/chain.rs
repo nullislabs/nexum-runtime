@@ -7,7 +7,8 @@ use alloy_chains::Chain;
 use crate::bindings::nexum;
 use crate::bindings::nexum::host::chain::ChainError;
 use crate::host::component::{ChainMethod, RuntimeTypes};
-use crate::host::error::{batch_over_cap, method_denied, response_over_cap};
+use crate::host::error::{method_denied, response_over_cap};
+use crate::host::provider_pool::PoolError;
 use crate::host::state::HostState;
 
 /// Resolve a guest method string into the permitted read surface; an unknown
@@ -76,7 +77,25 @@ impl<T: RuntimeTypes> nexum::host::chain::Host for HostState<T> {
         if let Err(err) = &result {
             // The one place the upstream error is recorded in full: the
             // guest fault about to be built carries only vocabulary text.
-            tracing::warn!(chain_id, method = name, error = %err, "chain request failed");
+            // Below WARN: a reverting poll would otherwise flood the
+            // operator log with node-controlled text.
+            if matches!(err, PoolError::Rpc(e) if e.as_error_resp().is_some()) {
+                tracing::debug!(
+                    module = %self.run.module,
+                    chain_id,
+                    method = name,
+                    error = %err,
+                    "chain request returned an error response"
+                );
+            } else {
+                tracing::warn!(
+                    module = %self.run.module,
+                    chain_id,
+                    method = name,
+                    error = %err,
+                    "chain request failed"
+                );
+            }
         }
         let result = result.map_err(ChainError::from).and_then(|body| {
             check_response_cap(&body, self.chain_response_max_bytes, chain_id, name)?;

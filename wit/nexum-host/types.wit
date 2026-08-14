@@ -71,7 +71,7 @@ interface types {
     type config = list<tuple<string, string>>;
 
     /// The cross-domain failure vocabulary richer interfaces embed as a
-    /// case. Each payload-bearing case carries a human-readable detail;
+    /// case. A payload-bearing case carries a short host-composed detail;
     /// `rate-limited` carries structured backoff guidance instead.
     variant fault {
         unsupported(string),

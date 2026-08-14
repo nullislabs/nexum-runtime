@@ -384,10 +384,9 @@ pub enum RpcTransport {
     WebSocket,
 }
 
-/// A `[chains]` RPC endpoint, parsed once at load so a malformed
-/// `rpc_url` refuses at boot rather than at the first chain call.
-/// Deliberately not `Deserialize`: a field-level serde refusal would
-/// bypass the typed [`EngineConfigError`] path.
+/// Parsed once at load, so a malformed `rpc_url` refuses at boot rather
+/// than at the first chain call. Deliberately not `Deserialize`: a
+/// field-level serde refusal would bypass [`EngineConfigError`].
 #[derive(Debug, Clone)]
 pub struct RpcEndpoint {
     url: url::Url,
@@ -405,7 +404,7 @@ impl RpcEndpoint {
         matches!(self.transport, RpcTransport::WebSocket)
     }
 
-    /// The URL as configured, credentials included.
+    /// Credentials included; the dial path needs them.
     pub fn url(&self) -> &url::Url {
         &self.url
     }

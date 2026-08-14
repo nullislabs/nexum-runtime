@@ -244,7 +244,7 @@ impl<T: RuntimeTypes> Supervisor<T> {
                 DispatchOutcome::Ok
             }
             Ok(Err(fault)) => {
-                let kind = crate::host::error::fault_label(&fault);
+                let kind = crate::host::fault::fault_label(&fault);
                 warn!(
                     module = %module.name,
                     chain_id,
@@ -252,7 +252,7 @@ impl<T: RuntimeTypes> Supervisor<T> {
                     block_number,
                     latency_ms,
                     kind,
-                    message = %crate::host::error::fault_message(&fault),
+                    message = %crate::host::fault::fault_message(&fault),
                     "on-event returned fault",
                 );
                 metrics::counter!(

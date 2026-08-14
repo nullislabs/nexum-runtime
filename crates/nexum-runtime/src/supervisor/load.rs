@@ -382,8 +382,8 @@ pub(super) async fn module<T: RuntimeTypes>(
         Err(e) => {
             warn!(
                 module = %module_namespace,
-                kind = crate::host::error::fault_label(&e),
-                message = %crate::host::error::fault_message(&e),
+                kind = crate::host::fault::fault_label(&e),
+                message = %crate::host::fault::fault_message(&e),
                 "init failed - module loaded but marked dead; dispatcher will skip it",
             );
             false

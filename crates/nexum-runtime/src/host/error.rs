@@ -1,40 +1,34 @@
-//! Constructors and `From` conversions building the WIT error shapes
-//! (`chain-error`, `Fault`); `fault_label` / `fault_message` project a
-//! `Fault` into metric and log fields.
+//! The only place a guest-visible `chain-error` is built. The scan test
+//! below enforces that.
 
 use alloy_primitives::Bytes;
 use alloy_transport::TransportError;
 
 use crate::bindings::nexum::host::chain::{ChainError, RpcError};
 use crate::bindings::nexum::host::types::{Fault, RateLimit};
-use crate::host::local_store_redb::StorageError;
 use crate::host::provider_pool::PoolError;
 
-/// The complete guest-visible chain fault vocabulary. Fieldless on
-/// purpose: [`text`](Self::text) maps each case to a fixed `&'static str`,
-/// so neither upstream error text nor anything derived from operator
-/// configuration can cross the WIT boundary through a chain fault. The
-/// caller logs the full upstream error host-side before converting.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, strum::VariantArray)]
+/// Fieldless on purpose: no runtime string can enter the set, so nothing
+/// upstream or operator-derived crosses the boundary.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, strum::IntoStaticStr, strum::VariantArray)]
 pub(crate) enum ChainFaultMessage {
+    #[strum(serialize = "chain has no configured RPC endpoint")]
     ChainNotConfigured,
+    #[strum(serialize = "method is outside the permitted read-only surface")]
     MethodNotPermitted,
+    #[strum(serialize = "upstream RPC endpoint unavailable")]
     UpstreamUnavailable,
+    #[strum(serialize = "request params are not valid JSON")]
     InvalidParams,
+    #[strum(serialize = "chain response exceeds the configured cap")]
     ResponseOverCap,
+    #[strum(serialize = "upstream node returned an error response")]
     UpstreamErrorResponse,
 }
 
 impl ChainFaultMessage {
-    pub(crate) const fn text(self) -> &'static str {
-        match self {
-            Self::ChainNotConfigured => "chain has no configured RPC endpoint",
-            Self::MethodNotPermitted => "method is outside the permitted read-only surface",
-            Self::UpstreamUnavailable => "upstream RPC endpoint unavailable",
-            Self::InvalidParams => "request params are not valid JSON",
-            Self::ResponseOverCap => "chain response exceeds the configured cap",
-            Self::UpstreamErrorResponse => "upstream node returned an error response",
-        }
+    pub(crate) fn text(self) -> &'static str {
+        self.into()
     }
 }
 
@@ -48,37 +42,6 @@ pub(crate) fn response_over_cap() -> ChainError {
     ChainError::Fault(Fault::InvalidInput(
         ChainFaultMessage::ResponseOverCap.text().to_owned(),
     ))
-}
-
-/// Stable snake_case label for a [`Fault`], for metric and log `kind` fields.
-pub fn fault_label(fault: &Fault) -> &'static str {
-    use nexum_world::FaultLabel as Label;
-    match fault {
-        Fault::Unsupported(_) => Label::Unsupported,
-        Fault::Unavailable(_) => Label::Unavailable,
-        Fault::Denied(_) => Label::Denied,
-        Fault::RateLimited(_) => Label::RateLimited,
-        Fault::Timeout => Label::Timeout,
-        Fault::InvalidInput(_) => Label::InvalidInput,
-        Fault::Internal(_) => Label::Internal,
-    }
-    .into()
-}
-
-/// Human-readable detail carried by a [`Fault`], for the log `message` field.
-pub fn fault_message(fault: &Fault) -> std::borrow::Cow<'_, str> {
-    match fault {
-        Fault::Unsupported(m)
-        | Fault::Unavailable(m)
-        | Fault::Denied(m)
-        | Fault::InvalidInput(m)
-        | Fault::Internal(m) => std::borrow::Cow::Borrowed(m),
-        Fault::RateLimited(rl) => match rl.retry_after_ms {
-            Some(ms) => std::borrow::Cow::Owned(format!("rate limited, retry after {ms} ms")),
-            None => std::borrow::Cow::Borrowed("rate limited"),
-        },
-        Fault::Timeout => std::borrow::Cow::Borrowed("timeout"),
-    }
 }
 
 /// Project a [`PoolError`] into `chain-error`: a structured JSON-RPC
@@ -185,20 +148,6 @@ fn timeout_in_source_chain(err: &(dyn std::error::Error + 'static)) -> bool {
     false
 }
 
-/// Project a [`StorageError`]: quota breach to `denied`, a per-batch cap to
-/// `invalid-input`, else `internal`.
-impl From<StorageError> for Fault {
-    fn from(err: StorageError) -> Self {
-        match err {
-            StorageError::QuotaExceeded { .. } => Fault::Denied(err.to_string()),
-            StorageError::ApplyOpsExceeded { .. } | StorageError::ApplyBytesExceeded { .. } => {
-                Fault::InvalidInput(err.to_string())
-            }
-            _ => Fault::Internal(err.to_string()),
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -213,7 +162,6 @@ mod tests {
         TransportErrorKind::custom_str(msg)
     }
 
-    /// A credential-bearing endpoint as an upstream error might echo it.
     const CREDENTIALED_URL: &str =
         "http://user:passsecret@127.0.0.1:1/v2/THISISALONGAPIKEY1234567890?apikey=qsecret";
 
@@ -225,7 +173,6 @@ mod tests {
             .collect()
     }
 
-    /// The message `err` would carry across the WIT boundary, if any.
     fn guest_message(err: &ChainError) -> Option<&str> {
         match err {
             ChainError::Fault(
@@ -240,12 +187,8 @@ mod tests {
         }
     }
 
-    /// Every message a chain fault can carry is one of the seven fixed
-    /// texts. `VARIANTS` is compiler-derived, so a new `ChainFaultMessage`
-    /// case joins the enumeration on its own and the equality fails until
-    /// the pinned list is consciously extended; and because `text` maps a
-    /// fieldless `Copy` enum to `&'static str`, no runtime string
-    /// (upstream text, operator configuration) can enter the set at all.
+    /// `VARIANTS` is compiler-derived, so a new case fails this until the
+    /// pinned list is extended.
     #[test]
     fn the_guest_vocabulary_is_pinned_and_closed() {
         assert_eq!(
@@ -256,7 +199,6 @@ mod tests {
                 "upstream RPC endpoint unavailable",
                 "request params are not valid JSON",
                 "chain response exceeds the configured cap",
-                "chain batch aggregate exceeds the configured cap",
                 "upstream node returned an error response",
             ],
         );
@@ -354,8 +296,7 @@ mod tests {
         assert_eq!(msg, ChainFaultMessage::UpstreamUnavailable.text());
     }
 
-    /// Upstream text is attacker-influenced; equality with the fixed
-    /// vocabulary text proves none of it is forwarded, whatever it embeds.
+    /// Upstream text is attacker-influenced, so assert equality, not absence.
     #[test]
     fn upstream_text_never_reaches_the_guest() {
         let adversarial = [
@@ -465,5 +406,115 @@ mod tests {
             panic!("expected InvalidInput fault, got {chain_err:?}");
         };
         assert_eq!(msg, ChainFaultMessage::InvalidParams.text());
+    }
+
+    fn rust_sources(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
+        let mut out = Vec::new();
+        let mut stack = vec![dir.to_path_buf()];
+        while let Some(dir) = stack.pop() {
+            for entry in std::fs::read_dir(&dir).expect("source dir reads") {
+                let path = entry.expect("dir entry reads").path();
+                if path.is_dir() {
+                    stack.push(path);
+                } else if path.extension().is_some_and(|e| e == "rs") {
+                    out.push(path);
+                }
+            }
+        }
+        out
+    }
+
+    /// Text before a `#[cfg(test)] mod`. A single gated item is kept, which
+    /// only over-scans.
+    fn shipped_region(text: &str) -> &str {
+        const ATTR: &str = "#[cfg(test)]";
+        let mut from = 0;
+        while let Some(i) = text[from..].find(ATTR) {
+            let at = from + i;
+            if text[at + ATTR.len()..].trim_start().starts_with("mod ") {
+                return &text[..at];
+            }
+            from = at + ATTR.len();
+        }
+        text
+    }
+
+    /// So a multi-line construction scans as one token run.
+    fn squash(code: &str) -> String {
+        code.lines()
+            .map(|line| {
+                if line.trim_start().starts_with("//") {
+                    ""
+                } else {
+                    line.find(" //").map_or(line, |i| &line[..i])
+                }
+            })
+            .flat_map(|line| line.chars().filter(|c| !c.is_whitespace()))
+            .collect()
+    }
+
+    /// Returns how many sites were checked.
+    fn funnel_constructions(code: &str) -> usize {
+        let mut sites = 0;
+        for prefix in [
+            "Fault::Unsupported(",
+            "Fault::Unavailable(",
+            "Fault::Denied(",
+            "Fault::InvalidInput(",
+            "Fault::Internal(",
+            "message:",
+        ] {
+            let mut from = 0;
+            while let Some(i) = code[from..].find(prefix) {
+                let after = from + i + prefix.len();
+                assert!(
+                    code[after..].starts_with("ChainFaultMessage::"),
+                    "a chain fault payload at `{prefix}` is not a vocabulary projection",
+                );
+                sites += 1;
+                from = after;
+            }
+        }
+        sites
+    }
+
+    /// Closes the set over construction sites, not just texts: the pinned
+    /// list alone cannot see a payload built somewhere else.
+    #[test]
+    fn chain_errors_are_constructed_only_here_and_only_from_the_vocabulary() {
+        let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let funnel = std::path::Path::new("host").join("error.rs");
+        let mut scanned = 0_usize;
+        let mut sites = 0_usize;
+        for path in rust_sources(&src) {
+            let text = std::fs::read_to_string(&path).expect("source file reads");
+            let code = squash(shipped_region(&text));
+            scanned += 1;
+            if path.ends_with(&funnel) {
+                sites = funnel_constructions(&code);
+                continue;
+            }
+            for token in [
+                "ChainError::Fault(",
+                "ChainError::Rpc(",
+                "RpcError{",
+                "Self::Fault(",
+                "Self::Rpc(",
+            ] {
+                assert!(
+                    !code.contains(token),
+                    "{} builds a chain-error outside host/error.rs: `{token}`",
+                    path.display(),
+                );
+            }
+        }
+        assert!(
+            scanned > 50,
+            "the walk must cover the crate, saw {scanned} files"
+        );
+        assert!(
+            sites >= 6,
+            "host/error.rs holds the construction sites, saw {sites}"
+        );
     }
 }
