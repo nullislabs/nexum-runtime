@@ -181,6 +181,93 @@ async fn e2e_http_probe_allowlisted_fetch_and_denied_path() {
     assert_eq!(booted.supervisor.alive_count(), 1);
 }
 
+/// The intersection through the real boot path: the denied leg is in the
+/// author list and excluded by the operator's `[policy.component]` row, so
+/// the guest sees the denial only if the row reaches the gate.
+#[tokio::test]
+async fn e2e_policy_http_allow_narrows_the_author_list_through_boot() {
+    let Some(wasm) = module_wasm_or_skip("http-probe") else {
+        return;
+    };
+    let server = wiremock::MockServer::start().await;
+    wiremock::Mock::given(wiremock::matchers::method("GET"))
+        .and(wiremock::matchers::path("/status"))
+        .respond_with(wiremock::ResponseTemplate::new(200).set_body_string("ok"))
+        .mount(&server)
+        .await;
+
+    let mut booted = BootScenario::new()
+        .wasm(wasm)
+        .permit_destinations([std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST)])
+        .policy(PolicySection {
+            component: [(
+                "m0".to_owned(),
+                ComponentPolicy {
+                    http_allow: Some(vec![crate::host_pattern::HostPattern::from("127.0.0.1")]),
+                    ..ComponentPolicy::default()
+                },
+            )]
+            .into(),
+            ..PolicySection::default()
+        })
+        .module(
+            TestManifest::new("http-probe")
+                .cap("logging")
+                .cap("http")
+                .http_allow("127.0.0.1")
+                .http_allow("operator-excluded.invalid")
+                .block_sub(1)
+                .config("probe_url", format!("{}/status", server.uri()))
+                // Denied at `admit` on the operator row, before any DNS
+                // lookup; without the row the guest would see a transport
+                // error rather than the denial it demands.
+                .config("denied_url", "http://operator-excluded.invalid/"),
+        )
+        .boot()
+        .await
+        .expect("boot");
+
+    assert_eq!(
+        booted.dispatch_block_on(1).await,
+        1,
+        "the operator row must exclude the author-listed host",
+    );
+    assert_eq!(booted.supervisor.alive_count(), 1);
+}
+
+/// `[policy]` egress values survive boot into the spec restarts rebuild
+/// stores from, so dropping either field in the load plumbing fails here.
+#[tokio::test]
+async fn boot_carries_policy_egress_into_the_store_spec() {
+    let Some(wasm) = example_wasm_or_skip() else {
+        return;
+    };
+    let deny: ipnet::IpNet = "203.0.113.0/24".parse().expect("test CIDR");
+    let allow = crate::host_pattern::HostPattern::from("api.cow.fi");
+    let booted = BootScenario::new()
+        .wasm(wasm)
+        .policy(PolicySection {
+            http_deny: vec![deny],
+            component: [(
+                "m0".to_owned(),
+                ComponentPolicy {
+                    http_allow: Some(vec![allow.clone()]),
+                    ..ComponentPolicy::default()
+                },
+            )]
+            .into(),
+            ..PolicySection::default()
+        })
+        .module(TestManifest::new("example").cap("logging"))
+        .boot()
+        .await
+        .expect("boot");
+
+    let spec = &booted.supervisor.modules[0].seed.spec;
+    assert_eq!(spec.http_denied, vec![deny]);
+    assert_eq!(spec.http_operator_allow, Some(vec![allow]));
+}
+
 /// The module logs at init and on the block; stdout/stderr line splitting
 /// is covered at the unit level on the StdioStream writer.
 #[tokio::test]

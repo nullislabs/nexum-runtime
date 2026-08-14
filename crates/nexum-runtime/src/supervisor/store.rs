@@ -10,7 +10,7 @@ use wasmtime_wasi::{HostMonotonicClock, HostWallClock, WasiCtxBuilder};
 
 use super::Shared;
 use crate::bindings::EventModule;
-use crate::engine_config::{OutboundHttpLimits, ResolvedModuleLimits};
+use crate::engine_config::{OutboundHttpLimits, PolicyCeilings};
 use crate::host::component::{RuntimeTypes, StateHandle, StateStore};
 use crate::host::extension::Extension;
 use crate::host::http::HttpGate;
@@ -76,45 +76,55 @@ impl HostMonotonicClock for SharedMonotonicClock {
     }
 }
 
-/// `[module.resources]` layered over engine `[limits]`.
+/// `[component.resources]` layered under the `[policy]` ceilings.
+#[derive(Clone, Copy)]
 pub(super) struct ResolvedLimits {
     pub(super) fuel: u64,
     pub(super) memory: usize,
     pub(super) state_bytes: u64,
 }
 
-/// Unset `[module.resources]` fields keep the engine `[limits]` default; a
-/// set field narrows and never widens.
+/// Unset `[component.resources]` fields keep the component's `[policy]`
+/// ceiling; a set field narrows and never widens.
 ///
-/// The manifest is author-supplied, so the engine value is a ceiling rather
+/// The manifest is author-supplied, so the policy value is a ceiling rather
 /// than a default. See `docs/adr/0001-operator-config-separate-and-trusted.md`.
 pub(super) fn resolve_module_limits(
+    id: &str,
     res: &ResourceSection,
-    cfg: &ResolvedModuleLimits,
+    ceilings: &PolicyCeilings,
 ) -> ResolvedLimits {
     ResolvedLimits {
         fuel: clamp(
+            id,
             "max_fuel_per_event",
             res.max_fuel_per_event,
-            cfg.fuel_per_event.get(),
+            ceilings.max_fuel_per_event.get(),
         ),
         memory: clamp(
+            id,
             "max_memory_bytes",
             res.max_memory_bytes,
-            cfg.memory_bytes.get(),
+            ceilings.max_memory_bytes.get(),
         ),
-        state_bytes: clamp("max_state_bytes", res.max_state_bytes, cfg.state_bytes),
+        state_bytes: clamp(
+            id,
+            "max_state_bytes",
+            res.max_state_bytes,
+            ceilings.max_state_bytes,
+        ),
     }
 }
 
 /// The engine value unless the manifest asks for less. A request above the
 /// ceiling is capped and logged: handing back a smaller budget than the
 /// manifest declares would otherwise look like the module misbehaving.
-fn clamp<T: Ord + std::fmt::Display>(field: &str, requested: Option<T>, ceiling: T) -> T {
+fn clamp<T: Ord + std::fmt::Display>(id: &str, field: &str, requested: Option<T>, ceiling: T) -> T {
     match requested {
         Some(value) if value > ceiling => {
             warn!(
                 target: "manifest",
+                id,
                 field,
                 requested = %value,
                 ceiling = %ceiling,
@@ -131,9 +141,14 @@ fn clamp<T: Ord + std::fmt::Display>(field: &str, requested: Option<T>, ceiling:
 /// the boot-time one.
 pub(super) struct StoreSpec {
     pub(super) http_allowlist: Vec<HostPattern>,
+    /// `[policy.component.<id>].http_allow`; the gate intersects it with
+    /// the manifest list.
+    pub(super) http_operator_allow: Option<Vec<HostPattern>>,
     pub(super) http_limits: OutboundHttpLimits,
     /// Operator-permitted addresses that would otherwise be refused.
     pub(super) http_permitted: Vec<std::net::IpAddr>,
+    /// `[policy].http_deny` ranges, refused after every allowlist.
+    pub(super) http_denied: Vec<ipnet::IpNet>,
     pub(super) memory_limit: usize,
     pub(super) fuel: u64,
     pub(super) chain_response_max_bytes: usize,
@@ -197,8 +212,10 @@ fn build<T: RuntimeTypes>(
             http_gate: HttpGate::new(
                 namespace,
                 spec.http_allowlist.clone(),
+                spec.http_operator_allow.clone(),
                 spec.http_limits,
                 spec.http_permitted.clone(),
+                spec.http_denied.clone(),
             ),
             run,
             log_router: router,

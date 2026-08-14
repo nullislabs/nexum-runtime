@@ -21,13 +21,17 @@ use super::cursors::{
     chainlog_cursor_key, commit_chain_log_cursor, progress_key, read_chain_log_cursor,
 };
 use super::dispatch::with_dispatch_deadline;
-use super::prepass::{NamespaceLedger, claim_namespace, unconfigured_chain};
+use super::prepass::{
+    NamespaceLedger, claim_namespace, enforce_total_reservation, unconfigured_chain,
+};
 use super::store::resolve_module_limits;
 use super::subscriptions::build_alloy_filter;
 use super::*;
 use crate::bindings::nexum;
 use crate::digest::{ContentDigest, DigestMismatch};
-use crate::engine_config::{ModuleLimits, ResolvedModuleLimits};
+use crate::engine_config::{
+    ComponentPolicy, ModuleLimits, PolicyCeilings, PolicySection, ResolvedModuleLimits, TotalPolicy,
+};
 use crate::host::logs::LogSource;
 use crate::host::provider_pool::ProviderPool;
 use crate::manifest::{self, CapabilityError, CapabilityRegistry, ParseError, ResourceSection};
@@ -100,12 +104,15 @@ async fn try_boot_single(
     let linker = make_linker(&engine);
     let (dir, store) = temp_local_store();
     let entry = ModuleEntry {
+        id: "single".to_owned(),
         path: wasm.to_path_buf(),
         manifest: manifest.map(Path::to_path_buf),
     };
     let limits = ResolvedModuleLimits::default();
+    let policy = PolicySection::default();
     let env = BootEnv {
         limits: &limits,
+        policy: &policy,
         configured_chains: test_chains(),
         require_component_digest: require_digest,
     };

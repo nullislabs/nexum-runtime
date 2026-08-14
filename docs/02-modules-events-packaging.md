@@ -25,7 +25,7 @@ kind    = "module"
 # Optional content pin: one sha256sum of the compiled .wasm.
 digest = "sha256:9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
 
-# Per-component resource requests. Each field narrows the engine [limits]
+# Per-component resource requests. Each field narrows the engine [policy]
 # ceiling and never widens it.
 [component.resources]
 max_fuel_per_event = 500_000_000
@@ -91,7 +91,8 @@ The declarable core capability names are `chain`, `identity`, `local-store`, `re
 Any other `wasi:` import is refused fail-closed.
 An extension registers further names under its own namespace: see [the linker extension seam](design/linker-extension-seam.md).
 
-> Resource ceilings are engine-global, set in `engine.toml` `[limits]`: `fuel_per_event` (default 1e9), `memory_bytes` (default 64 MiB), `state_bytes` (default 50 MiB), and `event_deadline_secs` (default 120).
+> Resource ceilings are set in `engine.toml` `[policy]`: `max_fuel_per_event` (default 1e9), `max_memory_bytes` (default 64 MiB), and `max_state_bytes` (default 50 MiB); the dispatch deadline stays in `[limits].event_deadline_secs` (default 120).
+> A `[policy.component.<id>]` row overrides them for one component, keyed on the `[[modules]].id` the operator writes.
 > They resolve in `crates/nexum-runtime/src/engine_config.rs`.
 > A `[component.resources]` field narrows one of them.
 > It never replaces or widens one: the manifest is author-supplied, so the engine value is a ceiling and a request above it is clamped and logged (`crates/nexum-runtime/src/supervisor/store.rs`, `resolve_module_limits` and `clamp`).
@@ -319,6 +320,7 @@ An operator deploys a module:
 1. The operator adds an entry to engine.toml:
 
    [[modules]]
+   id   = "twap-monitor"
    path = "/var/nexum/twap-monitor/twap_monitor.wasm"
 
 2. The prepass resolves the sibling component.toml, claims the name as a

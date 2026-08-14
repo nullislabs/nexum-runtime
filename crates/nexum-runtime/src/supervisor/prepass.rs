@@ -9,7 +9,8 @@ use strum::{IntoStaticStr, VariantNames};
 use thiserror::Error;
 use tracing::{info, warn};
 
-use crate::engine_config::EngineConfig;
+use super::store::{ResolvedLimits, resolve_module_limits};
+use crate::engine_config::{EngineConfig, PolicySection};
 use crate::manifest::{self, CapabilityRegistry, LoadedManifest, ParseError, Subscription};
 use crate::module_id::ModuleId;
 use crate::refusal::{Refusal, RefusalContext as _};
@@ -92,6 +93,20 @@ pub enum BootRefusal {
         chain_id: u64,
         /// The chains engine.toml declares.
         configured: BTreeSet<u64>,
+    },
+    /// N in-ceiling components can still oversubscribe the host together;
+    /// `[policy.total]` bounds the declared sum.
+    #[error(
+        "component {id} takes the summed memory reservation to {sum} bytes, \
+         over [policy.total].max_memory_bytes = {total}"
+    )]
+    TotalMemoryExceeded {
+        /// The entry whose reservation crossed the cap.
+        id: String,
+        /// The running sum, this entry included, saturating.
+        sum: u64,
+        /// The configured aggregate cap.
+        total: u64,
     },
 }
 
@@ -239,12 +254,38 @@ pub(super) fn unconfigured_chain(
     }
 }
 
+/// Sum the declared memory reservations against `[policy.total]`, in
+/// declaration order, refusing on the entry that crosses the cap. The
+/// reservation is the resolved effective limit, so a manifest that
+/// narrows its ceiling counts at the narrowed value.
+pub(super) fn enforce_total_reservation<'a>(
+    policy: &PolicySection,
+    reservations: impl IntoIterator<Item = (&'a str, usize)>,
+) -> Result<(), BootRefusal> {
+    let Some(total) = policy.total.max_memory_bytes else {
+        return Ok(());
+    };
+    let mut sum: u64 = 0;
+    for (id, memory) in reservations {
+        sum = sum.saturating_add(memory as u64);
+        if sum > total.get() as u64 {
+            return Err(BootRefusal::TotalMemoryExceeded {
+                id: id.to_owned(),
+                sum,
+                total: total.get() as u64,
+            });
+        }
+    }
+    Ok(())
+}
+
 /// Every manifest loaded, every name claimed, every subscribed chain gated,
-/// in `engine.toml` order.
+/// and the reservation sum bounded, in `engine.toml` order. Limits resolve
+/// once here; `load::module` reuses them, so a clamp warns once per field.
 pub(super) fn run(
     engine_cfg: &EngineConfig,
     registry: &CapabilityRegistry,
-) -> Result<Vec<LoadedManifest>, Refusal> {
+) -> Result<Vec<(LoadedManifest, ResolvedLimits)>, Refusal> {
     let mut ledger = NamespaceLedger::new();
     let configured_chains = ConfiguredChains::from_config(engine_cfg);
     let mut manifests = Vec::new();
@@ -255,7 +296,20 @@ pub(super) fn run(
         claim_namespace(&mut ledger, namespace.as_str(), &entry.path)?;
         enforce_subscriptions(namespace.as_str(), &loaded, &configured_chains)
             .with_refusal_context(|| format!("load module {}", entry.path.display()))?;
-        manifests.push(loaded);
+        let limits = resolve_module_limits(
+            &entry.id,
+            &loaded.resources,
+            &engine_cfg.policy.for_component(&entry.id).ceilings,
+        );
+        manifests.push((loaded, limits));
     }
+    enforce_total_reservation(
+        &engine_cfg.policy,
+        engine_cfg
+            .modules
+            .iter()
+            .zip(&manifests)
+            .map(|(entry, (_, limits))| (entry.id.as_str(), limits.memory)),
+    )?;
     Ok(manifests)
 }

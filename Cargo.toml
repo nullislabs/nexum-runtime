@@ -144,6 +144,10 @@ wit-parser = "=0.251.0"
 # Manifest parsing.
 toml = "1"
 
+# CIDR blocks for the `[policy].http_deny` egress denylist. Already in
+# the graph via the hyper stack.
+ipnet = "2"
+
 # Metrics facade + Prometheus exporter (engine `/metrics` listener).
 metrics = "0.24"
 metrics-exporter-prometheus = { version = "0.18", default-features = false, features = ["http-listener"] }

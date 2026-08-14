@@ -18,6 +18,7 @@ async fn main() -> anyhow::Result<()> {
 
     let cfg = EngineConfig {
         modules: vec![ModuleEntry {
+            id: "example".to_owned(),
             path: "target/wasm32-wasip2/release/example.wasm".into(),
             manifest: Some("modules/example/component.toml".into()),
         }],

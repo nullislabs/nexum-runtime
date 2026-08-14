@@ -22,7 +22,7 @@ use tracing::info;
 use wasmtime::Engine;
 use wasmtime::component::Linker;
 
-use crate::engine_config::{EngineConfig, ModuleEntry, ResolvedModuleLimits};
+use crate::engine_config::{EngineConfig, ModuleEntry, PolicySection, ResolvedModuleLimits};
 use crate::host::component::{Components, RuntimeTypes};
 use crate::host::extension::Extension;
 use crate::host::state::HostState;
@@ -45,8 +45,10 @@ pub struct Supervisor<T: RuntimeTypes> {
 
 /// Boot inputs derived from [`EngineConfig`], bundled once at the call site.
 pub struct BootEnv<'a> {
-    /// The engine ceiling a manifest may narrow but never widen.
+    /// Per-module limits outside the `[policy]` ceilings.
     pub limits: &'a ResolvedModuleLimits,
+    /// The `[policy]` surface a manifest may narrow but never widen.
+    pub policy: &'a PolicySection,
     /// Chains with an `engine.toml` entry; a subscription elsewhere refuses.
     pub configured_chains: ConfiguredChains,
     /// Refuse a component whose manifest declares no digest.
@@ -58,6 +60,7 @@ impl<'a> BootEnv<'a> {
     pub fn from_config(cfg: &'a EngineConfig) -> Self {
         Self {
             limits: &cfg.limits,
+            policy: &cfg.policy,
             configured_chains: ConfiguredChains::from_config(cfg),
             require_component_digest: cfg.engine.require_component_digest,
         }
@@ -91,19 +94,12 @@ impl<T: RuntimeTypes> Supervisor<T> {
             let shared = wire_extensions(engine, components, extensions, clocks)?;
             let registry = capability_registry(&shared.extensions);
             let module_manifests = prepass::run(engine_cfg, &registry)?;
+            let env = BootEnv::from_config(engine_cfg);
             let modules = load_modules(
                 &engine_cfg.modules,
                 module_manifests,
-                async |entry, manifest| {
-                    load::module(
-                        &shared,
-                        linker,
-                        entry,
-                        manifest,
-                        &engine_cfg.limits,
-                        engine_cfg.engine.require_component_digest,
-                    )
-                    .await
+                async |entry, manifest, resolved| {
+                    load::module(&shared, linker, entry, manifest, resolved, &env).await
                 },
             )
             .await?;
@@ -133,15 +129,14 @@ impl<T: RuntimeTypes> Supervisor<T> {
                 &loaded_manifest,
                 &env.configured_chains,
             )?;
-            let loaded = load::module(
-                &shared,
-                linker,
-                entry,
-                loaded_manifest,
-                env.limits,
-                env.require_component_digest,
-            )
-            .await?;
+            let resolved = store::resolve_module_limits(
+                &entry.id,
+                &loaded_manifest.resources,
+                &env.policy.for_component(&entry.id).ceilings,
+            );
+            prepass::enforce_total_reservation(env.policy, [(entry.id.as_str(), resolved.memory)])?;
+            let loaded =
+                load::module(&shared, linker, entry, loaded_manifest, resolved, env).await?;
             Ok(Self {
                 shared,
                 modules: vec![loaded],
@@ -206,12 +201,16 @@ fn wire_extensions<T: RuntimeTypes>(
 /// entry path.
 async fn load_modules<L>(
     entries: &[ModuleEntry],
-    manifests: Vec<crate::manifest::LoadedManifest>,
-    load: impl AsyncFn(&ModuleEntry, crate::manifest::LoadedManifest) -> Result<L, Refusal>,
+    manifests: Vec<(crate::manifest::LoadedManifest, store::ResolvedLimits)>,
+    load: impl AsyncFn(
+        &ModuleEntry,
+        crate::manifest::LoadedManifest,
+        store::ResolvedLimits,
+    ) -> Result<L, Refusal>,
 ) -> Result<Vec<L>, Refusal> {
     let mut out = Vec::with_capacity(entries.len());
-    for (entry, manifest) in entries.iter().zip(manifests) {
-        let loaded = load(entry, manifest)
+    for (entry, (manifest, resolved)) in entries.iter().zip(manifests) {
+        let loaded = load(entry, manifest, resolved)
             .await
             .with_refusal_context(|| format!("load module {}", entry.path.display()))?;
         out.push(loaded);

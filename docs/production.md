@@ -8,7 +8,7 @@ A downstream composition root that registers extensions runs the same way, under
 
 - The engine built in release: `cargo build -p nexum-cli --release` gives `target/release/nexum`.
 - Every component `.wasm` artifact present on a path the service user can read.
-- An `engine.toml` with `state_dir` on a persistent path (never `/tmp`), `log_level = "info"`, `[engine.metrics] enabled = true` with `bind_addr = "127.0.0.1:9100"`, one `[chains.<id>]` per subscribed chain with a paid RPC URL, and one `[[modules]]` per module.
+- An `engine.toml` with `state_dir` on a persistent path (never `/tmp`), `log_level = "info"`, `[engine.metrics] enabled = true` with `bind_addr = "127.0.0.1:9100"`, one `[chains.<id>]` per subscribed chain with a paid RPC URL, and one `[[modules]]` per module, each with an operator-written `id`.
 - `require_component_digest = true` under `[engine]`, with every manifest carrying a `[component].digest` pin.
 - The `state_dir` exists and is writable by the service user.
 - A Prometheus instance scraping `/metrics` (section 6) with the alert rules in section 7.
@@ -252,7 +252,8 @@ A `request_timeout_secs` under `[chains.<id>]` bounds one request and defaults t
 The chain interface has no batch verb; the guest SDK lowers a batch of RPC requests to sequential single requests, each with the full timeout, so a batch's worst case is the entry count times that timeout.
 `nexum_runtime_chain_request_total{outcome="err"}` is the degradation signal.
 
-Resource ceilings live in `engine.toml` `[limits]` and apply to every component.
+Resource ceilings live in `engine.toml` `[policy]` and apply to every component; a `[policy.component.<id>]` row, keyed on `[[modules]].id`, overrides them for one.
+`[policy.total].max_memory_bytes` bounds the summed reservations, and an oversubscribed set refuses at boot naming the entry that crossed it.
 A `[component.resources]` field in a manifest narrows a ceiling for one component and can never widen it.
 A component that consistently traps on fuel exhaustion is a bug, not a tuning miss.
 

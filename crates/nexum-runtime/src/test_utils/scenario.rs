@@ -10,7 +10,7 @@ use tempfile::TempDir;
 
 use super::manifest::{ManifestSource, TestManifest};
 use super::{in_memory_logs, test_chain_configs};
-use crate::engine_config::{ChainConfig, EngineConfig, ModuleEntry, ModuleLimits};
+use crate::engine_config::{ChainConfig, EngineConfig, ModuleEntry, ModuleLimits, PolicySection};
 use crate::host::component::{Components, RuntimeTypes};
 use crate::host::extension::{Extension, attach_wall_clock};
 use crate::host::local_store_redb::LocalStore;
@@ -22,6 +22,7 @@ use crate::test_utils::wasm::test_wasmtime_engine;
 
 /// One `[[modules]]` entry.
 pub struct Entry {
+    id: Option<String>,
     wasm: Option<PathBuf>,
     manifest: ManifestSource,
 }
@@ -30,9 +31,16 @@ impl Entry {
     /// An entry loading `manifest` on the scenario-wide component.
     pub fn new(manifest: impl Into<ManifestSource>) -> Self {
         Self {
+            id: None,
             wasm: None,
             manifest: manifest.into(),
         }
+    }
+
+    /// Operator-written id; unset, the entry gets `m<index>`.
+    pub fn id(mut self, id: impl Into<String>) -> Self {
+        self.id = Some(id.into());
+        self
     }
 
     /// Load this entry from `wasm` rather than the scenario-wide component.
@@ -66,6 +74,7 @@ pub struct BootScenario<T: RuntimeTypes = CoreRuntime> {
     components: Components<T>,
     extensions: Vec<Arc<dyn Extension<T>>>,
     limits: ModuleLimits,
+    policy: PolicySection,
     chains: HashMap<Chain, ChainConfig>,
     wasm: Option<PathBuf>,
     modules: Vec<Entry>,
@@ -102,6 +111,7 @@ impl<T: RuntimeTypes> BootScenario<T> {
             components,
             extensions: Vec::new(),
             limits: ModuleLimits::default(),
+            policy: PolicySection::default(),
             chains: test_chain_configs(),
             wasm: None,
             modules: Vec::new(),
@@ -131,6 +141,12 @@ impl<T: RuntimeTypes> BootScenario<T> {
     /// Replace the whole `[limits]` section.
     pub fn limits(mut self, limits: ModuleLimits) -> Self {
         self.limits = limits;
+        self
+    }
+
+    /// Replace the whole `[policy]` section.
+    pub fn policy(mut self, policy: PolicySection) -> Self {
+        self.policy = policy;
         self
     }
 
@@ -216,6 +232,7 @@ impl<T: RuntimeTypes> BootScenario<T> {
         let resolve = |i: usize, entry: Entry| {
             let at = dir.join(format!("module-{i}.toml"));
             (
+                entry.id.unwrap_or_else(|| format!("m{i}")),
                 entry.wasm.unwrap_or_else(|| default_wasm.clone()),
                 entry.manifest.resolve(&at),
             )
@@ -226,6 +243,7 @@ impl<T: RuntimeTypes> BootScenario<T> {
                 .limits
                 .try_into()
                 .expect("scenario [limits] must carry no zero"),
+            policy: self.policy,
             chains: self.chains,
             ..Default::default()
         };
@@ -233,8 +251,8 @@ impl<T: RuntimeTypes> BootScenario<T> {
         config.engine.require_component_digest = self.require_digest;
         config.defaulted = self.defaulted;
         for (i, entry) in self.modules.into_iter().enumerate() {
-            let (path, manifest) = resolve(i, entry);
-            config.modules.push(ModuleEntry { path, manifest });
+            let (id, path, manifest) = resolve(i, entry);
+            config.modules.push(ModuleEntry { id, path, manifest });
         }
         (
             config,
