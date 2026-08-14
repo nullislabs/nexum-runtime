@@ -188,6 +188,7 @@ impl Subscription {
 }
 
 #[derive(Debug, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct ComponentSection {
     /// Instance identity; keys the keccak local-store namespace, so it is
     /// unique across `[[modules]]`.
@@ -204,7 +205,7 @@ pub(crate) struct ComponentSection {
     #[serde(default)]
     pub kind: Option<String>,
     /// Per-component resource requests; each unset field inherits the
-    /// engine `[limits]` default and never widens it.
+    /// component's `[policy]` ceiling and never widens it.
     #[serde(default)]
     pub resources: ResourceSection,
 }
@@ -237,19 +238,22 @@ impl ComponentKind {
     }
 }
 
-/// `[module.resources]` overrides; each unset field keeps the engine
-/// `[limits]` default.
+/// `[component.resources]` overrides; each unset field keeps the
+/// component's `[policy]` ceiling.
 ///
 /// A set field narrows and never widens: this manifest is author-supplied,
-/// so the engine `[limits]` value is a ceiling. A field above it is capped.
+/// so the `[policy]` value is a ceiling. A field above it is capped.
+/// `deny_unknown_fields` so a misspelled key refuses rather than silently
+/// dropping the ceiling the author asked for.
 #[derive(Debug, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 pub struct ResourceSection {
     /// Linear-memory cap, in bytes.
     #[serde(default)]
     pub max_memory_bytes: Option<usize>,
-    /// Fuel granted per event dispatch.
+    /// Fuel granted per dispatch.
     #[serde(default)]
-    pub max_fuel_per_event: Option<u64>,
+    pub max_fuel_per_dispatch: Option<u64>,
     /// Local-store byte quota (key + value bytes).
     #[serde(default)]
     pub max_state_bytes: Option<u64>,

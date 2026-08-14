@@ -28,7 +28,7 @@ digest = "sha256:9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a0
 # Per-component resource requests. Each field narrows the engine [policy]
 # ceiling and never widens it.
 [component.resources]
-max_fuel_per_event = 500_000_000
+max_fuel_per_dispatch = 500_000_000
 
 # What this component depends on. The engine cross-checks the component's
 # WIT imports against this table before instantiation, and an import
@@ -91,9 +91,10 @@ The declarable core capability names are `chain`, `identity`, `local-store`, `re
 Any other `wasi:` import is refused fail-closed.
 An extension registers further names under its own namespace: see [the linker extension seam](design/linker-extension-seam.md).
 
-> Resource ceilings are set in `engine.toml` `[policy]`: `max_fuel_per_event` (default 1e9), `max_memory_bytes` (default 64 MiB), and `max_state_bytes` (default 50 MiB); the dispatch deadline stays in `[limits].event_deadline_secs` (default 120).
+> Resource ceilings are set in `engine.toml` `[policy]`: `max_fuel_per_dispatch` (default 1e9), `max_memory_bytes` (default 64 MiB), and `max_state_bytes` (default 50 MiB).
+> The dispatch deadline is `[limits].event_deadline_secs` (default 120); the key stays under `[limits]` and its name is open to later config work.
 > A `[policy.component.<id>]` row overrides them for one component, keyed on the `[[modules]].id` the operator writes.
-> They resolve in `crates/nexum-runtime/src/engine_config.rs`.
+> They resolve in `crates/nexum-runtime/src/engine_config/`.
 > A `[component.resources]` field narrows one of them.
 > It never replaces or widens one: the manifest is author-supplied, so the engine value is a ceiling and a request above it is clamped and logged (`crates/nexum-runtime/src/supervisor/store.rs`, `resolve_module_limits` and `clamp`).
 
@@ -202,7 +203,7 @@ flowchart TD
 | Source | Trigger | Backed by |
 |---|---|---|
 | `block` | New block on a chain | `eth_subscribe("newHeads")` over an alloy provider, or polling on an HTTP URL |
-| `chain-log` | Matching log emitted | `eth_subscribe("logs", filter)`, with `eth_getLogs` backfill on reconnect |
+| `chain-log` | Matching log emitted | An `eth_getLogs` block-range poller, alloy's `watch_canonical_logs_from`, reorg-aware and backfilling from the start block on open |
 | `cron` | Not dispatched | Parsed and inert. The supervisor warns at load. |
 | extension kinds | Whatever the extension opens | `Extension::events` |
 

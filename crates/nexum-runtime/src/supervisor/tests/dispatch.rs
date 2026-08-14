@@ -6,7 +6,7 @@ use super::*;
 fn module_limits_default_to_policy_ceilings_when_unset() {
     let cfg = PolicyCeilings::default();
     let resolved = resolve_module_limits("m", &ResourceSection::default(), &cfg);
-    assert_eq!(resolved.fuel, cfg.max_fuel_per_event.get());
+    assert_eq!(resolved.fuel, cfg.max_fuel_per_dispatch.get());
     assert_eq!(resolved.memory, cfg.max_memory_bytes.get());
     assert_eq!(resolved.state_bytes, cfg.max_state_bytes);
 }
@@ -17,7 +17,7 @@ fn manifest_resource_overrides_take_effect_and_are_field_local() {
     // Only fuel is overridden; memory + state keep the policy defaults.
     let res = ResourceSection {
         max_memory_bytes: None,
-        max_fuel_per_event: Some(100_000),
+        max_fuel_per_dispatch: Some(100_000),
         max_state_bytes: Some(2048),
     };
     let resolved = resolve_module_limits("m", &res, &cfg);
@@ -34,12 +34,12 @@ fn manifest_resources_cannot_widen_the_policy_ceiling() {
     let cfg = PolicyCeilings::default();
 
     let fuel_grab = ResourceSection {
-        max_fuel_per_event: Some(u64::MAX),
+        max_fuel_per_dispatch: Some(u64::MAX),
         ..ResourceSection::default()
     };
     assert_eq!(
         resolve_module_limits("m", &fuel_grab, &cfg).fuel,
-        cfg.max_fuel_per_event.get()
+        cfg.max_fuel_per_dispatch.get()
     );
 
     let memory_grab = ResourceSection {
@@ -67,11 +67,11 @@ fn a_narrower_manifest_value_still_wins() {
     let cfg = PolicyCeilings::default();
     let res = ResourceSection {
         max_memory_bytes: Some(cfg.max_memory_bytes.get() / 2),
-        max_fuel_per_event: Some(cfg.max_fuel_per_event.get() / 2),
+        max_fuel_per_dispatch: Some(cfg.max_fuel_per_dispatch.get() / 2),
         max_state_bytes: Some(cfg.max_state_bytes / 2),
     };
     let resolved = resolve_module_limits("m", &res, &cfg);
-    assert_eq!(resolved.fuel, cfg.max_fuel_per_event.get() / 2);
+    assert_eq!(resolved.fuel, cfg.max_fuel_per_dispatch.get() / 2);
     assert_eq!(resolved.memory, cfg.max_memory_bytes.get() / 2);
     assert_eq!(resolved.state_bytes, cfg.max_state_bytes / 2);
 }
