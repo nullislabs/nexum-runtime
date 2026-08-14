@@ -120,9 +120,9 @@ impl<T: RuntimeTypes> nexum::host::chain::Host for HostState<T> {
         // The per-entry cap (inside `request`) bounds each body; this
         // running total bounds the aggregate `Vec<RpcResult>` lowered into
         // guest memory in one go, so a wide batch of individually-legal
-        // bodies cannot saturate the guest heap either - the exact failure
-        // the guidance in #154 (block-range chunking via request-batch)
-        // would otherwise re-introduce.
+        // bodies cannot saturate the guest heap either: the exact failure
+        // block-range chunking through `request-batch` would otherwise
+        // re-introduce.
         let mut total_bytes: usize = 0;
         for req in requests {
             let method = req.method.clone();
@@ -214,7 +214,7 @@ mod tests {
         assert!(resolved[2].is_ok());
     }
 
-    // ── response size cap tests (#154) ──
+    // ── response size cap tests ──
 
     #[test]
     fn response_at_cap_is_accepted() {

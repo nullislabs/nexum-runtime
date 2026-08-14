@@ -248,7 +248,7 @@ fn quota_counts_across_short_lived_handles_of_one_namespace() {
     assert!(matches!(err, StorageError::QuotaExceeded { .. }));
 }
 
-// Atomic apply batches (#609).
+// Atomic apply batches.
 
 fn set_op(key: &str, value: &[u8]) -> WriteOp {
     WriteOp::Set {
