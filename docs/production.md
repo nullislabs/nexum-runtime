@@ -252,7 +252,7 @@ An `http(s)://` URL is not dialled at boot, so a bad HTTP endpoint surfaces on f
 
 Every provider carries a retry layer (10 attempts, 300 ms base backoff).
 A `request_timeout_secs` under `[chains.<id>]` bounds one request and defaults to 30 s.
-A batch dispatches its entries sequentially, each with the full timeout, so its worst case is the entry count times that timeout.
+The chain interface has no batch verb; the guest SDK lowers a batch of RPC requests to sequential single requests, each with the full timeout, so a batch's worst case is the entry count times that timeout.
 `nexum_runtime_chain_request_total{outcome="err"}` is the degradation signal.
 
 Resource ceilings live in `engine.toml` `[limits]` and apply to every component.
