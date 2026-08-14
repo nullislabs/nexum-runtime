@@ -1,11 +1,12 @@
-//! The only place a guest-visible `chain-error` is built. The scan test
-//! below enforces that.
+//! The only place a guest-visible `chain-error` or local-store [`Fault`] is
+//! built. The scan test below enforces that.
 
 use alloy_primitives::Bytes;
 use alloy_transport::TransportError;
 
 use crate::bindings::nexum::host::chain::{ChainError, RpcError};
 use crate::bindings::nexum::host::types::{Fault, RateLimit};
+use crate::host::local_store_redb::StorageError;
 use crate::host::provider_pool::PoolError;
 
 /// Fieldless on purpose: no runtime string can enter the set, so nothing
@@ -29,6 +30,54 @@ pub(crate) enum ChainFaultMessage {
 impl ChainFaultMessage {
     pub(crate) fn text(self) -> &'static str {
         self.into()
+    }
+}
+
+/// Fieldless for the same reason as [`ChainFaultMessage`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, strum::IntoStaticStr, strum::VariantArray)]
+pub(crate) enum LocalStoreFaultMessage {
+    #[strum(serialize = "local-store namespace quota exhausted")]
+    QuotaExhausted,
+    #[strum(serialize = "apply batch exceeds the per-batch op cap")]
+    ApplyOpsOverCap,
+    #[strum(serialize = "apply batch exceeds the per-batch value-byte cap")]
+    ApplyBytesOverCap,
+    #[strum(serialize = "local-store backend failure")]
+    BackendFailure,
+}
+
+impl LocalStoreFaultMessage {
+    pub(crate) fn text(self) -> &'static str {
+        self.into()
+    }
+}
+
+/// Project a [`StorageError`] into the guest [`Fault`], same class as before,
+/// vocabulary text only. The quota value and the redb text stay host-side;
+/// the local-store seam logs the full error before calling this.
+impl From<StorageError> for Fault {
+    fn from(err: StorageError) -> Self {
+        match err {
+            StorageError::QuotaExceeded { .. } => {
+                Fault::Denied(LocalStoreFaultMessage::QuotaExhausted.text().to_owned())
+            }
+            StorageError::ApplyOpsExceeded { .. } => {
+                Fault::InvalidInput(LocalStoreFaultMessage::ApplyOpsOverCap.text().to_owned())
+            }
+            StorageError::ApplyBytesExceeded { .. } => {
+                Fault::InvalidInput(LocalStoreFaultMessage::ApplyBytesOverCap.text().to_owned())
+            }
+            // Exhaustive on purpose: a new variant must pick its projection
+            // here before it can reach a guest.
+            StorageError::Open(_)
+            | StorageError::Txn(_)
+            | StorageError::Table(_)
+            | StorageError::Storage(_)
+            | StorageError::Commit(_)
+            | StorageError::InvalidNamespace(_) => {
+                Fault::Internal(LocalStoreFaultMessage::BackendFailure.text().to_owned())
+            }
+        }
     }
 }
 
@@ -173,6 +222,14 @@ mod tests {
             .collect()
     }
 
+    fn store_vocabulary() -> Vec<&'static str> {
+        use strum::VariantArray as _;
+        LocalStoreFaultMessage::VARIANTS
+            .iter()
+            .map(|m| m.text())
+            .collect()
+    }
+
     fn guest_message(err: &ChainError) -> Option<&str> {
         match err {
             ChainError::Fault(
@@ -202,6 +259,72 @@ mod tests {
                 "upstream node returned an error response",
             ],
         );
+    }
+
+    /// `VARIANTS` is compiler-derived, so a new case fails this until the
+    /// pinned list is extended.
+    #[test]
+    fn the_local_store_vocabulary_is_pinned_and_closed() {
+        assert_eq!(
+            store_vocabulary(),
+            [
+                "local-store namespace quota exhausted",
+                "apply batch exceeds the per-batch op cap",
+                "apply batch exceeds the per-batch value-byte cap",
+                "local-store backend failure",
+            ],
+        );
+    }
+
+    /// Equality, not absence: the operator-configured quota value must not
+    /// survive the projection in any form.
+    #[test]
+    fn quota_fault_is_denied_vocabulary_text_without_the_quota_value() {
+        let fault = Fault::from(StorageError::QuotaExceeded {
+            needed: 987_654_321,
+            quota: 123_456_789,
+        });
+        let Fault::Denied(msg) = fault else {
+            panic!("expected Denied fault, got {fault:?}");
+        };
+        assert_eq!(msg, LocalStoreFaultMessage::QuotaExhausted.text());
+    }
+
+    /// The two batch caps stay `invalid-input` and stay distinguishable, so
+    /// a guest knows whether to shrink the op count or the value bytes.
+    #[test]
+    fn apply_cap_faults_are_distinct_invalid_input_vocabulary_text() {
+        let ops = Fault::from(StorageError::ApplyOpsExceeded {
+            ops: 4096,
+            cap: 1024,
+        });
+        let bytes = Fault::from(StorageError::ApplyBytesExceeded {
+            bytes: 1 << 30,
+            cap: 4 << 20,
+        });
+        let (Fault::InvalidInput(ops), Fault::InvalidInput(bytes)) = (&ops, &bytes) else {
+            panic!("expected InvalidInput faults, got {ops:?} and {bytes:?}");
+        };
+        assert_eq!(ops, LocalStoreFaultMessage::ApplyOpsOverCap.text());
+        assert_eq!(bytes, LocalStoreFaultMessage::ApplyBytesOverCap.text());
+        assert_ne!(ops, bytes);
+    }
+
+    #[test]
+    fn backend_faults_are_internal_and_carry_no_upstream_text() {
+        // A real redb error wrapping path-bearing io text, and the host-built
+        // namespace refusal: both project to the one internal message.
+        let io = std::io::Error::other("I/O error: /var/lib/nexum/state/local-store.redb");
+        for err in [
+            StorageError::Storage(io.into()),
+            StorageError::InvalidNamespace("module namespace must not be empty".into()),
+        ] {
+            let fault = Fault::from(err);
+            let Fault::Internal(msg) = fault else {
+                panic!("expected Internal fault, got {fault:?}");
+            };
+            assert_eq!(msg, LocalStoreFaultMessage::BackendFailure.text());
+        }
     }
 
     #[test]
@@ -453,37 +576,60 @@ mod tests {
             .collect()
     }
 
+    const FAULT_PREFIXES: [&str; 5] = [
+        "Fault::Unsupported(",
+        "Fault::Unavailable(",
+        "Fault::Denied(",
+        "Fault::InvalidInput(",
+        "Fault::Internal(",
+    ];
+
+    /// Suffixes of `code` just past each occurrence of `prefix`.
+    fn occurrences<'a>(code: &'a str, prefix: &str) -> Vec<&'a str> {
+        let mut out = Vec::new();
+        let mut from = 0;
+        while let Some(i) = code[from..].find(prefix) {
+            let after = from + i + prefix.len();
+            out.push(&code[after..]);
+            from = after;
+        }
+        out
+    }
+
     /// Returns how many sites were checked.
     fn funnel_constructions(code: &str) -> usize {
         let mut sites = 0;
-        for prefix in [
-            "Fault::Unsupported(",
-            "Fault::Unavailable(",
-            "Fault::Denied(",
-            "Fault::InvalidInput(",
-            "Fault::Internal(",
-            "message:",
-        ] {
-            let mut from = 0;
-            while let Some(i) = code[from..].find(prefix) {
-                let after = from + i + prefix.len();
+        for prefix in FAULT_PREFIXES.into_iter().chain(["message:"]) {
+            for rest in occurrences(code, prefix) {
                 assert!(
-                    code[after..].starts_with("ChainFaultMessage::"),
-                    "a chain fault payload at `{prefix}` is not a vocabulary projection",
+                    rest.starts_with("ChainFaultMessage::")
+                        || rest.starts_with("LocalStoreFaultMessage::"),
+                    "a fault payload at `{prefix}` is not a vocabulary projection",
                 );
                 sites += 1;
-                from = after;
             }
         }
         sites
     }
 
     /// Closes the set over construction sites, not just texts: the pinned
-    /// list alone cannot see a payload built somewhere else.
+    /// lists alone cannot see a payload built somewhere else. Outside the
+    /// funnel a string-carrying fault is banned outright, pinned to a
+    /// compile-time literal (the capability stubs), or a pure destructure
+    /// (`host/fault.rs`); a `const` payload cannot hold runtime data.
     #[test]
-    fn chain_errors_are_constructed_only_here_and_only_from_the_vocabulary() {
+    fn guest_faults_are_constructed_only_in_the_funnel_and_only_from_the_vocabulary() {
         let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
         let funnel = std::path::Path::new("host").join("error.rs");
+        let projections = std::path::Path::new("host").join("fault.rs");
+        let stubs = [
+            std::path::Path::new("host")
+                .join("impls")
+                .join("identity.rs"),
+            std::path::Path::new("host")
+                .join("impls")
+                .join("remote_store.rs"),
+        ];
         let mut scanned = 0_usize;
         let mut sites = 0_usize;
         for path in rust_sources(&src) {
@@ -500,12 +646,48 @@ mod tests {
                 "RpcError{",
                 "Self::Fault(",
                 "Self::Rpc(",
+                "From<StorageError>",
+                "Self::Unsupported(",
+                "Self::Unavailable(",
+                "Self::Denied(",
+                "Self::InvalidInput(",
+                "Self::Internal(",
             ] {
                 assert!(
                     !code.contains(token),
-                    "{} builds a chain-error outside host/error.rs: `{token}`",
+                    "{} builds a guest fault outside host/error.rs: `{token}`",
                     path.display(),
                 );
+            }
+            if path.ends_with(&projections) {
+                for prefix in FAULT_PREFIXES {
+                    for rest in occurrences(&code, prefix) {
+                        assert!(
+                            rest.starts_with("_)") || rest.starts_with("m)"),
+                            "{} must only destructure a fault, at `{prefix}`",
+                            path.display(),
+                        );
+                    }
+                }
+            } else if stubs.iter().any(|s| path.ends_with(s)) {
+                for prefix in FAULT_PREFIXES {
+                    for rest in occurrences(&code, prefix) {
+                        assert!(
+                            prefix == "Fault::Unsupported("
+                                && (rest.starts_with('"') || rest.starts_with("DEFERRED")),
+                            "{} may only carry a literal unsupported text, at `{prefix}`",
+                            path.display(),
+                        );
+                    }
+                }
+            } else {
+                for prefix in FAULT_PREFIXES {
+                    assert!(
+                        occurrences(&code, prefix).is_empty(),
+                        "{} builds a string-carrying fault outside host/error.rs: `{prefix}`",
+                        path.display(),
+                    );
+                }
             }
         }
         assert!(
@@ -513,7 +695,7 @@ mod tests {
             "the walk must cover the crate, saw {scanned} files"
         );
         assert!(
-            sites >= 6,
+            sites >= 10,
             "host/error.rs holds the construction sites, saw {sites}"
         );
     }

@@ -4,36 +4,60 @@ use crate::bindings::nexum;
 use crate::bindings::nexum::host::local_store::{KeyValue, WriteOp};
 use crate::bindings::nexum::host::types::Fault;
 use crate::host::component::{RuntimeTypes, StateHandle};
-use crate::host::local_store_redb;
+use crate::host::local_store_redb::{self, StorageError};
 use crate::host::state::HostState;
+
+impl<T: RuntimeTypes> HostState<T> {
+    // The one place the storage error is recorded in full, quota value and
+    // redb text included: the guest fault carries only vocabulary text.
+    fn store_fault(&self, verb: &'static str, err: StorageError) -> Fault {
+        tracing::warn!(
+            module = %self.run.module,
+            verb,
+            error = %err,
+            "local-store verb failed"
+        );
+        Fault::from(err)
+    }
+}
 
 impl<T: RuntimeTypes> nexum::host::local_store::Host for HostState<T> {
     async fn get(&mut self, key: String) -> Result<Option<Vec<u8>>, Fault> {
-        self.store.get(&key).map_err(Fault::from)
+        self.store.get(&key).map_err(|e| self.store_fault("get", e))
     }
 
     async fn set(&mut self, key: String, value: Vec<u8>) -> Result<(), Fault> {
-        self.store.set(&key, &value).map_err(Fault::from)
+        self.store
+            .set(&key, &value)
+            .map_err(|e| self.store_fault("set", e))
     }
 
     async fn delete(&mut self, key: String) -> Result<(), Fault> {
-        self.store.delete(&key).map_err(Fault::from)
+        self.store
+            .delete(&key)
+            .map_err(|e| self.store_fault("delete", e))
     }
 
     async fn list_keys(&mut self, prefix: String) -> Result<Vec<String>, Fault> {
-        self.store.list_keys(&prefix).map_err(Fault::from)
+        self.store
+            .list_keys(&prefix)
+            .map_err(|e| self.store_fault("list-keys", e))
     }
 
     async fn contains(&mut self, key: String) -> Result<bool, Fault> {
-        self.store.contains(&key).map_err(Fault::from)
+        self.store
+            .contains(&key)
+            .map_err(|e| self.store_fault("contains", e))
     }
 
     async fn len(&mut self, key: String) -> Result<Option<u64>, Fault> {
-        self.store.len(&key).map_err(Fault::from)
+        self.store.len(&key).map_err(|e| self.store_fault("len", e))
     }
 
     async fn count(&mut self, prefix: String) -> Result<u64, Fault> {
-        self.store.count(&prefix).map_err(Fault::from)
+        self.store
+            .count(&prefix)
+            .map_err(|e| self.store_fault("count", e))
     }
 
     async fn apply(&mut self, ops: Vec<WriteOp>) -> Result<(), Fault> {
@@ -46,6 +70,8 @@ impl<T: RuntimeTypes> nexum::host::local_store::Host for HostState<T> {
                 WriteOp::Delete(key) => local_store_redb::WriteOp::Delete { key },
             })
             .collect();
-        self.store.apply(&ops).map_err(Fault::from)
+        self.store
+            .apply(&ops)
+            .map_err(|e| self.store_fault("apply", e))
     }
 }

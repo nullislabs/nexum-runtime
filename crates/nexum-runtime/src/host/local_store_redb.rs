@@ -433,17 +433,5 @@ pub enum StorageError {
     },
 }
 
-impl From<StorageError> for crate::bindings::nexum::host::types::Fault {
-    fn from(err: StorageError) -> Self {
-        match err {
-            StorageError::QuotaExceeded { .. } => Self::Denied(err.to_string()),
-            StorageError::ApplyOpsExceeded { .. } | StorageError::ApplyBytesExceeded { .. } => {
-                Self::InvalidInput(err.to_string())
-            }
-            _ => Self::Internal(err.to_string()),
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests;
