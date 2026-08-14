@@ -12,7 +12,7 @@ use tokio::sync::{mpsc, watch};
 use tracing::{error, info};
 
 use crate::shutdown::{
-    DrainOutcome, GracefulShutdown, GracefulShutdownGuard, Shutdown, ShutdownTrigger,
+    DrainOutcome, GracefulShutdown, GracefulShutdownGuard, Shutdown, ShutdownSignal,
 };
 use crate::task::TaskHandle;
 
@@ -52,16 +52,16 @@ impl TaskManager {
         self.executor.clone()
     }
 
-    /// A shutdown signal a task awaits via [`Shutdown::recv`].
+    /// A [`Shutdown`] receiver a task awaits via [`Shutdown::recv`].
     pub fn subscribe(&self) -> Shutdown {
         Shutdown {
             rx: self.executor.signal_tx.subscribe(),
         }
     }
 
-    /// A trigger that fires the shutdown signal.
-    pub fn trigger(&self) -> ShutdownTrigger {
-        ShutdownTrigger {
+    /// A handle that fires shutdown.
+    pub fn shutdown_signal(&self) -> ShutdownSignal {
+        ShutdownSignal {
             signal_tx: self.executor.signal_tx.clone(),
         }
     }
@@ -76,8 +76,8 @@ impl TaskManager {
         }
     }
 
-    /// Fire the shutdown signal, then wait until every graceful guard has
-    /// released or `timeout` elapses. Firing is idempotent.
+    /// Fire shutdown, then wait until every graceful guard has released or
+    /// `timeout` elapses. Firing is idempotent.
     pub async fn graceful_shutdown_with_timeout(mut self, timeout: Duration) -> DrainOutcome {
         self.executor.signal_tx.send_replace(true);
         let deadline = tokio::time::sleep(timeout);
@@ -192,7 +192,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn spawn_critical_panic_triggers_shutdown() {
+    async fn spawn_critical_panic_fires_shutdown() {
         let mut manager = TaskManager::new();
         let mut signal = manager.subscribe();
         manager
@@ -203,7 +203,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn spawn_critical_return_triggers_shutdown() {
+    async fn spawn_critical_return_fires_shutdown() {
         let mut manager = TaskManager::new();
         let mut signal = manager.subscribe();
         manager.executor().spawn_critical("done", async {});
@@ -254,7 +254,7 @@ mod tests {
     #[tokio::test]
     async fn signal_fired_before_subscribe_is_not_lost() {
         let manager = TaskManager::new();
-        manager.trigger().fire();
+        manager.shutdown_signal().fire();
         let mut signal = manager.subscribe();
         signal.recv().await;
     }

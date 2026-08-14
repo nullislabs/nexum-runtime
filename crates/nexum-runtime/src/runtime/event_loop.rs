@@ -629,7 +629,7 @@ fn block_stream_gap_to_log(
 }
 
 /// Wait for SIGINT or (on Unix) SIGTERM, whichever arrives first.
-pub async fn wait_for_shutdown_signal() -> anyhow::Result<&'static str> {
+pub async fn wait_for_os_signal() -> anyhow::Result<&'static str> {
     #[cfg(unix)]
     {
         use tokio::signal::unix::{SignalKind, signal};
