@@ -1,5 +1,5 @@
 ---
-status: superseded in part by 0017-capabilities-and-services.md
+status: superseded in part by 0017-capabilities-and-services.md and 0019-modules-react-to-triggers.md
 ---
 
 # A component declares a kind and its dependencies
@@ -93,3 +93,4 @@ The manifest file is `component.toml`, and `[[adapters]]` in `engine.toml` becom
   The macro serves the module kind, so the name stays accurate.
 - The WIT worlds spell the worker kind `event-module`.
   Aligning those spellings is a separate WIT change and is not carried here.
+  Superseded in part by [ADR-0019](0019-modules-react-to-triggers.md): the `event` adjective is retired for `trigger`, and the `module` versus `service` half of the spelling deferral stays open.
