@@ -1,4 +1,12 @@
+---
+status: superseded by ADR-0017; historical
+---
+
 # Capabilities and services: one model, four names
+
+> Historical: [ADR-0017](../adr/0017-capabilities-and-services.md) records the decision this document argued for.
+> `HostService`, `ServiceKind`, `Extension::service`, `SERVICE_CAPABILITIES`, `PROVIDER_CAPABILITIES`, and `Role::Adapter` below no longer occur in `crates`.
+> Read this document for the reasoning, not for the current names.
 
 A **host capability** is a WIT interface the runtime implements in Rust, named in a namespace the runtime owns, bound into a component's world at build time, and bounded by an operator dial.
 An **extension capability** is the same thing with the Rust written by a composition root behind the `Extension` seam, registered at boot instead of compiled into the `CORE` table.
@@ -235,11 +243,11 @@ Its declared `http.hosts` is honoured rather than silently discarded, which `sup
 
 ```toml
 [policy]                                    # what any component may hold, and how much
-max_memory_bytes   = 268435456
-max_fuel_per_event = 1000000000
-max_state_bytes    = 1073741824
-capabilities       = ["chain", "logging", "http"]
-http_deny          = ["169.254.0.0/16"]
+max_memory_bytes      = 268435456
+max_fuel_per_dispatch = 1000000000
+max_state_bytes       = 1073741824
+capabilities          = ["chain", "logging", "http"]
+http_deny             = ["169.254.0.0/16"]
 
 [policy.total]
 max_memory_bytes = 4294967296

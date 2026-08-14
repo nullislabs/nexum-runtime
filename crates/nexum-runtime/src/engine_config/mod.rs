@@ -407,9 +407,9 @@ event_deadline_secs = 30
 total_deadline_ms = 1000
 
 [policy]
-max_memory_bytes   = 268435456
-max_fuel_per_event = 7
-max_state_bytes    = 1024
+max_memory_bytes      = 268435456
+max_fuel_per_dispatch = 7
+max_state_bytes       = 1024
 capabilities       = ["chain", "logging", "http"]
 http_deny          = ["169.254.0.0/16"]
 
@@ -432,7 +432,7 @@ path = "m.wasm"
 "#,
         )
         .expect("every documented section parses under the guard");
-        assert_eq!(cfg.policy.ceilings.max_fuel_per_event.get(), 7);
+        assert_eq!(cfg.policy.ceilings.max_fuel_per_dispatch.get(), 7);
         assert_eq!(cfg.modules.len(), 1);
         assert_eq!(cfg.modules[0].id, "m");
         assert!(
@@ -461,7 +461,7 @@ path = "m.wasm"
         assert_eq!(limits.event_deadline, Duration::from_secs(120));
         let parsed: EngineConfig = toml::from_str("").expect("empty config parses");
         for ceilings in [PolicyCeilings::default(), parsed.policy.ceilings] {
-            assert_eq!(ceilings.max_fuel_per_event.get(), 1_000_000_000);
+            assert_eq!(ceilings.max_fuel_per_dispatch.get(), 1_000_000_000);
             assert_eq!(ceilings.max_memory_bytes.get(), 64 * 1024 * 1024);
             assert_eq!(ceilings.max_state_bytes, 50 * 1024 * 1024);
         }
@@ -475,14 +475,14 @@ path = "m.wasm"
 event_deadline_secs = 30
 
 [policy]
-max_fuel_per_event = 7
-max_memory_bytes   = 1_048_576
-max_state_bytes    = 2_048
+max_fuel_per_dispatch = 7
+max_memory_bytes      = 1_048_576
+max_state_bytes       = 2_048
 "#,
         )
         .expect("top-level limits parse");
         assert_eq!(cfg.limits.event_deadline, Duration::from_secs(30));
-        assert_eq!(cfg.policy.ceilings.max_fuel_per_event.get(), 7);
+        assert_eq!(cfg.policy.ceilings.max_fuel_per_dispatch.get(), 7);
         assert_eq!(cfg.policy.ceilings.max_memory_bytes.get(), 1_048_576);
         assert_eq!(cfg.policy.ceilings.max_state_bytes, 2_048);
     }
@@ -539,8 +539,8 @@ max_state_bytes    = 2_048
                 "limits.event_deadline_secs",
             ),
             (
-                "[policy]\nmax_fuel_per_event = 0\n",
-                "policy.max_fuel_per_event",
+                "[policy]\nmax_fuel_per_dispatch = 0\n",
+                "policy.max_fuel_per_dispatch",
             ),
             (
                 "[policy]\nmax_memory_bytes = 0\n",
@@ -556,9 +556,9 @@ max_state_bytes    = 2_048
                 "policy.component.m.max_memory_bytes",
             ),
             (
-                "[policy.component.m]\nmax_fuel_per_event = 0\n\
+                "[policy.component.m]\nmax_fuel_per_dispatch = 0\n\
                  [[modules]]\nid = \"m\"\npath = \"m.wasm\"\n",
-                "policy.component.m.max_fuel_per_event",
+                "policy.component.m.max_fuel_per_dispatch",
             ),
             (
                 "[limits.chain]\nresponse_body_max_bytes = 0\n",

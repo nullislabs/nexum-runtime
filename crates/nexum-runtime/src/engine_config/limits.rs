@@ -229,7 +229,7 @@ impl TryFrom<ModuleLimits> for ResolvedModuleLimits {
             (
                 raw.fuel_per_event.is_some(),
                 "limits.fuel_per_event",
-                "policy.max_fuel_per_event",
+                "policy.max_fuel_per_dispatch",
             ),
             (
                 raw.memory_bytes.is_some(),
@@ -583,7 +583,7 @@ response_body_max_bytes = 2_048
             (
                 "[limits]\nfuel_per_event = 7\n",
                 "limits.fuel_per_event",
-                "policy.max_fuel_per_event",
+                "policy.max_fuel_per_dispatch",
             ),
             (
                 "[limits]\nmemory_bytes = 7\n",

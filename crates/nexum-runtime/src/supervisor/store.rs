@@ -97,9 +97,9 @@ pub(super) fn resolve_module_limits(
     ResolvedLimits {
         fuel: clamp(
             id,
-            "max_fuel_per_event",
-            res.max_fuel_per_event,
-            ceilings.max_fuel_per_event.get(),
+            "max_fuel_per_dispatch",
+            res.max_fuel_per_dispatch,
+            ceilings.max_fuel_per_dispatch.get(),
         ),
         memory: clamp(
             id,

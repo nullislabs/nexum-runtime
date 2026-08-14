@@ -4,6 +4,10 @@ status: accepted
 
 # One operator policy surface
 
+> Amendment: this record was edited after acceptance.
+> The per-dispatch fuel key was renamed, and the Decision text below carries the current name, `max_fuel_per_dispatch`.
+> The `[limits]` subsections and `event_deadline_secs` stay in `[limits]`; this record does not fix their names, and later config work may rename them.
+
 ## Context
 
 Six planned dials each need a per-component operator control: a ceiling source, a digest pin, a log bucket, a batch cap, a capability allowlist, and an egress allowlist.
@@ -17,7 +21,7 @@ ADR-0001 also requires that policy binding to a component keys on an identifier 
 
 `engine.toml` carries one `[policy]` surface with three parts.
 
-- `[policy]` holds the ceilings any component gets: `max_memory_bytes`, `max_fuel_per_event`, `max_state_bytes`, the `capabilities` allowlist, and the `http_deny` range list.
+- `[policy]` holds the ceilings any component gets: `max_memory_bytes`, `max_fuel_per_dispatch`, `max_state_bytes`, the `capabilities` allowlist, and the `http_deny` range list.
 - `[policy.total]` holds the aggregate cap on the summed memory reservations.
 - `[policy.component.<id>]` holds targeted overrides, and each unset field falls back to `[policy]`.
 

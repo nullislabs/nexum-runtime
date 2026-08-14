@@ -567,13 +567,13 @@ name = "twap"
 [dependencies]
 
 [component.resources]
-max_memory_bytes   = 10485760
-max_fuel_per_event = 100000
-max_state_bytes    = 52428800
+max_memory_bytes      = 10485760
+max_fuel_per_dispatch = 100000
+max_state_bytes       = 52428800
 "#;
         let loaded = validate(toml).expect("parse");
         assert_eq!(loaded.resources.max_memory_bytes, Some(10_485_760));
-        assert_eq!(loaded.resources.max_fuel_per_event, Some(100_000));
+        assert_eq!(loaded.resources.max_fuel_per_dispatch, Some(100_000));
         assert_eq!(loaded.resources.max_state_bytes, Some(52_428_800));
     }
 
@@ -581,8 +581,46 @@ max_state_bytes    = 52428800
     fn resources_section_defaults_to_none() {
         let loaded = validate("[component]\nname = \"x\"\n\n[dependencies]\n").expect("parse");
         assert_eq!(loaded.resources.max_memory_bytes, None);
-        assert_eq!(loaded.resources.max_fuel_per_event, None);
+        assert_eq!(loaded.resources.max_fuel_per_dispatch, None);
         assert_eq!(loaded.resources.max_state_bytes, None);
+    }
+
+    #[test]
+    fn resources_section_refuses_an_unknown_key() {
+        let toml = r#"
+[component]
+name = "twap"
+
+[dependencies]
+
+[component.resources]
+max_fuel = 100000
+"#;
+        let err = validate(toml).expect_err("an unknown resources key must refuse");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("unknown field") && msg.contains("`max_fuel`"),
+            "{msg}",
+        );
+    }
+
+    #[test]
+    fn component_section_refuses_a_misspelled_resources_table() {
+        let toml = r#"
+[component]
+name = "twap"
+
+[dependencies]
+
+[component.resource]
+max_fuel_per_dispatch = 100000
+"#;
+        let err = validate(toml).expect_err("a misspelled resources table must refuse");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("unknown field") && msg.contains("`resource`"),
+            "{msg}",
+        );
     }
 
     #[test]

@@ -10,8 +10,8 @@ use crate::host_pattern::HostPattern;
 use super::error::{EngineConfigError, nonzero_u64, nonzero_usize, zero_field};
 use super::{nz_u64, nz_usize};
 
-/// Default fuel budget per `on_event` invocation (~1e9 WASM instructions).
-const DEFAULT_FUEL_PER_EVENT: NonZeroU64 = nz_u64(1_000_000_000);
+/// Default fuel budget per dispatch (~1e9 WASM instructions).
+const DEFAULT_FUEL_PER_DISPATCH: NonZeroU64 = nz_u64(1_000_000_000);
 
 /// Default linear-memory cap per module store (64 MiB).
 const DEFAULT_MEMORY_LIMIT: NonZeroUsize = nz_usize(64 * 1024 * 1024);
@@ -23,7 +23,7 @@ const DEFAULT_STATE_BYTES: u64 = 50 * 1024 * 1024;
 #[serde(deny_unknown_fields)]
 pub(super) struct RawPolicySection {
     max_memory_bytes: Option<usize>,
-    max_fuel_per_event: Option<u64>,
+    max_fuel_per_dispatch: Option<u64>,
     max_state_bytes: Option<u64>,
     capabilities: Option<Vec<String>>,
     #[serde(default)]
@@ -44,7 +44,7 @@ struct RawTotalPolicy {
 #[serde(deny_unknown_fields)]
 struct RawComponentPolicy {
     max_memory_bytes: Option<usize>,
-    max_fuel_per_event: Option<u64>,
+    max_fuel_per_dispatch: Option<u64>,
     max_state_bytes: Option<u64>,
     capabilities: Option<Vec<String>>,
     http_allow: Option<Vec<String>>,
@@ -79,9 +79,9 @@ impl PolicySection {
                 max_memory_bytes: row
                     .and_then(|r| r.max_memory_bytes)
                     .unwrap_or(self.ceilings.max_memory_bytes),
-                max_fuel_per_event: row
-                    .and_then(|r| r.max_fuel_per_event)
-                    .unwrap_or(self.ceilings.max_fuel_per_event),
+                max_fuel_per_dispatch: row
+                    .and_then(|r| r.max_fuel_per_dispatch)
+                    .unwrap_or(self.ceilings.max_fuel_per_dispatch),
                 max_state_bytes: row
                     .and_then(|r| r.max_state_bytes)
                     .unwrap_or(self.ceilings.max_state_bytes),
@@ -100,8 +100,8 @@ impl PolicySection {
 pub struct PolicyCeilings {
     /// Linear-memory cap in bytes per component store.
     pub max_memory_bytes: NonZeroUsize,
-    /// Fuel budget granted per `on_event` invocation.
-    pub max_fuel_per_event: NonZeroU64,
+    /// Fuel budget granted per dispatch.
+    pub max_fuel_per_dispatch: NonZeroU64,
     /// Local-store on-disk byte quota; zero denies every write.
     pub max_state_bytes: u64,
 }
@@ -110,7 +110,7 @@ impl Default for PolicyCeilings {
     fn default() -> Self {
         Self {
             max_memory_bytes: DEFAULT_MEMORY_LIMIT,
-            max_fuel_per_event: DEFAULT_FUEL_PER_EVENT,
+            max_fuel_per_dispatch: DEFAULT_FUEL_PER_DISPATCH,
             max_state_bytes: DEFAULT_STATE_BYTES,
         }
     }
@@ -132,7 +132,7 @@ pub struct ComponentPolicy {
     /// Linear-memory ceiling override.
     pub max_memory_bytes: Option<NonZeroUsize>,
     /// Fuel ceiling override.
-    pub max_fuel_per_event: Option<NonZeroU64>,
+    pub max_fuel_per_dispatch: Option<NonZeroU64>,
     /// Local-store quota override.
     pub max_state_bytes: Option<u64>,
     /// Capability allowlist override.
@@ -173,10 +173,10 @@ pub(super) fn resolve_policy(
             raw.max_memory_bytes,
             DEFAULT_MEMORY_LIMIT,
         )?,
-        max_fuel_per_event: nonzero_u64(
-            "policy.max_fuel_per_event",
-            raw.max_fuel_per_event,
-            DEFAULT_FUEL_PER_EVENT,
+        max_fuel_per_dispatch: nonzero_u64(
+            "policy.max_fuel_per_dispatch",
+            raw.max_fuel_per_dispatch,
+            DEFAULT_FUEL_PER_DISPATCH,
         )?,
         // Zero stays legal: a zero quota denies every local-store write,
         // which is an enforceable operator choice.
@@ -210,11 +210,11 @@ pub(super) fn resolve_policy(
                     })
                 })
                 .transpose()?,
-            max_fuel_per_event: row
-                .max_fuel_per_event
+            max_fuel_per_dispatch: row
+                .max_fuel_per_dispatch
                 .map(|v| {
                     NonZeroU64::new(v).ok_or_else(|| {
-                        zero_field(&format!("policy.component.{id}.max_fuel_per_event"))
+                        zero_field(&format!("policy.component.{id}.max_fuel_per_dispatch"))
                     })
                 })
                 .transpose()?,
@@ -269,8 +269,8 @@ path = "t.wasm"
         assert_eq!(wallet.ceilings.max_memory_bytes.get(), 500);
         // Unset row fields fall back to [policy].
         assert_eq!(
-            wallet.ceilings.max_fuel_per_event.get(),
-            PolicyCeilings::default().max_fuel_per_event.get()
+            wallet.ceilings.max_fuel_per_dispatch.get(),
+            PolicyCeilings::default().max_fuel_per_dispatch.get()
         );
         assert_eq!(
             wallet.capabilities,

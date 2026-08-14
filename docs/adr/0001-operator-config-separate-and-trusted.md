@@ -4,6 +4,12 @@ status: accepted
 
 # Operator config is separate from the module manifest, and only the operator config is trusted
 
+> Amendment: the schema names in this record are historical.
+> The manifest is `component.toml`; a `module.toml` is not read.
+> It defines `[component]`, `[component.resources]`, `[dependencies]`, `[config]`, and `[[subscription]]`, and it admits extension-owned top-level sections that the wired extensions parse.
+> `engine.toml` defines `[engine]`, `[limits]`, `[policy]`, `[chains.<id>]`, `[extensions]`, and `[[modules]]`; there is no `[[adapters]]`.
+> The decision itself, two files with one trust direction, is unchanged and stays accepted.
+
 ## Context
 
 The runtime reads two configuration files with different owners and different change cadences.

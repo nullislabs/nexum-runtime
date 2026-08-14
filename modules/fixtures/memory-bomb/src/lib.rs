@@ -33,7 +33,8 @@ impl Guest for MemoryBomb {
 
     fn on_event(_event: types::Event) -> Result<(), Fault> {
         // The default per-module cap is 64 MiB (`DEFAULT_MEMORY_LIMIT` in
-        // `crates/nexum-runtime/src/engine_config.rs`). Asking for 128 MiB
+        // `crates/nexum-runtime/src/engine_config/policy.rs`). Asking for
+        // 128 MiB
         // makes `memory.grow` return -1, because the host leaves wasmtime's
         // `trap_on_grow_failure` at its default; the trap is this guest's
         // own allocation abort. `black_box` keeps the allocation live so the
