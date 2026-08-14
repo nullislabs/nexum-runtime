@@ -1,6 +1,6 @@
 # RPC namespace design: the `chain` interface
 
-A component reaches chain state through one host function, `chain.request`, plus a batch form `chain.request-batch`.
+A component reaches chain state through one host function, `chain.request`.
 One generic JSON-RPC entry point means no WIT change per method.
 The guest SDK layers an alloy `Provider` on top, so every read method on the permitted surface works with no host-side per-method plumbing.
 
@@ -15,13 +15,8 @@ interface chain {
     record rpc-error { code: s32, message: string, data: option<list<u8>> }
     variant chain-error { fault(fault), rpc(rpc-error) }
 
-    record rpc-request { method: string, params: string }
-    variant rpc-result { ok(string), err(chain-error) }
-
     request: func(chain-id: chain-id, method: string, params: string)
         -> result<string, chain-error>;
-    request-batch: func(chain-id: chain-id, requests: list<rpc-request>)
-        -> result<list<rpc-result>, chain-error>;
 }
 ```
 
@@ -33,9 +28,6 @@ The `fault` case carries the shared fault vocabulary (`unavailable`, `rate-limit
 The `rpc` case carries the node code and the host-decoded revert bytes, so a revert reads without hand-parsing numeric JSON-RPC codes.
 The host hex-decodes the upstream `error.data` string once, so the guest receives raw ABI-encoded revert bytes.
 The host replaces every URL in the guest-visible error text.
-
-`request-batch` runs several calls against one chain in a single round trip where the transport supports it, and falls back to sequential `request` calls otherwise.
-The result list matches `requests` in length and order, and each entry is independently `ok` or `err`.
 
 ## Permitted method surface
 
@@ -52,7 +44,6 @@ Enforcement is host-side string-to-`ChainMethod` resolution, not a compile-time 
 The Component Model already sandboxes I/O, so a chain-capable component can only call `chain.request`, and the closed surface adds method-level defence in depth on top.
 
 A response body larger than `[limits.chain] response_body_max_bytes` is rejected with an `invalid-input` fault, and the host counts the rejection in `nexum_runtime_chain_response_capped_total`.
-The entry that pushes a batch's aggregate bytes past the same cap, and every later entry that returns a body, become `invalid-input` err entries.
 
 ## Signing
 

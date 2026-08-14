@@ -22,19 +22,6 @@ interface chain {
         rpc(rpc-error),
     }
 
-    /// A single JSON-RPC request to be executed as part of a batch.
-    record rpc-request {
-        method: string,
-        params: string,
-    }
-
-    /// Result of a single request inside a batch. Each entry is independent;
-    /// one failing call does not abort the others.
-    variant rpc-result {
-        ok(string),
-        err(chain-error),
-    }
-
     /// Execute a JSON-RPC request against the specified chain.
     ///
     /// The host routes to its configured provider for the given chain,
@@ -50,11 +37,4 @@ interface chain {
     /// strings.
     request: func(chain-id: chain-id, method: string, params: string)
         -> result<string, chain-error>;
-
-    /// Execute several JSON-RPC requests against the same chain in a single
-    /// round trip where the host transport supports it. Hosts that cannot
-    /// batch natively MUST fall back to sequential `request` calls. The
-    /// returned list is the same length as `requests` and in the same order.
-    request-batch: func(chain-id: chain-id, requests: list<rpc-request>)
-        -> result<list<rpc-result>, chain-error>;
 }
