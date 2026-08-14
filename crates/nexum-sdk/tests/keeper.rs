@@ -5,9 +5,9 @@
 use alloy_primitives::{Address, B256, address, b256};
 use nexum_sdk::host::{Fault, LocalStoreHost as _};
 use nexum_sdk::keeper::{
-    Disposition, Gates, Guarded, Journal, Mark, NEXT_BLOCK_PREFIX, NEXT_EPOCH_PREFIX, Poller,
-    REFUSED_PREFIX, Reservation, Retrier, RetryAction, Tick, WATCH_PREFIX, WatchRef, WatchSet,
-    watch_key,
+    COMMITMENT_PREFIX, CommitmentRef, CommitmentSet, Disposition, Gates, Guarded, Journal, Mark,
+    NEXT_BLOCK_PREFIX, NEXT_EPOCH_PREFIX, Poller, REFUSED_PREFIX, Reservation, Retrier,
+    RetryAction, Tick, commitment_key,
 };
 use nexum_sdk_test::MockHost;
 
@@ -20,8 +20,8 @@ fn sample_hash() -> B256 {
 }
 
 #[test]
-fn watch_key_is_lowercase_prefixed_hex() {
-    let key = watch_key(&sample_owner(), &sample_hash());
+fn commitment_key_is_lowercase_prefixed_hex() {
+    let key = commitment_key(&sample_owner(), &sample_hash());
     assert_eq!(
         key,
         concat!(
@@ -32,33 +32,36 @@ fn watch_key_is_lowercase_prefixed_hex() {
 }
 
 #[test]
-fn watch_key_round_trips_via_parse() {
-    let key = watch_key(&sample_owner(), &sample_hash());
-    let watch = WatchRef::parse(&key).expect("parse");
+fn commitment_key_round_trips_via_parse() {
+    let key = commitment_key(&sample_owner(), &sample_hash());
+    let commitment = CommitmentRef::parse(&key).expect("parse");
     assert_eq!(
-        watch.owner_hex().parse::<Address>().unwrap(),
+        commitment.owner_hex().parse::<Address>().unwrap(),
         sample_owner()
     );
-    assert_eq!(watch.hash_hex().parse::<B256>().unwrap(), sample_hash());
-    assert_eq!(watch.key(), key);
+    assert_eq!(
+        commitment.hash_hex().parse::<B256>().unwrap(),
+        sample_hash()
+    );
+    assert_eq!(commitment.key(), key);
 }
 
 #[test]
 fn parse_rejects_missing_prefix_or_separator() {
-    assert_eq!(WatchRef::parse("gate:0xaa:0xbb"), None);
-    assert_eq!(WatchRef::parse("watch:0xaa0xbb"), None);
-    assert_eq!(WatchRef::parse(""), None);
+    assert_eq!(CommitmentRef::parse("gate:0xaa:0xbb"), None);
+    assert_eq!(CommitmentRef::parse("watch:0xaa0xbb"), None);
+    assert_eq!(CommitmentRef::parse(""), None);
 }
 
 #[test]
 fn parse_rejects_empty_halves() {
     // `watch::` splits into two empty halves, which would derive
     // degenerate gate keys like `next_block::`; reject it outright.
-    assert_eq!(WatchRef::parse("watch::"), None);
-    assert_eq!(WatchRef::parse("watch:0xaa:"), None);
-    assert_eq!(WatchRef::parse("watch::0xbb"), None);
+    assert_eq!(CommitmentRef::parse("watch::"), None);
+    assert_eq!(CommitmentRef::parse("watch:0xaa:"), None);
+    assert_eq!(CommitmentRef::parse("watch::0xbb"), None);
     // A well-formed key with both halves still parses.
-    assert!(WatchRef::parse("watch:0xaa:0xbb").is_some());
+    assert!(CommitmentRef::parse("watch:0xaa:0xbb").is_some());
 }
 
 #[test]
@@ -66,196 +69,207 @@ fn parse_preserves_key_substrings_verbatim() {
     // A foreign writer may have cased the hex differently; gate keys
     // must derive from the stored substrings, not from a re-rendered
     // canonical form.
-    let watch = WatchRef::parse("watch:0xAABB:0xCCDD").expect("parse");
-    assert_eq!(watch.owner_hex(), "0xAABB");
-    assert_eq!(watch.hash_hex(), "0xCCDD");
-    assert_eq!(watch.next_block_key(), "next_block:0xAABB:0xCCDD");
-    assert_eq!(watch.next_epoch_key(), "next_epoch:0xAABB:0xCCDD");
+    let commitment = CommitmentRef::parse("watch:0xAABB:0xCCDD").expect("parse");
+    assert_eq!(commitment.owner_hex(), "0xAABB");
+    assert_eq!(commitment.hash_hex(), "0xCCDD");
+    assert_eq!(commitment.next_block_key(), "next_block:0xAABB:0xCCDD");
+    assert_eq!(commitment.next_epoch_key(), "next_epoch:0xAABB:0xCCDD");
 }
 
 #[test]
 fn put_get_list_round_trip() {
     let host = MockHost::new();
-    let watches = WatchSet::new(&host);
+    let commitments = CommitmentSet::new(&host);
 
-    let key = watches
+    let key = commitments
         .put(&sample_owner(), &sample_hash(), b"params")
         .unwrap();
-    assert_eq!(watches.list().unwrap(), vec![key.clone()]);
+    assert_eq!(commitments.list().unwrap(), vec![key.clone()]);
 
-    let watch = WatchRef::parse(&key).unwrap();
-    assert_eq!(watches.get(watch).unwrap().as_deref(), Some(&b"params"[..]));
+    let commitment = CommitmentRef::parse(&key).unwrap();
+    assert_eq!(
+        commitments.get(commitment).unwrap().as_deref(),
+        Some(&b"params"[..])
+    );
 }
 
 #[test]
 fn put_overwrites_in_place() {
     let host = MockHost::new();
-    let watches = WatchSet::new(&host);
+    let commitments = CommitmentSet::new(&host);
 
-    watches
+    commitments
         .put(&sample_owner(), &sample_hash(), b"one")
         .unwrap();
-    let key = watches
+    let key = commitments
         .put(&sample_owner(), &sample_hash(), b"two")
         .unwrap();
 
     assert_eq!(host.store.len(), 1, "re-put must not duplicate the row");
-    let watch = WatchRef::parse(&key).unwrap();
-    assert_eq!(watches.get(watch).unwrap().as_deref(), Some(&b"two"[..]));
+    let commitment = CommitmentRef::parse(&key).unwrap();
+    assert_eq!(
+        commitments.get(commitment).unwrap().as_deref(),
+        Some(&b"two"[..])
+    );
 }
 
 #[test]
-fn get_absent_watch_is_none() {
+fn get_absent_commitment_is_none() {
     let host = MockHost::new();
-    let watches = WatchSet::new(&host);
-    let key = watch_key(&sample_owner(), &sample_hash());
-    let watch = WatchRef::parse(&key).unwrap();
-    assert_eq!(watches.get(watch).unwrap(), None);
+    let commitments = CommitmentSet::new(&host);
+    let key = commitment_key(&sample_owner(), &sample_hash());
+    let commitment = CommitmentRef::parse(&key).unwrap();
+    assert_eq!(commitments.get(commitment).unwrap(), None);
 }
 
 #[test]
-fn list_scans_only_the_watch_prefix() {
+fn list_scans_only_the_commitment_prefix() {
     let host = MockHost::new();
-    let watches = WatchSet::new(&host);
-    let key = watches
+    let commitments = CommitmentSet::new(&host);
+    let key = commitments
         .put(&sample_owner(), &sample_hash(), b"params")
         .unwrap();
     Journal::submitted(&host).record("0xuid").unwrap();
 
-    assert_eq!(watches.list().unwrap(), vec![key]);
+    assert_eq!(commitments.list().unwrap(), vec![key]);
 }
 
 #[test]
-fn remove_drops_watch_and_all_gate_keys() {
+fn remove_drops_commitment_and_all_gate_keys() {
     let host = MockHost::new();
-    let watches = WatchSet::new(&host);
+    let commitments = CommitmentSet::new(&host);
     let gates = Gates::new(&host);
 
-    let key = watches
+    let key = commitments
         .put(&sample_owner(), &sample_hash(), b"params")
         .unwrap();
-    let watch = WatchRef::parse(&key).unwrap();
-    gates.set_next_block(watch, 500).unwrap();
-    gates.set_next_epoch(watch, 1_700_000_000).unwrap();
+    let commitment = CommitmentRef::parse(&key).unwrap();
+    gates.set_next_block(commitment, 500).unwrap();
+    gates.set_next_epoch(commitment, 1_700_000_000).unwrap();
     assert_eq!(host.store.len(), 3);
 
-    watches.remove(watch).unwrap();
+    commitments.remove(commitment).unwrap();
 
-    assert!(host.store.is_empty(), "watch and both gates must go");
+    assert!(host.store.is_empty(), "commitment and both gates must go");
 }
 
 #[test]
 fn remove_without_gates_is_clean() {
     let host = MockHost::new();
-    let watches = WatchSet::new(&host);
-    let key = watches
+    let commitments = CommitmentSet::new(&host);
+    let key = commitments
         .put(&sample_owner(), &sample_hash(), b"params")
         .unwrap();
-    watches.remove(WatchRef::parse(&key).unwrap()).unwrap();
+    commitments
+        .remove(CommitmentRef::parse(&key).unwrap())
+        .unwrap();
     assert!(host.store.is_empty());
 }
 
 #[test]
-fn remove_clears_gates_before_the_watch_row() {
-    // A fault on the watch delete must still find the gates gone: the
-    // retryable leftover is the watch row, never an orphaned gate.
+fn remove_clears_gates_before_the_commitment_row() {
+    // A fault on the commitment delete must still find the gates gone:
+    // the retryable leftover is the commitment row, never an orphaned
+    // gate.
     let host = MockHost::new();
-    let watches = WatchSet::new(&host);
+    let commitments = CommitmentSet::new(&host);
     let gates = Gates::new(&host);
-    let key = watches
+    let key = commitments
         .put(&sample_owner(), &sample_hash(), b"params")
         .unwrap();
-    let watch = WatchRef::parse(&key).unwrap();
-    gates.set_next_block(watch, 500).unwrap();
-    gates.set_next_epoch(watch, 1_700_000_000).unwrap();
+    let commitment = CommitmentRef::parse(&key).unwrap();
+    gates.set_next_block(commitment, 500).unwrap();
+    gates.set_next_epoch(commitment, 1_700_000_000).unwrap();
 
     host.store
-        .fail_on(WATCH_PREFIX, Fault::Unavailable("injected".into()));
+        .fail_on(COMMITMENT_PREFIX, Fault::Unavailable("injected".into()));
 
-    watches.remove(watch).unwrap_err();
+    commitments.remove(commitment).unwrap_err();
 
     let snapshot = host.store.snapshot();
     assert!(
         !snapshot
             .keys()
             .any(|k| k.starts_with(NEXT_BLOCK_PREFIX) || k.starts_with(NEXT_EPOCH_PREFIX)),
-        "gates must already be gone when the watch delete faults",
+        "gates must already be gone when the commitment delete faults",
     );
     assert!(
         snapshot.contains_key(&key),
-        "the watch row stays behind so a retry can re-drop it",
+        "the commitment row stays behind so a retry can re-drop it",
     );
 }
 
 #[test]
-fn remove_propagates_a_gate_delete_fault_and_keeps_the_watch() {
+fn remove_propagates_a_gate_delete_fault_and_keeps_the_commitment() {
     let host = MockHost::new();
-    let watches = WatchSet::new(&host);
-    let key = watches
+    let commitments = CommitmentSet::new(&host);
+    let key = commitments
         .put(&sample_owner(), &sample_hash(), b"params")
         .unwrap();
-    let watch = WatchRef::parse(&key).unwrap();
+    let commitment = CommitmentRef::parse(&key).unwrap();
 
     host.store
         .fail_on(NEXT_BLOCK_PREFIX, Fault::Unavailable("injected".into()));
 
-    watches.remove(watch).unwrap_err();
+    commitments.remove(commitment).unwrap_err();
 
     assert!(
         host.store.snapshot().contains_key(&key),
-        "a gate-delete fault must leave the watch for a retry",
+        "a gate-delete fault must leave the commitment for a retry",
     );
 }
 
 #[test]
 fn ready_with_no_gates_set() {
     let host = MockHost::new();
-    let watch = WatchRef::parse("watch:0xaa:0xbb").unwrap();
-    assert!(Gates::new(&host).is_ready(watch, 0, 0).unwrap());
+    let commitment = CommitmentRef::parse("watch:0xaa:0xbb").unwrap();
+    assert!(Gates::new(&host).is_ready(commitment, 0, 0).unwrap());
 }
 
 #[test]
 fn next_block_gate_is_inclusive_at_threshold() {
     let host = MockHost::new();
     let gates = Gates::new(&host);
-    let watch = WatchRef::parse("watch:0xaa:0xbb").unwrap();
-    gates.set_next_block(watch, 500).unwrap();
+    let commitment = CommitmentRef::parse("watch:0xaa:0xbb").unwrap();
+    gates.set_next_block(commitment, 500).unwrap();
 
-    assert!(!gates.is_ready(watch, 499, u64::MAX).unwrap());
-    assert!(gates.is_ready(watch, 500, u64::MAX).unwrap());
-    assert!(gates.is_ready(watch, 501, u64::MAX).unwrap());
+    assert!(!gates.is_ready(commitment, 499, u64::MAX).unwrap());
+    assert!(gates.is_ready(commitment, 500, u64::MAX).unwrap());
+    assert!(gates.is_ready(commitment, 501, u64::MAX).unwrap());
 }
 
 #[test]
 fn next_epoch_gate_is_inclusive_at_threshold() {
     let host = MockHost::new();
     let gates = Gates::new(&host);
-    let watch = WatchRef::parse("watch:0xaa:0xbb").unwrap();
-    gates.set_next_epoch(watch, 1_700_000_000).unwrap();
+    let commitment = CommitmentRef::parse("watch:0xaa:0xbb").unwrap();
+    gates.set_next_epoch(commitment, 1_700_000_000).unwrap();
 
-    assert!(!gates.is_ready(watch, u64::MAX, 1_699_999_999).unwrap());
-    assert!(gates.is_ready(watch, u64::MAX, 1_700_000_000).unwrap());
+    assert!(!gates.is_ready(commitment, u64::MAX, 1_699_999_999).unwrap());
+    assert!(gates.is_ready(commitment, u64::MAX, 1_700_000_000).unwrap());
 }
 
 #[test]
 fn both_gates_must_pass() {
     let host = MockHost::new();
     let gates = Gates::new(&host);
-    let watch = WatchRef::parse("watch:0xaa:0xbb").unwrap();
-    gates.set_next_block(watch, 100).unwrap();
-    gates.set_next_epoch(watch, 2_000).unwrap();
+    let commitment = CommitmentRef::parse("watch:0xaa:0xbb").unwrap();
+    gates.set_next_block(commitment, 100).unwrap();
+    gates.set_next_epoch(commitment, 2_000).unwrap();
 
-    assert!(!gates.is_ready(watch, 100, 1_999).unwrap());
-    assert!(!gates.is_ready(watch, 99, 2_000).unwrap());
-    assert!(gates.is_ready(watch, 100, 2_000).unwrap());
+    assert!(!gates.is_ready(commitment, 100, 1_999).unwrap());
+    assert!(!gates.is_ready(commitment, 99, 2_000).unwrap());
+    assert!(gates.is_ready(commitment, 100, 2_000).unwrap());
 }
 
 #[test]
 fn gate_values_are_u64_le() {
     let host = MockHost::new();
     let gates = Gates::new(&host);
-    let watch = WatchRef::parse("watch:0xaa:0xbb").unwrap();
-    gates.set_next_block(watch, 0x0102_0304_0506_0708).unwrap();
+    let commitment = CommitmentRef::parse("watch:0xaa:0xbb").unwrap();
+    gates
+        .set_next_block(commitment, 0x0102_0304_0506_0708)
+        .unwrap();
 
     assert_eq!(
         host.store.snapshot().get("next_block:0xaa:0xbb").unwrap(),
@@ -267,12 +281,12 @@ fn gate_values_are_u64_le() {
 fn malformed_gate_value_reads_as_no_gate() {
     let host = MockHost::new();
     let gates = Gates::new(&host);
-    let watch = WatchRef::parse("watch:0xaa:0xbb").unwrap();
+    let commitment = CommitmentRef::parse("watch:0xaa:0xbb").unwrap();
     host.store.set("next_block:0xaa:0xbb", b"not8b").unwrap();
 
     assert!(
-        gates.is_ready(watch, 0, 0).unwrap(),
-        "a corrupt gate can only make the watch poll sooner",
+        gates.is_ready(commitment, 0, 0).unwrap(),
+        "a corrupt gate can only make the commitment poll sooner",
     );
 }
 
@@ -280,26 +294,26 @@ fn malformed_gate_value_reads_as_no_gate() {
 fn clear_removes_both_gate_keys() {
     let host = MockHost::new();
     let gates = Gates::new(&host);
-    let watch = WatchRef::parse("watch:0xaa:0xbb").unwrap();
-    gates.set_next_block(watch, 1).unwrap();
-    gates.set_next_epoch(watch, 2).unwrap();
+    let commitment = CommitmentRef::parse("watch:0xaa:0xbb").unwrap();
+    gates.set_next_block(commitment, 1).unwrap();
+    gates.set_next_epoch(commitment, 2).unwrap();
 
-    gates.clear(watch).unwrap();
+    gates.clear(commitment).unwrap();
 
     assert!(host.store.is_empty());
     // And clearing again stays a no-op.
-    gates.clear(watch).unwrap();
+    gates.clear(commitment).unwrap();
 }
 
 #[test]
 fn gate_fault_propagates_from_is_ready() {
     let host = MockHost::new();
     let gates = Gates::new(&host);
-    let watch = WatchRef::parse("watch:0xaa:0xbb").unwrap();
+    let commitment = CommitmentRef::parse("watch:0xaa:0xbb").unwrap();
     host.store
         .fail_on(NEXT_EPOCH_PREFIX, Fault::Unavailable("injected".into()));
 
-    gates.is_ready(watch, 0, 0).unwrap_err();
+    gates.is_ready(commitment, 0, 0).unwrap_err();
 }
 
 #[test]
@@ -496,8 +510,8 @@ fn release_of_absent_is_a_no_op() {
     assert!(host.store.is_empty());
 }
 
-fn seeded_watch(host: &MockHost) -> String {
-    WatchSet::new(host)
+fn seeded_commitment(host: &MockHost) -> String {
+    CommitmentSet::new(host)
         .put(&sample_owner(), &sample_hash(), b"params")
         .unwrap()
 }
@@ -513,12 +527,12 @@ fn tick_at(block: u64, epoch_s: u64) -> Tick {
 #[test]
 fn ledger_try_next_block_leaves_the_store_untouched() {
     let host = MockHost::new();
-    let key = seeded_watch(&host);
+    let key = seeded_commitment(&host);
     let before = host.store.snapshot();
 
     Retrier::new(&host)
         .apply(
-            WatchRef::parse(&key).unwrap(),
+            CommitmentRef::parse(&key).unwrap(),
             RetryAction::TryNextBlock,
             &tick_at(100, 1_000),
         )
@@ -528,130 +542,149 @@ fn ledger_try_next_block_leaves_the_store_untouched() {
 }
 
 #[test]
-fn ledger_backoff_gates_the_watch_on_the_epoch_clock() {
+fn ledger_backoff_gates_the_commitment_on_the_epoch_clock() {
     let host = MockHost::new();
-    let key = seeded_watch(&host);
-    let watch = WatchRef::parse(&key).unwrap();
+    let key = seeded_commitment(&host);
+    let commitment = CommitmentRef::parse(&key).unwrap();
     let ledger = Retrier::new(&host);
 
     ledger
         .apply(
-            watch,
+            commitment,
             RetryAction::Backoff { seconds: 30 },
             &tick_at(100, 1_000),
         )
         .unwrap();
 
     let gates = Gates::new(&host);
-    assert!(!gates.is_ready(watch, u64::MAX, 1_029).unwrap());
-    assert!(gates.is_ready(watch, u64::MAX, 1_030).unwrap());
+    assert!(!gates.is_ready(commitment, u64::MAX, 1_029).unwrap());
+    assert!(gates.is_ready(commitment, u64::MAX, 1_030).unwrap());
     assert_eq!(
-        host.store.snapshot().get(&watch.next_epoch_key()).unwrap(),
+        host.store
+            .snapshot()
+            .get(&commitment.next_epoch_key())
+            .unwrap(),
         &1_030_u64.to_le_bytes().to_vec(),
     );
     assert!(
         host.store.snapshot().contains_key(&key),
-        "backoff must keep the watch",
+        "backoff must keep the commitment",
     );
 }
 
 #[test]
 fn ledger_backoff_saturates_on_the_epoch_clock() {
     let host = MockHost::new();
-    let key = seeded_watch(&host);
-    let watch = WatchRef::parse(&key).unwrap();
+    let key = seeded_commitment(&host);
+    let commitment = CommitmentRef::parse(&key).unwrap();
 
     Retrier::new(&host)
         .apply(
-            watch,
+            commitment,
             RetryAction::Backoff { seconds: u64::MAX },
             &tick_at(100, 1_000),
         )
         .unwrap();
 
     assert_eq!(
-        host.store.snapshot().get(&watch.next_epoch_key()).unwrap(),
+        host.store
+            .snapshot()
+            .get(&commitment.next_epoch_key())
+            .unwrap(),
         &u64::MAX.to_le_bytes().to_vec(),
     );
 }
 
 #[test]
-fn ledger_drop_removes_the_watch_and_its_gates() {
+fn ledger_drop_removes_the_commitment_and_its_gates() {
     let host = MockHost::new();
-    let key = seeded_watch(&host);
-    let watch = WatchRef::parse(&key).unwrap();
-    Gates::new(&host).set_next_block(watch, 500).unwrap();
+    let key = seeded_commitment(&host);
+    let commitment = CommitmentRef::parse(&key).unwrap();
+    Gates::new(&host).set_next_block(commitment, 500).unwrap();
 
     Retrier::new(&host)
-        .apply(watch, RetryAction::Drop, &tick_at(100, 1_000))
+        .apply(commitment, RetryAction::Drop, &tick_at(100, 1_000))
         .unwrap();
 
-    assert!(host.store.is_empty(), "watch and gates must go");
+    assert!(host.store.is_empty(), "commitment and gates must go");
 }
 
 #[test]
 fn ledger_drop_on_repeat_grants_one_next_block_retry() {
     let host = MockHost::new();
-    let key = seeded_watch(&host);
-    let watch = WatchRef::parse(&key).unwrap();
+    let key = seeded_commitment(&host);
+    let commitment = CommitmentRef::parse(&key).unwrap();
     let ledger = Retrier::new(&host);
 
-    // First refusal: the block is recorded and the watch gates to the
-    // next block instead of dropping.
+    // First refusal: the block is recorded and the commitment gates to
+    // the next block instead of dropping.
     ledger
-        .apply(watch, RetryAction::DropOnRepeat, &tick_at(100, 1_000))
+        .apply(commitment, RetryAction::DropOnRepeat, &tick_at(100, 1_000))
         .unwrap();
     let snapshot = host.store.snapshot();
-    assert!(snapshot.contains_key(&key), "first refusal keeps the watch");
+    assert!(
+        snapshot.contains_key(&key),
+        "first refusal keeps the commitment"
+    );
     assert_eq!(
-        snapshot.get(&watch.refused_key()).unwrap(),
+        snapshot.get(&commitment.refused_key()).unwrap(),
         &100_u64.to_le_bytes().to_vec(),
     );
     assert_eq!(
-        snapshot.get(&watch.next_block_key()).unwrap(),
+        snapshot.get(&commitment.next_block_key()).unwrap(),
         &101_u64.to_le_bytes().to_vec(),
     );
 
     // A repeat at the same block leaves the store untouched.
     let before = host.store.snapshot();
     ledger
-        .apply(watch, RetryAction::DropOnRepeat, &tick_at(100, 1_000))
+        .apply(commitment, RetryAction::DropOnRepeat, &tick_at(100, 1_000))
         .unwrap();
     assert_eq!(host.store.snapshot(), before);
 
-    // A repeat on a later block removes the watch and every derived key.
+    // A repeat on a later block removes the commitment and every
+    // derived key.
     ledger
-        .apply(watch, RetryAction::DropOnRepeat, &tick_at(101, 1_012))
+        .apply(commitment, RetryAction::DropOnRepeat, &tick_at(101, 1_012))
         .unwrap();
-    assert!(host.store.is_empty(), "watch, gates, and marker must go");
+    assert!(
+        host.store.is_empty(),
+        "commitment, gates, and marker must go"
+    );
 }
 
 #[test]
 fn ledger_clear_refusal_resets_the_one_block_grace() {
     let host = MockHost::new();
-    let key = seeded_watch(&host);
-    let watch = WatchRef::parse(&key).unwrap();
+    let key = seeded_commitment(&host);
+    let commitment = CommitmentRef::parse(&key).unwrap();
     let ledger = Retrier::new(&host);
 
     ledger
-        .apply(watch, RetryAction::DropOnRepeat, &tick_at(100, 1_000))
+        .apply(commitment, RetryAction::DropOnRepeat, &tick_at(100, 1_000))
         .unwrap();
-    ledger.clear_refusal(watch).unwrap();
-    assert!(!host.store.snapshot().contains_key(&watch.refused_key()));
+    ledger.clear_refusal(commitment).unwrap();
+    assert!(
+        !host
+            .store
+            .snapshot()
+            .contains_key(&commitment.refused_key())
+    );
 
     // A refusal at a later block after the clear is a fresh first
-    // refusal: the watch survives and the marker records the new block.
+    // refusal: the commitment survives and the marker records the new
+    // block.
     ledger
-        .apply(watch, RetryAction::DropOnRepeat, &tick_at(105, 1_060))
+        .apply(commitment, RetryAction::DropOnRepeat, &tick_at(105, 1_060))
         .unwrap();
     let snapshot = host.store.snapshot();
-    assert!(snapshot.contains_key(&key), "the watch must survive");
+    assert!(snapshot.contains_key(&key), "the commitment must survive");
     assert_eq!(
-        snapshot.get(&watch.refused_key()).unwrap(),
+        snapshot.get(&commitment.refused_key()).unwrap(),
         &105_u64.to_le_bytes().to_vec(),
     );
     assert_eq!(
-        snapshot.get(&watch.next_block_key()).unwrap(),
+        snapshot.get(&commitment.next_block_key()).unwrap(),
         &106_u64.to_le_bytes().to_vec(),
     );
 }
@@ -659,15 +692,15 @@ fn ledger_clear_refusal_resets_the_one_block_grace() {
 #[test]
 fn ledger_drop_removes_the_refused_marker() {
     let host = MockHost::new();
-    let key = seeded_watch(&host);
-    let watch = WatchRef::parse(&key).unwrap();
+    let key = seeded_commitment(&host);
+    let commitment = CommitmentRef::parse(&key).unwrap();
 
     let ledger = Retrier::new(&host);
     ledger
-        .apply(watch, RetryAction::DropOnRepeat, &tick_at(100, 1_000))
+        .apply(commitment, RetryAction::DropOnRepeat, &tick_at(100, 1_000))
         .unwrap();
     ledger
-        .apply(watch, RetryAction::Drop, &tick_at(100, 1_000))
+        .apply(commitment, RetryAction::Drop, &tick_at(100, 1_000))
         .unwrap();
 
     assert!(
@@ -696,13 +729,13 @@ fn retry_action_labels_are_stable_snake_case() {
 /// The keeper passes stored params and the judged tick verbatim.
 #[test]
 fn poller_sees_params_and_tick_verbatim() {
-    struct EchoSource;
-    impl<H> Poller<H> for EchoSource {
+    struct EchoProbe;
+    impl<H> Poller<H> for EchoProbe {
         type Outcome = (usize, u64, u64, u64, String);
         fn poll(
             &self,
             _host: &H,
-            watch: WatchRef<'_>,
+            commitment: CommitmentRef<'_>,
             params: &[u8],
             tick: &Tick,
         ) -> Self::Outcome {
@@ -711,21 +744,22 @@ fn poller_sees_params_and_tick_verbatim() {
                 tick.chain_id,
                 tick.block,
                 tick.epoch_s,
-                watch.key(),
+                commitment.key(),
             )
         }
     }
 
     let host = MockHost::new();
-    let key = seeded_watch(&host);
-    let watch = WatchRef::parse(&key).unwrap();
+    let key = seeded_commitment(&host);
+    let commitment = CommitmentRef::parse(&key).unwrap();
     let tick = Tick {
         chain_id: 1,
         block: 42,
         epoch_s: 1_700_000_000,
     };
 
-    let (len, chain_id, block, epoch_s, echoed) = EchoSource.poll(&host, watch, b"params", &tick);
+    let (len, chain_id, block, epoch_s, echoed) =
+        EchoProbe.poll(&host, commitment, b"params", &tick);
     assert_eq!(len, b"params".len());
     assert_eq!(chain_id, 1);
     assert_eq!(block, 42);

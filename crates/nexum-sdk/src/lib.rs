@@ -10,7 +10,7 @@
 //! Modules:
 //! - [`prelude`] - alloy primitive re-exports.
 //! - [`host`] - the [`Host`](host::Host) seam over the core host interfaces, plus the [`Fault`](host::Fault) vocabulary.
-//! - [`keeper`] - keeper stores ([`WatchSet`](keeper::WatchSet), [`Gates`](keeper::Gates), [`Journal`](keeper::Journal)), the [`Poller`](keeper::Poller) seam, and the [`Retrier`](keeper::Retrier).
+//! - [`keeper`] - keeper stores ([`CommitmentSet`](keeper::CommitmentSet), [`Gates`](keeper::Gates), [`Journal`](keeper::Journal)), the [`Poller`](keeper::Poller) seam, and the [`Retrier`](keeper::Retrier).
 //! - [`chain`] - typed chain access and the alloy provider seam.
 //! - [`events`] - chain-log delivery.
 //! - [`store`] - typed local-store helpers ([`WriteBatch`](store::WriteBatch), [`TypedCell`](store::TypedCell), [`TypedMap`](store::TypedMap), [`Counter`](store::Counter)).

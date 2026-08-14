@@ -334,11 +334,11 @@ mod tests {
     #[test]
     fn local_store_list_keys_prefix_scan() {
         let store = MockLocalStore::default();
-        store.set("watch:a:1", b"").unwrap();
-        store.set("watch:a:2", b"").unwrap();
+        store.set("commitment:a:1", b"").unwrap();
+        store.set("commitment:a:2", b"").unwrap();
         store.set("submitted:1", b"").unwrap();
-        let keys = store.list_keys("watch:").unwrap();
-        assert_eq!(keys, vec!["watch:a:1", "watch:a:2"]);
+        let keys = store.list_keys("commitment:").unwrap();
+        assert_eq!(keys, vec!["commitment:a:1", "commitment:a:2"]);
     }
 
     #[test]
