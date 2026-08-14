@@ -499,62 +499,25 @@ enabled  = true
         assert_eq!(config.get("enabled").map(String::as_str), Some("true"));
     }
 
+    /// ADR-0020 retired `[component].kind`; `deny_unknown_fields` on
+    /// `ComponentSection` refuses it rather than parse-and-ignore.
     #[test]
-    fn component_kind_defaults_to_a_module() {
-        use crate::manifest::types::ComponentKind;
-        let loaded = validate(
-            r#"
-[component]
-name = "plain"
-
-[dependencies]
-"#,
-        )
-        .expect("parse");
-        assert_eq!(loaded.kind, ComponentKind::Module);
-    }
-
-    #[test]
-    fn component_kind_reads_service() {
-        use crate::manifest::types::ComponentKind;
-        let loaded = validate(
-            r#"
-[component]
-name = "acme-provider"
-kind = "service"
-
-[dependencies]
-"#,
-        )
-        .expect("parse");
-        assert_eq!(loaded.kind, ComponentKind::Service);
-        // A service's name is the service type, so the name selects the row.
-        assert_eq!(loaded.name.as_str(), "acme-provider");
-    }
-
-    /// `Display` is the manifest spelling for both kinds.
-    #[test]
-    fn component_kind_displays_its_manifest_spelling() {
-        use crate::manifest::types::ComponentKind;
-        assert_eq!(ComponentKind::Module.to_string(), "module");
-        assert_eq!(ComponentKind::Service.to_string(), "service");
-    }
-
-    /// The kind is a closed role now, so an invented spelling refuses at
-    /// load instead of surviving to boot as a provider name.
-    #[test]
-    fn component_kind_refuses_an_unknown_spelling() {
+    fn component_section_refuses_the_retired_kind_field() {
         let err = validate(
             r#"
 [component]
-name = "bad"
-kind = "gadget"
+name = "stale"
+kind = "module"
+
+[dependencies]
 "#,
         )
-        .expect_err("an unknown kind must refuse");
+        .expect_err("the retired kind field must refuse");
+        assert!(matches!(err, ParseError::Toml(_)), "{err:?}");
+        let msg = err.to_string();
         assert!(
-            matches!(err, ParseError::UnknownComponentKind { ref kind } if kind == "gadget"),
-            "{err:?}",
+            msg.contains("unknown field") && msg.contains("`kind`"),
+            "{msg}",
         );
     }
 

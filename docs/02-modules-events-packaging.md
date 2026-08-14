@@ -2,13 +2,9 @@
 
 ## The component bundle
 
-A component is distributed as a bundle: a WASM component plus a manifest that declares its identity, its kind, its event subscriptions, and the capabilities it depends on.
+A component is distributed as a bundle: a WASM component plus a manifest that declares its identity, its event subscriptions, and the capabilities it depends on.
 The manifest is the bridge between packaging, the event system, and the runtime lifecycle.
-
-`kind` is `module` or `service`.
-A module consumes host capabilities and services.
-A service also registers its name for other components to depend on.
-See [ADR-0016](adr/0016-component-vocabulary.md).
+See [ADR-0016](adr/0016-component-vocabulary.md) and [ADR-0020](adr/0020-retire-component-kind.md).
 
 ### Manifest (`component.toml`)
 
@@ -20,7 +16,6 @@ The operator config is a separate, trusted file: see [ADR-0001](adr/0001-operato
 [component]
 name    = "twap-monitor"
 version = "0.3.0"
-kind    = "module"
 
 # Optional content pin: one sha256sum of the compiled .wasm.
 digest = "sha256:9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
@@ -309,9 +304,6 @@ Time, randomness, and outbound HTTP are WASI concerns rather than `nexum:host` i
 
 A component built through `#[nexum_sdk::module]` does not import the whole world.
 `nexum-world` synthesizes a per-component world whose imports are exactly the interfaces its `[dependencies]` declare, so an undeclared capability is absent by construction rather than trapped at first use.
-
-`wit/nexum-host/query-module.wit` declares a second, experimental world for synchronous side-effect-free evaluation.
-Its shape is provisional.
 
 ## Putting it together
 

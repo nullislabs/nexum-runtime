@@ -6,6 +6,9 @@ status: superseded by ADR-0017; historical
 
 > Historical: [ADR-0017](../adr/0017-capabilities-and-services.md) records the decision this document argued for.
 > `HostService`, `ServiceKind`, `Extension::service`, `SERVICE_CAPABILITIES`, `PROVIDER_CAPABILITIES`, and `Role::Adapter` below no longer occur in `crates`.
+> [ADR-0020](../adr/0020-retire-component-kind.md) retired the manifest `kind` field after this document was written.
+> The "`kind` is required" rule and the `kind = "backend"` spelling below belong to the superseded argument, not to the current manifest, and must not be reintroduced by the `provides` work.
+> `wit/nexum-host/query-module.wit`, cited in the migration below, was deleted with it; git history preserves its shape.
 > Read this document for the reasoning, not for the current names.
 
 A **host capability** is a WIT interface the runtime implements in Rust, named in a namespace the runtime owns, bound into a component's world at build time, and bounded by an operator dial.

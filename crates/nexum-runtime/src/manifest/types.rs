@@ -201,41 +201,10 @@ pub(crate) struct ComponentSection {
     /// bytes before compile.
     #[serde(default)]
     pub digest: Option<String>,
-    /// What this component is, as written; absent defaults to a module.
-    #[serde(default)]
-    pub kind: Option<String>,
     /// Per-component resource requests; each unset field inherits the
     /// component's `[policy]` ceiling and never widens it.
     #[serde(default)]
     pub resources: ResourceSection,
-}
-
-/// What a component is. A module consumes; a service also registers its
-/// name for other components to depend on, so a service's name is the
-/// service type an extension declares.
-// strum derives parse and render from one variant list, so the accepted
-// spellings cannot drift from `Display` when a variant is added.
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash, strum::Display, strum::EnumString)]
-#[strum(serialize_all = "kebab-case")]
-pub enum ComponentKind {
-    /// Consumes host capabilities and services; registers nothing.
-    #[default]
-    Module,
-    /// Also registers its name for other components to depend on.
-    Service,
-}
-
-impl ComponentKind {
-    /// The manifest spelling; the kind is a closed role, so an invented
-    /// spelling refuses rather than surviving to boot as a provider name.
-    fn from_manifest(kind: Option<&str>) -> Result<Self, ParseError> {
-        match kind {
-            None => Ok(Self::Module),
-            Some(kind) => kind.parse().map_err(|_| ParseError::UnknownComponentKind {
-                kind: kind.to_owned(),
-            }),
-        }
-    }
 }
 
 /// `[component.resources]` overrides; each unset field keeps the
@@ -280,9 +249,6 @@ pub struct Dependency {
 pub struct LoadedManifest {
     /// `[component].name` parsed into the namespace.
     pub name: crate::module_id::ModuleId,
-    /// `[component].kind`.
-    #[allow(dead_code)] // Validated at parse but has no reader.
-    pub kind: ComponentKind,
     /// `[component].digest` parsed to its typed digest.
     pub component_digest: Option<crate::digest::ContentDigest>,
     /// `[component.resources]` overrides.
@@ -305,14 +271,13 @@ pub struct LoadedManifest {
 impl TryFrom<Manifest> for LoadedManifest {
     type Error = ParseError;
 
-    /// Every context-free value check, in order: name, kind, digest,
+    /// Every context-free value check, in order: name, digest,
     /// subscriptions, then `[dependencies]` presence. The registry
     /// cross-check and the `hosts` placement check stay in `load`, which
     /// holds the registry and refuses an unknown name first.
     fn try_from(manifest: Manifest) -> Result<Self, ParseError> {
         // The only producer of a `ModuleId`.
         let name = crate::module_id::ModuleId::parse(&manifest.component.name)?;
-        let kind = ComponentKind::from_manifest(manifest.component.kind.as_deref())?;
         let component_digest = manifest
             .component
             .digest
@@ -348,7 +313,6 @@ impl TryFrom<Manifest> for LoadedManifest {
             .collect();
         Ok(Self {
             name,
-            kind,
             component_digest,
             resources: manifest.component.resources,
             dependencies,

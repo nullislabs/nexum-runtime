@@ -58,12 +58,6 @@ pub enum ParseError {
         #[source]
         source: crate::digest::DigestParseError,
     },
-    /// `[component].kind` is not a recognized component kind.
-    #[error("manifest: [component].kind {kind:?} is not \"module\" or \"service\"")]
-    UnknownComponentKind {
-        /// The kind as written.
-        kind: String,
-    },
     /// A `[[subscription]]` table without a string `kind`.
     #[error("manifest: [[subscription]] table {index} must declare a string `kind`")]
     MissingSubscriptionKind {

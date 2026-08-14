@@ -6,6 +6,10 @@ amends: 0014-local-store-durability-model.md, 0018-one-operator-policy-surface.m
 
 # Modules react to triggers
 
+> Amendment: this record was edited after acceptance.
+> [ADR-0020](0020-retire-component-kind.md) retired the manifest `kind` field and so discharged the `module` versus `service` half of the ADR-0016 spelling deferral that the Supersession section below leaves open.
+> The sentence carries the mark in place.
+
 ## Context
 
 Five words cover the reactive path today.
@@ -83,6 +87,7 @@ This record supersedes, in part, the closing consequence of [ADR-0016](0016-comp
 The `event` adjective is now decided: the world spelling becomes `trigger-module` and the export becomes `on-trigger` when the WIT rename lands.
 The `module` versus `service` half of that spelling deferral is not discharged here.
 Renaming `world event-module` to `world trigger-module` swaps one adjective for another and still does not spell `module`, so that deferral stays open.
+Discharged by [ADR-0020](0020-retire-component-kind.md): the manifest spells no kind, so there are no two spellings left to align.
 ADR-0016 carries the mark in place, in its status line and on the affected consequence, as it already does for [ADR-0017](0017-capabilities-and-services.md).
 
 [ADR-0018](0018-one-operator-policy-surface.md) is amended in place: `on_event` in its Capabilities text becomes `on-trigger`, marked in its amendment block.

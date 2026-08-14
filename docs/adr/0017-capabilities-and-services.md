@@ -5,6 +5,11 @@ supersedes: 0016-component-vocabulary.md (in part)
 
 # A capability is host-implemented, a service is guest-implemented
 
+> Amendment: this record was edited after acceptance.
+> [ADR-0020](0020-retire-component-kind.md) retired the `[component].kind` field.
+> The Context sentence below, "a component declares a kind and its dependencies", now stands only for the dependencies half.
+> The three concepts this record settles are unchanged.
+
 ## Context
 
 [ADR-0016](0016-component-vocabulary.md) settled that a component declares a kind and its dependencies.

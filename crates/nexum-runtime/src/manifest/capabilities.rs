@@ -173,7 +173,7 @@ pub fn enforce_capabilities<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::manifest::types::{ComponentKind, Dependency, ResourceSection};
+    use crate::manifest::types::{Dependency, ResourceSection};
 
     /// A registry with one extension namespace registered, mirroring
     /// what a composition root assembles.
@@ -247,7 +247,6 @@ mod tests {
     fn manifest_with_caps(required: &[&str]) -> LoadedManifest {
         LoadedManifest {
             name: test_module_id(),
-            kind: ComponentKind::Module,
             component_digest: None,
             resources: ResourceSection::default(),
             dependencies: required

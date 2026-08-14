@@ -184,7 +184,6 @@ mod tests {
         "missing_capabilities",
         "misplaced_dependency_attribute",
         "invalid_component_digest",
-        "unknown_component_kind",
         "missing_subscription_kind",
         "invalid_subscription",
         "invalid_chain_log_address",
