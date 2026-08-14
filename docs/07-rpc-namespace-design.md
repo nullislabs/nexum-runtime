@@ -29,16 +29,17 @@ interface chain {
 `params` and the success value are JSON strings, and the host frames the id and jsonrpc envelope.
 
 A failure is a `chain-error` with two cases.
-The `fault` case carries the shared host vocabulary (`unavailable`, `rate-limited`, `timeout`, `denied`, `invalid-input`, and the rest), which a component matches on to retry or to back off.
+The `fault` case carries the shared fault vocabulary (`unavailable`, `rate-limited`, `timeout`, `denied`, `invalid-input`, and the rest), which a component matches on to retry or to back off.
 The `rpc` case carries the node code and the host-decoded revert bytes, so a revert reads without hand-parsing numeric JSON-RPC codes.
 The host hex-decodes the upstream `error.data` string once, so the guest receives raw ABI-encoded revert bytes.
+The host replaces every URL in the guest-visible error text.
 
 `request-batch` runs several calls against one chain in a single round trip where the transport supports it, and falls back to sequential `request` calls otherwise.
 The result list matches `requests` in length and order, and each entry is independently `ok` or `err`.
 
 ## Permitted method surface
 
-The host forwards only a closed read-only set: the `ChainMethod` enum in `nexum-world` (`crates/nexum-world/src/lib.rs:92`).
+The host forwards only a closed read-only set: the `ChainMethod` enum in `crates/nexum-world/src/lib.rs`.
 Host dispatch and the guest-side allowlist re-export the same type, so the two cannot drift.
 A method outside the set, which is every signing or mutating method, has no variant, so it cannot cross the WIT edge.
 An unknown method is refused with a `denied` fault before it reaches the provider.
@@ -50,7 +51,8 @@ The enum is the structural ceiling for every host.
 Enforcement is host-side string-to-`ChainMethod` resolution, not a compile-time guarantee.
 The Component Model already sandboxes I/O, so a chain-capable component can only call `chain.request`, and the closed surface adds method-level defence in depth on top.
 
-A response body larger than `[limits.chain] response_body_max_bytes` is rejected, and the host counts the rejection in `nexum_runtime_chain_response_capped_total`.
+A response body larger than `[limits.chain] response_body_max_bytes` is rejected with an `invalid-input` fault, and the host counts the rejection in `nexum_runtime_chain_response_capped_total`.
+The entry that pushes a batch's aggregate bytes past the same cap, and every later entry that returns a body, become `invalid-input` err entries.
 
 ## Signing
 
@@ -76,7 +78,7 @@ The `IdentityHost` trait in `nexum-sdk` mirrors the interface one for one.
 `nexum_sdk::chain` fronts `chain.request` with an alloy `Provider`, so component code calls typed provider methods instead of hand-building JSON-RPC:
 
 - `HostTransport<H>` implements alloy's `Service<RequestPacket>` over any `ChainHost`.
-  It dispatches single requests through `chain.request` and batches through `chain.request-batch`.
+  It dispatches every request through `chain.request`, one call per batch entry.
 - `ProviderHost::provider(chain)` mints an alloy `RootProvider` over that transport, blanket-implemented for every cloneable `ChainHost`.
 - `block_on` drives the returned futures.
   The transport is a synchronous WIT import, so a future resolves on its first poll.
@@ -94,7 +96,8 @@ A component that only needs raw JSON calls `host.request(chain_id, method, param
 ## Handlers are synchronous
 
 `#[nexum_sdk::module]` dispatches events to synchronous named handlers: `init`, `on_block`, `on_chain_logs`, `on_tick`, and `on_custom`.
-An absent handler is a no-op for that event, and a name outside the set is refused at macro expansion.
+An absent handler is a no-op for that event.
+An impl with no recognized handler, or with an `on_`-prefixed name outside the set, is refused at macro expansion.
 There is no `block_on` wrapper around a handler and no provider injection.
 A handler that wants the alloy provider builds it with `host.provider(chain)` and drives the call with `block_on` itself.
 

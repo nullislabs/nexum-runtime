@@ -34,7 +34,7 @@ The bindgen shares `nexum:host/types` with the core bindings through `with`, so 
 `enforce_capabilities` and manifest name validation both consult it.
 The composition root assembles the `Vec<Arc<dyn Extension<T>>>` once and threads it through the runtime builder (`with_extensions`), which builds the linker and the registry from it.
 The supervisor caches the list, so the restart path rebuilds an identical linker.
-Two wired extensions claiming one namespace is a boot error, `DuplicateServiceNamespace`.
+Two wired extensions claiming one namespace is a boot refusal, `ExtensionNamespaceClaimed`.
 
 An extension lives in its own crate.
 It depends on the runtime for the seam types (`HostState`, `Extension`, the `nexum:host/types` bindgen), and the composition-root binary depends on it.
@@ -59,7 +59,7 @@ A component built through `#[nexum_sdk::module]` compiles against a per-componen
 A component that never declares an extension capability therefore has no such import, and boots with a core-only linker by construction.
 A component that does import an extension interface instantiates only if, before instantiation:
 
-- the extension's linker hook is registered, else it hits an unsatisfied-import trap, AND
+- the extension's linker hook is registered, else instantiation fails with an unsatisfied-import error, AND
 - the extension's capability namespace is registered, else the manifest's declaration of that capability is rejected as unknown.
 
 The linker hook and the capability namespace of an extension MUST therefore be registered as a pair, from the same `Extension` value, before any component is instantiated.

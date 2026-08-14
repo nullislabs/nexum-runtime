@@ -10,7 +10,7 @@ The `nexum:host/local-store` seam is call by call.
 The redb backend commits each write in its own fsynced transaction, and no transaction spans an `on-event` or `init` call.
 
 A handler that writes and then traps keeps every write that already returned.
-This is true for a typed fault, a panic, fuel exhaustion, a deadline and a process crash.
+This is true for a typed fault, a panic, fuel exhaustion, a deadline, and a process crash.
 Earlier documentation claimed an implicit per-event write transaction that rolls back on a trap.
 That transaction never existed.
 
