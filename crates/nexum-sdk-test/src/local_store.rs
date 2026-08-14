@@ -212,7 +212,7 @@ impl LocalStoreHost for MockLocalStore {
 /// every torn prefix a trap can strand, so a recovery pass can be
 /// held to convergence from each one.
 ///
-/// Review rule this harness enforces (#609): no in-store invariant
+/// The rule this harness enforces: no in-store invariant
 /// may span two `set` calls unless the intermediate state is
 /// self-healing or the writes ride the atomic `apply` batch verb.
 pub struct TrapStore<H> {
