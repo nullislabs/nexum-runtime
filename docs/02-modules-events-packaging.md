@@ -70,7 +70,7 @@ Key design points:
 - **`[[subscription]]` blocks are declarative.**
   A component does not set up its own subscriptions imperatively.
   The runtime loads each component and runs its `init` first, then derives the subscription plan from the booted supervisor and opens the event sources.
-  `init` runs during load at `crates/nexum-runtime/src/supervisor/load.rs:208`, and `subscription_plan()` reads the already-booted supervisor at `crates/nexum-runtime/src/supervisor/subscriptions.rs:18`.
+  `call_init` runs during load in `crates/nexum-runtime/src/supervisor/load.rs`, and `subscription_plan` reads the already-booted supervisor in `crates/nexum-runtime/src/supervisor/subscriptions.rs`.
 - **`[dependencies]` drives what the runtime links.**
   Each key names a core host capability or another component's service, and its table carries the attributes that qualify it.
   A component that declares `http` imports `wasi:http/outgoing-handler`, the SDK's `http::fetch` helper wraps it, and the host checks every outgoing request against the `hosts` list on the `http` dependency.
@@ -242,7 +242,7 @@ For one event, the supervisor walks the matching components serially and awaits 
 Two mechanisms, and no others:
 
 1. **Fuel.**
-   `consume_fuel` is on, and the store is refuelled to the resolved budget before every dispatch (`crates/nexum-runtime/src/builder.rs:148`).
+   `consume_fuel` is on in `wasmtime_config` (`crates/nexum-runtime/src/builder.rs`), and `dispatch` refuels the store to the resolved budget before every dispatch (`crates/nexum-runtime/src/supervisor/dispatch.rs`).
 2. **A wall-clock deadline.**
    The dispatch runs under `event_deadline_secs`, which covers the host-call time fuel cannot meter.
    A deadline hit leaves the store unusable, so it is treated like a trap: the run ends and the component restarts.
