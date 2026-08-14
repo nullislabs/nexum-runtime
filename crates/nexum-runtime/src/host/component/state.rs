@@ -19,7 +19,8 @@ pub trait StateStore {
 /// Per-module key-value handle; mirrors the inherent `ModuleStore` API.
 pub trait StateHandle {
     /// Cap this handle at `quota_bytes` (key + value bytes); writes past it
-    /// are rejected with [`StorageError::QuotaExceeded`].
+    /// are rejected with [`StorageError::QuotaExceeded`], or
+    /// [`StorageError::QuotaUnsatisfiable`] when the write alone cannot fit.
     fn with_quota(self, quota_bytes: u64) -> Self;
     /// Fetch a value; `Ok(None)` when absent.
     fn get(&self, key: &str) -> Result<Option<Vec<u8>>, StorageError>;

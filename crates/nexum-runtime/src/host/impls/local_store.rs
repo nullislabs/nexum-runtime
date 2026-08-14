@@ -8,16 +8,8 @@ use crate::host::local_store_redb::{self, StorageError};
 use crate::host::state::HostState;
 
 impl<T: RuntimeTypes> HostState<T> {
-    // The one place the storage error is recorded in full, quota value and
-    // redb text included: the guest fault carries only vocabulary text.
     fn store_fault(&self, verb: &'static str, err: StorageError) -> Fault {
-        tracing::warn!(
-            module = %self.run.module,
-            verb,
-            error = %err,
-            "local-store verb failed"
-        );
-        Fault::from(err)
+        crate::host::error::store_fault(&self.run.module, verb, err)
     }
 }
 

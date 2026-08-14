@@ -7,6 +7,13 @@ package nexum:host@0.1.0;
 /// module's entries.
 ///
 /// How the host separates namespaces is not part of this contract.
+///
+/// A host implementation MUST NOT put upstream storage-engine text, or
+/// anything derived from its own configuration (the quota value included),
+/// in a `fault` detail. The host does not report the quota or the charged
+/// footprint; a refused write is the quota signal, and the refusal
+/// distinguishes a write that could fit after deletes from one that can
+/// never fit.
 interface local-store {
     use types.{fault};
 

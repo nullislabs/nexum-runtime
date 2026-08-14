@@ -33,11 +33,12 @@ impl ChainFaultMessage {
     }
 }
 
-/// Fieldless for the same reason as [`ChainFaultMessage`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq, strum::IntoStaticStr, strum::VariantArray)]
 pub(crate) enum LocalStoreFaultMessage {
     #[strum(serialize = "local-store namespace quota exhausted")]
     QuotaExhausted,
+    #[strum(serialize = "local-store write can never fit the namespace quota")]
+    WriteNeverFits,
     #[strum(serialize = "apply batch exceeds the per-batch op cap")]
     ApplyOpsOverCap,
     #[strum(serialize = "apply batch exceeds the per-batch value-byte cap")]
@@ -52,31 +53,50 @@ impl LocalStoreFaultMessage {
     }
 }
 
-/// Project a [`StorageError`] into the guest [`Fault`], same class as before,
-/// vocabulary text only. The quota value and the redb text stay host-side;
-/// the local-store seam logs the full error before calling this.
-impl From<StorageError> for Fault {
-    fn from(err: StorageError) -> Self {
-        match err {
-            StorageError::QuotaExceeded { .. } => {
-                Fault::Denied(LocalStoreFaultMessage::QuotaExhausted.text().to_owned())
-            }
-            StorageError::ApplyOpsExceeded { .. } => {
-                Fault::InvalidInput(LocalStoreFaultMessage::ApplyOpsOverCap.text().to_owned())
-            }
-            StorageError::ApplyBytesExceeded { .. } => {
-                Fault::InvalidInput(LocalStoreFaultMessage::ApplyBytesOverCap.text().to_owned())
-            }
-            // Exhaustive on purpose: a new variant must pick its projection
-            // here before it can reach a guest.
-            StorageError::Open(_)
-            | StorageError::Txn(_)
-            | StorageError::Table(_)
-            | StorageError::Storage(_)
-            | StorageError::Commit(_)
-            | StorageError::InvalidNamespace(_) => {
-                Fault::Internal(LocalStoreFaultMessage::BackendFailure.text().to_owned())
-            }
+/// The only route from a [`StorageError`] to a guest [`Fault`]. Deliberately
+/// not a `From` impl: `?` would skip the log below, and only that log keeps
+/// the quota value and the redb text for the operator.
+pub(crate) fn store_fault(
+    module: impl std::fmt::Display,
+    verb: &'static str,
+    err: StorageError,
+) -> Fault {
+    let refusal = matches!(
+        err,
+        StorageError::QuotaExceeded { .. }
+            | StorageError::QuotaUnsatisfiable { .. }
+            | StorageError::ApplyOpsExceeded { .. }
+            | StorageError::ApplyBytesExceeded { .. }
+    );
+    if refusal {
+        // Below WARN: a module sitting at its quota or batch cap would
+        // otherwise flood the operator log on every dispatch.
+        tracing::debug!(module = %module, verb, error = %err, "local-store verb refused");
+    } else {
+        tracing::warn!(module = %module, verb, error = %err, "local-store verb failed");
+    }
+    match err {
+        StorageError::QuotaExceeded { .. } => {
+            Fault::Denied(LocalStoreFaultMessage::QuotaExhausted.text().to_owned())
+        }
+        StorageError::QuotaUnsatisfiable { .. } => {
+            Fault::Denied(LocalStoreFaultMessage::WriteNeverFits.text().to_owned())
+        }
+        StorageError::ApplyOpsExceeded { .. } => {
+            Fault::InvalidInput(LocalStoreFaultMessage::ApplyOpsOverCap.text().to_owned())
+        }
+        StorageError::ApplyBytesExceeded { .. } => {
+            Fault::InvalidInput(LocalStoreFaultMessage::ApplyBytesOverCap.text().to_owned())
+        }
+        // Exhaustive on purpose: a new variant must pick its projection
+        // here before it can reach a guest.
+        StorageError::Open(_)
+        | StorageError::Txn(_)
+        | StorageError::Table(_)
+        | StorageError::Storage(_)
+        | StorageError::Commit(_)
+        | StorageError::InvalidNamespace(_) => {
+            Fault::Internal(LocalStoreFaultMessage::BackendFailure.text().to_owned())
         }
     }
 }
@@ -261,14 +281,13 @@ mod tests {
         );
     }
 
-    /// `VARIANTS` is compiler-derived, so a new case fails this until the
-    /// pinned list is extended.
     #[test]
     fn the_local_store_vocabulary_is_pinned_and_closed() {
         assert_eq!(
             store_vocabulary(),
             [
                 "local-store namespace quota exhausted",
+                "local-store write can never fit the namespace quota",
                 "apply batch exceeds the per-batch op cap",
                 "apply batch exceeds the per-batch value-byte cap",
                 "local-store backend failure",
@@ -277,31 +296,55 @@ mod tests {
     }
 
     /// Equality, not absence: the operator-configured quota value must not
-    /// survive the projection in any form.
+    /// survive the projection in any form. The two denials stay distinct,
+    /// so a guest knows whether deletes can help.
     #[test]
-    fn quota_fault_is_denied_vocabulary_text_without_the_quota_value() {
-        let fault = Fault::from(StorageError::QuotaExceeded {
-            needed: 987_654_321,
-            quota: 123_456_789,
-        });
-        let Fault::Denied(msg) = fault else {
-            panic!("expected Denied fault, got {fault:?}");
+    fn quota_faults_are_denied_vocabulary_text_without_the_quota_value() {
+        let exhausted = store_fault(
+            "m",
+            "set",
+            StorageError::QuotaExceeded {
+                needed: 987_654_321,
+                quota: 123_456_789,
+            },
+        );
+        let never_fits = store_fault(
+            "m",
+            "set",
+            StorageError::QuotaUnsatisfiable {
+                needed: 987_654_321,
+                quota: 123_456_789,
+            },
+        );
+        let (Fault::Denied(exhausted), Fault::Denied(never_fits)) = (&exhausted, &never_fits)
+        else {
+            panic!("expected Denied faults, got {exhausted:?} and {never_fits:?}");
         };
-        assert_eq!(msg, LocalStoreFaultMessage::QuotaExhausted.text());
+        assert_eq!(exhausted, LocalStoreFaultMessage::QuotaExhausted.text());
+        assert_eq!(never_fits, LocalStoreFaultMessage::WriteNeverFits.text());
+        assert_ne!(exhausted, never_fits);
     }
 
     /// The two batch caps stay `invalid-input` and stay distinguishable, so
     /// a guest knows whether to shrink the op count or the value bytes.
     #[test]
     fn apply_cap_faults_are_distinct_invalid_input_vocabulary_text() {
-        let ops = Fault::from(StorageError::ApplyOpsExceeded {
-            ops: 4096,
-            cap: 1024,
-        });
-        let bytes = Fault::from(StorageError::ApplyBytesExceeded {
-            bytes: 1 << 30,
-            cap: 4 << 20,
-        });
+        let ops = store_fault(
+            "m",
+            "apply",
+            StorageError::ApplyOpsExceeded {
+                ops: 4096,
+                cap: 1024,
+            },
+        );
+        let bytes = store_fault(
+            "m",
+            "apply",
+            StorageError::ApplyBytesExceeded {
+                bytes: 1 << 30,
+                cap: 4 << 20,
+            },
+        );
         let (Fault::InvalidInput(ops), Fault::InvalidInput(bytes)) = (&ops, &bytes) else {
             panic!("expected InvalidInput faults, got {ops:?} and {bytes:?}");
         };
@@ -312,19 +355,75 @@ mod tests {
 
     #[test]
     fn backend_faults_are_internal_and_carry_no_upstream_text() {
-        // A real redb error wrapping path-bearing io text, and the host-built
-        // namespace refusal: both project to the one internal message.
+        // A real redb error wrapping path-bearing io text, and the
+        // host-built namespace refusal.
         let io = std::io::Error::other("I/O error: /var/lib/nexum/state/local-store.redb");
         for err in [
             StorageError::Storage(io.into()),
             StorageError::InvalidNamespace("module namespace must not be empty".into()),
         ] {
-            let fault = Fault::from(err);
+            let fault = store_fault("m", "get", err);
             let Fault::Internal(msg) = fault else {
                 panic!("expected Internal fault, got {fault:?}");
             };
             assert_eq!(msg, LocalStoreFaultMessage::BackendFailure.text());
         }
+    }
+
+    /// Pins the operator half of the seam: the log keeps exactly what the
+    /// guest fault must not, and refusals sit below WARN.
+    #[test]
+    fn store_fault_logs_the_full_error_host_side_and_splits_levels() {
+        use std::sync::{Arc, Mutex};
+
+        #[derive(Clone, Default)]
+        struct Sink(Arc<Mutex<Vec<u8>>>);
+        impl std::io::Write for Sink {
+            fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+                self.0.lock().expect("sink lock").extend_from_slice(buf);
+                Ok(buf.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for Sink {
+            type Writer = Sink;
+            fn make_writer(&'a self) -> Sink {
+                self.clone()
+            }
+        }
+
+        let sink = Sink::default();
+        let subscriber = tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::DEBUG)
+            .with_ansi(false)
+            .with_writer(sink.clone())
+            .finish();
+        tracing::subscriber::with_default(subscriber, || {
+            let _ = store_fault(
+                "mod-a",
+                "set",
+                StorageError::QuotaExceeded {
+                    needed: 987_654_321,
+                    quota: 123_456_789,
+                },
+            );
+            let io = std::io::Error::other("I/O error: /var/lib/nexum/state/local-store.redb");
+            let _ = store_fault("mod-a", "get", StorageError::Storage(io.into()));
+        });
+        let out = String::from_utf8(sink.0.lock().expect("sink lock").clone())
+            .expect("log output is UTF-8");
+        let quota = out
+            .lines()
+            .find(|l| l.contains("123456789"))
+            .expect("the quota value is logged");
+        assert!(quota.contains("DEBUG"), "refusal above DEBUG: {quota}");
+        let redb = out
+            .lines()
+            .find(|l| l.contains("/var/lib/nexum/state/local-store.redb"))
+            .expect("the redb text is logged");
+        assert!(redb.contains("WARN"), "backend failure not WARN: {redb}");
     }
 
     #[test]
@@ -638,6 +737,12 @@ mod tests {
             scanned += 1;
             if path.ends_with(&funnel) {
                 sites = funnel_constructions(&code);
+                // A `From` impl would let `?` reach the guest while skipping
+                // the operator log in `store_fault`.
+                assert!(
+                    !code.contains("From<StorageError>"),
+                    "the storage projection must stay a logging function, not a From impl",
+                );
                 continue;
             }
             for token in [

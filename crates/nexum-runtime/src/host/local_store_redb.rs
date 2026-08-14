@@ -189,9 +189,16 @@ impl ModuleStore {
                     && projected > quota
                 {
                     // Returning aborts the write transaction: nothing lands.
-                    return Err(StorageError::QuotaExceeded {
-                        needed: projected,
-                        quota,
+                    return Err(if entry > quota {
+                        StorageError::QuotaUnsatisfiable {
+                            needed: entry,
+                            quota,
+                        }
+                    } else {
+                        StorageError::QuotaExceeded {
+                            needed: projected,
+                            quota,
+                        }
                     });
                 }
             }
@@ -267,9 +274,16 @@ impl ModuleStore {
                     && projected > quota
                 {
                     // Returning aborts the write transaction: nothing lands.
-                    return Err(StorageError::QuotaExceeded {
-                        needed: projected,
-                        quota,
+                    return Err(if charged > quota {
+                        StorageError::QuotaUnsatisfiable {
+                            needed: charged,
+                            quota,
+                        }
+                    } else {
+                        StorageError::QuotaExceeded {
+                            needed: projected,
+                            quota,
+                        }
                     });
                 }
             }
@@ -410,6 +424,15 @@ pub enum StorageError {
     #[error("local-store quota exceeded: write needs {needed} B but quota is {quota} B")]
     QuotaExceeded {
         /// Footprint the write would produce.
+        needed: u64,
+        /// The module's byte quota.
+        quota: u64,
+    },
+    /// The write alone exceeds the whole quota, so no deletes can make
+    /// it fit.
+    #[error("local-store write needs {needed} B alone but the quota is {quota} B")]
+    QuotaUnsatisfiable {
+        /// On-disk cost of just this write's entries.
         needed: u64,
         /// The module's byte quota.
         quota: u64,
