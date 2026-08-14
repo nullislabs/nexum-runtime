@@ -4,10 +4,14 @@ status: accepted
 
 # Local store durability is per call, not per event
 
+> Amendment: this record was edited after acceptance.
+> [ADR-0019](0019-modules-react-to-triggers.md) retired the export name `on-event`, and the text below carries the decided name, `on-trigger`.
+> The WIT rename lands in a later code issue, so the export in the tree may still read `on-event`.
+
 ## Context
 
 The `nexum:host/local-store` seam is call by call.
-The redb backend commits each write in its own fsynced transaction, and no transaction spans an `on-event` or `init` call.
+The redb backend commits each write in its own fsynced transaction, and no transaction spans an `on-trigger` or `init` call.
 
 A handler that writes and then traps keeps every write that already returned.
 This is true for a typed fault, a panic, fuel exhaustion, a deadline, and a process crash.
@@ -31,7 +35,7 @@ Dispatch is serialized through a single actor, so no observer sees a torn mid-ev
 
 Per-event atomicity is rejected in every form.
 
-- A write transaction held across `on-event` locks the single shared write head across handler awaits, for as long as the dispatch deadline allows.
+- A write transaction held across `on-trigger` locks the single shared write head across handler awaits, for as long as the dispatch deadline allows.
   Dropping it on the deadline leaks an open transaction while the host state survives, which freezes writes for every module through the poison-backoff window.
 - A host-side staged overlay defers the reserved marker's durability past the wire send.
   Any escape hatch that writes through immediately then carries all the load-bearing writes, so the transaction protects nothing.
