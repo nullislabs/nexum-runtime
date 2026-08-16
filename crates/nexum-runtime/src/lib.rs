@@ -33,6 +33,7 @@ pub mod digest;
 pub mod engine_config;
 pub mod host;
 pub mod host_pattern;
+pub mod interface_id;
 pub mod manifest;
 pub mod metrics;
 pub mod module_id;

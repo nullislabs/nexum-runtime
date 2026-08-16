@@ -46,6 +46,7 @@ pub fn manifest(name: impl Into<String>) -> TestManifest {
 pub struct TestManifest {
     name: String,
     component: Option<String>,
+    provides: Option<String>,
     caps: Vec<String>,
     http_allow: Vec<String>,
     config: Vec<(String, String)>,
@@ -58,6 +59,7 @@ impl TestManifest {
         Self {
             name: name.into(),
             component: None,
+            provides: None,
             caps: Vec::new(),
             http_allow: Vec::new(),
             config: Vec::new(),
@@ -68,6 +70,12 @@ impl TestManifest {
     /// Set `[component].digest` to a content-digest pin.
     pub fn component_digest(mut self, digest: impl Into<String>) -> Self {
         self.component = Some(digest.into());
+        self
+    }
+
+    /// Set `[component].provides` to an interface-id claim.
+    pub fn provides(mut self, interface: impl Into<String>) -> Self {
+        self.provides = Some(interface.into());
         self
     }
 
@@ -145,6 +153,9 @@ impl TestManifest {
         component.insert("name".into(), self.name.clone().into());
         if let Some(digest) = &self.component {
             component.insert("digest".into(), digest.clone().into());
+        }
+        if let Some(provides) = &self.provides {
+            component.insert("provides".into(), provides.clone().into());
         }
 
         // Each dependency is a table, so an attribute belongs to the thing

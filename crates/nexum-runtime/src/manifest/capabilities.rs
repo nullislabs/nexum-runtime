@@ -248,6 +248,7 @@ mod tests {
         LoadedManifest {
             name: test_module_id(),
             component_digest: None,
+            provides: None,
             resources: ResourceSection::default(),
             dependencies: required
                 .iter()

@@ -9,6 +9,7 @@ supersedes: 0016-component-vocabulary.md (in part)
 > [ADR-0020](0020-retire-component-kind.md) retired the `[component].kind` field.
 > The Context sentence below, "a component declares a kind and its dependencies", now stands only for the dependencies half.
 > The three concepts this record settles are unchanged.
+> [ADR-0021](0021-provides-and-implements.md) fixes the shapes the Decision below leaves open: the `provides` grammar, the track-keyed `[implements]` row with its digest, and the refusals each gap raises.
 
 ## Context
 

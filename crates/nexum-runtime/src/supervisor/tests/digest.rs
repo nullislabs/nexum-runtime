@@ -22,7 +22,7 @@ fn read_verified_component_rejects_a_mismatched_digest() {
 
     let engine = test_wasmtime_engine();
     let declared = wrong_digest();
-    let err = read_verified_component(&engine, &path, Some(&declared), false)
+    let err = read_verified_component(&engine, &path, DigestPolicy::author(Some(&declared), false))
         .err()
         .expect("a mismatched digest must refuse the component");
     let crate::refusal::Refusal::Digest(mismatch) = &err else {
@@ -46,7 +46,7 @@ fn read_verified_component_requires_a_digest_when_the_flag_is_set() {
     std::fs::write(&path, b"any bytes at all").expect("write artifact");
 
     let engine = test_wasmtime_engine();
-    let err = read_verified_component(&engine, &path, None, true)
+    let err = read_verified_component(&engine, &path, DigestPolicy::author(None, true))
         .err()
         .expect("an unpinned artifact must refuse under the flag");
     Refusal::from(err)
@@ -64,8 +64,9 @@ fn read_verified_component_verifies_the_committed_pinned_fixture() {
         .expect("the fixture manifest carries a pin");
 
     let engine = test_wasmtime_engine();
-    let (_component, actual) = read_verified_component(&engine, &wat, Some(&declared), true)
-        .expect("the pinned fixture verifies and compiles");
+    let (_component, actual) =
+        read_verified_component(&engine, &wat, DigestPolicy::author(Some(&declared), true))
+            .expect("the pinned fixture verifies and compiles");
     assert_eq!(actual, declared);
 }
 
@@ -74,7 +75,8 @@ fn read_verified_component_computes_a_digest_for_unpinned_loads() {
     let (wat, _manifest) = pinned_fixture();
     let engine = test_wasmtime_engine();
     let (_component, actual) =
-        read_verified_component(&engine, &wat, None, false).expect("unpinned load compiles");
+        read_verified_component(&engine, &wat, DigestPolicy::author(None, false))
+            .expect("unpinned load compiles");
     let bytes = std::fs::read(&wat).expect("read fixture");
     assert_eq!(actual, ContentDigest::of_bytes(&bytes));
 }
@@ -139,9 +141,12 @@ async fn boot_single_refuses_a_mismatched_component_digest() {
     let (_store, result) = try_boot_single(&wasm, Some(&manifest), false, None).await;
     Refusal::from(result.err().expect("a stale pin must refuse the boot"))
         .variant::<DigestMismatch>(|e| {
-            e.declared == wrong_digest()
+            e.pin == crate::digest::DigestPin::Author
+                && e.declared == wrong_digest()
                 && e.actual == ContentDigest::of_bytes(b"drifted artifact bytes")
         })
+        // The refusal names the file to edit; the operator pin lives elsewhere.
+        .names("[component].digest in the manifest")
         .lacks("compile");
 }
 

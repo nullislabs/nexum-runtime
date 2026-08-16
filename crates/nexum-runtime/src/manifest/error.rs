@@ -58,6 +58,12 @@ pub enum ParseError {
         #[source]
         source: crate::digest::DigestParseError,
     },
+    #[error("manifest: [component].provides {value:?} is not an interface id: {source}")]
+    InvalidInterfaceId {
+        value: String,
+        #[source]
+        source: crate::interface_id::InvalidInterfaceId,
+    },
     /// A `[[subscription]]` table without a string `kind`.
     #[error("manifest: [[subscription]] table {index} must declare a string `kind`")]
     MissingSubscriptionKind {

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # House-style gate. Runs identically in CI and under `just content`.
 #
-#   content-lint.sh                 check tracked files only
+#   content-lint.sh                 check tracked and untracked files
 #   content-lint.sh <base>..<head>  also check every commit message in the range
 #
 # The pull-request body is checked when PR_BODY is set in the environment.
@@ -49,16 +49,19 @@ ISE='('"$IZE_STEMS"')(e|es|ed|ing|ation|ations)\b'
 # contribution honest.
 FORBIDDEN='Co-Authored-By: Claude|Generated with Claude Code'
 
-echo "content-lint: tracked files"
-hits=$(git grep -nIP "$DASHES" -- . || true)
+# `--untracked` covers a new file before it is staged, which is when the
+# author can still fix it cheaply. Ignored paths stay out, so `target` and
+# the nix store are not walked.
+echo "content-lint: tracked and untracked files"
+hits=$(git grep --untracked -nIP "$DASHES" -- . || true)
 if [ -n "$hits" ]; then
-    fail "em-dash or en-dash in tracked files:"
+    fail "em-dash or en-dash in tracked or untracked files:"
     printf '%s\n' "$hits" | sed 's/^/    /' >&2
 fi
 
 # CONTRIBUTING.md is exempt: stating the rule means quoting the spelling it
 # rejects.
-hits=$(git grep -nIPi "$ISE" -- . ':!CONTRIBUTING.md' || true)
+hits=$(git grep --untracked -nIPi "$ISE" -- . ':!CONTRIBUTING.md' || true)
 if [ -n "$hits" ]; then
     fail "Oxford spelling takes -ize, not -ise:"
     printf '%s\n' "$hits" | sed 's/^/    /' >&2
