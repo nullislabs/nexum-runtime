@@ -1,7 +1,7 @@
 //! # panic-bomb (test fixture)
 //!
 //! Installs the nexum-sdk tracing facade (subscriber + panic hook) in
-//! `init` and panics on every `on_event`. The hook forwards the panic
+//! `init` and panics on every `on_trigger`. The hook forwards the panic
 //! to stderr and the host logging call before the trap reaches the
 //! supervisor, so one death leaves Stderr, HostInterface, and Panic
 //! records. Test-only.
@@ -13,7 +13,7 @@ wit_bindgen::generate!({
     path: [
         "../../../wit/nexum-host",
     ],
-    world: "nexum:host/event-module",
+    world: "nexum:host/trigger-module",
     generate_all,
 });
 
@@ -51,7 +51,7 @@ impl Guest for PanicBomb {
         Ok(())
     }
 
-    fn on_event(_event: types::Event) -> Result<(), Fault> {
+    fn on_trigger(_trigger: types::Trigger) -> Result<(), Fault> {
         panic!("panic-bomb detonated");
     }
 }

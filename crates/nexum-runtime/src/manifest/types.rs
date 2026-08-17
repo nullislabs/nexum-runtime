@@ -26,10 +26,9 @@ pub(crate) struct Manifest {
     pub dependencies: Option<DependencySection>,
     #[serde(default)]
     pub config: toml::Table,
-    /// `[[subscription]]` tables as written; parsed by the validation
-    /// pass.
-    #[serde(default, rename = "subscription")]
-    pub subscriptions: Vec<toml::Table>,
+    /// `[[trigger]]` tables as written; parsed by the validation pass.
+    #[serde(default, rename = "trigger")]
+    pub triggers: Vec<toml::Table>,
     /// Extension-owned sections (every non-core top-level key), parsed
     /// opaquely and routed to the wired extensions; a section no extension
     /// claims is refused at boot.
@@ -41,22 +40,22 @@ pub(crate) struct Manifest {
 /// to the runtime; each claiming extension parses its own.
 pub type ExtensionSections = BTreeMap<String, toml::Value>;
 
-/// One `[[subscription]]` table. The `kind` field discriminates; an
-/// unknown kind parses as [`Subscription::Extension`] and is validated at
-/// boot against the wired extensions' declared kinds.
+/// One `[[trigger]]` table. The `on` field discriminates; an unknown
+/// kind parses as [`Trigger::Extension`] and is validated at boot
+/// against the wired extensions' declared kinds.
 #[derive(Debug, Clone)]
-pub enum Subscription {
-    /// New-block events; one subscription per chain id, fanned out to every
-    /// module watching that chain.
+pub enum Trigger {
+    /// A new block; one stream per chain id, fanned out to every module
+    /// watching that chain.
     Block {
         /// EVM chain id.
         chain_id: u64,
     },
-    /// Chain-log events matching `address` + topic-0; one subscription per
-    /// entry, tagged with the owning module. A re-open replays its start
-    /// height; `removed` retraction covers only the last delivered
+    /// A contract event's log matching `address` + topic-0; one stream
+    /// per entry, tagged with the owning module. A re-open replays its
+    /// start height; `removed` retraction covers only the last delivered
     /// log-bearing height.
-    ChainLog {
+    Event {
         /// EVM chain id.
         chain_id: u64,
         /// Contract address filter, declared as 20-byte hex.
@@ -67,37 +66,37 @@ pub enum Subscription {
         /// Persist a durable cursor; a restart re-opens AT the cursor block
         /// and replays it.
         resume: bool,
-        /// Backfill cap in blocks for a `resume` subscription; `None`
+        /// Backfill cap in blocks for a `resume` trigger; `None`
         /// backfills the whole gap, a cap drops the oldest missed blocks.
         max_lookback: Option<u64>,
     },
-    /// Cron-scheduled tick; parsed but not dispatched (the supervisor
-    /// warns).
-    Cron {
+    /// A cron expression's time arriving; parsed but not dispatched (the
+    /// supervisor warns).
+    Schedule {
         /// Standard 5-field cron expression.
         #[allow(dead_code)]
-        schedule: String,
+        cron: String,
     },
-    /// An extension-owned event kind. Delivered when the kind matches and
-    /// every filter pair is present in the event's attributes.
+    /// An extension-owned kind. Delivered when the kind matches and
+    /// every filter pair is present in the delivery's attributes.
     Extension {
-        /// The extension-declared subscription kind.
-        kind: String,
-        /// Attribute filters; empty admits every event of the kind.
+        /// The manifest's `on` value, verbatim.
+        extension_kind: String,
+        /// Attribute filters; empty admits every delivery of the kind.
         filters: BTreeMap<String, String>,
     },
 }
 
-/// Core subscription kinds shaped by serde; the hex fields stay raw
-/// strings until the [`Subscription`] conversion validates them.
-// `kebab-case` reproduces `nexum_world::SubscriptionKind`, which gates this.
+/// Core trigger kinds shaped by serde; the hex fields stay raw
+/// strings until the [`Trigger`] conversion validates them.
+// `kebab-case` reproduces `nexum_world::TriggerKind`, which gates this.
 #[derive(Deserialize)]
-#[serde(tag = "kind", rename_all = "kebab-case")]
-enum CoreSubscription {
+#[serde(tag = "on", rename_all = "kebab-case")]
+enum CoreTrigger {
     Block {
         chain_id: u64,
     },
-    ChainLog {
+    Event {
         chain_id: u64,
         #[serde(default)]
         address: Option<String>,
@@ -108,77 +107,79 @@ enum CoreSubscription {
         #[serde(default)]
         max_lookback: Option<u64>,
     },
-    Cron {
-        schedule: String,
+    Schedule {
+        cron: String,
     },
 }
 
-impl TryFrom<CoreSubscription> for Subscription {
+impl TryFrom<CoreTrigger> for Trigger {
     type Error = ParseError;
 
     /// Validates the hex filters; the wording is operator-pinned.
-    fn try_from(sub: CoreSubscription) -> Result<Self, ParseError> {
-        Ok(match sub {
-            CoreSubscription::Block { chain_id } => Self::Block { chain_id },
-            CoreSubscription::ChainLog {
+    fn try_from(trigger: CoreTrigger) -> Result<Self, ParseError> {
+        Ok(match trigger {
+            CoreTrigger::Block { chain_id } => Self::Block { chain_id },
+            CoreTrigger::Event {
                 chain_id,
                 address,
                 event_signature,
                 resume,
                 max_lookback,
-            } => Self::ChainLog {
+            } => Self::Event {
                 chain_id,
                 address: address
                     .map(|raw| {
-                        raw.parse::<Address>().map_err(|source| {
-                            ParseError::InvalidChainLogAddress { value: raw, source }
-                        })
-                    })
-                    .transpose()?,
-                event_signature: event_signature
-                    .map(|raw| {
-                        raw.parse::<B256>()
-                            .map_err(|source| ParseError::InvalidChainLogTopic {
+                        raw.parse::<Address>()
+                            .map_err(|source| ParseError::InvalidEventAddress {
                                 value: raw,
                                 source,
                             })
                     })
                     .transpose()?,
+                event_signature: event_signature
+                    .map(|raw| {
+                        raw.parse::<B256>()
+                            .map_err(|source| ParseError::InvalidEventTopic { value: raw, source })
+                    })
+                    .transpose()?,
                 resume,
                 max_lookback,
             },
-            CoreSubscription::Cron { schedule } => Self::Cron { schedule },
+            CoreTrigger::Schedule { cron } => Self::Schedule { cron },
         })
     }
 }
 
-impl Subscription {
+impl Trigger {
     /// The kind dispatch: a core kind must match its shape, an unknown
-    /// kind becomes [`Subscription::Extension`] with string filters.
+    /// kind becomes [`Trigger::Extension`] with string filters.
     /// `index` is the table's 1-based position; a refusal carries it
     /// because the parsed tables have no source spans.
     fn from_table(index: usize, table: toml::Table) -> Result<Self, ParseError> {
-        let Some(kind) = table.get("kind").and_then(toml::Value::as_str) else {
-            return Err(ParseError::MissingSubscriptionKind { index });
+        let Some(kind) = table.get("on").and_then(toml::Value::as_str) else {
+            return Err(ParseError::MissingTriggerKind { index });
         };
-        if kind.parse::<nexum_world::SubscriptionKind>().is_err() {
-            let kind = kind.to_owned();
+        if kind.parse::<nexum_world::TriggerKind>().is_err() {
+            let extension_kind = kind.to_owned();
             let mut filters = BTreeMap::new();
             for (key, value) in table {
-                if key == "kind" {
+                if key == "on" {
                     continue;
                 }
                 let toml::Value::String(value) = value else {
-                    return Err(ParseError::NonStringSubscriptionFilter { key });
+                    return Err(ParseError::NonStringTriggerFilter { key });
                 };
                 filters.insert(key, value);
             }
-            return Ok(Self::Extension { kind, filters });
+            return Ok(Self::Extension {
+                extension_kind,
+                filters,
+            });
         }
         let kind = kind.to_owned();
         toml::Value::Table(table)
-            .try_into::<CoreSubscription>()
-            .map_err(|source| ParseError::InvalidSubscription {
+            .try_into::<CoreTrigger>()
+            .map_err(|source| ParseError::InvalidTrigger {
                 index,
                 kind,
                 source,
@@ -262,8 +263,8 @@ pub struct LoadedManifest {
     /// module's `init`. Scalars become their text form; arrays and tables
     /// their TOML representation.
     pub config: Vec<(String, String)>,
-    /// Parsed `[[subscription]]` tables.
-    pub subscriptions: Vec<Subscription>,
+    /// Parsed `[[trigger]]` tables.
+    pub triggers: Vec<Trigger>,
     /// Extension-owned sections.
     pub extensions: ExtensionSections,
 }
@@ -272,7 +273,7 @@ impl TryFrom<Manifest> for LoadedManifest {
     type Error = ParseError;
 
     /// Every context-free value check, in order: name, digest,
-    /// subscriptions, then `[dependencies]` presence. The registry
+    /// triggers, then `[dependencies]` presence. The registry
     /// cross-check and the `hosts` placement check stay in `load`, which
     /// holds the registry and refuses an unknown name first.
     fn try_from(manifest: Manifest) -> Result<Self, ParseError> {
@@ -288,11 +289,11 @@ impl TryFrom<Manifest> for LoadedManifest {
                 value: manifest.component.digest.clone().unwrap_or_default(),
                 source,
             })?;
-        let subscriptions = manifest
-            .subscriptions
+        let triggers = manifest
+            .triggers
             .into_iter()
             .zip(1..)
-            .map(|(table, index)| Subscription::from_table(index, table))
+            .map(|(table, index)| Trigger::from_table(index, table))
             .collect::<Result<Vec<_>, _>>()?;
         let dependencies = manifest
             .dependencies
@@ -318,7 +319,7 @@ impl TryFrom<Manifest> for LoadedManifest {
             dependencies,
             http_allowlist,
             config,
-            subscriptions,
+            triggers,
             extensions: manifest.extensions,
         })
     }

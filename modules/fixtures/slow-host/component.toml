@@ -1,5 +1,5 @@
-# slow-host test fixture. Subscribes to a single chain's blocks so the
-# supervisor invokes `on_event` once per block; the handler issues one
+# slow-host test fixture. Declares a block trigger on a single chain so the
+# supervisor invokes `on_trigger` once per block; the handler issues one
 # `chain::request` host call and returns Ok. The integration test wires
 # the chain capability to a mock provider that parks the first request
 # far past a short `[limits.dispatch].deadline_secs` override, so the
@@ -17,6 +17,6 @@ version = "0.1.0"
 logging = {}
 chain = {}
 
-[[subscription]]
-kind = "block"
+[[trigger]]
+on = "block"
 chain_id = 1

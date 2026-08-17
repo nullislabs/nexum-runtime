@@ -49,7 +49,7 @@ pub struct TestManifest {
     caps: Vec<String>,
     http_allow: Vec<String>,
     config: Vec<(String, String)>,
-    subscriptions: Vec<toml::Table>,
+    triggers: Vec<toml::Table>,
 }
 
 impl TestManifest {
@@ -61,7 +61,7 @@ impl TestManifest {
             caps: Vec::new(),
             http_allow: Vec::new(),
             config: Vec::new(),
-            subscriptions: Vec::new(),
+            triggers: Vec::new(),
         }
     }
 
@@ -89,45 +89,45 @@ impl TestManifest {
         self
     }
 
-    /// Add a `[[subscription]]` on new blocks for one chain.
-    pub fn block_sub(mut self, chain_id: u64) -> Self {
-        self.subscriptions.push(subscription("block", chain_id));
+    /// Add a `[[trigger]]` on new blocks for one chain.
+    pub fn block_trigger(mut self, chain_id: u64) -> Self {
+        self.triggers.push(trigger("block", chain_id));
         self
     }
 
-    /// Append an unfiltered `chain-log` subscription on `chain_id`.
-    pub fn chain_log_sub(mut self, chain_id: u64) -> Self {
-        self.subscriptions.push(subscription("chain-log", chain_id));
+    /// Append an unfiltered `event` trigger on `chain_id`.
+    pub fn event_trigger(mut self, chain_id: u64) -> Self {
+        self.triggers.push(trigger("event", chain_id));
         self
     }
 
-    /// Append a filtered `chain-log` subscription; an omitted filter key is absent
+    /// Append a filtered `event` trigger; an omitted filter key is absent
     /// from the emitted table, never empty.
-    pub fn chain_log_sub_filtered(
+    pub fn event_trigger_filtered(
         mut self,
         chain_id: u64,
         address: Option<&str>,
         event_signature: Option<&str>,
     ) -> Self {
-        let mut sub = subscription("chain-log", chain_id);
+        let mut table = trigger("event", chain_id);
         if let Some(address) = address {
-            sub.insert("address".into(), address.into());
+            table.insert("address".into(), address.into());
         }
         if let Some(signature) = event_signature {
-            sub.insert("event_signature".into(), signature.into());
+            table.insert("event_signature".into(), signature.into());
         }
-        self.subscriptions.push(sub);
+        self.triggers.push(table);
         self
     }
 
-    /// Append an extension subscription; no filters admits every event of the kind.
-    pub fn extension_sub(mut self, kind: &str, filters: &[(&str, &str)]) -> Self {
-        let mut sub = toml::Table::new();
-        sub.insert("kind".into(), kind.into());
+    /// Append an extension trigger; no filters admits every delivery of the kind.
+    pub fn extension_trigger(mut self, kind: &str, filters: &[(&str, &str)]) -> Self {
+        let mut table = toml::Table::new();
+        table.insert("on".into(), kind.into());
         for (key, value) in filters {
-            sub.insert((*key).into(), (*value).into());
+            table.insert((*key).into(), (*value).into());
         }
-        self.subscriptions.push(sub);
+        self.triggers.push(table);
         self
     }
 
@@ -172,13 +172,10 @@ impl TestManifest {
                 .collect();
             root.insert("config".into(), config.into());
         }
-        if !self.subscriptions.is_empty() {
-            let subs: Vec<toml::Value> = self
-                .subscriptions
-                .iter()
-                .map(|s| s.clone().into())
-                .collect();
-            root.insert("subscription".into(), subs.into());
+        if !self.triggers.is_empty() {
+            let triggers: Vec<toml::Value> =
+                self.triggers.iter().map(|s| s.clone().into()).collect();
+            root.insert("trigger".into(), triggers.into());
         }
         toml::to_string(&root).expect("serialize the test manifest")
     }
@@ -196,18 +193,18 @@ impl TestManifest {
     }
 }
 
-fn subscription(kind: &str, chain_id: u64) -> toml::Table {
-    let mut sub = toml::Table::new();
-    sub.insert("kind".into(), kind.into());
+fn trigger(on: &str, chain_id: u64) -> toml::Table {
+    let mut table = toml::Table::new();
+    table.insert("on".into(), on.into());
     let chain_id = i64::try_from(chain_id).expect("chain id fits a TOML integer");
-    sub.insert("chain_id".into(), chain_id.into());
-    sub
+    table.insert("chain_id".into(), chain_id.into());
+    table
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::manifest::{CapabilityRegistry, Subscription, load};
+    use crate::manifest::{CapabilityRegistry, Trigger, load};
 
     /// Load through the real write-then-parse path with the core registry.
     fn load_core(manifest: &TestManifest) -> crate::manifest::LoadedManifest {
@@ -221,13 +218,13 @@ mod tests {
     }
 
     #[test]
-    fn emitted_manifest_loads_with_name_caps_and_subscriptions() {
+    fn emitted_manifest_loads_with_name_caps_and_triggers() {
         let loaded = load_core(
             &TestManifest::new("example")
                 .cap("logging")
                 .cap("chain")
-                .block_sub(1)
-                .chain_log_sub(11_155_111),
+                .block_trigger(1)
+                .event_trigger(11_155_111),
         );
 
         assert_eq!(loaded.name.as_str(), "example");
@@ -240,12 +237,12 @@ mod tests {
             ["chain", "logging"],
         );
 
-        let subs = &loaded.subscriptions;
-        assert_eq!(subs.len(), 2, "both subscriptions parsed: {subs:?}");
-        assert!(matches!(subs[0], Subscription::Block { chain_id: 1 }));
+        let triggers = &loaded.triggers;
+        assert_eq!(triggers.len(), 2, "both triggers parsed: {triggers:?}");
+        assert!(matches!(triggers[0], Trigger::Block { chain_id: 1 }));
         assert!(matches!(
-            subs[1],
-            Subscription::ChainLog {
+            triggers[1],
+            Trigger::Event {
                 chain_id: 11_155_111,
                 address: None,
                 event_signature: None,
@@ -317,7 +314,7 @@ mod tests {
     }
 
     #[test]
-    fn chain_log_filters_and_extension_kinds_reach_the_loaded_subscriptions() {
+    fn event_filters_and_extension_kinds_reach_the_loaded_triggers() {
         const ADDRESS: &str = "0xbA3cB449bD2B4ADddBc894D8697F5170800EAdeC";
         const TOPIC: &str = "0xcf5f9de2984132265203b5c335b25727702ca77262ff622e136baa7362bf1da9";
         let address: alloy_primitives::Address = ADDRESS.parse().unwrap();
@@ -326,38 +323,39 @@ mod tests {
         let loaded = load_core(
             &TestManifest::new("example")
                 .cap("logging")
-                .chain_log_sub_filtered(1, Some(ADDRESS), Some(TOPIC))
-                .chain_log_sub_filtered(2, Some(ADDRESS), None)
-                .extension_sub("acme-status", &[])
-                .extension_sub("acme-status", &[("scope", "primary")]),
+                .event_trigger_filtered(1, Some(ADDRESS), Some(TOPIC))
+                .event_trigger_filtered(2, Some(ADDRESS), None)
+                .extension_trigger("acme-status", &[])
+                .extension_trigger("acme-status", &[("scope", "primary")]),
         );
 
-        let subs = &loaded.subscriptions;
+        let triggers = &loaded.triggers;
         assert!(
             matches!(
-                &subs[0],
-                Subscription::ChainLog { chain_id: 1, address: Some(a), event_signature: Some(t), .. }
+                &triggers[0],
+                Trigger::Event { chain_id: 1, address: Some(a), event_signature: Some(t), .. }
                     if *a == address && *t == topic
             ),
-            "both filters land: {subs:?}",
+            "both filters land: {triggers:?}",
         );
         assert!(
             matches!(
-                &subs[1],
-                Subscription::ChainLog { chain_id: 2, address: Some(a), event_signature: None, .. }
+                &triggers[1],
+                Trigger::Event { chain_id: 2, address: Some(a), event_signature: None, .. }
                     if *a == address
             ),
-            "an omitted topic stays unfiltered: {subs:?}",
+            "an omitted topic stays unfiltered: {triggers:?}",
         );
         assert!(
-            matches!(&subs[2], Subscription::Extension { kind, filters }
-                if kind == "acme-status" && filters.is_empty()),
-            "an unknown kind parses as an extension subscription: {subs:?}",
+            matches!(&triggers[2], Trigger::Extension { extension_kind, filters }
+                if extension_kind == "acme-status" && filters.is_empty()),
+            "an unknown kind parses as an extension trigger: {triggers:?}",
         );
         assert!(
-            matches!(&subs[3], Subscription::Extension { kind, filters }
-                if kind == "acme-status" && filters.get("scope").is_some_and(|v| v == "primary")),
-            "attribute filters ride the same table: {subs:?}",
+            matches!(&triggers[3], Trigger::Extension { extension_kind, filters }
+                if extension_kind == "acme-status"
+                    && filters.get("scope").is_some_and(|v| v == "primary")),
+            "attribute filters ride the same table: {triggers:?}",
         );
     }
 
@@ -367,14 +365,14 @@ mod tests {
     fn manifest_and_require_are_sugar_over_new_and_cap() {
         let sugar = manifest("example")
             .require(["logging", "chain"])
-            .block_sub(1)
-            .chain_log_sub(100)
+            .block_trigger(1)
+            .event_trigger(100)
             .to_toml();
         let explicit = TestManifest::new("example")
             .cap("logging")
             .cap("chain")
-            .block_sub(1)
-            .chain_log_sub(100)
+            .block_trigger(1)
+            .event_trigger(100)
             .to_toml();
         assert_eq!(sugar, explicit);
     }
@@ -388,8 +386,8 @@ mod tests {
             .cap("http")
             .http_allow("127.0.0.1")
             .config("threshold", "2500.00")
-            .block_sub(1)
-            .chain_log_sub_filtered(11_155_111, Some("0xabc"), None)
+            .block_trigger(1)
+            .event_trigger_filtered(11_155_111, Some("0xabc"), None)
             .to_toml();
         let golden = r#"[component]
 name = "golden"
@@ -402,14 +400,14 @@ hosts = ["127.0.0.1"]
 
 [dependencies.logging]
 
-[[subscription]]
+[[trigger]]
 chain_id = 1
-kind = "block"
+on = "block"
 
-[[subscription]]
+[[trigger]]
 address = "0xabc"
 chain_id = 11155111
-kind = "chain-log"
+on = "event"
 "#;
         assert_eq!(toml, golden);
     }
@@ -440,11 +438,11 @@ kind = "chain-log"
         let dir = tempfile::tempdir().expect("tempdir");
         let a = TestManifest::new("module-a")
             .cap("logging")
-            .block_sub(1)
+            .block_trigger(1)
             .write_as(&dir.path().join("a.toml"));
         let b = TestManifest::new("module-b")
             .cap("logging")
-            .block_sub(100)
+            .block_trigger(100)
             .write_as(&dir.path().join("b.toml"));
 
         assert_eq!(load_path(&a).name.as_str(), "module-a");

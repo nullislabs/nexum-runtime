@@ -5,7 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Evil-by-design fixture: on every event runs an unbounded loop to exhaust the wasmtime fuel budget. Engine must trap with OutOfFuel + mark the module dead."
+description = "Evil-by-design fixture: on every trigger runs an unbounded loop to exhaust the wasmtime fuel budget. Engine must trap with OutOfFuel + mark the module dead."
 
 [lib]
 crate-type = ["cdylib"]

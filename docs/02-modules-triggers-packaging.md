@@ -1,9 +1,9 @@
-# Component lifecycle, event system, and packaging
+# Component lifecycle, trigger system, and packaging
 
 ## The component bundle
 
-A component is distributed as a bundle: a WASM component plus a manifest that declares its identity, its event subscriptions, and the capabilities it depends on.
-The manifest is the bridge between packaging, the event system, and the runtime lifecycle.
+A component is distributed as a bundle: a WASM component plus a manifest that declares its identity, its triggers, and the capabilities it depends on.
+The manifest is the bridge between packaging, the trigger system, and the runtime lifecycle.
 See [ADR-0016](adr/0016-component-vocabulary.md) and [ADR-0020](adr/0020-retire-component-kind.md).
 
 ### Manifest (`component.toml`)
@@ -34,21 +34,21 @@ local-store = {}
 logging     = {}
 http        = { hosts = ["api.cow.fi"] }
 
-# Event subscriptions: what the runtime feeds this component.
-[[subscription]]
-kind = "block"
+# Triggers: what the runtime feeds this component.
+[[trigger]]
+on = "block"
 chain_id = 42161
 
-[[subscription]]
-kind = "chain-log"
+[[trigger]]
+on = "event"
 chain_id = 42161
 address = "0xfdaFc9d1902f4e0b84f65F49f244b32b31013b74"
 event_signature = "0x0000000000000000000000000000000000000000000000000000000000000000"
 resume = true
 
-[[subscription]]
-kind = "cron"
-schedule = "*/5 * * * *"
+[[trigger]]
+on = "schedule"
+cron = "*/5 * * * *"
 
 # Opaque config, handed to the guest as string pairs.
 [config]
@@ -64,10 +64,10 @@ Key design points:
   The pin is optional: an absent pin loads with a warning, unless `require_component_digest = true` under `[engine]` in `engine.toml` makes it a boot error.
   The operator can pin the same artifact independently with `digest` on its `[[modules]]` entry in `engine.toml`, and the warning is silent when that pin covers the artifact, because the bytes are verified either way.
   A refusal names which of the two pins the bytes disagree with, so the operator knows which file to edit.
-- **`[[subscription]]` blocks are declarative.**
-  A component does not set up its own subscriptions imperatively.
-  The runtime loads each component and runs its `init` first, then derives the subscription plan from the booted supervisor and opens the event sources.
-  `call_init` runs during load in `crates/nexum-runtime/src/supervisor/load.rs`, and `subscription_plan` reads the already-booted supervisor in `crates/nexum-runtime/src/supervisor/subscriptions.rs`.
+- **`[[trigger]]` tables are declarative.**
+  A component does not open its own sources imperatively.
+  The runtime loads each component and runs its `init` first, then derives the plan from the booted supervisor and opens the sources.
+  `call_init` runs during load in `crates/nexum-runtime/src/supervisor/load.rs`, and `trigger_plan` reads the already-booted supervisor in `crates/nexum-runtime/src/supervisor/triggers.rs`.
 - **`[dependencies]` drives what the runtime links.**
   Each key names a host capability, and its table carries the attributes that qualify it.
   A component that declares `http` imports `wasi:http/outgoing-handler`, the SDK's `http::fetch` helper wraps it, and the host checks every outgoing request against the `hosts` list on the `http` dependency.
@@ -75,9 +75,9 @@ Key design points:
 - **The `[dependencies]` table is mandatory.**
   A manifest with no table at all is refused; an empty table is valid and grants nothing.
   `hosts` qualifies the `http` dependency and nothing else, and it is refused anywhere else rather than silently dropped.
-- **Chain ids are declared per subscription**, not in a top-level `[chains]` table.
-  Each `[[subscription]]` names its own `chain_id`.
-  If `engine.toml` carries no `[chains.<id>]` entry for a chain a subscription names, the engine refuses the boot in the prepass, before any component is compiled.
+- **Chain ids are declared per trigger**, not in a top-level `[chains]` table.
+  Each `[[trigger]]` names its own `chain_id`.
+  If `engine.toml` carries no `[chains.<id>]` entry for a chain a trigger names, the engine refuses the boot in the prepass, before any component is compiled.
 - **`[config]` is opaque to the runtime.**
   The guest receives `list<tuple<string, string>>`.
   The host flattens each TOML scalar to its text form on the way through, and renders an array or a table as its TOML representation.
@@ -137,12 +137,12 @@ stateDiagram-v2
 
 | Value | Meaning |
 |---|---|
-| **Alive** | Dispatchable. The only value that receives events. |
+| **Alive** | Dispatchable. The only value that receives triggers. |
 | **Backoff** | A trap or a deadline hit ended the run. The supervisor revives it when the backoff expires. |
 | **Dead** | The boot-time `init` returned a fault. Permanent: the supervisor never restarts it. |
 | **Poisoned** | Too many failures inside the poison window. Terminal for the process; only an operator restart clears it. |
 
-Load itself is ordered: the prepass resolves every manifest, claims namespaces, and gates subscribed chains against `[chains]`; then modules load.
+Load itself is ordered: the prepass resolves every manifest, claims namespaces, and gates triggered chains against `[chains]`; then modules load.
 
 The backoff schedule doubles from 1 s and caps at 300 s, jittered into the upper half of each step so modules that failed together do not retry together.
 The poison policy is 5 failures inside 600 s by default, configurable under `[limits.poison]`.
@@ -167,22 +167,22 @@ A successful dispatch resets the module's failure count.
 - **Poison recovery is operator work.**
   The failure ring is in memory and clears at process start.
 
-## Event system
+## Trigger system
 
 ### Architecture
 
 ```mermaid
 flowchart TD
-    subgraph SRC["Event sources"]
+    subgraph SRC["Sources"]
         BS["Block streams (per chain)"]
-        LW["Chain-log streams (per subscription)"]
+        LW["Log streams (per event trigger)"]
         EX["Extension streams"]
     end
 
     subgraph NR["nexum-runtime"]
         SRC
         EL["Event loop\n(one select over every source)"]
-        SUP["Supervisor\n(matches the subscription plan)"]
+        SUP["Supervisor\n(matches the trigger plan)"]
         MA["Component A"]
         MB["Component B"]
     end
@@ -195,26 +195,26 @@ flowchart TD
     SUP --> MB
 ```
 
-### Event sources
+### Triggers and their sources
 
-| Source | Trigger | Backed by |
+| Trigger | Fires on | Source |
 |---|---|---|
-| `block` | New block on a chain | `eth_subscribe("newHeads")` over an alloy provider, or polling on an HTTP URL |
-| `chain-log` | Matching log emitted | An `eth_getLogs` block-range poller, alloy's `watch_canonical_logs_from`, reorg-aware and backfilling from the start block on open |
-| `cron` | Not dispatched | Parsed and inert. The supervisor warns at load. |
-| extension kinds | Whatever the extension opens | `Extension::events` |
+| `block` | A new block on a chain | `eth_subscribe("newHeads")` over an alloy provider, or polling on an HTTP URL |
+| `event` | A log matching the filters | An `eth_getLogs` block-range poller, alloy's `watch_canonical_logs_from`, reorg-aware and backfilling from the start block on open |
+| `schedule` | Not dispatched | Parsed and inert. The supervisor warns at load. |
+| extension kinds | Whatever the extension delivers | `Extension::open_sources` |
 
 Block streams are shared per chain.
-If two components subscribe to blocks on chain 42161, the runtime opens one block subscription and fans it out to both.
-A chain-log stream is opened per subscription and tagged with the owning component.
+If two components declare block triggers on chain 42161, the runtime opens one block stream and fans it out to both.
+A log stream is opened per event trigger and tagged with the owning component.
 
 Only a dispatchable component contributes to the plan, so no stream opens for a dead or poisoned one.
 
 ### Dispatch
 
 There is no router struct and no per-component inbox.
-One `run` loop owns the supervisor, selects one event from the merged sources, and dispatches it before it selects again (`crates/nexum-runtime/src/runtime/event_loop.rs`).
-For one event, the supervisor walks the matching components serially and awaits each in turn (`crates/nexum-runtime/src/supervisor/dispatch.rs`).
+One `run` loop owns the supervisor, selects one trigger from the merged sources, and dispatches it before it selects again (`crates/nexum-runtime/src/runtime/event_loop.rs`).
+For one trigger, the supervisor walks the matching components serially and awaits each in turn (`crates/nexum-runtime/src/supervisor/dispatch.rs`).
 
 - **Serial, not concurrent.**
   A slow component delays the whole engine.
@@ -224,16 +224,16 @@ For one event, the supervisor walks the matching components serially and awaits 
   Interleaving between two different sources is not deterministic.
 - **Rate limited per component.**
   Each component holds a token bucket, checked before the guest is entered: `burst` 256 and `refill_per_sec` 128 by default, configurable under `[limits.dispatch]`.
-  An event over the rate is dropped, counted in `nexum_runtime_dispatch_dropped_total`, and never retried.
+  A trigger over the rate is dropped, counted in `nexum_runtime_dispatch_dropped_total`, and never retried.
   The bucket carries across a restart.
 - **No acknowledgement.**
-  A successful return from `on-event` is not an ack.
+  A successful return from `on-trigger` is not an ack.
   A component that needs progress tracking writes it to the local store itself.
 - **Cursors commit only after a successful dispatch.**
-  A `resume` chain-log subscription persists its cursor after each successful dispatch, so a dropped or failed dispatch is re-delivered on the next boot rather than skipped.
-- **Catch-up is the component's job, except for chain-log backfill.**
-  The engine backfills the gap for a `resume` subscription on reconnect, capped by `max_lookback`.
-  Anything else, for example a gap across a restart on a non-resume subscription, is for the component to detect in `init` and to backfill through `chain::request`.
+  A `resume` event trigger persists its cursor after each successful dispatch, so a dropped or failed dispatch is re-delivered on the next boot rather than skipped.
+- **Catch-up is the component's job, except for log backfill.**
+  The engine backfills the gap for a `resume` trigger on reconnect, capped by `max_lookback`.
+  Anything else, for example a gap across a restart on a non-resume trigger, is for the component to detect in `init` and to backfill through `chain::request`.
 
 ### What bounds one dispatch
 
@@ -248,16 +248,16 @@ Two mechanisms, and no others:
 The host does not use epoch interruption.
 `wasmtime_config` sets `wasm_component_model` and `consume_fuel` and nothing else (`crates/nexum-runtime/src/builder.rs:148-149`).
 
-### Event encoding
+### Trigger encoding
 
-Events cross the WASM boundary as the `event` variant in `wit/nexum-host/types.wit`:
+Triggers cross the WASM boundary as the `trigger` variant in `wit/nexum-host/types.wit`:
 
 ```wit
-variant event {
+variant trigger {
     block(block),
-    chain-logs(chain-logs),
-    tick(tick),
-    custom(custom-event),
+    event(log),
+    schedule(schedule-tick),
+    extension(extension-trigger),
 }
 
 record block {
@@ -267,28 +267,28 @@ record block {
     timestamp: u64,
 }
 
-record tick {
+record schedule-tick {
     fired-at: u64,
 }
 
-record custom-event {
-    kind: string,
+record extension-trigger {
+    extension-kind: string,
     payload: list<u8>,
 }
 ```
 
 The canonical ABI carries the data, handled by `bindgen!`.
 Every `u64` timestamp in the package is milliseconds since the Unix epoch, UTC.
-`custom` is the generic extension event: the core routes it by `kind` and never reads `payload`, and the subscribing component decodes it against the extension that emitted it.
+`extension` is the generic extension trigger: the core routes it by `extension-kind` and never reads `payload`, and the declaring component decodes it against the extension that emitted it.
 
 ## The `nexum:host` world
 
 The universal package is `nexum:host@0.1.0`, and it is a leaf: it imports no other package.
-`wit/nexum-host/event-module.wit` declares the world a module is built against.
+`wit/nexum-host/trigger-module.wit` declares the world a module is built against.
 
 ```wit
-world event-module {
-    use types.{config, event, fault};
+world trigger-module {
+    use types.{config, trigger, fault};
 
     import chain;
     import identity;
@@ -297,7 +297,7 @@ world event-module {
     import logging;
 
     export init: func(config: config) -> result<_, fault>;
-    export on-event: func(event: event) -> result<_, fault>;
+    export on-trigger: func(trigger: trigger) -> result<_, fault>;
 }
 ```
 
@@ -319,7 +319,7 @@ An operator deploys a module:
    path = "/var/nexum/twap-monitor/twap_monitor.wasm"
 
 2. The prepass resolves the sibling component.toml, claims the name as a
-   local-store namespace, and checks that every subscribed chain has a
+   local-store namespace, and checks that every triggered chain has a
    [chains.<id>] entry.
 
 3. The supervisor reads the artifact, verifies sha256 against
@@ -331,16 +331,16 @@ An operator deploys a module:
 5. It builds a fresh Store under the resolved limits, instantiates, and
    calls init(config).
 
-6. Once every component has loaded, the runtime derives the subscription
-   plan and opens the event sources:
-   - one block stream per subscribed chain
-   - one chain-log stream per chain-log subscription, seeded from its
+6. Once every component has loaded, the runtime derives the plan and
+   opens the sources:
+   - one block stream per triggered chain
+   - one log stream per event trigger, seeded from its
      durable cursor when resume = true
 
-7. Events flow:
+7. Triggers flow:
    block 19_000_001 on Arbitrum
    -> event loop -> supervisor matches the plan
-   -> await on-event(event::block(...)) on each matching component
+   -> await on-trigger(trigger::block(...)) on each matching component
    -> the component calls chain::request and local-store::set
    -> Ok(()) commits the block marker and the loop selects again
 

@@ -24,25 +24,25 @@ fn price_alert(threshold: &str) -> TestManifest {
     let mut manifest = TestManifest::new("price-alert")
         .cap("logging")
         .cap("chain")
-        .block_sub(SEPOLIA);
+        .block_trigger(SEPOLIA);
     for (key, value) in price_alert_config(threshold) {
         manifest = manifest.config(key, value);
     }
     manifest
 }
 
-/// Loaded but dead: no dispatch, no chain-facing subscription, and the
-/// dropped subscriptions stay attributable.
+/// Loaded but dead: no dispatch, no chain-facing stream, and the
+/// dropped triggers stay attributable.
 #[tokio::test]
-async fn init_failure_marks_module_dead_excluding_dispatch_and_subscriptions() {
+async fn init_failure_marks_module_dead_excluding_dispatch_and_triggers() {
     let Some(wasm) = module_wasm_or_skip("price-alert") else {
         return;
     };
-    // Both a block and a filtered chain-log subscription, so both filter
+    // Both a block and a filtered event trigger, so both filter
     // paths are exercised.
     let mut booted = BootScenario::new()
         .wasm(wasm)
-        .module(price_alert("not-a-number").chain_log_sub_filtered(
+        .module(price_alert("not-a-number").event_trigger_filtered(
             SEPOLIA,
             Some("0xbA3cB449bD2B4ADddBc894D8697F5170800EAdeC"),
             Some("0xcf5f9de2984132265203b5c335b25727702ca77262ff622e136baa7362bf1da9"),
@@ -60,27 +60,27 @@ async fn init_failure_marks_module_dead_excluding_dispatch_and_subscriptions() {
     assert_eq!(
         booted.dispatch_block_on(SEPOLIA).await,
         0,
-        "no live module is subscribed to chain 11155111 blocks",
+        "no live module declares chain 11155111 blocks",
     );
-    let plan = booted.supervisor.subscription_plan();
+    let plan = booted.supervisor.trigger_plan();
     assert!(
         plan.block_chains.is_empty(),
         "dead module must not contribute block chains",
     );
     assert!(
-        plan.chain_log_subs.is_empty(),
-        "dead module must not contribute chain-log subscriptions",
+        plan.event_triggers.is_empty(),
+        "dead module must not contribute chain-log streams",
     );
     assert_eq!(
         plan.viability(0),
-        Viability::DeadHoldSubs,
-        "the filtered-out subscriptions must be attributed to the dead module",
+        Viability::DeadHoldTriggers,
+        "the filtered-out triggers must be attributed to the dead module",
     );
 }
 
-/// Positive control: the alive module's subscriptions survive the filter.
+/// Positive control: the alive module's triggers survive the filter.
 #[tokio::test]
-async fn alive_module_subscriptions_survive_alongside_dead_module() {
+async fn alive_module_triggers_survive_alongside_dead_module() {
     let Some(price_alert_wasm) = module_wasm_or_skip("price-alert") else {
         return;
     };
@@ -90,7 +90,8 @@ async fn alive_module_subscriptions_survive_alongside_dead_module() {
     let booted = BootScenario::new()
         .module(Entry::new(price_alert("not-a-number")).wasm(price_alert_wasm))
         .module(
-            Entry::new(TestManifest::new("example").cap("logging").block_sub(1)).wasm(example_wasm),
+            Entry::new(TestManifest::new("example").cap("logging").block_trigger(1))
+                .wasm(example_wasm),
         )
         .boot()
         .await
@@ -102,7 +103,7 @@ async fn alive_module_subscriptions_survive_alongside_dead_module() {
         1,
         "only the example is alive"
     );
-    let plan = booted.supervisor.subscription_plan();
+    let plan = booted.supervisor.trigger_plan();
     assert_eq!(
         plan.block_chains.iter().map(|c| c.id()).collect::<Vec<_>>(),
         vec![1],
@@ -111,11 +112,11 @@ async fn alive_module_subscriptions_survive_alongside_dead_module() {
     assert_eq!(
         plan.viability(0),
         Viability::Live,
-        "one live subscription keeps the plan viable despite the dead module",
+        "one live trigger keeps the plan viable despite the dead module",
     );
 }
 
-/// Declares two subscription kinds and opens no event source for either.
+/// Declares two trigger kinds and opens no source for either.
 struct Ticker;
 
 impl Extension<CoreRuntime> for Ticker {
@@ -131,13 +132,13 @@ impl Extension<CoreRuntime> for Ticker {
     fn link(&self, _linker: &mut Linker<HostState<CoreRuntime>>) -> anyhow::Result<()> {
         Ok(())
     }
-    fn subscriptions(&self) -> &'static [&'static str] {
+    fn emits_trigger_kinds(&self) -> &'static [&'static str] {
         &["alarms", "ticks"]
     }
 }
 
 /// One health filter covers extension kinds too: a dead module's kind opens
-/// no extension event source, while a live module's survives.
+/// no extension source, while a live module's survives.
 #[tokio::test]
 async fn dead_module_extension_kind_is_excluded_from_the_plan() {
     let Some(price_alert_wasm) = module_wasm_or_skip("price-alert") else {
@@ -149,14 +150,14 @@ async fn dead_module_extension_kind_is_excluded_from_the_plan() {
     let booted = BootScenario::new()
         .extensions([Arc::new(Ticker) as Arc<dyn Extension<CoreRuntime>>])
         .module(
-            Entry::new(price_alert("not-a-number").extension_sub("alarms", &[]))
+            Entry::new(price_alert("not-a-number").extension_trigger("alarms", &[]))
                 .wasm(price_alert_wasm),
         )
         .module(
             Entry::new(
                 TestManifest::new("example")
                     .cap("logging")
-                    .extension_sub("ticks", &[]),
+                    .extension_trigger("ticks", &[]),
             )
             .wasm(example_wasm),
         )
@@ -164,7 +165,7 @@ async fn dead_module_extension_kind_is_excluded_from_the_plan() {
         .await
         .expect("both modules load; only price-alert's init fails");
 
-    let plan = booted.supervisor.subscription_plan();
+    let plan = booted.supervisor.trigger_plan();
     assert_eq!(
         plan.extension_kinds
             .iter()
@@ -180,8 +181,8 @@ async fn dead_module_extension_kind_is_excluded_from_the_plan() {
     );
     assert_eq!(
         plan.viability(0),
-        Viability::DeadHoldSubs,
-        "with no source opened, the dead module's subscriptions are the only ones left",
+        Viability::DeadHoldTriggers,
+        "with no source opened, the dead module's triggers are the only ones left",
     );
 }
 
@@ -198,7 +199,7 @@ async fn a_declared_extension_kind_alone_is_not_viable() {
             Entry::new(
                 TestManifest::new("example")
                     .cap("logging")
-                    .extension_sub("ticks", &[]),
+                    .extension_trigger("ticks", &[]),
             )
             .wasm(example_wasm),
         )
@@ -206,7 +207,7 @@ async fn a_declared_extension_kind_alone_is_not_viable() {
         .await
         .expect("the example boots alive");
 
-    let plan = booted.supervisor.subscription_plan();
+    let plan = booted.supervisor.trigger_plan();
     assert_eq!(plan.extension_kinds.len(), 1, "the live kind is declared");
     assert_eq!(
         plan.viability(0),
@@ -340,7 +341,8 @@ async fn resource_limit_dead_bomb_does_not_starve_healthy_module() {
             .wasm(bomb_wasm),
         )
         .module(
-            Entry::new(TestManifest::new("example").cap("logging").block_sub(1)).wasm(example_wasm),
+            Entry::new(TestManifest::new("example").cap("logging").block_trigger(1))
+                .wasm(example_wasm),
         )
         .boot()
         .await
@@ -378,7 +380,7 @@ async fn restart_flaky_module_recovers_after_backoff() {
             TestManifest::new("flaky-bomb")
                 .cap("logging")
                 .cap("local-store")
-                .block_sub(1)
+                .block_trigger(1)
                 .config("fail_first_n", "1"),
         )
         .boot()

@@ -5,7 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Proc-macro glue for nexum runtime modules: #[module] emits the per-cdylib wit-bindgen, host adapter, event dispatch, and export."
+description = "Proc-macro glue for nexum runtime modules: #[module] emits the per-cdylib wit-bindgen, host adapter, trigger dispatch, and export."
 
 [lib]
 proc-macro = true

@@ -479,7 +479,7 @@ mod tests {
         };
         let mut booted = BootScenario::new()
             .wasm(&wasm)
-            .module(TestManifest::new("example").cap("logging").block_sub(1))
+            .module(TestManifest::new("example").cap("logging").block_trigger(1))
             .boot()
             .await
             .expect("scenario boot");
@@ -500,12 +500,12 @@ mod tests {
         };
         let mut booted = BootScenario::new()
             .wasm(&example)
-            .module(TestManifest::new("example").cap("logging").block_sub(1))
+            .module(TestManifest::new("example").cap("logging").block_trigger(1))
             .module(
                 Entry::new(
                     TestManifest::new("clock-reader")
                         .cap("logging")
-                        .block_sub(1),
+                        .block_trigger(1),
                 )
                 .wasm(&reader),
             )
@@ -550,7 +550,7 @@ mod tests {
             .module(
                 TestManifest::new("clock-reader")
                     .cap("logging")
-                    .block_sub(1),
+                    .block_trigger(1),
             )
             .extensions([capture])
             .clock(clock.as_override())

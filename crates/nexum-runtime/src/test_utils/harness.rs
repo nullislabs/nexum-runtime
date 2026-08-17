@@ -204,12 +204,12 @@ impl TestRuntime {
         self.handle.logs()
     }
 
-    /// Deliver a block header to the module's open block subscription.
+    /// Deliver a block header to the module's open block stream.
     pub fn push_block(&self, header: Header) {
         self.chain.push_block(header);
     }
 
-    /// Deliver a log to the module's open chain-log subscription.
+    /// Deliver a log to the module's open chain-log stream.
     pub fn push_chain_log(&self, log: Log) {
         self.chain.push_chain_log(log);
     }
@@ -265,7 +265,10 @@ mod tests {
     use crate::test_utils::{TestManifest, example_wasm_or_skip, manifest, module_wasm_or_skip};
 
     fn example_block_manifest() -> String {
-        manifest("example").cap("logging").block_sub(1).to_toml()
+        manifest("example")
+            .cap("logging")
+            .block_trigger(1)
+            .to_toml()
     }
 
     /// A block manifest plus a `[component].digest` pin of the wasm's bytes.
@@ -276,14 +279,14 @@ mod tests {
         manifest(name)
             .cap("logging")
             .component_digest(digest.to_string())
-            .block_sub(chain_id)
+            .block_trigger(chain_id)
             .to_toml()
     }
 
     fn price_alert_manifest() -> String {
         manifest("price-alert")
             .require(["logging", "chain"])
-            .block_sub(1)
+            .block_trigger(1)
             .config(
                 "oracle_address",
                 "0x694AA1769357215DE4FAC081bf1f309aDC325306",
@@ -319,7 +322,7 @@ mod tests {
         let record = rt
             .wait_for_log("example", "block 19000000")
             .await
-            .expect("the on_event log line lands after dispatch");
+            .expect("the on_trigger log line lands after dispatch");
         assert_eq!(
             record.source,
             crate::host::logs::LogSource::HostInterface,
@@ -352,10 +355,10 @@ mod tests {
         rt.wait().await.expect("clean shutdown");
     }
 
-    /// End-to-end on the chain-log leg: launch with a `chain-log`
-    /// subscription, inject a log, and read the module's log line back.
+    /// End-to-end on the event leg: launch with an `event`
+    /// trigger, inject a log, and read the module's log line back.
     #[tokio::test]
-    async fn harness_dispatches_chain_logs() {
+    async fn harness_dispatches_events() {
         let Some(wasm) = example_wasm_or_skip() else {
             return;
         };
@@ -364,17 +367,17 @@ mod tests {
             .manifest_inline(
                 TestManifest::new("example")
                     .cap("logging")
-                    .chain_log_sub(1)
+                    .event_trigger(1)
                     .to_toml(),
             )
             .launch()
             .await
-            .expect("launch example on the chain-log leg");
+            .expect("launch example on the event leg");
 
         rt.push_chain_log(Log::default());
-        rt.wait_for_log("example", "received 1 chain-log entries")
+        rt.wait_for_log("example", "event with 0 topics on chain 1")
             .await
-            .expect("the chain-log line lands after dispatch");
+            .expect("the event line lands after dispatch");
 
         rt.shutdown();
         rt.wait().await.expect("clean shutdown");
@@ -459,7 +462,7 @@ mod tests {
         rt.push_block(header_numbered(19_000_000));
         rt.wait_for_log("example", "block 19000000")
             .await
-            .expect("the on_event log line lands after dispatch");
+            .expect("the on_trigger log line lands after dispatch");
 
         let runs = rt.logs().list_runs("example");
         assert_eq!(runs.len(), 1, "one run recorded");
@@ -477,7 +480,7 @@ mod tests {
 
     /// End to end on the chain-request leg: program the mock `eth_call`,
     /// launch price-alert, inject a block, and read its alert line back; the
-    /// programmed answer is above threshold, so the module logs TRIGGERED.
+    /// programmed answer is above threshold, so the module logs the alert.
     #[tokio::test]
     async fn harness_serves_chain_requests_to_the_module() {
         use crate::host::component::ChainMethod;
@@ -511,7 +514,7 @@ mod tests {
             .expect("launch price-alert over the harness");
 
         rt.push_block(header_numbered(19_000_000));
-        rt.wait_for_log("price-alert", "TRIGGERED")
+        rt.wait_for_log("price-alert", "THRESHOLD CROSSED")
             .await
             .expect("the alert line lands after the oracle read");
 
@@ -530,10 +533,10 @@ mod tests {
         rt.wait().await.expect("clean shutdown");
     }
 
-    /// Both block and chain-log events dispatch in one session: the `biased`
+    /// Both block and event triggers dispatch in one session: the `biased`
     /// select in `run()` delivers both kinds without starvation.
     #[tokio::test]
-    async fn harness_delivers_block_and_chain_log_events_without_starvation() {
+    async fn harness_delivers_block_and_event_triggers_without_starvation() {
         let Some(wasm) = example_wasm_or_skip() else {
             return;
         };
@@ -542,13 +545,13 @@ mod tests {
             .manifest_inline(
                 TestManifest::new("example")
                     .cap("logging")
-                    .block_sub(1)
-                    .chain_log_sub(1)
+                    .block_trigger(1)
+                    .event_trigger(1)
                     .to_toml(),
             )
             .launch()
             .await
-            .expect("launch example subscribed to both blocks and chain-logs");
+            .expect("launch example declaring both blocks and events");
 
         // Both events are queued before either is awaited, so the biased
         // select genuinely arbitrates between two ready streams: a
@@ -563,9 +566,9 @@ mod tests {
         rt.wait_for_log("example", "block 42 on chain")
             .await
             .expect("block event dispatched");
-        rt.wait_for_log("example", "received 1 chain-log entries")
+        rt.wait_for_log("example", "event with 0 topics on chain 1")
             .await
-            .expect("chain-log event dispatched, neither event kind starved the other");
+            .expect("event dispatched, neither trigger kind starved the other");
 
         rt.shutdown();
         rt.wait().await.expect("clean shutdown");
@@ -710,16 +713,16 @@ mod tests {
             record.message,
         );
 
-        // The module never saw the oracle answer, so it must not trigger.
+        // The module never saw the oracle answer, so it must not alert.
         let runs = rt.logs().list_runs("price-alert");
-        let triggered = runs.into_iter().any(|meta| {
+        let alerted = runs.into_iter().any(|meta| {
             rt.logs()
                 .read(&meta.run, 0)
                 .records
                 .iter()
-                .any(|r| r.message.contains("TRIGGERED"))
+                .any(|r| r.message.contains("THRESHOLD CROSSED"))
         });
-        assert!(!triggered, "an over-cap response must never reach classify");
+        assert!(!alerted, "an over-cap response must never reach classify");
 
         rt.shutdown();
         rt.wait().await.expect("clean shutdown");
@@ -771,7 +774,7 @@ mod tests {
         let builder = TestRuntime::builder(wasm).manifest_inline(
             TestManifest::new("clock-reader")
                 .cap("logging")
-                .block_sub(1)
+                .block_trigger(1)
                 .to_toml(),
         );
         builder
@@ -838,7 +841,7 @@ mod tests {
             .manifest_inline(
                 TestManifest::new("env-reader")
                     .cap("logging")
-                    .block_sub(1)
+                    .block_trigger(1)
                     .to_toml(),
             )
             .launch()
@@ -908,7 +911,7 @@ mod tests {
             format!("{v:064x}")
         }
         // latestRoundData() with answer = 3000 * 10^8, above the manifest's
-        // 2500.00 threshold, so the module logs TRIGGERED.
+        // 2500.00 threshold, so the module logs the alert.
         let result = format!(
             "\"0x{}{}{}{}{}\"",
             word(1),
@@ -933,7 +936,7 @@ mod tests {
             booted
                 .records("price-alert")
                 .iter()
-                .any(|record| record.message.contains("TRIGGERED")),
+                .any(|record| record.message.contains("THRESHOLD CROSSED")),
             "the programmed oracle answer reached the module",
         );
         assert!(

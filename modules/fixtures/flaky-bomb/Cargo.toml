@@ -5,7 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Evil-by-design fixture: traps on the first N events (via unreachable!) and succeeds afterwards. The supervisor must exercise its exponential-backoff restart policy + reset the failure counter when the module recovers."
+description = "Evil-by-design fixture: traps on the first N triggers (via unreachable!) and succeeds afterwards. The supervisor must exercise its exponential-backoff restart policy + reset the failure counter when the module recovers."
 
 [lib]
 crate-type = ["cdylib"]

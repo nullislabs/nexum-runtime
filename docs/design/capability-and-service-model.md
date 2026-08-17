@@ -104,7 +104,7 @@ That would attach concept 3's word permanently to concept 4.
 It does not exist.
 A `[[services]]` entry is selected by `shared.kinds.get(name)` at `supervisor/load.rs`, against a `BTreeMap<&'static str, ServiceRow<T>>` built from extension Rust.
 A service's type is therefore its manifest `name`, which is author-controlled and checkable against nothing.
-`synthesize` emits only `world module` with fixed `init` and `on-event` exports, so no component can have a synthesized world that exports an interface.
+`synthesize` emits only `world module` with fixed `init` and `on-trigger` exports, so no component can have a synthesized world that exports an interface.
 Every `[[services]]` entry on main is an extension backend.
 
 **Becomes.**
@@ -197,7 +197,7 @@ One thing shared by accident that should not be: `build_provider_linker` calls o
 Nothing checks that the two agree.
 
 One thing the first draft claimed as justified and is not: the per-component fuel budget does not survive a service call.
-`SupervisedStore::call` refuels before every routed call, so N service calls inside one `on-event` cost N full provider budgets, none charged to the caller.
+`SupervisedStore::call` refuels before every routed call, so N service calls inside one `on-trigger` cost N full provider budgets, none charged to the caller.
 The same holds for the state quota and the memory ceiling.
 This is a defect the trampoline work must repair, not a property the model already has.
 

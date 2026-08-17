@@ -9,6 +9,7 @@ amends: 0014-local-store-durability-model.md, 0018-one-operator-policy-surface.m
 > Amendment: this record was edited after acceptance.
 > [ADR-0020](0020-retire-component-kind.md) retired the manifest `kind` field and so discharged the `module` versus `service` half of the ADR-0016 spelling deferral that the Supersession section below leaves open.
 > The sentence carries the mark in place.
+> The trigger rename respelled two core kinds, `chain-log` to `event` and `cron` to `schedule`, and the Decision text below carries the current names.
 
 ## Context
 
@@ -30,7 +31,7 @@ The naive rule "two concepts that are not one-to-one cannot share a word" is wro
 
 A trigger is why a module ran.
 The word covers the kind, the manifest declaration of one, and one delivered occurrence.
-Every layer names a kind with one string: the core set `block`, `chain-log` and `cron`, plus the kinds the composition root's extensions declare.
+Every layer names a kind with one string: the core set `block`, `event` and `schedule`, plus the kinds the composition root's extensions declare.
 The vocabulary is open across deployments and closed for one composition root, because the load path refuses an undeclared extension kind.
 Every layer spells each member the same way, so a reader never has to ask which layer holds the name.
 

@@ -13,8 +13,8 @@ logging = {}
 chain = {}
 local-store = {}
 
-[[subscription]]
-kind = "block"
+[[trigger]]
+on = "block"
 chain_id = 11155111
 
 # --- config -----------------------------------------------------------

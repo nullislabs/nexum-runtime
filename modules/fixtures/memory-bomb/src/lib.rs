@@ -1,7 +1,7 @@
 //! # memory-bomb (test fixture)
 //!
 //! Allocates past the default 64 MiB per-module memory cap on every
-//! `on_event`. The `StoreLimits` refuse the grow, the guest allocator sees
+//! `on_trigger`. The `StoreLimits` refuse the grow, the guest allocator sees
 //! the failure and aborts, the supervisor marks the module dead, and other
 //! modules keep dispatching. Test-only.
 
@@ -12,7 +12,7 @@ wit_bindgen::generate!({
     path: [
         "../../../wit/nexum-host",
     ],
-    world: "nexum:host/event-module",
+    world: "nexum:host/trigger-module",
     generate_all,
 });
 
@@ -31,7 +31,7 @@ impl Guest for MemoryBomb {
         Ok(())
     }
 
-    fn on_event(_event: types::Event) -> Result<(), Fault> {
+    fn on_trigger(_trigger: types::Trigger) -> Result<(), Fault> {
         // The default per-module cap is 64 MiB (`DEFAULT_MEMORY_LIMIT` in
         // `crates/nexum-runtime/src/engine_config/policy.rs`). Asking for
         // 128 MiB

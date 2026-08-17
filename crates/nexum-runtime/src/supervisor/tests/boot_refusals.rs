@@ -45,9 +45,9 @@ fn a_boot_refusal_increments_the_counter_under_its_parse_class() {
     );
 }
 
-/// `[dependencies]` is declared so the failing gate is the subscription kind.
+/// `[dependencies]` is declared so the failing gate is the trigger kind.
 #[tokio::test]
-async fn boot_refuses_an_undeclared_extension_subscription_kind() {
+async fn boot_refuses_an_undeclared_extension_trigger_kind() {
     let Some(wasm) = example_wasm_or_skip() else {
         return;
     };
@@ -56,12 +56,12 @@ async fn boot_refuses_an_undeclared_extension_subscription_kind() {
         .module(
             TestManifest::new("example")
                 .cap("logging")
-                .extension_sub("acme-status", &[]),
+                .extension_trigger("acme-status", &[]),
         )
         .expect_refusal()
         .await
         .variant::<LoadRefusal>(
-            |e| matches!(e, LoadRefusal::UnknownEventKind { kind, .. } if kind == "acme-status"),
+            |e| matches!(e, LoadRefusal::UnknownTriggerKind { kind, .. } if kind == "acme-status"),
         );
 }
 
@@ -98,14 +98,14 @@ async fn boot_refuses_a_nonexistent_explicit_manifest_path() {
         });
 }
 
-/// A manifest without `[dependencies]` refuses before the subscription-kind
+/// A manifest without `[dependencies]` refuses before the trigger-kind
 /// gate and before any compile.
 #[tokio::test]
 async fn boot_refuses_a_capsless_manifest_before_any_other_gate() {
     // Raw TOML: the textual absence of [dependencies] is the fixture.
     let module = "[component]\nname = \"example\"\n\n\
                   [venue]\nbody_version = 2\n\n\
-                  [[subscription]]\nkind = \"acme-status\"\n";
+                  [[trigger]]\non = \"acme-status\"\n";
     BootScenario::new()
         .module(module.to_owned())
         .expect_refusal()
@@ -115,7 +115,7 @@ async fn boot_refuses_a_capsless_manifest_before_any_other_gate() {
         })
         // Operator wording pin.
         .names("empty one grants nothing")
-        .lacks("unknown event kind")
+        .lacks("unknown trigger kind")
         .lacks("no wired extension claims")
         .lacks("compile");
 }
@@ -151,7 +151,7 @@ async fn boot_denies_an_undeclared_chain_import_for_balance_tracker() {
             TestManifest::new("balance-tracker")
                 .cap("logging")
                 .cap("local-store")
-                .block_sub(1),
+                .block_trigger(1),
         )
         .expect_refusal()
         .await
@@ -181,20 +181,20 @@ async fn boot_refuses_a_capability_the_policy_excludes() {
         .lacks("compile");
 }
 
-/// Chain events arrive through `on_event` rather than an import, so a
-/// permitted set that excludes `chain` refuses a chain subscription too.
+/// Chain data arrives through `on_trigger` rather than an import, so a
+/// permitted set that excludes `chain` refuses a chain trigger too.
 #[tokio::test]
-async fn boot_refuses_a_chain_subscription_the_policy_excludes() {
+async fn boot_refuses_a_chain_trigger_the_policy_excludes() {
     BootScenario::new()
         .policy(PolicySection {
             capabilities: Some(vec!["logging".to_owned()]),
             ..PolicySection::default()
         })
-        .module(TestManifest::new("example").cap("logging").block_sub(1))
+        .module(TestManifest::new("example").cap("logging").block_trigger(1))
         .expect_refusal()
         .await
         .variant::<LoadRefusal>(|e| {
-            matches!(e, LoadRefusal::ChainSubscriptionNotPermitted { id, permitted }
+            matches!(e, LoadRefusal::ChainTriggerNotPermitted { id, permitted }
                 if id == "m0" && permitted == "logging")
         })
         .lacks("compile");

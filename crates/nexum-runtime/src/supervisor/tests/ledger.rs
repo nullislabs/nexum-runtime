@@ -40,13 +40,13 @@ fn extension_sections_must_be_claimed() {
     );
 }
 
-/// Two extensions colliding on a subscription kind or a manifest section
+/// Two extensions colliding on a trigger kind or a manifest section
 /// are refused at boot; a non-colliding set passes the uniqueness pass.
 #[test]
 fn extension_claims_must_be_unique() {
     struct Claiming {
         namespace: &'static str,
-        subscriptions: &'static [&'static str],
+        kinds: &'static [&'static str],
         sections: &'static [&'static str],
     }
     impl Extension<CoreRuntime> for Claiming {
@@ -62,8 +62,8 @@ fn extension_claims_must_be_unique() {
         fn link(&self, _linker: &mut Linker<HostState<CoreRuntime>>) -> anyhow::Result<()> {
             Ok(())
         }
-        fn subscriptions(&self) -> &'static [&'static str] {
-            self.subscriptions
+        fn emits_trigger_kinds(&self) -> &'static [&'static str] {
+            self.kinds
         }
         fn manifest_sections(&self) -> &'static [&'static str] {
             self.sections
@@ -71,12 +71,12 @@ fn extension_claims_must_be_unique() {
     }
     fn ext(
         namespace: &'static str,
-        subscriptions: &'static [&'static str],
+        kinds: &'static [&'static str],
         sections: &'static [&'static str],
     ) -> Arc<dyn Extension<CoreRuntime>> {
         Arc::new(Claiming {
             namespace,
-            subscriptions,
+            kinds,
             sections,
         })
     }
@@ -91,9 +91,9 @@ fn extension_claims_must_be_unique() {
         ext("a", &["orders"], &["venue"]),
         ext("b", &["orders"], &["pool"]),
     ])
-    .expect_err("duplicate subscription kind");
+    .expect_err("duplicate trigger kind");
     assert!(
-        matches!(&err, LoadRefusal::SubscriptionKindClaimed { kind } if *kind == "orders"),
+        matches!(&err, LoadRefusal::TriggerKindClaimed { kind } if *kind == "orders"),
         "{err}"
     );
 

@@ -11,9 +11,7 @@ use thiserror::Error as ThisError;
 use tracing::{info, warn};
 use wasmtime::component::{Component, Linker};
 
-use super::admission::{
-    capability_registry, enforce_extension_sections, extension_subscription_vocabulary,
-};
+use super::admission::{capability_registry, enforce_extension_sections, extension_trigger_kinds};
 use super::artifact::{DigestPolicy, read_verified_component};
 use super::dispatch::with_dispatch_deadline;
 use super::lifecycle::Health;
@@ -21,13 +19,13 @@ use super::prepass::manifest_namespace;
 use super::store::{HostStore, ResolvedLimits, StoreSpec, fresh_run_store};
 use super::{BootEnv, Shared};
 use crate::bindings::nexum::host::types::Fault;
-use crate::bindings::{Config, EventModule};
+use crate::bindings::{Config, TriggerModule};
 use crate::digest::ContentDigest;
 use crate::engine_config::ModuleEntry;
 use crate::host::component::RuntimeTypes;
 use crate::host::logs::RunId;
 use crate::host::state::HostState;
-use crate::manifest::{self, CapabilityRegistry, LoadedManifest, Subscription};
+use crate::manifest::{self, CapabilityRegistry, LoadedManifest, Trigger};
 use crate::module_id::ModuleId;
 use crate::refusal::{Refusal, RefusalContext as _};
 use crate::runtime::dispatch_rate::TokenBucket;
@@ -55,10 +53,10 @@ pub enum LoadRefusal {
         /// The doubly claimed namespace.
         namespace: &'static str,
     },
-    /// An embedder wiring bug: a subscription kind's events must have one
-    /// owning extension.
-    #[error("subscription kind {kind} is claimed twice")]
-    SubscriptionKindClaimed {
+    /// An embedder wiring bug: a trigger kind must have one owning
+    /// extension.
+    #[error("trigger kind {kind} is claimed twice")]
+    TriggerKindClaimed {
         /// The doubly claimed kind.
         kind: &'static str,
     },
@@ -69,13 +67,11 @@ pub enum LoadRefusal {
         /// The doubly claimed section key.
         section: &'static str,
     },
-    /// Either a typo in the subscription kind or its extension is not
-    /// wired into this composition.
-    #[error(
-        "module {module} subscribes to unknown event kind {kind}; no wired extension declares it"
-    )]
-    UnknownEventKind {
-        /// The subscribing module.
+    /// Either a typo in the trigger kind or its extension is not wired
+    /// into this composition.
+    #[error("module {module} declares unknown trigger kind {kind}; no wired extension declares it")]
+    UnknownTriggerKind {
+        /// The declaring module.
         module: ModuleId,
         /// The unknown kind.
         kind: String,
@@ -105,14 +101,14 @@ pub enum LoadRefusal {
         /// The permitted set, for the fix.
         permitted: String,
     },
-    /// Chain events reach the guest through `on_event`, not an import, so
-    /// the subscription is gated on the same operator grant as the `chain`
+    /// Chain data reaches the guest through `on_trigger`, not an import,
+    /// so the trigger is gated on the same operator grant as the `chain`
     /// dependency.
     #[error(
-        "component {id} subscribes to chain events; \
+        "component {id} declares a chain trigger; \
          [policy].capabilities permits only: {permitted}"
     )]
-    ChainSubscriptionNotPermitted {
+    ChainTriggerNotPermitted {
         /// The entry's operator-written id.
         id: String,
         /// The permitted set, for the fix.
@@ -139,7 +135,7 @@ pub(super) struct Seed {
 
 /// Restarts replace bindings, store, and run; the rate bucket carries across.
 pub(super) struct LiveInstance<T: RuntimeTypes> {
-    pub(super) bindings: EventModule,
+    pub(super) bindings: TriggerModule,
     pub(super) store: HostStore<T>,
     pub(super) run: RunId,
     pub(super) dispatch_bucket: TokenBucket,
@@ -149,7 +145,7 @@ pub(super) struct LoadedModule<T: RuntimeTypes> {
     pub(super) name: ModuleId,
     pub(super) live: LiveInstance<T>,
     pub(super) seed: Seed,
-    pub(super) subscriptions: Vec<Subscription>,
+    pub(super) triggers: Vec<Trigger>,
     pub(super) health: Health,
 }
 
@@ -190,7 +186,7 @@ fn default_init_config(config: &Config, namespace: &str) -> Config {
 /// Runs under the dispatch deadline so a hung host call cannot park boot or a
 /// restart; a deadline hit or trap is `Err`, a guest fault `Ok(Err(fault))`.
 async fn run_init<T: RuntimeTypes>(
-    bindings: &EventModule,
+    bindings: &TriggerModule,
     store: &mut HostStore<T>,
     config: &Config,
     deadline: Duration,
@@ -206,8 +202,8 @@ pub(super) async fn instantiate_module<T: RuntimeTypes>(
     seed: &Seed,
     name: &ModuleId,
     store: &mut HostStore<T>,
-) -> Result<(EventModule, Result<(), Fault>)> {
-    let bindings = EventModule::instantiate_async(&mut *store, &seed.artifact.component, linker)
+) -> Result<(TriggerModule, Result<(), Fault>)> {
+    let bindings = TriggerModule::instantiate_async(&mut *store, &seed.artifact.component, linker)
         .await
         // wasmtime::Error is not StdError, so anyhow's with_context needs the bridge.
         .map_err(Error::from)
@@ -249,16 +245,14 @@ fn enforce_policy_capabilities(
             });
         }
     }
-    // A block or chain-log subscription delivers chain data without an
+    // A block or event trigger delivers chain data without an
     // import, so the `chain` grant gates it too.
-    let subscribes_to_chain = loaded.subscriptions.iter().any(|sub| {
-        matches!(
-            sub,
-            Subscription::Block { .. } | Subscription::ChainLog { .. }
-        )
-    });
-    if subscribes_to_chain && !permitted.iter().any(|p| p == "chain") {
-        return Err(LoadRefusal::ChainSubscriptionNotPermitted {
+    let declares_chain_trigger = loaded
+        .triggers
+        .iter()
+        .any(|t| matches!(t, Trigger::Block { .. } | Trigger::Event { .. }));
+    if declares_chain_trigger && !permitted.iter().any(|p| p == "chain") {
+        return Err(LoadRefusal::ChainTriggerNotPermitted {
             id: id.to_owned(),
             permitted: permitted_set(),
         });
@@ -363,18 +357,20 @@ pub(super) async fn module<T: RuntimeTypes>(
             false
         }
     };
-    // Unserviceable subscriptions warn; an undeclared extension kind refuses.
-    let extension_kinds = extension_subscription_vocabulary(&shared.extensions);
-    for sub in &loaded_manifest.subscriptions {
-        match sub {
-            Subscription::Cron { .. } => warn!(
+    // Unserviceable triggers warn; an undeclared extension kind refuses.
+    let extension_kinds = extension_trigger_kinds(&shared.extensions);
+    for trigger in &loaded_manifest.triggers {
+        match trigger {
+            Trigger::Schedule { .. } => warn!(
                 module = %module_namespace,
-                "cron subscriptions are declared but inert in 0.2 (lands in 0.3)",
+                "schedule triggers are declared but never fire until 0.3",
             ),
-            Subscription::Extension { kind, .. } if !extension_kinds.contains(kind.as_str()) => {
-                return Err(LoadRefusal::UnknownEventKind {
+            Trigger::Extension { extension_kind, .. }
+                if !extension_kinds.contains(extension_kind.as_str()) =>
+            {
+                return Err(LoadRefusal::UnknownTriggerKind {
                     module: module_namespace.clone(),
-                    kind: kind.clone(),
+                    kind: extension_kind.clone(),
                 }
                 .into());
             }
@@ -391,7 +387,7 @@ pub(super) async fn module<T: RuntimeTypes>(
             dispatch_bucket: TokenBucket::new(limits_cfg.dispatch, Instant::now()),
         },
         seed,
-        subscriptions: loaded_manifest.subscriptions.clone(),
+        triggers: loaded_manifest.triggers.clone(),
         health: Health::from_init(init_succeeded),
     })
 }

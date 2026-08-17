@@ -58,42 +58,42 @@ pub enum ParseError {
         #[source]
         source: crate::digest::DigestParseError,
     },
-    /// A `[[subscription]]` table without a string `kind`.
-    #[error("manifest: [[subscription]] table {index} must declare a string `kind`")]
-    MissingSubscriptionKind {
-        /// 1-based position among the `[[subscription]]` tables.
+    /// A `[[trigger]]` table without a string `on`.
+    #[error("manifest: [[trigger]] table {index} must declare a string `on`")]
+    MissingTriggerKind {
+        /// 1-based position among the `[[trigger]]` tables.
         index: usize,
     },
-    /// A core-kind `[[subscription]]` table whose shape does not match
-    /// its kind.
-    #[error("manifest: invalid {kind:?} subscription ([[subscription]] table {index}): {source}")]
-    InvalidSubscription {
-        /// 1-based position among the `[[subscription]]` tables.
+    /// A core-kind `[[trigger]]` table whose shape does not match its
+    /// kind.
+    #[error("manifest: invalid {kind:?} trigger ([[trigger]] table {index}): {source}")]
+    InvalidTrigger {
+        /// 1-based position among the `[[trigger]]` tables.
         index: usize,
         /// The declared core kind.
         kind: String,
         #[source]
         source: toml::de::Error,
     },
-    /// A chain-log `address` that is not 20-byte hex.
-    #[error("manifest: invalid chain-log address {value:?}: {source}")]
-    InvalidChainLogAddress {
+    /// An event trigger `address` that is not 20-byte hex.
+    #[error("manifest: invalid event address {value:?}: {source}")]
+    InvalidEventAddress {
         /// The address as written.
         value: String,
         #[source]
         source: alloy_primitives::hex::FromHexError,
     },
-    /// A chain-log `event_signature` that is not 32-byte hex.
+    /// An event trigger `event_signature` that is not 32-byte hex.
     #[error("manifest: invalid topic {value:?}: {source}")]
-    InvalidChainLogTopic {
+    InvalidEventTopic {
         /// The topic as written.
         value: String,
         #[source]
         source: alloy_primitives::hex::FromHexError,
     },
-    /// An extension-kind subscription filter with a non-string value.
-    #[error("manifest: subscription filter `{key}` must be a string")]
-    NonStringSubscriptionFilter {
+    /// An extension-kind trigger filter with a non-string value.
+    #[error("manifest: trigger filter `{key}` must be a string")]
+    NonStringTriggerFilter {
         /// The filter key.
         key: String,
     },

@@ -1,5 +1,5 @@
 //! Multi-module supervisor: loads `engine.toml` entries, one wasmtime `Store`
-//! each, and routes subscribed events.
+//! each, and routes triggers.
 
 mod admission;
 mod artifact;
@@ -9,12 +9,12 @@ mod lifecycle;
 pub(crate) mod load;
 pub(crate) mod prepass;
 mod store;
-mod subscriptions;
+mod triggers;
 
 pub use load::LoadRefusal;
 pub use prepass::{BootRefusal, ConfiguredChains};
 pub use store::{WasiClockOverride, build_linker};
-pub use subscriptions::{ChainLogSub, SubscriptionPlan, Viability};
+pub use triggers::{EventTrigger, TriggerPlan, Viability};
 
 use std::sync::Arc;
 
@@ -32,7 +32,7 @@ use crate::runtime::poison_policy::PoisonPolicy;
 use admission::{capability_registry, enforce_extension_uniqueness};
 use cursors::ChainLogCursors;
 use load::LoadedModule;
-use prepass::{enforce_subscriptions, load_required_manifest, manifest_namespace};
+use prepass::{enforce_triggers, load_required_manifest, manifest_namespace};
 
 /// Owns every loaded module.
 pub struct Supervisor<T: RuntimeTypes> {
@@ -53,7 +53,7 @@ pub struct BootEnv<'a> {
     pub limits: &'a ResolvedModuleLimits,
     /// The `[policy]` surface a manifest may narrow but never widen.
     pub policy: &'a PolicySection,
-    /// Chains with an `engine.toml` entry; a subscription elsewhere refuses.
+    /// Chains with an `engine.toml` entry; a trigger elsewhere refuses.
     pub configured_chains: ConfiguredChains,
     /// Refuse a component whose manifest declares no digest.
     pub require_component_digest: bool,
@@ -128,7 +128,7 @@ impl<T: RuntimeTypes> Supervisor<T> {
             let registry = capability_registry(&shared.extensions);
             let loaded_manifest =
                 load_required_manifest(&entry.path, entry.manifest.as_deref(), &registry)?;
-            enforce_subscriptions(
+            enforce_triggers(
                 manifest_namespace(&loaded_manifest).as_str(),
                 &loaded_manifest,
                 &env.configured_chains,
@@ -154,7 +154,7 @@ impl<T: RuntimeTypes> Supervisor<T> {
     }
 
     /// Halt the dispatch fan-out between guest calls once `stop` fires; a
-    /// skipped chain-log event replays through its resume cursor, a skipped
+    /// skipped event replays through its resume cursor, a skipped
     /// block does not.
     pub fn stop_on(&mut self, stop: Shutdown) {
         self.stop = Some(stop);

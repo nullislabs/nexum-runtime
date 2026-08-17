@@ -1,5 +1,5 @@
-# memory-bomb test fixture. Subscribes to blocks; the
-# `on_event` handler allocates 128 MiB which exceeds the default 64
+# memory-bomb test fixture. Declares a block trigger; the
+# `on_trigger` handler allocates 128 MiB which exceeds the default 64
 # MiB per-module cap. The host traps + the integration test asserts
 # the supervisor marks the module dead.
 
@@ -10,6 +10,6 @@ version = "0.1.0"
 [dependencies]
 logging = {}
 
-[[subscription]]
-kind = "block"
+[[trigger]]
+on = "block"
 chain_id = 1

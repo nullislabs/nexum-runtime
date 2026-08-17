@@ -1,6 +1,6 @@
 //! # topic-parity (build fixture)
 //!
-//! Compile-only: `subscribes(...)` names the events below, so the macro
+//! Compile-only: `sol_events(...)` names the events below, so the macro
 //! emits the const parity check against `component.toml`. A drift on either
 //! side fails this crate's build.
 
@@ -19,12 +19,12 @@ sol! {
 
 struct TopicParity;
 
-#[nexum_sdk::module(subscribes(Transfer, Approval))]
+#[nexum_sdk::module(sol_events(Transfer, Approval))]
 impl TopicParity {
-    fn on_chain_logs(batch: types::ChainLogs) -> Result<(), Fault> {
+    fn on_event(log: types::Log) -> Result<(), Fault> {
         logging::log(
             logging::Level::Info,
-            &format!("received {} chain-log entries", batch.logs.len()),
+            &format!("event with {} topics", log.topics.len()),
         );
         Ok(())
     }

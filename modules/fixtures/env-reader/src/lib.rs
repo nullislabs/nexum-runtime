@@ -15,7 +15,7 @@ wit_bindgen::generate!({
     path: [
         "../../../wit/nexum-host",
     ],
-    world: "nexum:host/event-module",
+    world: "nexum:host/trigger-module",
     generate_all,
 });
 
@@ -31,7 +31,7 @@ impl Guest for EnvReader {
         Ok(())
     }
 
-    fn on_event(_event: types::Event) -> Result<(), Fault> {
+    fn on_trigger(_trigger: types::Trigger) -> Result<(), Fault> {
         // Counts alone decide the assertion; the keys are logged too so a
         // failure names what leaked rather than only how much.
         let vars: Vec<String> = std::env::vars().map(|(k, _)| k).collect();

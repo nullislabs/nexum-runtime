@@ -16,7 +16,7 @@ workspace = true
 macros = ["dep:syn"]
 
 [dependencies]
-# Typed `B256` topics for the chain-log extraction, so the macro-side
+# Typed `B256` topics for the event topic extraction, so the macro-side
 # parity check parses the same values the runtime loads.
 alloy-primitives.workspace = true
 # Derives the closed capability / fault-label vocabularies: `VariantNames`

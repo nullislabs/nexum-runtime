@@ -1,9 +1,9 @@
 package nexum:host@0.1.0;
 
-/// Event-driven module: automation, background processing.
+/// Trigger-driven module: automation, background processing.
 /// No UI capabilities. Runs on any conforming host.
-world event-module {
-    use types.{config, event, fault};
+world trigger-module {
+    use types.{config, trigger, fault};
 
     // Six core primitives (always provided by a conforming host).
     import chain;
@@ -19,5 +19,5 @@ world event-module {
     // hosts list on the http dependency in component.toml.
 
     export init: func(config: config) -> result<_, fault>;
-    export on-event: func(event: event) -> result<_, fault>;
+    export on-trigger: func(trigger: trigger) -> result<_, fault>;
 }

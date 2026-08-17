@@ -14,6 +14,6 @@ crate-type = ["cdylib"]
 
 [dependencies]
 nexum-sdk = { path = "../../../crates/nexum-sdk" }
-# Declares the subscribed event, whose SIGNATURE_HASH the parity check reads.
+# Declares the Solidity events, whose SIGNATURE_HASH the parity check reads.
 alloy-sol-types = { version = "1.6", default-features = false, features = ["std"] }
 wit-bindgen = { version = "0.59", default-features = false, features = ["macros", "realloc"] }

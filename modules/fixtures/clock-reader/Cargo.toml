@@ -5,7 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Test fixture: on every event reads the WASI wall clock through std and logs it. Lets a test assert the guest observes a WasiClockOverride end to end."
+description = "Test fixture: on every trigger reads the WASI wall clock through std and logs it. Lets a test assert the guest observes a WasiClockOverride end to end."
 
 [lib]
 crate-type = ["cdylib"]

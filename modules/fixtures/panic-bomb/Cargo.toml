@@ -5,7 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Evil-by-design fixture: installs the nexum-sdk tracing facade in init and panics on every event. One death must leave Stderr, HostInterface, and Panic records on the run."
+description = "Evil-by-design fixture: installs the nexum-sdk tracing facade in init and panics on every trigger. One death must leave Stderr, HostInterface, and Panic records on the run."
 
 [lib]
 crate-type = ["cdylib"]

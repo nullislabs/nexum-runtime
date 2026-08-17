@@ -56,7 +56,7 @@ pub fn on_block<H: ChainHost + LoggingHost>(
             answer = %answer,
             threshold = %settings.threshold_scaled,
             direction = ?settings.direction,
-            "price-alert: TRIGGERED",
+            "price-alert: THRESHOLD CROSSED",
         );
     } else {
         tracing::info!(
@@ -131,12 +131,12 @@ mod tests {
     use nexum_sdk::host::{ChainError, Fault};
     use nexum_sdk_test::{MockHost, capture_tracing};
 
-    fn sample_settings(trigger_scaled_dec: i128, direction: Direction) -> Settings {
+    fn sample_settings(threshold_scaled_dec: i128, direction: Direction) -> Settings {
         Settings {
             oracle_address: "0x694AA1769357215DE4FAC081bf1f309aDC325306"
                 .parse()
                 .unwrap(),
-            threshold_scaled: I256::try_from(trigger_scaled_dec).unwrap(),
+            threshold_scaled: I256::try_from(threshold_scaled_dec).unwrap(),
             direction,
             every_n_blocks: 1,
         }
@@ -284,9 +284,9 @@ mod tests {
     }
 
     #[test]
-    fn on_block_idle_when_price_above_below_trigger() {
+    fn on_block_idle_when_price_above_below_threshold() {
         let host = MockHost::new();
-        let settings = sample_settings(/*trigger*/ 250_050_000_000, Direction::Below);
+        let settings = sample_settings(/*threshold*/ 250_050_000_000, Direction::Below);
         programmed_eth_call(
             &host,
             settings.oracle_address,
@@ -304,7 +304,7 @@ mod tests {
     }
 
     #[test]
-    fn on_block_triggers_below_threshold() {
+    fn on_block_crosses_below_threshold() {
         let host = MockHost::new();
         let settings = sample_settings(250_050_000_000, Direction::Below);
         programmed_eth_call(
@@ -318,13 +318,13 @@ mod tests {
 
         // `expect_one` on the WARN level pins the single-alert count.
         let ev = logs.expect_one(|e| e.level == Level::WARN);
-        assert_eq!(ev.message, "price-alert: TRIGGERED");
+        assert_eq!(ev.message, "price-alert: THRESHOLD CROSSED");
         assert_eq!(ev.field_str("direction").as_deref(), Some("Below"));
         assert_eq!(ev.field_str("answer").as_deref(), Some("200000000000"));
     }
 
     #[test]
-    fn on_block_triggers_above_threshold() {
+    fn on_block_crosses_above_threshold() {
         let host = MockHost::new();
         let settings = sample_settings(100, Direction::Above);
         programmed_eth_call(
@@ -337,7 +337,7 @@ mod tests {
         result.unwrap();
 
         let ev = logs.expect_one(|e| e.level == Level::WARN);
-        assert_eq!(ev.message, "price-alert: TRIGGERED");
+        assert_eq!(ev.message, "price-alert: THRESHOLD CROSSED");
         assert_eq!(ev.field_str("direction").as_deref(), Some("Above"));
     }
 
@@ -358,7 +358,7 @@ mod tests {
         // through the host logging call, so it lands on `host.logging`.
         assert!(host.logging.contains("eth_call failed"));
         // No facade event at all: the module returns before emitting
-        // either the ok or TRIGGERED line.
+        // either the ok or THRESHOLD CROSSED line.
         assert!(logs.is_empty());
     }
 

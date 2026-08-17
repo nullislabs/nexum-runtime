@@ -5,7 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Evil-by-design fixture: on every event allocates past the 64 MiB memory cap to force a memory-growth trap. Engine must trap + mark the module dead without taking down the supervisor."
+description = "Evil-by-design fixture: on every trigger allocates past the 64 MiB memory cap to force a memory-growth trap. Engine must trap + mark the module dead without taking down the supervisor."
 
 [lib]
 crate-type = ["cdylib"]

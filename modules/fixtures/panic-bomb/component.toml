@@ -1,5 +1,5 @@
-# panic-bomb test fixture. Subscribes to blocks; `init` installs the
-# nexum-sdk tracing facade (subscriber + panic hook) and `on_event`
+# panic-bomb test fixture. Declares a block trigger; `init` installs the
+# nexum-sdk tracing facade (subscriber + panic hook) and `on_trigger`
 # panics. The hook writes the panic to stderr and forwards it over the
 # host logging call before the trap reaches the supervisor, so the
 # integration test asserts one dead run carries Stderr, HostInterface,
@@ -12,6 +12,6 @@ version = "0.1.0"
 [dependencies]
 logging = {}
 
-[[subscription]]
-kind = "block"
+[[trigger]]
+on = "block"
 chain_id = 1

@@ -48,7 +48,7 @@ The engine uses the name as the state namespace, and it refuses a missing, empty
 cargo run -p nexum-cli -- target/wasm32-wasip2/release/example.wasm modules/example/component.toml
 ```
 
-A module that subscribes to `block` or `chain-log` events needs its chain declared in `engine.toml`, or the engine refuses to boot.
+A module that declares a `block` or `event` trigger needs its chain declared in `engine.toml`, or the engine refuses to boot.
 The smallest working stanza is:
 
 ```toml
@@ -57,7 +57,7 @@ rpc_url = "http://localhost:8545"
 ```
 
 `http(s)://` URLs are not dialled at boot; `ws(s)://` URLs are.
-The example module declares no subscriptions, so `just run` needs no `engine.toml`; the modules under `modules/examples/` and `modules/fixtures/` do.
+The example module declares no triggers, so `just run` needs no `engine.toml`; the modules under `modules/examples/` and `modules/fixtures/` do.
 
 ## Component integrity
 

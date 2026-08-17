@@ -100,20 +100,20 @@ pub const WASI_GATES: [&str; 1 + WasiCap::VARIANTS.len()] = {
     out
 };
 
-/// A core `[[subscription]] kind`. A kind with no variant here is
+/// A core `[[trigger]] on` value. A kind with no variant here is
 /// extension-owned, so the set is the runtime's core/extension split.
 #[derive(
     Clone, Copy, Debug, Eq, PartialEq, Hash, Display, EnumString, IntoStaticStr, VariantNames,
 )]
 #[strum(serialize_all = "kebab-case")]
 #[non_exhaustive]
-pub enum SubscriptionKind {
-    /// New-block events.
+pub enum TriggerKind {
+    /// A new block on a chain.
     Block,
-    /// Chain-log events filtered by address and topic-0.
-    ChainLog,
-    /// Cron-scheduled ticks.
-    Cron,
+    /// A contract event's log matching the address and topic-0 filters.
+    Event,
+    /// A cron expression's time arriving.
+    Schedule,
 }
 
 /// A `nexum:host/types.fault` case as a stable snake_case label, in WIT
@@ -362,13 +362,13 @@ pub enum WorldError {
         /// The dependency key.
         name: String,
     },
-    /// `[[subscription]]` is not an array of tables.
-    #[error("[[subscription]] must be an array of tables")]
-    SubscriptionsNotAnArray,
-    /// A chain-log subscription's `event_signature` is not a string.
-    #[error("[[subscription]].event_signature must be a string")]
+    /// `[[trigger]]` is not an array of tables.
+    #[error("[[trigger]] must be an array of tables")]
+    TriggersNotAnArray,
+    /// An event trigger's `event_signature` is not a string.
+    #[error("[[trigger]].event_signature must be a string")]
     EventSignatureNotAString,
-    /// A chain-log `event_signature` that is not 32-byte hex.
+    /// An event trigger `event_signature` that is not 32-byte hex.
     // Pinned operator wording; mirrors the runtime's load-time refusal.
     #[error("invalid topic {topic:?}: {source}")]
     InvalidTopic {
@@ -475,29 +475,27 @@ pub fn manifest_capabilities(text: &str) -> Result<Vec<String>, WorldError> {
     Ok(table.keys().cloned().collect())
 }
 
-/// The distinct chain-log `event_signature` topics from the manifest
+/// The distinct event trigger `event_signature` topics from the manifest
 /// text, in declaration order. Same hex grammar as the runtime's load.
-pub fn manifest_chain_log_topics(text: &str) -> Result<Vec<B256>, WorldError> {
+pub fn manifest_event_topics(text: &str) -> Result<Vec<B256>, WorldError> {
     let value: toml::Table = text.parse().map_err(|source| WorldError::NotToml {
         file: "component.toml",
         source,
     })?;
-    let Some(subscriptions) = value.get("subscription") else {
+    let Some(triggers) = value.get("trigger") else {
         return Ok(Vec::new());
     };
-    let subscriptions = subscriptions
-        .as_array()
-        .ok_or(WorldError::SubscriptionsNotAnArray)?;
+    let triggers = triggers.as_array().ok_or(WorldError::TriggersNotAnArray)?;
     let mut topics = Vec::new();
-    for sub in subscriptions {
-        let kind = sub
-            .get("kind")
+    for trigger in triggers {
+        let kind = trigger
+            .get("on")
             .and_then(toml::Value::as_str)
-            .map(str::parse::<SubscriptionKind>);
-        if !matches!(kind, Some(Ok(SubscriptionKind::ChainLog))) {
+            .map(str::parse::<TriggerKind>);
+        if !matches!(kind, Some(Ok(TriggerKind::Event))) {
             continue;
         }
-        let Some(raw) = sub.get("event_signature") else {
+        let Some(raw) = trigger.get("event_signature") else {
             continue;
         };
         let raw = raw.as_str().ok_or(WorldError::EventSignatureNotAString)?;
@@ -613,7 +611,7 @@ pub fn synthesize(
     }
 
     let mut imports = String::new();
-    // `nexum:host` is a leaf package (the `event` variant carries status
+    // `nexum:host` is a leaf package (the `trigger` variant carries status
     // transitions as opaque bytes), so the base resolve set
     // is the host package alone; capability declarations append their
     // own packages. Dependency order: each directory is parsed against
@@ -650,12 +648,12 @@ pub fn synthesize(
 
     let mut wit = String::from(
         "package nexum:module-world;\n\nworld module {\n    \
-         use nexum:host/types@0.1.0.{config, event, fault};\n\n",
+         use nexum:host/types@0.1.0.{config, trigger, fault};\n\n",
     );
     wit.push_str(&imports);
     wit.push_str(
         "\n    export init: func(config: config) -> result<_, fault>;\n    \
-         export on-event: func(event: event) -> result<_, fault>;\n}\n",
+         export on-trigger: func(trigger: trigger) -> result<_, fault>;\n}\n",
     );
 
     Ok(ModuleWorld {
@@ -1108,12 +1106,9 @@ logging = "yes"
         let err = manifest_capabilities("dependencies = 7\n").unwrap_err();
         assert!(matches!(err, WorldError::DependenciesNotATable));
         assert_eq!(err.to_string(), "[dependencies] must be a table");
-        let err = manifest_chain_log_topics("subscription = 7\n").unwrap_err();
-        assert!(matches!(err, WorldError::SubscriptionsNotAnArray));
-        assert_eq!(
-            err.to_string(),
-            "[[subscription]] must be an array of tables"
-        );
+        let err = manifest_event_topics("trigger = 7\n").unwrap_err();
+        assert!(matches!(err, WorldError::TriggersNotAnArray));
+        assert_eq!(err.to_string(), "[[trigger]] must be an array of tables");
         let err = manifest_extensions("extensions = 7\n").unwrap_err();
         assert!(matches!(err, WorldError::ExtensionsNotATable));
         assert_eq!(
@@ -1145,31 +1140,33 @@ logging = "yes"
 
     /// Pinned manifest grammar; the runtime's serde renames derive from it.
     #[test]
-    fn subscription_kinds_spell_the_manifest_grammar() {
-        assert_eq!(SubscriptionKind::VARIANTS, ["block", "chain-log", "cron"]);
-        assert!("log".parse::<SubscriptionKind>().is_err());
+    fn trigger_kinds_spell_the_manifest_grammar() {
+        assert_eq!(TriggerKind::VARIANTS, ["block", "event", "schedule"]);
+        assert!("log".parse::<TriggerKind>().is_err());
+        assert!("chain-log".parse::<TriggerKind>().is_err());
+        assert!("cron".parse::<TriggerKind>().is_err());
     }
 
     #[test]
-    fn chain_log_topics_are_distinct_and_in_declaration_order() {
-        let topics = manifest_chain_log_topics(
+    fn event_topics_are_distinct_and_in_declaration_order() {
+        let topics = manifest_event_topics(
             r#"
-[[subscription]]
-kind     = "chain-log"
+[[trigger]]
+on       = "event"
 chain_id = 1
 event_signature = "0xcf5f9de2984132265203b5c335b25727702ca77262ff622e136baa7362bf1da9"
 
-[[subscription]]
-kind     = "block"
+[[trigger]]
+on       = "block"
 chain_id = 1
 
-[[subscription]]
-kind     = "chain-log"
+[[trigger]]
+on       = "event"
 chain_id = 100
 event_signature = "CF5F9DE2984132265203B5C335B25727702CA77262FF622E136BAA7362BF1DA9"
 
-[[subscription]]
-kind     = "chain-log"
+[[trigger]]
+on       = "event"
 chain_id = 1
 event_signature = "0x0000000000000000000000000000000000000000000000000000000000000001"
 "#,
@@ -1187,24 +1184,24 @@ event_signature = "0x00000000000000000000000000000000000000000000000000000000000
     }
 
     #[test]
-    fn chain_log_topics_skip_wildcard_and_foreign_subscriptions() {
+    fn event_topics_skip_wildcard_and_foreign_triggers() {
         let text = r#"
-[[subscription]]
-kind     = "chain-log"
+[[trigger]]
+on       = "event"
 chain_id = 1
 
-[[subscription]]
-kind = "acme-status"
+[[trigger]]
+on = "acme-status"
 event_signature = "not-hex-but-not-ours"
 "#;
-        assert_eq!(manifest_chain_log_topics(text).unwrap(), Vec::<B256>::new());
-        assert_eq!(manifest_chain_log_topics("").unwrap(), Vec::<B256>::new());
+        assert_eq!(manifest_event_topics(text).unwrap(), Vec::<B256>::new());
+        assert_eq!(manifest_event_topics("").unwrap(), Vec::<B256>::new());
     }
 
     #[test]
-    fn chain_log_topic_refusal_pins_the_operator_wording() {
-        let err = manifest_chain_log_topics(
-            "[[subscription]]\nkind = \"chain-log\"\nchain_id = 1\n\
+    fn event_topic_refusal_pins_the_operator_wording() {
+        let err = manifest_event_topics(
+            "[[trigger]]\non = \"event\"\nchain_id = 1\n\
              event_signature = \"not-a-topic\"\n",
         )
         .unwrap_err();
@@ -1217,15 +1214,15 @@ event_signature = "not-hex-but-not-ours"
                 .starts_with("invalid topic \"not-a-topic\":"),
             "{err}"
         );
-        let err = manifest_chain_log_topics(
-            "[[subscription]]\nkind = \"chain-log\"\nchain_id = 1\nevent_signature = 7\n",
+        let err = manifest_event_topics(
+            "[[trigger]]\non = \"event\"\nchain_id = 1\nevent_signature = 7\n",
         )
         .unwrap_err();
         assert!(matches!(err, WorldError::EventSignatureNotAString));
         // Operator-facing wording, pinned verbatim.
         assert_eq!(
             err.to_string(),
-            "[[subscription]].event_signature must be a string"
+            "[[trigger]].event_signature must be a string"
         );
     }
 
@@ -1256,7 +1253,7 @@ event_signature = "not-hex-but-not-ours"
         assert!(
             world
                 .wit
-                .contains("export on-event: func(event: event) -> result<_, fault>;")
+                .contains("export on-trigger: func(trigger: trigger) -> result<_, fault>;")
         );
     }
 

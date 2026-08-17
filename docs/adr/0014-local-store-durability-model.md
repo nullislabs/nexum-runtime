@@ -6,7 +6,7 @@ status: accepted
 
 > Amendment: this record was edited after acceptance.
 > [ADR-0019](0019-modules-react-to-triggers.md) retired the export name `on-event`, and the text below carries the decided name, `on-trigger`.
-> The WIT rename lands in a later code issue, so the export in the tree may still read `on-event`.
+> The WIT rename landed with #239.
 
 ## Context
 

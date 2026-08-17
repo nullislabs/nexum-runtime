@@ -13,8 +13,8 @@ logging = {}
 # before a connection is made.
 http = { hosts = ["api.cow.fi"] }
 
-[[subscription]]
-kind = "block"
+[[trigger]]
+on = "block"
 chain_id = 11155111
 
 # --- config -----------------------------------------------------------

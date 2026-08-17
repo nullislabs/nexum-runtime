@@ -1,4 +1,4 @@
-//! Event dispatch: rate limit, refuel, invoke `on_event` under the
+//! Trigger dispatch: rate limit, refuel, invoke `on_trigger` under the
 //! wall-clock deadline, and record the outcome.
 
 use std::time::Duration;
@@ -14,9 +14,9 @@ use super::cursors::{commit_chain_log_cursor, persist_progress_marker};
 use super::lifecycle::{revive_one, sweep};
 use crate::bindings::nexum;
 use crate::host::component::RuntimeTypes;
-use crate::host::extension::ExtensionEvent;
+use crate::host::extension::ExtensionDelivery;
 use crate::host::logs::{LogRecord, LogSource};
-use crate::manifest::Subscription;
+use crate::manifest::Trigger;
 use crate::module_id::ModuleId;
 
 impl<T: RuntimeTypes> Supervisor<T> {
@@ -25,7 +25,7 @@ impl<T: RuntimeTypes> Supervisor<T> {
         let chain = Chain::from_id(block.chain_id);
         let chain_id = chain.id();
         let block_number = block.number;
-        let event = nexum::host::types::Event::Block(block);
+        let trigger = nexum::host::types::Trigger::Block(block);
         let now = Instant::now();
         sweep(&self.shared, &mut self.modules, now, self.stop.as_ref()).await;
 
@@ -36,9 +36,9 @@ impl<T: RuntimeTypes> Supervisor<T> {
                 if !m.health.dispatchable() {
                     return false;
                 }
-                m.subscriptions
+                m.triggers
                     .iter()
-                    .any(|s| matches!(s, Subscription::Block { chain_id: cid } if chain == *cid))
+                    .any(|t| matches!(t, Trigger::Block { chain_id: cid } if chain == *cid))
             })
             .collect();
         for (position, idx) in candidate_indices.iter().copied().enumerate() {
@@ -52,7 +52,7 @@ impl<T: RuntimeTypes> Supervisor<T> {
                     metrics::counter!(
                         "nexum_runtime_dispatch_dropped_total",
                         "module" => self.modules[i].name.to_string(),
-                        "event_kind" => "block",
+                        "trigger_kind" => "block",
                         "reason" => "shutdown",
                     )
                     .increment(1);
@@ -71,7 +71,7 @@ impl<T: RuntimeTypes> Supervisor<T> {
                 break;
             }
             if matches!(
-                self.dispatch_to(idx, chain_id, "block", block_number, &event, now)
+                self.dispatch_to(idx, chain_id, "block", block_number, &trigger, now)
                     .await,
                 DispatchOutcome::Ok,
             ) {
@@ -87,9 +87,9 @@ impl<T: RuntimeTypes> Supervisor<T> {
         dispatched
     }
 
-    /// Returns `true` only when the module accepted the event; the resume
+    /// Returns `true` only when the module accepted the log; the resume
     /// cursor persists only after a successful dispatch.
-    pub async fn dispatch_chain_log(
+    pub async fn dispatch_event(
         &mut self,
         module_name: &ModuleId,
         chain: Chain,
@@ -98,20 +98,20 @@ impl<T: RuntimeTypes> Supervisor<T> {
     ) -> bool {
         let now = Instant::now();
         // Skipped: the cursor stays put, so `resume = true` replays the
-        // event at the next start. Counted anyway, so the shutdown reason is
+        // log at the next start. Counted anyway, so the shutdown reason is
         // one series rather than three behaviours.
         if self.stop_requested() {
             metrics::counter!(
                 "nexum_runtime_dispatch_dropped_total",
                 "module" => module_name.to_string(),
-                "event_kind" => "chain-log",
+                "trigger_kind" => "event",
                 "reason" => "shutdown",
             )
             .increment(1);
             return false;
         }
         let Some(idx) = self.modules.iter().position(|m| m.name == *module_name) else {
-            warn!(module = %module_name, "no such module - dropping chain-log");
+            warn!(module = %module_name, "no such module - dropping event");
             return false;
         };
 
@@ -120,7 +120,7 @@ impl<T: RuntimeTypes> Supervisor<T> {
             return false;
         }
 
-        // The chain-log hot path revives only its own module, never the rest.
+        // The event hot path revives only its own module, never the rest.
         if self.modules[idx].health.due_restart(now) {
             revive_one(&self.shared, &mut self.modules[idx], now).await;
         }
@@ -133,17 +133,14 @@ impl<T: RuntimeTypes> Supervisor<T> {
 
         let block_number = log.block_number;
         let removed = log.removed;
-        let event = nexum::host::types::Event::ChainLogs(nexum::host::types::ChainLogs {
-            chain_id: chain.id(),
-            logs: vec![nexum::host::types::ChainLog::from(&log)],
-        });
+        let trigger = nexum::host::types::Trigger::Event(super::triggers::wit_log(&log, chain));
         let ok = matches!(
             self.dispatch_to(
                 idx,
                 chain.id(),
-                "chain-log",
+                "event",
                 block_number.unwrap_or_default(),
-                &event,
+                &trigger,
                 now,
             )
             .await,
@@ -163,7 +160,7 @@ impl<T: RuntimeTypes> Supervisor<T> {
     }
 
     /// The restart sweep runs first; returns the number of modules invoked.
-    pub async fn dispatch_extension_event(&mut self, event: ExtensionEvent) -> usize {
+    pub async fn dispatch_extension_trigger(&mut self, delivery: ExtensionDelivery) -> usize {
         let now = Instant::now();
         sweep(&self.shared, &mut self.modules, now, self.stop.as_ref()).await;
 
@@ -173,13 +170,14 @@ impl<T: RuntimeTypes> Supervisor<T> {
                 if !m.health.dispatchable() {
                     return false;
                 }
-                m.subscriptions.iter().any(|s| {
+                m.triggers.iter().any(|t| {
                     matches!(
-                        s,
-                        Subscription::Extension { kind, filters }
-                            if kind == event.kind && filters.iter().all(|(fk, fv)| {
-                                event.attrs.iter().any(|(ak, av)| ak == fk && av == fv)
-                            })
+                        t,
+                        Trigger::Extension { extension_kind, filters }
+                            if extension_kind == delivery.extension_kind
+                                && filters.iter().all(|(fk, fv)| {
+                                    delivery.attrs.iter().any(|(ak, av)| ak == fk && av == fv)
+                                })
                     )
                 })
             })
@@ -191,16 +189,16 @@ impl<T: RuntimeTypes> Supervisor<T> {
                     metrics::counter!(
                         "nexum_runtime_dispatch_dropped_total",
                         "module" => self.modules[i].name.to_string(),
-                        "event_kind" => event.kind,
+                        "trigger_kind" => delivery.extension_kind,
                         "reason" => "shutdown",
                     )
                     .increment(1);
                 }
                 break;
             }
-            // Extension events are not chain-scoped; telemetry carries the 0 sentinel.
+            // Extension deliveries are not chain-scoped; telemetry carries the 0 sentinel.
             if matches!(
-                self.dispatch_to(idx, 0, event.kind, 0, &event.event, now)
+                self.dispatch_to(idx, 0, delivery.extension_kind, 0, &delivery.trigger, now)
                     .await,
                 DispatchOutcome::Ok,
             ) {
@@ -215,9 +213,9 @@ impl<T: RuntimeTypes> Supervisor<T> {
         &mut self,
         idx: usize,
         chain_id: u64,
-        event_kind: &'static str,
+        trigger_kind: &'static str,
         block_number: u64,
-        event: &nexum::host::types::Event,
+        trigger: &nexum::host::types::Trigger,
         now: Instant,
     ) -> DispatchOutcome {
         let poison_policy = self.policy;
@@ -231,14 +229,14 @@ impl<T: RuntimeTypes> Supervisor<T> {
             debug!(
                 module = %module.name,
                 chain_id,
-                event_kind,
+                trigger_kind,
                 block_number,
-                "dispatch rate limit exceeded - dropping event",
+                "dispatch rate limit exceeded - dropping trigger",
             );
             metrics::counter!(
                 "nexum_runtime_dispatch_dropped_total",
                 "module" => module.name.to_string(),
-                "event_kind" => event_kind,
+                "trigger_kind" => trigger_kind,
                 "reason" => "rate_limited",
             )
             .increment(1);
@@ -248,7 +246,7 @@ impl<T: RuntimeTypes> Supervisor<T> {
             error!(
                 module = %module.name,
                 chain_id,
-                event_kind,
+                trigger_kind,
                 error = %e,
                 "set_fuel failed - skipping"
             );
@@ -261,7 +259,7 @@ impl<T: RuntimeTypes> Supervisor<T> {
         let call = module
             .live
             .bindings
-            .call_on_event(&mut module.live.store, event);
+            .call_on_trigger(&mut module.live.store, trigger);
         let outcome = with_dispatch_deadline(deadline, call)
             .await
             .unwrap_or_else(|exceeded| Err(wasmtime::Error::from(exceeded)));
@@ -276,7 +274,7 @@ impl<T: RuntimeTypes> Supervisor<T> {
                 debug!(
                     module = %module.name,
                     chain_id,
-                    event_kind,
+                    trigger_kind,
                     block_number,
                     latency_ms,
                     "dispatch ok"
@@ -284,7 +282,7 @@ impl<T: RuntimeTypes> Supervisor<T> {
                 metrics::histogram!(
                     "nexum_runtime_event_latency_seconds",
                     "module" => module.name.to_string(),
-                    "event_kind" => event_kind,
+                    "trigger_kind" => trigger_kind,
                 )
                 .record(elapsed.as_secs_f64());
                 module.health.dispatch_succeeded();
@@ -295,12 +293,12 @@ impl<T: RuntimeTypes> Supervisor<T> {
                 warn!(
                     module = %module.name,
                     chain_id,
-                    event_kind,
+                    trigger_kind,
                     block_number,
                     latency_ms,
                     kind,
                     message = %crate::host::fault::fault_message(&fault),
-                    "on-event returned fault",
+                    "on-trigger returned fault",
                 );
                 metrics::counter!(
                     "nexum_runtime_module_errors_total",
@@ -318,13 +316,13 @@ impl<T: RuntimeTypes> Supervisor<T> {
                 error!(
                     module = %module.name,
                     chain_id,
-                    event_kind,
+                    trigger_kind,
                     block_number,
                     latency_ms,
                     failure_count = verdict.failure_count,
                     backoff_ms = verdict.backoff.as_millis() as u64,
                     error = %trap,
-                    "on-event trapped - module marked dead; will retry after backoff",
+                    "on-trigger trapped - module marked dead; will retry after backoff",
                 );
                 metrics::counter!(
                     "nexum_runtime_module_errors_total",
@@ -393,7 +391,7 @@ pub(super) enum DispatchOutcome {
     Fault,
     /// Marked dead, maybe quarantined per the poison policy.
     Trapped,
-    /// `set_fuel` failed before the call; the module stays alive, the event skips.
+    /// `set_fuel` failed before the call; the module stays alive, the trigger skips.
     FuelSetFailed,
     /// Dropped before the guest runs; liveness untouched.
     RateLimited,

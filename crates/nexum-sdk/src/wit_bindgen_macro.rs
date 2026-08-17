@@ -83,11 +83,12 @@ macro_rules! bind_host_via_wit_bindgen {
             }
         }
 
-        /// Rebuild the native alloy log from the wit-bindgen `chain-log`
-        /// record; assembly lives in `nexum_sdk::events`.
-        impl ::core::convert::From<nexum::host::types::ChainLog> for $crate::events::Log {
-            fn from(log: nexum::host::types::ChainLog) -> Self {
-                $crate::events::ChainLogParts {
+        /// Rebuild the native alloy log from the wit-bindgen `log`
+        /// record; assembly lives in `nexum_sdk::sol_events`.
+        impl ::core::convert::From<nexum::host::types::Log> for $crate::sol_events::Log {
+            fn from(log: nexum::host::types::Log) -> Self {
+                $crate::sol_events::LogParts {
+                    chain_id: log.chain_id,
                     address: &log.address,
                     topics: &log.topics,
                     data: &log.data,

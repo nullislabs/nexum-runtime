@@ -1,5 +1,5 @@
 //! Helpers over the `Vec<(String, String)>` `[config]` entries a
-//! module's `on_event` receives: required and optional key lookup, and
+//! module's `init` receives: required and optional key lookup, and
 //! fixed-point decimal parsing.
 
 use alloy_primitives::{I256, U256};
@@ -161,14 +161,14 @@ mod tests {
     #[test]
     fn scale_decimal_pads_short_fractional() {
         // "2500.00" with 8 decimals -> 2500 * 1e8 = 250_000_000_000
-        let v = scale_decimal("2500.00", 8, "trigger").unwrap();
+        let v = scale_decimal("2500.00", 8, "threshold").unwrap();
         assert_eq!(v, I256::try_from(250_000_000_000_i128).unwrap());
     }
 
     #[test]
     fn scale_decimal_truncates_long_fractional() {
         // "1.123456789" with 4 decimals -> "11234"
-        let v = scale_decimal("1.123456789", 4, "trigger").unwrap();
+        let v = scale_decimal("1.123456789", 4, "threshold").unwrap();
         assert_eq!(v, I256::try_from(11234_i128).unwrap());
     }
 

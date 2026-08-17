@@ -53,7 +53,7 @@ pub fn load(path: &Path, registry: &CapabilityRegistry) -> Result<LoadedManifest
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::manifest::types::Subscription;
+    use crate::manifest::types::Trigger;
 
     /// Parse and validate an inline manifest, skipping the registry
     /// cross-check `load` adds.
@@ -63,7 +63,7 @@ mod tests {
     }
 
     #[test]
-    fn load_parses_block_and_chain_log_subscriptions() {
+    fn load_parses_block_and_event_triggers() {
         let toml = r#"
 [component]
 name = "twap-monitor"
@@ -72,61 +72,60 @@ name = "twap-monitor"
 chain = {}
 local-store = {}
 
-[[subscription]]
-kind     = "block"
+[[trigger]]
+on       = "block"
 chain_id = 1
 
-[[subscription]]
-kind     = "chain-log"
+[[trigger]]
+on       = "event"
 chain_id = 1
 address  = "0xC92E8bdf79f0507f65a392b0ab4667716BFE0110"
 event_signature = "0x00000000000000000000000000000000000000000000000000000000deadbeef"
 "#;
         let loaded = validate(toml).expect("parse");
         assert_eq!(loaded.name.as_str(), "twap-monitor");
-        assert_eq!(loaded.subscriptions.len(), 2);
+        assert_eq!(loaded.triggers.len(), 2);
         assert!(matches!(
-            &loaded.subscriptions[0],
-            Subscription::Block { chain_id: 1 }
+            &loaded.triggers[0],
+            Trigger::Block { chain_id: 1 }
         ));
-        if let Subscription::ChainLog {
+        if let Trigger::Event {
             chain_id, address, ..
-        } = &loaded.subscriptions[1]
+        } = &loaded.triggers[1]
         {
             assert_eq!(*chain_id, 1);
             assert!(address.is_some());
         } else {
-            panic!("expected ChainLog subscription");
+            panic!("expected Event trigger");
         }
     }
 
-    /// Malformed chain-log hex refuses the manifest at load, not at first
-    /// dispatch, with a typed variant carrying the value and the operator
-    /// wording pinned verbatim.
+    /// Malformed event trigger hex refuses the manifest at load, not at
+    /// first dispatch, with a typed variant carrying the value and the
+    /// operator wording pinned verbatim.
     #[test]
-    fn load_refuses_malformed_chain_log_hex_at_parse() {
-        fn chain_log(field: &str) -> String {
+    fn load_refuses_malformed_event_hex_at_parse() {
+        fn event_trigger(field: &str) -> String {
             format!(
-                "[component]\nname = \"bad\"\n\n[[subscription]]\nkind     = \"chain-log\"\n\
+                "[component]\nname = \"bad\"\n\n[[trigger]]\non       = \"event\"\n\
                  chain_id = 1\n{field}\n"
             )
         }
-        let err = validate(&chain_log("address  = \"0xabc\"")).expect_err("malformed address");
+        let err = validate(&event_trigger("address  = \"0xabc\"")).expect_err("malformed address");
         assert!(
-            matches!(err, ParseError::InvalidChainLogAddress { ref value, .. } if value == "0xabc"),
+            matches!(err, ParseError::InvalidEventAddress { ref value, .. } if value == "0xabc"),
             "{err:?}",
         );
         // Operator wording pin.
         assert!(
-            err.to_string()
-                .contains("invalid chain-log address \"0xabc\""),
+            err.to_string().contains("invalid event address \"0xabc\""),
             "{err}"
         );
 
-        let err =
-            validate(&chain_log("event_signature = \"not-a-topic\"")).expect_err("malformed topic");
+        let err = validate(&event_trigger("event_signature = \"not-a-topic\""))
+            .expect_err("malformed topic");
         assert!(
-            matches!(err, ParseError::InvalidChainLogTopic { ref value, .. } if value == "not-a-topic"),
+            matches!(err, ParseError::InvalidEventTopic { ref value, .. } if value == "not-a-topic"),
             "{err:?}",
         );
         // Operator wording pin.
@@ -139,28 +138,28 @@ event_signature = "0x00000000000000000000000000000000000000000000000000000000dea
     /// A core-kind table whose shape does not match its kind carries the
     /// declared kind and the table's position in the refusal.
     #[test]
-    fn load_refuses_a_core_subscription_missing_its_shape() {
-        let toml = "[component]\nname = \"bad\"\n\n[[subscription]]\nkind = \"chain-log\"\n";
-        let err = validate(toml).expect_err("chain-log without chain_id");
+    fn load_refuses_a_core_trigger_missing_its_shape() {
+        let toml = "[component]\nname = \"bad\"\n\n[[trigger]]\non = \"event\"\n";
+        let err = validate(toml).expect_err("event trigger without chain_id");
         assert!(
             matches!(
                 err,
-                ParseError::InvalidSubscription { index: 1, ref kind, .. } if kind == "chain-log"
+                ParseError::InvalidTrigger { index: 1, ref kind, .. } if kind == "event"
             ),
             "{err:?}",
         );
     }
 
-    /// A subscription table without a `kind` cannot dispatch; the refusal
+    /// A trigger table without an `on` cannot dispatch; the refusal
     /// carries the table's 1-based position, the only locator left once
     /// validation runs after the TOML parse.
     #[test]
-    fn load_refuses_a_subscription_without_a_kind() {
-        let toml = "[component]\nname = \"bad\"\n\n[[subscription]]\nkind = \"block\"\n\
-                    chain_id = 1\n\n[[subscription]]\nchain_id = 1\n";
-        let err = validate(toml).expect_err("kindless subscription");
+    fn load_refuses_a_trigger_without_an_on() {
+        let toml = "[component]\nname = \"bad\"\n\n[[trigger]]\non = \"block\"\n\
+                    chain_id = 1\n\n[[trigger]]\nchain_id = 1\n";
+        let err = validate(toml).expect_err("kindless trigger");
         assert!(
-            matches!(err, ParseError::MissingSubscriptionKind { index: 2 }),
+            matches!(err, ParseError::MissingTriggerKind { index: 2 }),
             "{err:?}"
         );
         // The position reaches the operator.
@@ -170,7 +169,7 @@ event_signature = "0x00000000000000000000000000000000000000000000000000000000dea
     /// Typing the field must neither widen nor narrow the accepted spelling:
     /// `0x`-prefixed or bare, any case, no checksum requirement.
     #[test]
-    fn load_accepts_every_hex_spelling_of_a_chain_log_address() {
+    fn load_accepts_every_hex_spelling_of_an_event_address() {
         let expected: alloy_primitives::Address = "0xc92e8bdf79f0507f65a392b0ab4667716bfe0110"
             .parse()
             .expect("canonical address");
@@ -181,14 +180,14 @@ event_signature = "0x00000000000000000000000000000000000000000000000000000000dea
             "c92e8bdf79f0507f65a392b0ab4667716bfe0110",
         ] {
             let toml = format!(
-                "[component]\nname = \"ok\"\n\n[dependencies]\n\n[[subscription]]\n\
-                 kind     = \"chain-log\"\nchain_id = 1\naddress  = \"{spelling}\"\n"
+                "[component]\nname = \"ok\"\n\n[dependencies]\n\n[[trigger]]\n\
+                 on       = \"event\"\nchain_id = 1\naddress  = \"{spelling}\"\n"
             );
             let loaded = validate(&toml).expect(spelling);
             assert!(
                 matches!(
-                    &loaded.subscriptions[0],
-                    Subscription::ChainLog { address: Some(a), .. } if *a == expected
+                    &loaded.triggers[0],
+                    Trigger::Event { address: Some(a), .. } if *a == expected
                 ),
                 "{spelling} must parse to the canonical address",
             );
@@ -202,37 +201,37 @@ event_signature = "0x00000000000000000000000000000000000000000000000000000000dea
     fn world_topic_extraction_agrees_with_load() {
         let toml = r#"
 [component]
-name = "watcher"
+name = "alerts"
 
 [dependencies]
 
-[[subscription]]
-kind     = "block"
+[[trigger]]
+on       = "block"
 chain_id = 1
 
-[[subscription]]
-kind     = "chain-log"
+[[trigger]]
+on       = "event"
 chain_id = 1
 event_signature = "0xCF5F9DE2984132265203B5C335B25727702CA77262FF622E136BAA7362BF1DA9"
 
-[[subscription]]
-kind     = "chain-log"
+[[trigger]]
+on       = "event"
 chain_id = 1
 event_signature = "0x0000000000000000000000000000000000000000000000000000000000000001"
 
-[[subscription]]
-kind     = "chain-log"
+[[trigger]]
+on       = "event"
 chain_id = 100
 event_signature = "cf5f9de2984132265203b5c335b25727702ca77262ff622e136baa7362bf1da9"
 "#;
         let loaded_manifest = validate(toml).expect("parse");
         // Distinct, not `dedup`: the repeat is non-adjacent, as it is on chain.
         let mut loaded: Vec<alloy_primitives::B256> = Vec::new();
-        for sub in &loaded_manifest.subscriptions {
-            if let Subscription::ChainLog {
+        for trigger in &loaded_manifest.triggers {
+            if let Trigger::Event {
                 event_signature: Some(topic),
                 ..
-            } = sub
+            } = trigger
                 && !loaded.contains(topic)
             {
                 loaded.push(*topic);
@@ -244,66 +243,66 @@ event_signature = "cf5f9de2984132265203b5c335b25727702ca77262ff622e136baa7362bf1
             "the fixture repeats a topic non-adjacently"
         );
         assert_eq!(
-            nexum_world::manifest_chain_log_topics(toml).expect("extract"),
+            nexum_world::manifest_event_topics(toml).expect("extract"),
             loaded,
         );
 
-        let bad = "[component]\nname = \"bad\"\n\n[[subscription]]\nkind = \"chain-log\"\n\
+        let bad = "[component]\nname = \"bad\"\n\n[[trigger]]\non = \"event\"\n\
                    chain_id = 1\nevent_signature = \"not-a-topic\"\n";
         assert!(matches!(
             validate(bad),
-            Err(ParseError::InvalidChainLogTopic { .. })
+            Err(ParseError::InvalidEventTopic { .. })
         ));
-        assert!(nexum_world::manifest_chain_log_topics(bad).is_err());
+        assert!(nexum_world::manifest_event_topics(bad).is_err());
     }
 
     #[test]
-    fn load_parses_the_retired_log_kind_as_an_extension_kind() {
-        // The chain-event kind is `chain-log`; a stale `kind = "log"`
-        // parses as an extension kind and boot refuses it against the
-        // extension vocabulary, so a not-yet-migrated manifest still
-        // surfaces clearly rather than silently dropping events.
+    fn load_refuses_the_retired_chain_log_kind() {
+        // A not-yet-migrated manifest must refuse rather than silently
+        // drop deliveries. `chain-log` parses as an extension kind, so
+        // its integer `chain_id` fails the string-filter rule first.
         let toml = r#"
 [component]
 name = "stale"
 
 [dependencies]
 
-[[subscription]]
-kind     = "log"
-chain_id = "1"
+[[trigger]]
+on       = "chain-log"
+chain_id = 1
 "#;
-        let loaded = validate(toml).expect("parse");
         assert!(matches!(
-            &loaded.subscriptions[0],
-            Subscription::Extension { kind, .. } if kind == "log"
+            validate(toml),
+            Err(ParseError::NonStringTriggerFilter { key }) if key == "chain_id"
         ));
     }
 
     #[test]
-    fn load_parses_extension_subscriptions_with_string_filters() {
+    fn load_parses_extension_triggers_with_string_filters() {
         let toml = r#"
 [component]
-name = "watcher"
+name = "alerts"
 
 [dependencies]
 
-[[subscription]]
-kind = "acme-status"
+[[trigger]]
+on = "acme-status"
 
-[[subscription]]
-kind  = "acme-status"
+[[trigger]]
+on    = "acme-status"
 scope = "primary"
 "#;
         let loaded = validate(toml).expect("parse");
         assert!(matches!(
-            &loaded.subscriptions[0],
-            Subscription::Extension { kind, filters } if kind == "acme-status" && filters.is_empty()
+            &loaded.triggers[0],
+            Trigger::Extension { extension_kind, filters }
+                if extension_kind == "acme-status" && filters.is_empty()
         ));
         assert!(matches!(
-            &loaded.subscriptions[1],
-            Subscription::Extension { kind, filters }
-                if kind == "acme-status" && filters.get("scope").is_some_and(|v| v == "primary")
+            &loaded.triggers[1],
+            Trigger::Extension { extension_kind, filters }
+                if extension_kind == "acme-status"
+                    && filters.get("scope").is_some_and(|v| v == "primary")
         ));
     }
 
@@ -313,15 +312,15 @@ scope = "primary"
     fn load_rejects_a_non_string_extension_filter() {
         let toml = r#"
 [component]
-name = "watcher"
+name = "alerts"
 
-[[subscription]]
-kind  = "acme-status"
+[[trigger]]
+on    = "acme-status"
 scope = 7
 "#;
         let err = validate(toml).expect_err("non-string filter");
         assert!(
-            matches!(err, ParseError::NonStringSubscriptionFilter { ref key } if key == "scope"),
+            matches!(err, ParseError::NonStringTriggerFilter { ref key } if key == "scope"),
             "{err:?}",
         );
         // Operator wording pin.
@@ -340,13 +339,13 @@ name = "keeper"
 [venue]
 body_version = 2
 
-[[subscription]]
-kind     = "block"
+[[trigger]]
+on       = "block"
 chain_id = 1
 "#;
         let loaded = validate(toml).expect("parse");
         assert_eq!(loaded.name.as_str(), "keeper");
-        assert_eq!(loaded.subscriptions.len(), 1);
+        assert_eq!(loaded.triggers.len(), 1);
         assert_eq!(loaded.extensions.len(), 1);
         let venue = loaded.extensions.get("venue").expect("venue section");
         assert_eq!(
@@ -369,22 +368,19 @@ name = "plain"
     }
 
     #[test]
-    fn load_parses_cron_subscription() {
+    fn load_parses_schedule_trigger() {
         let toml = r#"
 [component]
 name = "scheduler"
 
 [dependencies]
 
-[[subscription]]
-kind     = "cron"
-schedule = "*/5 * * * *"
+[[trigger]]
+on   = "schedule"
+cron = "*/5 * * * *"
 "#;
         let loaded = validate(toml).expect("parse");
-        assert!(matches!(
-            &loaded.subscriptions[0],
-            Subscription::Cron { .. }
-        ));
+        assert!(matches!(&loaded.triggers[0], Trigger::Schedule { .. }));
     }
 
     #[test]

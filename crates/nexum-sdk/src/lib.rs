@@ -12,7 +12,7 @@
 //! - [`host`] - the [`Host`](host::Host) seam over the core host interfaces, plus the [`Fault`](host::Fault) vocabulary.
 //! - [`keeper`] - keeper stores ([`CommitmentSet`](keeper::CommitmentSet), [`Gates`](keeper::Gates), [`Journal`](keeper::Journal)), the [`Poller`](keeper::Poller) seam, and the [`Retrier`](keeper::Retrier).
 //! - [`chain`] - typed chain access and the alloy provider seam.
-//! - [`events`] - chain-log delivery.
+//! - [`sol_events`] - event delivery.
 //! - [`store`] - typed local-store helpers ([`WriteBatch`](store::WriteBatch), [`TypedCell`](store::TypedCell), [`TypedMap`](store::TypedMap), [`Counter`](store::Counter)).
 //! - [`config`] - config-table lookups and decimal scaling.
 //! - [`address`] - EVM address parsing.
@@ -34,11 +34,11 @@ pub use alloy_sol_types as sol_types;
 pub mod address;
 pub mod chain;
 pub mod config;
-pub mod events;
 pub mod host;
 pub mod http;
 pub mod keeper;
 pub mod prelude;
+pub mod sol_events;
 pub mod store;
 pub mod tracing;
 pub mod wit_bindgen_macro;
