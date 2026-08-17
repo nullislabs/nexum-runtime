@@ -7,14 +7,12 @@
 
 mod chain;
 mod error;
-mod implements;
 mod limits;
 mod load;
 mod policy;
 
 pub use chain::{ChainConfig, RpcEndpoint, RpcEndpointError, RpcTransport};
 pub use error::{EngineConfigError, EnvVarError};
-pub use implements::{Implementer, ImplementsSection};
 pub use limits::{
     ChainLimitsSection, DispatchLimitsSection, HttpLimitsSection, LogLimitsSection,
     LogRetentionLimits, ModuleLimits, OutboundHttpLimits, PoisonLimitsSection,
@@ -23,15 +21,15 @@ pub use limits::{
 pub use load::load_or_default;
 pub use policy::{ComponentPolicy, EffectivePolicy, PolicyCeilings, PolicySection, TotalPolicy};
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{HashMap, HashSet};
 use std::num::{NonZeroU64, NonZeroUsize};
 use std::path::PathBuf;
 
 use alloy_chains::Chain;
 use serde::Deserialize;
 
+use crate::digest::ContentDigest;
 use chain::{RawChainConfig, resolve_chains};
-use implements::{RawImplementer, resolve_implements};
 use policy::{RawPolicySection, resolve_policy};
 
 /// A literal as non-zero; a zero fails the build.
@@ -62,9 +60,6 @@ pub struct EngineConfig {
     pub limits: ResolvedModuleLimits,
     /// Operator resource and egress policy.
     pub policy: PolicySection,
-    /// `[implements]` bindings, keyed on the interface's compatibility
-    /// track. The sole authorization of a `provides` claim.
-    pub implements: ImplementsSection,
     /// Per-chain RPC config keyed by EIP-155 chain id. Numeric
     /// (`[chains.11155111]`) and named (`[chains.sepolia]`) keys both
     /// validate via `Chain`'s `FromStr` after the TOML parse.
@@ -91,13 +86,11 @@ struct RawEngineConfig {
     #[serde(default)]
     policy: RawPolicySection,
     #[serde(default)]
-    implements: BTreeMap<String, RawImplementer>,
-    #[serde(default)]
     chains: HashMap<String, RawChainConfig>,
     #[serde(default)]
     extensions: HashMap<String, toml::Value>,
     #[serde(default)]
-    modules: Vec<ModuleEntry>,
+    modules: Vec<RawModuleEntry>,
 }
 
 impl TryFrom<RawEngineConfig> for EngineConfig {
@@ -124,24 +117,41 @@ impl TryFrom<RawEngineConfig> for EngineConfig {
             }
         }
         let policy = resolve_policy(raw.policy, &ids)?;
-        let implements = resolve_implements(raw.implements, &ids)?;
+        let modules = raw
+            .modules
+            .into_iter()
+            .map(ModuleEntry::try_from)
+            .collect::<Result<_, _>>()?;
         Ok(Self {
             engine: raw.engine,
             limits: raw.limits.try_into()?,
             policy,
-            implements,
             chains,
             extensions: raw.extensions,
-            modules: raw.modules,
+            modules,
             defaulted: false,
         })
     }
 }
 
-/// One `[[modules]]` table. `manifest` defaults to a sibling
-/// `component.toml`.
+/// Raw `[[modules]]` table; the digest stays as written until the
+/// [`ModuleEntry`] conversion validates it.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
+struct RawModuleEntry {
+    id: String,
+    path: std::path::PathBuf,
+    #[serde(default)]
+    manifest: Option<std::path::PathBuf>,
+    #[serde(default)]
+    digest: Option<String>,
+}
+
+/// One `[[modules]]` table. `manifest` defaults to a sibling
+/// `component.toml`. Deserialization goes through the raw shape, so a
+/// standalone parse validates the digest exactly as the config load does.
+#[derive(Debug, Deserialize)]
+#[serde(try_from = "RawModuleEntry")]
 pub struct ModuleEntry {
     /// Operator-written identity; the `[policy.component.<id>]` key. The
     /// author-supplied `[component].name` never binds policy (ADR-0001).
@@ -149,8 +159,34 @@ pub struct ModuleEntry {
     /// Path to the compiled `.wasm` component.
     pub path: std::path::PathBuf,
     /// Path to the module's `component.toml`. Defaults to `<path-parent>/component.toml`.
-    #[serde(default)]
     pub manifest: Option<std::path::PathBuf>,
+    /// The operator's pin on this entry's artifact, verified against the
+    /// exact bytes handed to the compiler. Independent of the author's
+    /// `[component].digest`: both are verified when present.
+    pub digest: Option<ContentDigest>,
+}
+
+impl TryFrom<RawModuleEntry> for ModuleEntry {
+    type Error = EngineConfigError;
+
+    fn try_from(raw: RawModuleEntry) -> Result<Self, EngineConfigError> {
+        let digest = match raw.digest {
+            Some(value) => Some(value.parse::<ContentDigest>().map_err(|source| {
+                EngineConfigError::InvalidModuleDigest {
+                    id: raw.id.clone(),
+                    value,
+                    source,
+                }
+            })?),
+            None => None,
+        };
+        Ok(Self {
+            id: raw.id,
+            path: raw.path,
+            manifest: raw.manifest,
+            digest,
+        })
+    }
 }
 
 /// `[engine]`: settings that apply to the process, not to one module.
@@ -405,9 +441,11 @@ request_timeout_secs = 0
                 "[limits]\nevent_deadline_secs = 30\n",
             ),
             (
-                "key in an implements row",
+                // ADR-0022 cut `[implements]`; a stale table refuses at
+                // parse as an unknown key rather than binding nothing.
+                "retired [implements] table",
                 "[[modules]]\nid = \"m\"\npath = \"m.wasm\"\n\
-                 [implements.\"a:b/c@1\"]\ncomponent = \"m\"\ndigets = \"sha256:00\"\n",
+                 [implements.\"a:b/c@1\"]\ncomponent = \"m\"\n",
             ),
         ] {
             let err = toml::from_str::<EngineConfig>(toml)
@@ -445,10 +483,6 @@ max_memory_bytes = 4294967296
 max_memory_bytes = 1073741824
 http_allow       = ["api.cow.fi"]
 
-[implements."nexum:wallet/signer@2"]
-component = "m"
-digest    = "sha256:ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
-
 [chains.1]
 rpc_url = "https://example.test"
 
@@ -458,13 +492,14 @@ anything = "goes here, the engine never reads it"
 [[modules]]
 id = "m"
 path = "m.wasm"
+digest = "sha256:ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
 "#,
         )
         .expect("every documented section parses under the guard");
         assert_eq!(cfg.policy.ceilings.max_fuel_per_dispatch.get(), 7);
         assert_eq!(cfg.modules.len(), 1);
         assert_eq!(cfg.modules[0].id, "m");
-        assert_eq!(cfg.implements.len(), 1);
+        assert!(cfg.modules[0].digest.is_some());
         assert!(
             cfg.extensions.contains_key("acme"),
             "an extension table stays opaque and unguarded",
@@ -546,84 +581,48 @@ max_state_bytes       = 2_048
     }
 
     #[test]
-    fn an_implements_row_resolves_to_a_typed_binding() {
+    fn a_modules_digest_parses_to_a_typed_pin() {
         let pin = format!("sha256:{}", "ab".repeat(32));
         let cfg: EngineConfig = toml::from_str(&format!(
-            "[implements.\"nexum:wallet/signer@2\"]\ncomponent = \"m\"\ndigest = \"{pin}\"\n\
-             [implements.\"acme:venues/registry@0.3\"]\ncomponent = \"m\"\n\
-             [[modules]]\nid = \"m\"\npath = \"m.wasm\"\n",
+            "[[modules]]\nid = \"m\"\npath = \"m.wasm\"\ndigest = \"{pin}\"\n\
+             [[modules]]\nid = \"n\"\npath = \"n.wasm\"\n",
         ))
-        .expect("[implements] rows parse");
-        let track = crate::interface_id::InterfaceTrack::parse("nexum:wallet/signer@2")
-            .expect("valid track");
-        let row = cfg.implements.get(&track).expect("pinned row");
-        assert_eq!(row.component, "m");
-        assert_eq!(row.digest.expect("pin parsed").to_string(), pin);
-        let track = crate::interface_id::InterfaceTrack::parse("acme:venues/registry@0.3")
-            .expect("valid track");
-        let row = cfg.implements.get(&track).expect("unpinned row");
+        .expect("[[modules]] digests parse");
+        let pinned = &cfg.modules[0];
+        assert_eq!(pinned.digest.expect("pin parsed").to_string(), pin);
         assert!(
-            row.digest.is_none(),
-            "an absent digest survives parse; load refuses it as implementer_unpinned",
+            cfg.modules[1].digest.is_none(),
+            "an absent operator pin is the permitted default",
         );
     }
 
-    /// The key must be the compatibility track: a full version would let
-    /// two in-track claimants both match distinct rows, defeating the
-    /// prepass duplicate-claim gate.
+    /// `ModuleEntry` is public API a downstream config can embed, so the
+    /// standalone `Deserialize` impl must survive the raw-shape split,
+    /// and it must validate the digest exactly as the config load does.
     #[test]
-    fn an_implements_key_that_is_not_a_track_refuses() {
-        for bad in [
-            "nexum:wallet/signer@2.0.0",
-            "signer@2",
-            "nexum:wallet/signer",
-        ] {
-            let toml = format!(
-                "[implements.\"{bad}\"]\ncomponent = \"m\"\n\
-                 [[modules]]\nid = \"m\"\npath = \"m.wasm\"\n",
-            );
-            let raw = toml::from_str::<RawEngineConfig>(&toml)
-                .expect("the raw parse only decides the TOML is well formed");
-            let err = EngineConfig::try_from(raw).expect_err("a non-track key must not validate");
-            assert!(
-                matches!(err, EngineConfigError::InvalidInterfaceTrack { ref key } if key == bad),
-                "{err:?}",
-            );
-            // The public `Deserialize` path runs the same conversion.
-            let err = toml::from_str::<EngineConfig>(&toml)
-                .expect_err("the derived Deserialize must refuse too");
-            assert!(err.to_string().contains(bad), "{err}");
-        }
+    fn a_module_entry_deserializes_standalone() {
+        let pin = format!("sha256:{}", "ab".repeat(32));
+        let entry: ModuleEntry = toml::from_str(&format!(
+            "id = \"m\"\npath = \"m.wasm\"\ndigest = \"{pin}\"\n"
+        ))
+        .expect("a standalone entry parses");
+        assert_eq!(entry.id, "m");
+        assert_eq!(entry.digest.expect("pin parsed").to_string(), pin);
+        let err =
+            toml::from_str::<ModuleEntry>("id = \"m\"\npath = \"m.wasm\"\ndigest = \"bad\"\n")
+                .expect_err("a malformed pin must refuse standalone too");
+        assert!(err.to_string().contains("bad"), "{err}");
     }
 
     #[test]
-    fn an_implements_row_matching_no_module_id_refuses() {
-        const DANGLING: &str = "[implements.\"nexum:wallet/signer@2\"]\ncomponent = \"wallet\"\n\
-             [[modules]]\nid = \"tracker\"\npath = \"t.wasm\"\n";
-        let raw = toml::from_str::<RawEngineConfig>(DANGLING)
-            .expect("the raw parse only decides the TOML is well formed");
-        let err = EngineConfig::try_from(raw).expect_err("a dangling row must not validate");
-        assert!(
-            matches!(err, EngineConfigError::UnknownImplementsComponent { ref interface, ref id }
-                if interface == "nexum:wallet/signer@2" && id == "wallet"),
-            "{err:?}",
-        );
-        let err = toml::from_str::<EngineConfig>(DANGLING)
-            .expect_err("the derived Deserialize must refuse too");
-        assert!(err.to_string().contains("wallet"), "{err}");
-    }
-
-    #[test]
-    fn a_malformed_implementer_digest_refuses() {
-        const BAD: &str = "[implements.\"nexum:wallet/signer@2\"]\n\
-             component = \"m\"\ndigest = \"notahash\"\n\
-             [[modules]]\nid = \"m\"\npath = \"m.wasm\"\n";
+    fn a_malformed_modules_digest_refuses() {
+        const BAD: &str = "[[modules]]\nid = \"m\"\npath = \"m.wasm\"\ndigest = \"notahash\"\n";
         let raw = toml::from_str::<RawEngineConfig>(BAD)
             .expect("the raw parse only decides the TOML is well formed");
         let err = EngineConfig::try_from(raw).expect_err("a malformed pin must not validate");
         assert!(
-            matches!(err, EngineConfigError::InvalidImplementerDigest { ref interface, ref value, .. }
-                if interface == "nexum:wallet/signer@2" && value == "notahash"),
+            matches!(err, EngineConfigError::InvalidModuleDigest { ref id, ref value, .. }
+                if id == "m" && value == "notahash"),
             "{err:?}",
         );
         let err = toml::from_str::<EngineConfig>(BAD)

@@ -1,9 +1,14 @@
 ---
-status: accepted
+status: superseded by 0022-cut-guest-to-guest-calling.md
 amends: 0017-capabilities-and-services.md
 ---
 
 # A provides claim is verified by the engine and authorized by the operator
+
+> Amendment: this record was superseded after acceptance.
+> [ADR-0022](0022-cut-guest-to-guest-calling.md) cut guest-to-guest calling: `[component].provides`, the `[implements]` table, and every refusal below are removed from the tree.
+> The whole Decision is the pair, so no clause survives in part.
+> `InterfaceId` and `InterfaceTrack` survive for the plugin registry, and the operator digest pin moves to `[[modules]].digest`.
 
 ## Context
 

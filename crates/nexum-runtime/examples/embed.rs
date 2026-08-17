@@ -21,6 +21,7 @@ async fn main() -> anyhow::Result<()> {
             id: "example".to_owned(),
             path: "target/wasm32-wasip2/release/example.wasm".into(),
             manifest: Some("modules/example/component.toml".into()),
+            digest: None,
         }],
         ..EngineConfig::default()
     };

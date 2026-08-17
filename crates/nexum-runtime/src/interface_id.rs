@@ -1,5 +1,9 @@
-//! Interface identity: the `[component].provides` claim and the
-//! `[implements]` key.
+//! Interface identity: a full interface id and its compatibility track.
+//!
+//! Uncalled since ADR-0022 cut guest-to-guest calling, and kept on purpose:
+//! a plugin registry selects slot candidates before reading artifact bytes,
+//! and [`InterfaceTrack`] decides whether an update needs fresh user
+//! consent. Not an orphan.
 
 use derive_more::Display;
 use thiserror::Error;
@@ -42,26 +46,7 @@ impl InterfaceId {
         })
     }
 
-    /// True when `export` names the same interface at a version that
-    /// satisfies the claim: the same [track](Self::track) and no older
-    /// than the claimed version. An unversioned export never satisfies a
-    /// claim, which always carries a full version.
-    pub fn matches_export(&self, export: &str) -> bool {
-        let Some((name, version)) = export.split_once('@') else {
-            return false;
-        };
-        if name != self.name {
-            return false;
-        }
-        let Ok(version) = semver::Version::parse(version) else {
-            return false;
-        };
-        track_suffix(&version) == track_suffix(&self.version) && version >= self.version
-    }
-
-    /// The compatibility track this id belongs to. `[implements]` and the
-    /// prepass duplicate-claim ledger both key on it, through this one
-    /// derivation, so the two sites cannot drift.
+    /// The one derivation, so two sites keyed on a track cannot drift.
     pub fn track(&self) -> InterfaceTrack {
         InterfaceTrack(format!("{}@{}", self.name, track_suffix(&self.version)))
     }
@@ -102,8 +87,8 @@ fn is_kebab_word(word: &str) -> bool {
 }
 
 /// The key is not a track: full semver, leading zeros, and a bare `@0`
-/// are all refused, because a loosely spelt authorization row silently
-/// binds nothing.
+/// are all refused, because a loosely spelt track key silently matches
+/// nothing.
 #[derive(Debug, Error)]
 #[error(
     "{0:?} is not an interface track \
@@ -112,15 +97,14 @@ fn is_kebab_word(word: &str) -> bool {
 pub struct InvalidInterfaceTrack(pub String);
 
 /// An interface's compatibility track, e.g. `nexum:wallet/signer@2`.
-/// A compatible provider release stays inside its track, so an
-/// `[implements]` row keyed on one survives it; the digest pins the exact
-/// artifact. Under 0.1 nothing is compatible, so the track is the whole
-/// version and every release is an operator edit.
+/// A compatible release stays inside its track, so a selection keyed on
+/// one survives it. Under 0.1 nothing is compatible, so the track is the
+/// whole version and every release leaves the track.
 #[derive(Clone, Debug, Display, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct InterfaceTrack(String);
 
 impl InterfaceTrack {
-    /// Validate an `[implements]` key; the grammar is strict, as a pin's is.
+    /// Strict: a loose spelling matches nothing.
     pub fn parse(key: &str) -> Result<Self, InvalidInterfaceTrack> {
         let refuse = || InvalidInterfaceTrack(key.to_owned());
         let Some((name, suffix)) = key.split_once('@') else {
@@ -217,31 +201,6 @@ mod tests {
         assert_ne!(id("a:b/c@1.0.0").track(), id("a:b/c@2.0.0").track());
         assert_ne!(id("a:b/c@0.1.0").track(), id("a:b/c@0.2.0").track());
         assert_ne!(id("a:b/c@0.0.1").track(), id("a:b/c@0.0.9").track());
-    }
-
-    #[test]
-    fn an_export_satisfies_the_claim_only_in_track_and_no_older() {
-        let claim = id("nexum:wallet/signer@2.1.0");
-        assert!(claim.matches_export("nexum:wallet/signer@2.1.0"));
-        assert!(claim.matches_export("nexum:wallet/signer@2.2.0"));
-        // An older in-track export does not honour the claimed surface.
-        assert!(!claim.matches_export("nexum:wallet/signer@2.0.0"));
-        // The wrong track is the fail-open the operator cannot see.
-        assert!(!claim.matches_export("nexum:wallet/signer@1.0.0"));
-        assert!(!claim.matches_export("nexum:wallet/signer@3.0.0"));
-        assert!(!claim.matches_export("nexum:wallet/signer"));
-        assert!(!claim.matches_export("nexum:wallet/other@2.1.0"));
-        assert!(!claim.matches_export("init"));
-    }
-
-    /// Cargo reads `^0.0.1` as `=0.0.1`, so a newer patch under 0.1 is a
-    /// different interface, not a compatible one.
-    #[test]
-    fn a_newer_patch_under_zero_one_does_not_satisfy_the_claim() {
-        let claim = id("acme:pool/quoter@0.0.1");
-        assert!(claim.matches_export("acme:pool/quoter@0.0.1"));
-        assert!(!claim.matches_export("acme:pool/quoter@0.0.9"));
-        assert!(!claim.matches_export("acme:pool/quoter@0.1.0"));
     }
 
     #[test]

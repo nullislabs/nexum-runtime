@@ -11,16 +11,12 @@ use tempfile::TempDir;
 use super::manifest::{ManifestSource, TestManifest};
 use super::{in_memory_logs, test_chain_configs};
 use crate::digest::ContentDigest;
-use crate::engine_config::{
-    ChainConfig, EngineConfig, Implementer, ImplementsSection, ModuleEntry, ModuleLimits,
-    PolicySection,
-};
+use crate::engine_config::{ChainConfig, EngineConfig, ModuleEntry, ModuleLimits, PolicySection};
 use crate::host::component::{Components, RuntimeTypes};
 use crate::host::extension::{Extension, attach_wall_clock};
 use crate::host::local_store_redb::LocalStore;
 use crate::host::logs::{LogPipeline, LogRecord};
 use crate::host::provider_pool::ProviderPool;
-use crate::interface_id::InterfaceTrack;
 use crate::preset::CoreRuntime;
 use crate::supervisor::{Supervisor, WasiClockOverride, build_linker};
 use crate::test_utils::wasm::test_wasmtime_engine;
@@ -30,6 +26,7 @@ pub struct Entry {
     id: Option<String>,
     wasm: Option<PathBuf>,
     manifest: ManifestSource,
+    digest: Option<ContentDigest>,
 }
 
 impl Entry {
@@ -39,6 +36,7 @@ impl Entry {
             id: None,
             wasm: None,
             manifest: manifest.into(),
+            digest: None,
         }
     }
 
@@ -51,6 +49,12 @@ impl Entry {
     /// Load this entry from `wasm` rather than the scenario-wide component.
     pub fn wasm(mut self, wasm: impl Into<PathBuf>) -> Self {
         self.wasm = Some(wasm.into());
+        self
+    }
+
+    /// The operator's `[[modules]].digest` pin for this entry's artifact.
+    pub fn digest(mut self, digest: ContentDigest) -> Self {
+        self.digest = Some(digest);
         self
     }
 }
@@ -80,7 +84,6 @@ pub struct BootScenario<T: RuntimeTypes = CoreRuntime> {
     extensions: Vec<Arc<dyn Extension<T>>>,
     limits: ModuleLimits,
     policy: PolicySection,
-    implements: ImplementsSection,
     chains: HashMap<Chain, ChainConfig>,
     wasm: Option<PathBuf>,
     modules: Vec<Entry>,
@@ -118,7 +121,6 @@ impl<T: RuntimeTypes> BootScenario<T> {
             extensions: Vec::new(),
             limits: ModuleLimits::default(),
             policy: PolicySection::default(),
-            implements: ImplementsSection::default(),
             chains: test_chain_configs(),
             wasm: None,
             modules: Vec::new(),
@@ -154,24 +156,6 @@ impl<T: RuntimeTypes> BootScenario<T> {
     /// Replace the whole `[policy]` section.
     pub fn policy(mut self, policy: PolicySection) -> Self {
         self.policy = policy;
-        self
-    }
-
-    /// Add one `[implements]` row binding `track` to the entry id
-    /// `component`, with an optional artifact pin.
-    pub fn implement(
-        mut self,
-        track: &str,
-        component: impl Into<String>,
-        digest: Option<ContentDigest>,
-    ) -> Self {
-        self.implements.insert(
-            InterfaceTrack::parse(track).expect("scenario interface track"),
-            Implementer {
-                component: component.into(),
-                digest,
-            },
-        );
         self
     }
 
@@ -260,6 +244,7 @@ impl<T: RuntimeTypes> BootScenario<T> {
                 entry.id.unwrap_or_else(|| format!("m{i}")),
                 entry.wasm.unwrap_or_else(|| default_wasm.clone()),
                 entry.manifest.resolve(&at),
+                entry.digest,
             )
         };
 
@@ -269,7 +254,6 @@ impl<T: RuntimeTypes> BootScenario<T> {
                 .try_into()
                 .expect("scenario [limits] must carry no zero"),
             policy: self.policy,
-            implements: self.implements,
             chains: self.chains,
             ..Default::default()
         };
@@ -277,8 +261,13 @@ impl<T: RuntimeTypes> BootScenario<T> {
         config.engine.require_component_digest = self.require_digest;
         config.defaulted = self.defaulted;
         for (i, entry) in self.modules.into_iter().enumerate() {
-            let (id, path, manifest) = resolve(i, entry);
-            config.modules.push(ModuleEntry { id, path, manifest });
+            let (id, path, manifest, digest) = resolve(i, entry);
+            config.modules.push(ModuleEntry {
+                id,
+                path,
+                manifest,
+                digest,
+            });
         }
         (
             config,

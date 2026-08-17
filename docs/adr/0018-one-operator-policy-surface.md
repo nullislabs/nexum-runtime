@@ -9,6 +9,8 @@ status: accepted
 > `[limits.watch]` and `[limits.quota]` were retired and the per-dispatch deadline moved to `[limits.dispatch].deadline_secs`; the Decision text below carries the current names.
 > [ADR-0019](0019-modules-react-to-triggers.md) retired the export name `on-event`, and the Capabilities text below carries the decided name, `on-trigger`.
 > The WIT rename lands in a later code issue, so the export in the tree may still read `on-event`.
+> [ADR-0022](0022-cut-guest-to-guest-calling.md) landed the digest-pin dial from the Context list as `digest` on the `[[modules]]` entry it pins, not as a `[policy.component]` row; the pin binds one artifact to one entry, so it lives on the entry.
+> ADR-0022 also cut the service load path, so the `[[services]]` Consequence below carries a mark in place.
 
 ## Context
 
@@ -74,7 +76,9 @@ The gate admits a host only when it matches both name lists, so neither file can
 - This is one breaking config change: every `[[modules]]` entry needs an `id`, and the three `[limits]` scalars move to `[policy]`.
   `deny_unknown_fields` makes a second change a second hard boot failure, so the surface lands whole.
 - The dial issues consume this surface instead of adding their own sections.
+  Amended by [ADR-0022](0022-cut-guest-to-guest-calling.md): the digest-pin dial landed as `[[modules]].digest`, on the entry it pins, and the other dials stay on this surface.
 - `[[services]]` entries gain an `id` and join `[policy.component]` when the service load path lands.
+  Superseded by [ADR-0022](0022-cut-guest-to-guest-calling.md): the service load path is cut and a `[[services]]` table refuses at parse, so no such entry will land.
 - Every load-time refusal goes through the validated `TryFrom` conversion with a typed error, never through a serde string.
 
 ## Alternatives rejected

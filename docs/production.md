@@ -10,10 +10,10 @@ A downstream composition root that registers extensions runs the same way, under
 - Every component `.wasm` artifact present on a path the service user can read.
 - An `engine.toml` with `state_dir` on a persistent path (never `/tmp`), `log_level = "info"`, `[engine.metrics] enabled = true` with `bind_addr = "127.0.0.1:9100"`, one `[chains.<id>]` per subscribed chain with a paid RPC URL, and one `[[modules]]` per module, each with an operator-written `id`.
 - `require_component_digest = true` under `[engine]`, with every manifest carrying a `[component].digest` pin.
-- One `[implements."<namespace>:<package>/<interface>@<track>"]` row per component whose manifest carries a `provides` claim, with `component` set to that entry's `[[modules]].id` and `digest` set to the artifact's sha256.
-  A claimant with no row refuses with `implementer_unbound`, and a row without a digest refuses with `implementer_unpinned`.
-  A row whose component claims no matching interface refuses with `implementer_not_claiming`, which is what stops an edit to the untrusted manifest from disarming this pin.
-  The track is the major version at or above 1.0 (`@2`), `0.minor` below it (`@0.3`), and the full version below 0.1 (`@0.0.7`), which is semver's own compatibility rule.
+- A `digest` on each `[[modules]]` entry, set to the artifact's sha256.
+  This is the operator's own pin, in trusted config: the default sibling manifest lives in the same trust domain as the artifact, so its `[component].digest` does not hold against a compromised artifact store.
+  An operator-owned manifest outside the artifact directory, named by the `manifest` key on the entry and combined with `require_component_digest = true`, closes the same gap; `[[modules]].digest` is the direct form and needs no separate manifest path.
+  Both pins are verified against the exact bytes handed to the compiler, and a mismatch refuses the boot naming which pin failed and the file it is in.
 - The `state_dir` exists and is writable by the service user.
 - A Prometheus instance scraping `/metrics` (section 6) with the alert rules in section 7.
 - A log aggregator ingesting the engine's JSON stdout (section 5).
@@ -270,7 +270,7 @@ journalctl -u nexum -f --output=json \
   | jq 'select(.MESSAGE | fromjson? | .fields.module == "twap-monitor")'
 ```
 
-Recover a poisoned component: fix the underlying bug, rebuild the artifact, update the `[component].digest` pin (and the `[implements]` digest, if the component provides an interface), then `sudo systemctl restart nexum`.
+Recover a poisoned component: fix the underlying bug, rebuild the artifact, update the `[component].digest` pin and the entry's `[[modules]].digest` pin, then `sudo systemctl restart nexum`.
 A `digest_mismatch` refusal names the pin that failed and the file it is in, so it says which of the two to edit.
 The failure ring is in memory and clears at boot.
 The engine reads `[[modules]]` at boot only, and it detects no artifact change while running, so adding, changing, or removing a component means editing `engine.toml` and restarting.

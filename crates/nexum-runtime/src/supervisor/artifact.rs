@@ -14,11 +14,11 @@ use super::load::LoadRefusal;
 use crate::digest::{ContentDigest, DigestMismatch, DigestPin};
 use crate::refusal::Refusal;
 
-/// Digest expectations for one artifact. The operator's `[implements]`
+/// Digest expectations for one artifact. The operator's `[[modules]]`
 /// pin and the author's `[component].digest` are independent: both are
 /// verified when present, so a disagreement between them refuses.
 pub(super) struct DigestPolicy<'a> {
-    /// The `[implements]` row's pin; checked first, so a disagreement
+    /// The `[[modules]].digest` pin; checked first, so a disagreement
     /// reports the operator's expectation.
     pub(super) operator: Option<&'a ContentDigest>,
     /// The manifest's `[component].digest` pin.
@@ -30,7 +30,6 @@ pub(super) struct DigestPolicy<'a> {
 
 #[cfg(test)]
 impl<'a> DigestPolicy<'a> {
-    /// The author-pin-only policy, for tests without an `[implements]` row.
     pub(super) fn author(declared: Option<&'a ContentDigest>, require: bool) -> Self {
         Self {
             operator: None,
@@ -59,7 +58,7 @@ pub(super) fn read_verified_component(
             }
             .into());
         }
-        debug!(component = %path.display(), digest = %actual, "operator [implements] pin verified");
+        debug!(component = %path.display(), digest = %actual, "operator [[modules]].digest pin verified");
     }
     match pins.author {
         // A mismatch stays a typed arm of the refusal: callers match on it.
