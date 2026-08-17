@@ -87,15 +87,14 @@ pub struct LaunchContext<'a> {
     pub config: &'a EngineConfig,
 }
 
-/// Upper bound on the final durable-flush drain before shutdown forces exit.
-const SHUTDOWN_DRAIN_TIMEOUT: Duration = Duration::from_secs(10);
-
 /// A running runtime. [`shutdown`](Self::shutdown) or dropping fires shutdown;
 /// [`wait`](Self::wait) blocks on the bounded drain.
 pub struct RuntimeHandle {
     event_loop: TaskHandle<TaskExit>,
     tasks: TaskManager,
     logs: LogPipeline,
+    // `[limits.shutdown] drain_secs`.
+    drain_timeout: Duration,
     // Held for the length of the run; dropped once the event loop has joined.
     _add_ons: Vec<AddOnHandle>,
 }
@@ -113,12 +112,13 @@ impl RuntimeHandle {
     }
 
     /// Block until the loop stops (on its own, on shutdown, or on a critical
-    /// task ending), bounding the final flush; a drain past the timeout forces
-    /// exit.
+    /// task ending), bounding the final flush by `[limits.shutdown]
+    /// drain_secs`; a drain past that bound forces exit 1.
     pub async fn wait(self) -> anyhow::Result<()> {
         let RuntimeHandle {
             event_loop,
             mut tasks,
+            drain_timeout,
             _add_ons,
             ..
         } = self;
@@ -136,17 +136,18 @@ impl RuntimeHandle {
         // Signalled: block on the bounded drain. The event-loop task holds
         // the flush guard until it returns, not the abort-only reconnect
         // pumps.
-        match tasks
-            .graceful_shutdown_with_timeout(SHUTDOWN_DRAIN_TIMEOUT)
-            .await
-        {
+        match tasks.graceful_shutdown_with_timeout(drain_timeout).await {
             DrainOutcome::Drained => finish_wait(join.await),
             DrainOutcome::TimedOut { outstanding } => {
                 error!(
                     outstanding,
-                    timeout = ?SHUTDOWN_DRAIN_TIMEOUT,
+                    timeout = ?drain_timeout,
                     "shutdown drain exceeded deadline, forcing exit"
                 );
+                // Exit 1 is a decision: the fan-out halts between guest
+                // calls and the default drain outlasts the one in-flight
+                // deadline-bounded call, so a timeout is a wedged task, and
+                // `Restart=on-failure` should restart it.
                 std::process::exit(1);
             }
         }
@@ -300,6 +301,10 @@ impl<T: RuntimeTypes> AssembledRuntime<T> {
             modules = supervisor.module_count(),
             alive,
             chains = plan.block_chains.len(),
+            // The drain default tracks `deadline_secs`, so a systemd
+            // `TimeoutStopSec` sized against an older deadline is silently
+            // too small. Emit the resolved value so it can be compared.
+            shutdown_drain_secs = engine_cfg.limits.shutdown_drain.as_secs(),
             "supervisor ready"
         );
         if alive == 0 {
@@ -362,6 +367,7 @@ impl<T: RuntimeTypes> AssembledRuntime<T> {
                     event_loop,
                     tasks,
                     logs,
+                    drain_timeout: engine_cfg.limits.shutdown_drain,
                     _add_ons: add_on_handles,
                 });
             }
@@ -385,10 +391,12 @@ impl<T: RuntimeTypes> AssembledRuntime<T> {
         );
         // The event-loop task holds the graceful guard until `run` returns
         // (after its final dispatch and cursor commit); shutdown ends the
-        // loop between dispatches rather than cancelling it, so the drain
-        // blocks on it.
+        // loop between guest calls rather than cancelling it, so the drain
+        // blocks on at most one deadline-bounded call.
+        let stop = tasks.subscribe();
         let event_loop = executor.spawn_graceful(move |graceful| async move {
             let mut supervisor = supervisor; // rebind as mut: the dispatch calls below take &mut self
+            supervisor.stop_on(stop);
             event_loop::run(
                 &mut supervisor,
                 block_streams,
@@ -406,6 +414,7 @@ impl<T: RuntimeTypes> AssembledRuntime<T> {
             event_loop,
             tasks,
             logs,
+            drain_timeout: engine_cfg.limits.shutdown_drain,
             _add_ons: add_on_handles,
         })
     }
@@ -1301,6 +1310,8 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let mut config = EngineConfig::default();
         config.engine.state_dir = dir.path().join("state");
+        // Non-default, so a launch path regressing to a constant fails here.
+        config.limits.shutdown_drain = Duration::from_secs(9);
 
         let mut handle = RuntimeBuilder::new(&config)
             .with_types::<CoreRuntime>()
@@ -1317,6 +1328,12 @@ mod tests {
         let logs = handle.logs().clone();
         let _ = logs.list_runs("example");
 
+        assert_eq!(
+            handle.drain_timeout,
+            Duration::from_secs(9),
+            "the configured drain reaches the handle `wait` reads",
+        );
+
         handle.shutdown();
         handle.wait().await.expect("clean shutdown");
     }
@@ -1326,6 +1343,7 @@ mod tests {
             event_loop,
             tasks,
             logs: test_logs(),
+            drain_timeout: EngineConfig::default().limits.shutdown_drain,
             _add_ons: Vec::new(),
         }
     }

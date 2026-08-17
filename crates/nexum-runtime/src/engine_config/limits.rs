@@ -15,6 +15,10 @@ use super::nz_usize;
 /// Default per-dispatch wall-clock deadline.
 const DEFAULT_DISPATCH_DEADLINE: Duration = Duration::from_secs(120);
 
+/// Added past the deadline to cover the final cursor commit and the
+/// reconnect-task drain.
+const SHUTDOWN_DRAIN_MARGIN: Duration = Duration::from_secs(30);
+
 /// Default ceiling on the guest-settable connect timeout.
 const DEFAULT_HTTP_CONNECT_TIMEOUT_MAX: Duration = Duration::from_secs(10);
 
@@ -69,6 +73,9 @@ pub struct ModuleLimits {
     /// `[limits.dispatch]`.
     #[serde(default)]
     pub dispatch: DispatchLimitsSection,
+    /// `[limits.shutdown]`.
+    #[serde(default)]
+    pub shutdown: ShutdownLimitsSection,
 }
 
 /// `[limits]` resolved once at load: every optional knob replaced by its
@@ -79,6 +86,10 @@ pub struct ResolvedModuleLimits {
     /// Wall-clock deadline for a dispatch, covering host-call time fuel
     /// cannot meter.
     pub dispatch_deadline: Duration,
+    /// Bound on the shutdown drain of the in-flight dispatch; defaults to
+    /// `dispatch_deadline` plus a margin so an untuned drain outlasts the
+    /// one call left in flight.
+    pub shutdown_drain: Duration,
     /// Cap on one chain JSON-RPC response body.
     pub chain_response_max_bytes: NonZeroUsize,
     /// Outbound wasi:http limits.
@@ -209,11 +220,19 @@ impl TryFrom<ModuleLimits> for ResolvedModuleLimits {
                 DEFAULT_DISPATCH_REFILL_PER_SEC,
             )?,
         );
+        let dispatch_deadline = nonzero_secs(
+            "limits.dispatch.deadline_secs",
+            raw.dispatch.deadline_secs,
+            DEFAULT_DISPATCH_DEADLINE,
+        )?;
         Ok(Self {
-            dispatch_deadline: nonzero_secs(
-                "limits.dispatch.deadline_secs",
-                raw.dispatch.deadline_secs,
-                DEFAULT_DISPATCH_DEADLINE,
+            dispatch_deadline,
+            shutdown_drain: nonzero_secs(
+                "limits.shutdown.drain_secs",
+                raw.shutdown.drain_secs,
+                // Saturate: `Add` panics near `u64::MAX` seconds, and the
+                // default is computed even under an explicit override.
+                dispatch_deadline.saturating_add(SHUTDOWN_DRAIN_MARGIN),
             )?,
             chain_response_max_bytes: nonzero_usize(
                 "limits.chain.response_body_max_bytes",
@@ -313,6 +332,15 @@ pub struct DispatchLimitsSection {
     /// Wall-clock deadline (s) for a dispatch, covering host-call time
     /// fuel cannot meter.
     pub deadline_secs: Option<u64>,
+}
+
+/// `[limits.shutdown]`. Process-scoped, unlike its `[limits.dispatch]`
+/// neighbours: there is one process and one stop.
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ShutdownLimitsSection {
+    /// Bound (s) on the drain of the in-flight dispatch.
+    pub drain_secs: Option<u64>,
 }
 
 /// Resolved log retention limits the in-memory store enforces. Non-zero
@@ -524,6 +552,58 @@ window_secs  = 60
         let policy = ResolvedModuleLimits::default().dispatch;
         assert_eq!(policy.capacity, DEFAULT_DISPATCH_BURST);
         assert_eq!(policy.refill_per_sec, DEFAULT_DISPATCH_REFILL_PER_SEC);
+    }
+
+    /// A drain shorter than the deadline it drains loses the in-flight
+    /// dispatch's cursor commit on SIGTERM.
+    #[test]
+    fn shutdown_drain_defaults_past_the_dispatch_deadline() {
+        let resolved = ResolvedModuleLimits::default();
+        assert_eq!(
+            resolved.shutdown_drain,
+            resolved.dispatch_deadline + Duration::from_secs(30),
+        );
+
+        let cfg: EngineConfig = toml::from_str(
+            r#"
+[limits.dispatch]
+deadline_secs = 300
+"#,
+        )
+        .expect("limits.dispatch parses");
+        assert_eq!(cfg.limits.shutdown_drain, Duration::from_secs(330));
+    }
+
+    #[test]
+    fn shutdown_drain_parses_with_override() {
+        let cfg: EngineConfig = toml::from_str(
+            r#"
+[limits.shutdown]
+drain_secs = 45
+"#,
+        )
+        .expect("limits.shutdown parses");
+        assert_eq!(cfg.limits.shutdown_drain, Duration::from_secs(45));
+
+        toml::from_str::<EngineConfig>("[limits.shutdown]\ndrain_secs = 0\n")
+            .expect_err("a zero drain would forbid the final flush");
+
+        toml::from_str::<EngineConfig>("[limits.dispatch]\nshutdown_drain_secs = 45\n")
+            .expect_err("the retired spelling refuses under deny_unknown_fields");
+    }
+
+    /// The drain default is computed even under an override, so a maximal
+    /// deadline must saturate rather than panic on the added margin.
+    #[test]
+    fn a_maximal_deadline_saturates_the_drain_default() {
+        let toml_max = format!("[limits.dispatch]\ndeadline_secs = {}\n", u64::MAX);
+        let cfg: EngineConfig = toml::from_str(&toml_max).expect("a maximal deadline parses");
+        assert_eq!(cfg.limits.shutdown_drain, Duration::MAX);
+
+        let cfg: EngineConfig =
+            toml::from_str(&format!("{toml_max}\n[limits.shutdown]\ndrain_secs = 60\n"))
+                .expect("an explicit drain beside a maximal deadline parses");
+        assert_eq!(cfg.limits.shutdown_drain, Duration::from_secs(60));
     }
 
     #[test]

@@ -28,7 +28,7 @@ use crate::host::component::RuntimeTypes;
 use crate::host::extension::{ExtensionEvent, ExtensionEventStream};
 use crate::host::provider_pool::ProviderPool;
 use crate::module_id::ModuleId;
-use crate::runtime::restart_policy::backoff_for;
+use crate::runtime::restart_policy::{backoff_for, jitter_seed};
 use crate::supervisor::{ChainLogSub, Supervisor};
 use nexum_tasks::{TaskExecutor, TaskExit, TaskSet};
 
@@ -105,10 +105,10 @@ fn receiver_stream<T: Send + 'static>(
 }
 
 /// Bumps `attempt`, hands `(attempt, backoff_ms)` to the site's log line, and
-/// sleeps the backoff.
-async fn backoff_pause(attempt: &mut u32, log: impl FnOnce(u32, u64)) {
+/// sleeps the backoff; `seed` decorrelates the site from its co-failing peers.
+async fn backoff_pause(attempt: &mut u32, seed: u64, log: impl FnOnce(u32, u64)) {
     *attempt = attempt.saturating_add(1);
-    let backoff = backoff_for(*attempt);
+    let backoff = backoff_for(*attempt, seed);
     log(*attempt, backoff.as_millis() as u64);
     tokio::time::sleep(backoff).await;
 }
@@ -121,6 +121,7 @@ async fn reconnecting_block_task(
     tx: mpsc::Sender<Result<(Chain, alloy_rpc_types_eth::Header), (Chain, TransportError)>>,
 ) -> TaskExit {
     let chain_id = chain.id();
+    let seed = jitter_seed(&format!("block-{chain_id}"));
     let mut attempt: u32 = 0;
     let mut last_event: Option<Instant> = None;
     loop {
@@ -181,7 +182,7 @@ async fn reconnecting_block_task(
                 warn!(chain_id, error = %err, "block subscription failed");
             }
         }
-        backoff_pause(&mut attempt, |attempt, backoff_ms| {
+        backoff_pause(&mut attempt, seed, |attempt, backoff_ms| {
             warn!(
                 chain_id,
                 attempt, backoff_ms, "reconnecting block subscription after backoff",
@@ -225,6 +226,7 @@ async fn reconnecting_chain_log_task(
         max_lookback,
     } = resume;
     let chain_id = chain.id();
+    let seed = jitter_seed(module.as_str()) ^ chain_id;
     let mut attempt: u32 = 0;
     let mut last_event: Option<Instant> = None;
     // One past the highest scanned height; rolled back on a removed batch.
@@ -236,7 +238,7 @@ async fn reconnecting_chain_log_task(
         let provider = match pool.provider(chain) {
             Ok(provider) => provider,
             Err(err) => {
-                backoff_pause(&mut attempt, |attempt, backoff_ms| {
+                backoff_pause(&mut attempt, seed, |attempt, backoff_ms| {
                     warn!(
                         module = %module,
                         chain_id,
@@ -253,7 +255,7 @@ async fn reconnecting_chain_log_task(
         let head = match provider.get_block_number().await {
             Ok(head) => head,
             Err(err) => {
-                backoff_pause(&mut attempt, |attempt, backoff_ms| {
+                backoff_pause(&mut attempt, seed, |attempt, backoff_ms| {
                     warn!(
                         module = %module,
                         chain_id,
@@ -274,7 +276,7 @@ async fn reconnecting_chain_log_task(
                 Ok(Some(block)) if block.header.hash == t.hash => {}
                 Ok(Some(_)) => invalidated_tail = Some(t.number),
                 Ok(None) | Err(_) => {
-                    backoff_pause(&mut attempt, |attempt, backoff_ms| {
+                    backoff_pause(&mut attempt, seed, |attempt, backoff_ms| {
                         warn!(
                             module = %module,
                             chain_id,
@@ -429,7 +431,7 @@ async fn reconnecting_chain_log_task(
                 );
             }
         }
-        backoff_pause(&mut attempt, |attempt, backoff_ms| {
+        backoff_pause(&mut attempt, seed, |attempt, backoff_ms| {
             warn!(
                 module = %module,
                 chain_id,
@@ -458,10 +460,12 @@ pub type TaggedChainLogStream =
     std::pin::Pin<Box<dyn futures::Stream<Item = TaggedChainLog> + Send>>;
 /// Drive the supervisor with events until `shutdown` resolves.
 ///
-/// `shutdown` is observed only between dispatches, never mid-`call_on_event`,
-/// so an in-flight wasmtime call finishes before the loop exits; the guard it
-/// yields is held until return, so the drain covers the final dispatch and
-/// cursor commit. Returns the `(blocks, chain_logs)` dispatch tally.
+/// `shutdown` is observed only between guest calls, never mid-`call_on_event`:
+/// here between events, and through the supervisor's stop probe between the
+/// per-module calls of one event. The in-flight call finishes before the loop
+/// exits; the guard `shutdown` yields is held until return, so the drain
+/// covers that call and its cursor commit. Returns the `(blocks, chain_logs)`
+/// dispatch tally.
 pub async fn run<T: RuntimeTypes, G>(
     supervisor: &mut Supervisor<T>,
     block_streams: Vec<TaggedBlockStream>,

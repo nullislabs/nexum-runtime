@@ -27,7 +27,7 @@ impl<T: RuntimeTypes> Supervisor<T> {
         let block_number = block.number;
         let event = nexum::host::types::Event::Block(block);
         let now = Instant::now();
-        sweep(&self.shared, &mut self.modules, now).await;
+        sweep(&self.shared, &mut self.modules, now, self.stop.as_ref()).await;
 
         let mut dispatched = 0;
         let candidate_indices: Vec<usize> = (0..self.modules.len())
@@ -41,7 +41,35 @@ impl<T: RuntimeTypes> Supervisor<T> {
                     .any(|s| matches!(s, Subscription::Block { chain_id: cid } if chain == *cid))
             })
             .collect();
-        for idx in candidate_indices {
+        for (position, idx) in candidate_indices.iter().copied().enumerate() {
+            // A stop drops the block for the modules after this one. The
+            // fan-out order is `[[modules]]` order, so the same trailing
+            // modules lose it at every stop: count and name them, or the
+            // bias is invisible.
+            if self.stop_requested() {
+                let skipped = &candidate_indices[position..];
+                for &i in skipped {
+                    metrics::counter!(
+                        "nexum_runtime_dispatch_dropped_total",
+                        "module" => self.modules[i].name.to_string(),
+                        "event_kind" => "block",
+                        "reason" => "shutdown",
+                    )
+                    .increment(1);
+                }
+                warn!(
+                    chain_id,
+                    block_number,
+                    skipped = skipped.len(),
+                    modules = %skipped
+                        .iter()
+                        .map(|&i| self.modules[i].name.to_string())
+                        .collect::<Vec<_>>()
+                        .join(", "),
+                    "stop requested mid fan-out; these modules do not see this block",
+                );
+                break;
+            }
             if matches!(
                 self.dispatch_to(idx, chain_id, "block", block_number, &event, now)
                     .await,
@@ -69,6 +97,19 @@ impl<T: RuntimeTypes> Supervisor<T> {
         cursor_key: Option<&str>,
     ) -> bool {
         let now = Instant::now();
+        // Skipped: the cursor stays put, so `resume = true` replays the
+        // event at the next start. Counted anyway, so the shutdown reason is
+        // one series rather than three behaviours.
+        if self.stop_requested() {
+            metrics::counter!(
+                "nexum_runtime_dispatch_dropped_total",
+                "module" => module_name.to_string(),
+                "event_kind" => "chain-log",
+                "reason" => "shutdown",
+            )
+            .increment(1);
+            return false;
+        }
         let Some(idx) = self.modules.iter().position(|m| m.name == *module_name) else {
             warn!(module = %module_name, "no such module - dropping chain-log");
             return false;
@@ -84,7 +125,9 @@ impl<T: RuntimeTypes> Supervisor<T> {
             revive_one(&self.shared, &mut self.modules[idx], now).await;
         }
 
-        if !self.modules[idx].health.dispatchable() {
+        // The revive above is deadline-bounded; re-probe so a stop during it
+        // does not start a second bounded call.
+        if self.stop_requested() || !self.modules[idx].health.dispatchable() {
             return false;
         }
 
@@ -122,7 +165,7 @@ impl<T: RuntimeTypes> Supervisor<T> {
     /// The restart sweep runs first; returns the number of modules invoked.
     pub async fn dispatch_extension_event(&mut self, event: ExtensionEvent) -> usize {
         let now = Instant::now();
-        sweep(&self.shared, &mut self.modules, now).await;
+        sweep(&self.shared, &mut self.modules, now, self.stop.as_ref()).await;
 
         let candidate_indices: Vec<usize> = (0..self.modules.len())
             .filter(|&i| {
@@ -142,7 +185,19 @@ impl<T: RuntimeTypes> Supervisor<T> {
             })
             .collect();
         let mut dispatched = 0;
-        for idx in candidate_indices {
+        for (position, idx) in candidate_indices.iter().copied().enumerate() {
+            if self.stop_requested() {
+                for &i in &candidate_indices[position..] {
+                    metrics::counter!(
+                        "nexum_runtime_dispatch_dropped_total",
+                        "module" => self.modules[i].name.to_string(),
+                        "event_kind" => event.kind,
+                        "reason" => "shutdown",
+                    )
+                    .increment(1);
+                }
+                break;
+            }
             // Extension events are not chain-scoped; telemetry carries the 0 sentinel.
             if matches!(
                 self.dispatch_to(idx, 0, event.kind, 0, &event.event, now)
@@ -184,6 +239,7 @@ impl<T: RuntimeTypes> Supervisor<T> {
                 "nexum_runtime_dispatch_dropped_total",
                 "module" => module.name.to_string(),
                 "event_kind" => event_kind,
+                "reason" => "rate_limited",
             )
             .increment(1);
             return DispatchOutcome::RateLimited;
@@ -257,7 +313,8 @@ impl<T: RuntimeTypes> Supervisor<T> {
             Err(trap) => {
                 // The module died when the call ended, not at entry.
                 let died_at = start + elapsed;
-                let verdict = module.health.record_trap(died_at, poison_policy);
+                let seed = crate::runtime::restart_policy::jitter_seed(module.name.as_str());
+                let verdict = module.health.record_trap(died_at, poison_policy, seed);
                 error!(
                     module = %module.name,
                     chain_id,

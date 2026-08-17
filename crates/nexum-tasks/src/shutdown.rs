@@ -42,6 +42,11 @@ pub struct Shutdown {
 }
 
 impl Shutdown {
+    /// Synchronous probe for a loop that must stop between units of work.
+    pub fn is_fired(&self) -> bool {
+        *self.rx.borrow()
+    }
+
     /// Await shutdown; resolves immediately if already fired and is safe to
     /// await more than once.
     pub async fn recv(&mut self) {

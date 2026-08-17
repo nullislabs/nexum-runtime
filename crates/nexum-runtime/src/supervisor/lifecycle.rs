@@ -6,6 +6,7 @@ use std::time::Duration;
 use tokio::time::Instant;
 
 use anyhow::{Error, Result, anyhow};
+use nexum_tasks::Shutdown;
 use tracing::{error, info};
 
 use super::Shared;
@@ -15,7 +16,7 @@ use crate::digest::ContentDigest;
 use crate::host::component::RuntimeTypes;
 use crate::module_id::ModuleId;
 use crate::runtime::poison_policy::{PoisonPolicy, should_poison};
-use crate::runtime::restart_policy::backoff_for;
+use crate::runtime::restart_policy::{backoff_for, jitter_seed};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum LifecycleState {
@@ -88,10 +89,16 @@ impl Health {
         self.failure_count
     }
 
-    /// `now` is the death instant the dispatch stamped.
-    pub(super) fn record_trap(&mut self, now: Instant, policy: PoisonPolicy) -> TrapVerdict {
+    /// `now` is the death instant the dispatch stamped; `seed` decorrelates
+    /// the backoff across modules.
+    pub(super) fn record_trap(
+        &mut self,
+        now: Instant,
+        policy: PoisonPolicy,
+        seed: u64,
+    ) -> TrapVerdict {
         self.failure_count = self.failure_count.saturating_add(1);
-        let backoff = backoff_for(self.failure_count);
+        let backoff = backoff_for(self.failure_count, seed);
         while let Some(&front) = self.window.front() {
             if now.duration_since(front) > policy.window {
                 self.window.pop_front();
@@ -118,9 +125,9 @@ impl Health {
     }
 
     /// Backoff slides from `now`; restart failures never feed the poison window.
-    pub(super) fn defer_restart(&mut self, now: Instant) -> Deferral {
+    pub(super) fn defer_restart(&mut self, now: Instant, seed: u64) -> Deferral {
         self.failure_count = self.failure_count.saturating_add(1);
-        let backoff = backoff_for(self.failure_count);
+        let backoff = backoff_for(self.failure_count, seed);
         self.state = LifecycleState::Backoff {
             until: now.checked_add(backoff).unwrap_or(now),
         };
@@ -197,8 +204,14 @@ pub(super) async fn sweep<T: RuntimeTypes, S: Sweepable<T>>(
     shared: &Shared<T>,
     items: &mut [S],
     now: Instant,
+    stop: Option<&Shutdown>,
 ) {
     for item in items.iter_mut() {
+        // Each revive runs a deadline-bounded `init`; a fired stop must not
+        // start another.
+        if stop.is_some_and(Shutdown::is_fired) {
+            return;
+        }
         if item.health().due_restart(now) {
             revive_one(shared, item, now).await;
         }
@@ -218,7 +231,8 @@ pub(super) async fn revive_one<T: RuntimeTypes, S: Sweepable<T>>(
             report_restart_outcome(item.name(), Ok(()));
         }
         Err(e) => {
-            let deferral = item.health_mut().defer_restart(now);
+            let seed = jitter_seed(item.name().as_str());
+            let deferral = item.health_mut().defer_restart(now, seed);
             report_restart_outcome(item.name(), Err((deferral, e)));
         }
     }
@@ -271,6 +285,16 @@ mod health_tests {
         Duration::from_secs(n)
     }
 
+    const SEED: u64 = 0x5eed;
+
+    fn assert_backoff_base(backoff: Duration, base: Duration) {
+        assert!(
+            (base / 2..=base).contains(&backoff),
+            "{backoff:?} outside [{:?}, {base:?}]",
+            base / 2,
+        );
+    }
+
     #[test]
     fn alive_is_dispatchable_and_never_due() {
         let t0 = Instant::now();
@@ -294,26 +318,33 @@ mod health_tests {
     fn trap_enters_backoff_from_death_instant() {
         let t0 = Instant::now();
         let mut health = Health::alive();
-        let verdict = health.record_trap(t0, policy(5, 600));
+        let verdict = health.record_trap(t0, policy(5, 600), SEED);
         assert_eq!(verdict.failure_count, 1);
-        assert_eq!(verdict.backoff, secs(1));
+        assert_backoff_base(verdict.backoff, secs(1));
         assert!(verdict.poisoned.is_none());
         assert!(!health.dispatchable());
-        assert!(!health.due_restart(t0 + Duration::from_millis(999)));
-        assert!(health.due_restart(t0 + secs(1)));
+        assert!(!health.due_restart(t0 + verdict.backoff - Duration::from_millis(1)));
+        assert!(health.due_restart(t0 + verdict.backoff));
     }
 
     #[test]
     fn consecutive_traps_climb_the_backoff_curve() {
         let t0 = Instant::now();
         let mut health = Health::alive();
-        assert_eq!(health.record_trap(t0, policy(9, 600)).backoff, secs(1));
-        assert_eq!(
-            health.record_trap(t0 + secs(2), policy(9, 600)).backoff,
+        assert_backoff_base(
+            health.record_trap(t0, policy(9, 600), SEED).backoff,
+            secs(1),
+        );
+        assert_backoff_base(
+            health
+                .record_trap(t0 + secs(2), policy(9, 600), SEED)
+                .backoff,
             secs(2),
         );
-        assert_eq!(
-            health.record_trap(t0 + secs(6), policy(9, 600)).backoff,
+        assert_backoff_base(
+            health
+                .record_trap(t0 + secs(6), policy(9, 600), SEED)
+                .backoff,
             secs(4),
         );
     }
@@ -322,21 +353,21 @@ mod health_tests {
     fn a_restart_keeps_the_failure_curve() {
         let t0 = Instant::now();
         let mut health = Health::alive();
-        health.record_trap(t0, policy(9, 600));
-        health.record_trap(t0 + secs(2), policy(9, 600));
+        health.record_trap(t0, policy(9, 600), SEED);
+        health.record_trap(t0 + secs(2), policy(9, 600), SEED);
         health.restart_succeeded();
         assert!(health.dispatchable());
         assert_eq!(health.failure_count(), 2);
-        let verdict = health.record_trap(t0 + secs(9), policy(9, 600));
+        let verdict = health.record_trap(t0 + secs(9), policy(9, 600), SEED);
         assert_eq!(verdict.failure_count, 3);
-        assert_eq!(verdict.backoff, secs(4), "the curve kept climbing");
+        assert_backoff_base(verdict.backoff, secs(4));
     }
 
     #[test]
     fn dispatch_success_resets_the_count() {
         let t0 = Instant::now();
         let mut health = Health::alive();
-        health.record_trap(t0, policy(9, 600));
+        health.record_trap(t0, policy(9, 600), SEED);
         health.restart_succeeded();
         health.dispatch_succeeded();
         assert_eq!(health.failure_count(), 0);
@@ -346,17 +377,17 @@ mod health_tests {
     fn defer_slides_backoff_from_now_and_skips_the_poison_window() {
         let t0 = Instant::now();
         let mut health = Health::alive();
-        health.record_trap(t0, policy(2, 600));
-        let deferral = health.defer_restart(t0 + secs(1));
+        health.record_trap(t0, policy(2, 600), SEED);
+        let deferral = health.defer_restart(t0 + secs(1), SEED);
         assert_eq!(deferral.failure_count, 2);
-        assert_eq!(deferral.backoff, secs(2));
-        assert!(!health.due_restart(t0 + secs(2)));
-        assert!(health.due_restart(t0 + secs(3)));
+        assert_backoff_base(deferral.backoff, secs(2));
+        assert!(!health.due_restart(t0 + secs(1) + deferral.backoff - Duration::from_millis(1)));
+        assert!(health.due_restart(t0 + secs(1) + deferral.backoff));
         assert!(
             !health.is_poisoned(),
             "restart failures never feed the poison window",
         );
-        let verdict = health.record_trap(t0 + secs(4), policy(2, 600));
+        let verdict = health.record_trap(t0 + secs(4), policy(2, 600), SEED);
         assert_eq!(verdict.poisoned, Some(2), "the second trap crosses");
     }
 
@@ -364,14 +395,19 @@ mod health_tests {
     fn poison_crosses_at_the_threshold_within_the_window() {
         let t0 = Instant::now();
         let mut health = Health::alive();
-        assert!(health.record_trap(t0, policy(3, 600)).poisoned.is_none());
         assert!(
             health
-                .record_trap(t0 + secs(1), policy(3, 600))
+                .record_trap(t0, policy(3, 600), SEED)
                 .poisoned
                 .is_none()
         );
-        let verdict = health.record_trap(t0 + secs(2), policy(3, 600));
+        assert!(
+            health
+                .record_trap(t0 + secs(1), policy(3, 600), SEED)
+                .poisoned
+                .is_none()
+        );
+        let verdict = health.record_trap(t0 + secs(2), policy(3, 600), SEED);
         assert_eq!(verdict.poisoned, Some(3));
         assert!(health.is_poisoned());
         assert!(!health.dispatchable());
@@ -382,13 +418,13 @@ mod health_tests {
     fn old_failures_age_out_of_the_window() {
         let t0 = Instant::now();
         let mut health = Health::alive();
-        health.record_trap(t0, policy(2, 10));
-        let verdict = health.record_trap(t0 + secs(11), policy(2, 10));
+        health.record_trap(t0, policy(2, 10), SEED);
+        let verdict = health.record_trap(t0 + secs(11), policy(2, 10), SEED);
         assert!(
             verdict.poisoned.is_none(),
             "the first failure aged out before the second landed",
         );
-        let verdict = health.record_trap(t0 + secs(12), policy(2, 10));
+        let verdict = health.record_trap(t0 + secs(12), policy(2, 10), SEED);
         assert_eq!(verdict.poisoned, Some(2));
     }
 
@@ -396,9 +432,9 @@ mod health_tests {
     fn poisoned_is_terminal() {
         let t0 = Instant::now();
         let mut health = Health::alive();
-        health.record_trap(t0, policy(1, 600));
+        health.record_trap(t0, policy(1, 600), SEED);
         assert!(health.is_poisoned());
-        let verdict = health.record_trap(t0 + secs(1), policy(1, 600));
+        let verdict = health.record_trap(t0 + secs(1), policy(1, 600), SEED);
         assert!(
             verdict.poisoned.is_none(),
             "only the transition reports the crossing",
