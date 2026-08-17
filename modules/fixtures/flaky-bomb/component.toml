@@ -1,4 +1,4 @@
-# flaky-bomb test fixture. Subscribes to blocks; `on_event`
+# flaky-bomb test fixture. Declares a block trigger; `on_trigger`
 # traps via `unreachable!()` on the first N attempts, then recovers.
 # Drives the supervisor's exponential-backoff restart policy through
 # its full lifecycle.
@@ -11,12 +11,12 @@ version = "0.1.0"
 logging = {}
 local-store = {}
 
-[[subscription]]
-kind = "block"
+[[trigger]]
+on = "block"
 chain_id = 1
 
 [config]
-# Number of consecutive events to trap on before recovering. Tests
+# Number of consecutive triggers to trap on before recovering. Tests
 # typically synthesize a manifest with `fail_first_n = "1"` to keep
 # the test wall-clock short (only one 1 s backoff window to wait).
 fail_first_n = "1"

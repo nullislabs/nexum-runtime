@@ -53,13 +53,13 @@ fn e2e_example_component_imports_equal_declared_capabilities() {
 }
 
 #[tokio::test]
-async fn e2e_block_subscription_dispatched() {
+async fn e2e_block_trigger_dispatched() {
     let Some(wasm) = example_wasm_or_skip() else {
         return;
     };
     let mut booted = BootScenario::new()
         .wasm(wasm)
-        .module(TestManifest::new("example").cap("logging").block_sub(1))
+        .module(TestManifest::new("example").cap("logging").block_trigger(1))
         .boot()
         .await
         .expect("boot");
@@ -67,7 +67,7 @@ async fn e2e_block_subscription_dispatched() {
     assert_eq!(
         booted.dispatch_block_on(1).await,
         1,
-        "one module subscribed to chain 1 blocks",
+        "one module declares chain 1 blocks",
     );
     assert_eq!(
         booted.supervisor.alive_count(),
@@ -91,7 +91,7 @@ async fn e2e_manual_clock_override_boots_and_dispatches() {
     let dir = tempfile::tempdir().expect("tempdir");
     let manifest = TestManifest::new("example")
         .cap("logging")
-        .block_sub(1)
+        .block_trigger(1)
         .write_to(dir.path());
 
     let clock = ManualClock::new();
@@ -165,7 +165,7 @@ async fn e2e_http_probe_allowlisted_fetch_and_denied_path() {
                 .cap("logging")
                 .cap("http")
                 .http_allow("127.0.0.1")
-                .block_sub(1)
+                .block_trigger(1)
                 .config("probe_url", format!("{}/status", server.uri()))
                 .config("denied_url", "http://denied.invalid/"),
         )
@@ -216,7 +216,7 @@ async fn e2e_policy_http_allow_narrows_the_author_list_through_boot() {
                 .cap("http")
                 .http_allow("127.0.0.1")
                 .http_allow("operator-excluded.invalid")
-                .block_sub(1)
+                .block_trigger(1)
                 .config("probe_url", format!("{}/status", server.uri()))
                 // Denied at `admit` on the operator row, before any DNS
                 // lookup; without the row the guest would see a transport
@@ -280,7 +280,7 @@ async fn host_interface_records_are_retrievable_after_a_run() {
         .manifest_inline(
             TestManifest::new("example")
                 .cap("logging")
-                .block_sub(1)
+                .block_trigger(1)
                 .to_toml(),
         )
         .launch()
@@ -291,11 +291,11 @@ async fn host_interface_records_are_retrievable_after_a_run() {
     header.inner.number = 19_000_000;
     rt.push_block(header);
 
-    // The polled log read doubles as the dispatch barrier: the on_event line
+    // The polled log read doubles as the dispatch barrier: the on_trigger line
     // only lands once the event loop has dispatched the injected block.
     rt.wait_for_log("example", "block 19000000")
         .await
-        .expect("the on_event log line lands after dispatch");
+        .expect("the on_trigger log line lands after dispatch");
 
     let runs = rt.logs().list_runs("example");
     assert_eq!(runs.len(), 1, "one run recorded for the example module");
@@ -313,7 +313,7 @@ async fn host_interface_records_are_retrievable_after_a_run() {
         page.records
             .iter()
             .any(|r| r.message.contains("block 19000000")),
-        "the on_event log line is retained",
+        "the on_trigger log line is retained",
     );
 
     rt.shutdown();

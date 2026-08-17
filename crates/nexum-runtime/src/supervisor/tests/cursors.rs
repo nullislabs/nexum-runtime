@@ -1,4 +1,4 @@
-//! Chain-log filters, log projection, cursor keys and persistence.
+//! Event trigger filters, log projection, cursor keys and persistence.
 
 use super::*;
 
@@ -39,7 +39,7 @@ fn alloy_filter_no_address_no_topic() {
 /// A mined log carries every block-scoped field; the host projection must
 /// preserve each one so the guest rebuilds the native alloy log losslessly.
 #[test]
-fn project_chain_log_preserves_mined_log() {
+fn project_log_preserves_mined_log() {
     use alloy_primitives::{Address, B256, Bytes};
 
     let address = Address::repeat_byte(0x11);
@@ -58,8 +58,9 @@ fn project_chain_log_preserves_mined_log() {
         removed: true,
     };
 
-    let projected = nexum::host::types::ChainLog::from(&log);
+    let projected = wit_log(&log, Chain::from_id(11_155_111));
 
+    assert_eq!(projected.chain_id, 11_155_111);
     assert_eq!(projected.address, address.as_slice().to_vec());
     assert_eq!(
         projected.topics,
@@ -87,7 +88,7 @@ fn project_chain_log_preserves_mined_log() {
 /// A pending log has no block-scoped fields; the projection must leave each
 /// one `None` rather than collapsing an absent value onto a zero default.
 #[test]
-fn project_chain_log_leaves_pending_fields_none() {
+fn project_log_leaves_pending_fields_none() {
     use alloy_primitives::{Address, Bytes};
 
     let inner =
@@ -103,7 +104,7 @@ fn project_chain_log_leaves_pending_fields_none() {
         removed: false,
     };
 
-    let projected = nexum::host::types::ChainLog::from(&log);
+    let projected = wit_log(&log, Chain::from_id(1));
 
     assert!(projected.block_hash.is_none());
     assert!(projected.block_number.is_none());
@@ -231,7 +232,7 @@ fn cursor_record_unseeded_writes_the_first_block() {
 }
 
 #[test]
-fn cursor_record_is_per_subscription() {
+fn cursor_record_is_per_module() {
     let mut cursors = ChainLogCursors::default();
     assert_eq!(
         cursors.record("mod-a", "key", 100, false, || None),

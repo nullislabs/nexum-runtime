@@ -1,6 +1,6 @@
-# fuel-bomb test fixture. Subscribes to a single chain's
-# blocks so the supervisor invokes `on_event` once; the unbounded
-# loop in `on_event` then exhausts the wasmtime fuel budget and the
+# fuel-bomb test fixture. Declares a block trigger on a single chain
+# so the supervisor invokes `on_trigger` once; the unbounded
+# loop in `on_trigger` then exhausts the wasmtime fuel budget and the
 # host traps `OutOfFuel`. The integration test asserts the trap is
 # caught + the module is marked dead.
 
@@ -11,6 +11,6 @@ version = "0.1.0"
 [dependencies]
 logging = {}
 
-[[subscription]]
-kind = "block"
+[[trigger]]
+on = "block"
 chain_id = 1

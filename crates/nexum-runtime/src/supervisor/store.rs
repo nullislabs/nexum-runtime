@@ -9,7 +9,7 @@ use wasmtime::{Engine, Store};
 use wasmtime_wasi::{HostMonotonicClock, HostWallClock, WasiCtxBuilder};
 
 use super::Shared;
-use crate::bindings::EventModule;
+use crate::bindings::TriggerModule;
 use crate::engine_config::{OutboundHttpLimits, PolicyCeilings};
 use crate::host::component::{RuntimeTypes, StateHandle, StateStore};
 use crate::host::extension::Extension;
@@ -236,7 +236,9 @@ pub fn build_linker<T: RuntimeTypes>(
     extensions: &[Arc<dyn Extension<T>>],
 ) -> anyhow::Result<Linker<HostState<T>>> {
     let mut linker = Linker::<HostState<T>>::new(engine);
-    EventModule::add_to_linker::<HostState<T>, HasSelf<HostState<T>>>(&mut linker, |state| state)?;
+    TriggerModule::add_to_linker::<HostState<T>, HasSelf<HostState<T>>>(&mut linker, |state| {
+        state
+    })?;
     wasmtime_wasi::p2::add_to_linker_async(&mut linker)?;
     // wasi:http only; the p2 call above already covers the shared
     // wasi:io/wasi:clocks interfaces.

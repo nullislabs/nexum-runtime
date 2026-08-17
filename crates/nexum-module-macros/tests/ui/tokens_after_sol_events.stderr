@@ -1,0 +1,5 @@
+error: unexpected tokens after `sol_events(...)`
+ --> tests/ui/tokens_after_sol_events.rs:7:30
+  |
+7 | #[module(sol_events(Transfer), extra)]
+  |                              ^

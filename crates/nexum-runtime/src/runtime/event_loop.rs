@@ -4,7 +4,7 @@
 //! and retracts a reorged delivered tail.
 //!
 //! `open_block_streams` and `open_chain_log_streams` each spawn one
-//! reconnect-aware task per subscription: it opens the stream, pumps items to
+//! reconnect-aware task per trigger or chain: it opens the stream, pumps items to
 //! an mpsc channel, and on drop waits `restart_policy::backoff_for` before
 //! reopening, resetting the backoff once the stream has been healthy for
 //! `HEALTHY_WINDOW`. The tasks exit with [`TaskExit::ReceiverGone`] when `run`
@@ -25,11 +25,11 @@ use tracing::{info, warn};
 
 use crate::bindings::nexum;
 use crate::host::component::RuntimeTypes;
-use crate::host::extension::{ExtensionEvent, ExtensionEventStream};
+use crate::host::extension::{ExtensionDelivery, ExtensionSource};
 use crate::host::provider_pool::ProviderPool;
 use crate::module_id::ModuleId;
 use crate::runtime::restart_policy::{backoff_for, jitter_seed};
-use crate::supervisor::{ChainLogSub, Supervisor};
+use crate::supervisor::{EventTrigger, Supervisor};
 use nexum_tasks::{TaskExecutor, TaskExit, TaskSet};
 
 /// Uninterrupted-event duration before the backoff counter resets to 0.
@@ -67,27 +67,32 @@ pub fn open_block_streams(
     streams
 }
 
-/// Open one reconnect-aware chain-log task per subscription; see
+/// Open one reconnect-aware chain-log task per event trigger; see
 /// [`open_block_streams`].
 pub fn open_chain_log_streams(
     pool: &ProviderPool,
-    subs: Vec<ChainLogSub>,
+    triggers: Vec<EventTrigger>,
     executor: &TaskExecutor,
     tasks: &mut TaskSet,
 ) -> Vec<TaggedChainLogStream> {
     let mut streams = Vec::new();
-    for sub in subs {
+    for trigger in triggers {
         let (tx, rx) = mpsc::channel::<TaggedChainLog>(RECONNECT_CHANNEL_BUF);
         let pool = pool.clone();
         let resume = ChainLogResume {
-            // The cursor key is constant per subscription and cloned onto every
+            // The cursor key is constant per trigger and cloned onto every
             // log; `Arc` keeps that clone cheap.
-            cursor_key: sub.cursor_key.map(Arc::from),
-            initial_cursor: sub.initial_cursor,
-            max_lookback: sub.max_lookback,
+            cursor_key: trigger.cursor_key.map(Arc::from),
+            initial_cursor: trigger.initial_cursor,
+            max_lookback: trigger.max_lookback,
         };
         tasks.push(executor.spawn(reconnecting_chain_log_task(
-            pool, sub.module, sub.chain, sub.filter, resume, tx,
+            pool,
+            trigger.module,
+            trigger.chain,
+            trigger.filter,
+            resume,
+            tx,
         )));
         let tagged: TaggedChainLogStream = Box::pin(receiver_stream(rx));
         streams.push(tagged);
@@ -192,9 +197,9 @@ async fn reconnecting_block_task(
     }
 }
 
-/// Per-subscription resume and backfill knobs for a chain-log task.
+/// Per-trigger resume and backfill knobs for a chain-log task.
 struct ChainLogResume {
-    /// Durable cursor key; `Some` for a `resume` subscription.
+    /// Durable cursor key; `Some` for a `resume` trigger.
     cursor_key: Option<Arc<str>>,
     /// Persisted resume block read at boot; the first successful open starts here.
     initial_cursor: Option<u64>,
@@ -210,7 +215,7 @@ struct DeliveredTail {
     logs: Vec<alloy_rpc_types_eth::Log>,
 }
 
-/// Poller-backed loop for one (module, chain) chain-log subscription; a
+/// Poller-backed loop for one (module, chain) event trigger; a
 /// re-open resumes past the scanned range and retracts a reorged tail.
 async fn reconnecting_chain_log_task(
     pool: ProviderPool,
@@ -293,7 +298,7 @@ async fn reconnecting_chain_log_task(
         }
         let mut start_block = poller_start_block(boot_resume, resume_from, invalidated_tail, head);
         // Opt-in bound: `max_lookback` caps how far back a resume
-        // subscription backfills. The default (`None`) backfills fully; a
+        // trigger backfills. The default (`None`) backfills fully; a
         // set cap clamps the start up to `head - cap` and surfaces the
         // dropped oldest blocks.
         if let Some(cap) = max_lookback {
@@ -458,26 +463,26 @@ pub type TaggedChainLog = (ModuleId, Chain, alloy_rpc_types_eth::Log, Option<Arc
 /// Stream of [`TaggedChainLog`], merged across every subscribed chain.
 pub type TaggedChainLogStream =
     std::pin::Pin<Box<dyn futures::Stream<Item = TaggedChainLog> + Send>>;
-/// Drive the supervisor with events until `shutdown` resolves.
+/// Drive the supervisor with triggers until `shutdown` resolves.
 ///
-/// `shutdown` is observed only between guest calls, never mid-`call_on_event`:
-/// here between events, and through the supervisor's stop probe between the
-/// per-module calls of one event. The in-flight call finishes before the loop
-/// exits; the guard `shutdown` yields is held until return, so the drain
-/// covers that call and its cursor commit. Returns the `(blocks, chain_logs)`
-/// dispatch tally.
+/// `shutdown` is observed only between guest calls, never
+/// mid-`call_on_trigger`: here between triggers, and through the
+/// supervisor's stop probe between the per-module calls of one trigger. The
+/// in-flight call finishes before the loop exits; the guard `shutdown`
+/// yields is held until return, so the drain covers that call and its
+/// cursor commit. Returns the `(blocks, chain_logs)` dispatch tally.
 pub async fn run<T: RuntimeTypes, G>(
     supervisor: &mut Supervisor<T>,
     block_streams: Vec<TaggedBlockStream>,
     chain_log_streams: Vec<TaggedChainLogStream>,
-    extension_streams: Vec<ExtensionEventStream>,
+    extension_streams: Vec<ExtensionSource>,
     tasks: TaskSet,
     shutdown: impl std::future::Future<Output = G> + Send,
 ) -> (u64, u64) {
     // `select_all` over an empty Vec yields `None` immediately, which
     // would trip the "stream ended -> shut down" arm below before the
-    // first block / chain-log ever flows. Engine configs that subscribe to
-    // only one event kind (e.g. all modules use `[[subscription]] kind
+    // first block / chain-log ever flows. Engine configs that declare
+    // only one trigger kind (e.g. all modules use `[[trigger]] on
     // = "block"`) are valid and must not be punished. Replace each
     // empty side with `stream::pending()` so the corresponding select
     // arm is never selected; the bail-on-None semantic still fires
@@ -492,7 +497,7 @@ pub async fn run<T: RuntimeTypes, G>(
     } else {
         select_all(chain_log_streams).boxed()
     };
-    let mut extension_events: BoxStream<'_, _> = if extension_streams.is_empty() {
+    let mut extension_deliveries: BoxStream<'_, _> = if extension_streams.is_empty() {
         futures::stream::pending().boxed()
     } else {
         select_all(extension_streams).boxed()
@@ -500,33 +505,33 @@ pub async fn run<T: RuntimeTypes, G>(
     let mut shutdown = Box::pin(shutdown);
     let mut dispatched_blocks: u64 = 0;
     let mut dispatched_chain_logs: u64 = 0;
-    let mut dispatched_extension_events: u64 = 0;
+    let mut dispatched_extension_triggers: u64 = 0;
     let started = Instant::now();
     loop {
-        // Phase 1: pick the next event OR observe shutdown. The
+        // Phase 1: pick the next trigger OR observe shutdown. The
         // dispatch itself happens in phase 2 (outside the select)
         // so an in-flight wasmtime call never gets cancelled by a
         // shutdown signal arriving mid-dispatch.
-        enum NextEvent<G> {
+        enum NextTrigger<G> {
             Block(nexum::host::types::Block),
             // The alloy `Log` is boxed so the `Chain` tag does not push
             // the enum past the large-variant lint threshold.
-            ChainLog(
+            Event(
                 ModuleId,
                 Chain,
                 Box<alloy_rpc_types_eth::Log>,
                 Option<Arc<str>>,
             ),
-            Extension(ExtensionEvent),
+            Extension(ExtensionDelivery),
             // Carries the drain guard `shutdown` yielded.
             Shutdown(G),
             StreamPanic(&'static str),
         }
         let next = tokio::select! {
             biased;
-            guard = &mut shutdown => NextEvent::Shutdown(guard),
+            guard = &mut shutdown => NextTrigger::Shutdown(guard),
             next = blocks.next() => match next {
-                Some(Ok((chain, header))) => NextEvent::Block(nexum::host::types::Block {
+                Some(Ok((chain, header))) => NextTrigger::Block(nexum::host::types::Block {
                     chain_id: chain.id(),
                     number: header.number,
                     hash: header.hash.as_slice().to_vec(),
@@ -536,62 +541,62 @@ pub async fn run<T: RuntimeTypes, G>(
                     warn!(chain_id = chain.id(), error = %err, "block stream error - continuing");
                     continue;
                 }
-                None => NextEvent::StreamPanic("block"),
+                None => NextTrigger::StreamPanic("block"),
             },
             next = chain_logs.next() => match next {
                 Some((module, chain, log, cursor_key)) => {
-                    NextEvent::ChainLog(module, chain, Box::new(log), cursor_key)
+                    NextTrigger::Event(module, chain, Box::new(log), cursor_key)
                 }
-                None => NextEvent::StreamPanic("chain-log"),
+                None => NextTrigger::StreamPanic("chain-log"),
             },
-            next = extension_events.next() => match next {
-                Some(event) => NextEvent::Extension(event),
+            next = extension_deliveries.next() => match next {
+                Some(delivery) => NextTrigger::Extension(delivery),
                 // Extension source tasks loop forever; `None` means one exited.
-                None => NextEvent::StreamPanic("extension-event"),
+                None => NextTrigger::StreamPanic("extension"),
             },
         };
 
         match next {
-            NextEvent::Block(block) => {
+            NextTrigger::Block(block) => {
                 supervisor.dispatch_block(block).await;
                 dispatched_blocks += 1;
             }
-            NextEvent::ChainLog(module, chain, log, cursor_key) => {
+            NextTrigger::Event(module, chain, log, cursor_key) => {
                 supervisor
-                    .dispatch_chain_log(&module, chain, *log, cursor_key.as_deref())
+                    .dispatch_event(&module, chain, *log, cursor_key.as_deref())
                     .await;
                 dispatched_chain_logs += 1;
             }
-            NextEvent::Extension(event) => {
-                supervisor.dispatch_extension_event(event).await;
-                dispatched_extension_events += 1;
+            NextTrigger::Extension(delivery) => {
+                supervisor.dispatch_extension_trigger(delivery).await;
+                dispatched_extension_triggers += 1;
             }
-            NextEvent::Shutdown(guard) => {
+            NextTrigger::Shutdown(guard) => {
                 // Drop the stream-end receivers so the reconnect
                 // tasks observe a closed channel and exit. Then drain
                 // the task set so the engine genuinely sees the tasks
                 // finish before returning.
                 drop(blocks);
                 drop(chain_logs);
-                drop(extension_events);
+                drop(extension_deliveries);
                 tasks.shutdown().await;
                 info!(
                     dispatched_blocks,
                     dispatched_chain_logs,
-                    dispatched_extension_events,
+                    dispatched_extension_triggers,
                     uptime_secs = started.elapsed().as_secs(),
                     "graceful shutdown complete",
                 );
                 drop(guard);
                 return (dispatched_blocks, dispatched_chain_logs);
             }
-            NextEvent::StreamPanic(kind) => {
+            NextTrigger::StreamPanic(kind) => {
                 // Reconnect tasks should loop forever.
                 // Hitting `None` from `select_all` means the task
                 // exited (panic or channel closed). Bail loudly.
                 drop(blocks);
                 drop(chain_logs);
-                drop(extension_events);
+                drop(extension_deliveries);
                 tasks.shutdown().await;
                 warn!(
                     kind,
@@ -720,7 +725,7 @@ mod tests {
         tasks: &mut TaskSet,
         initial_cursor: Option<u64>,
     ) -> TaggedChainLogStream {
-        let subs = vec![ChainLogSub {
+        let triggers = vec![EventTrigger {
             module: ModuleId::parse("mod").expect("valid module name"),
             chain: alloy_chains::Chain::mainnet(),
             filter: alloy_rpc_types_eth::Filter::default(),
@@ -728,9 +733,9 @@ mod tests {
             initial_cursor,
             max_lookback: None,
         }];
-        open_chain_log_streams(pool, subs, executor, tasks)
+        open_chain_log_streams(pool, triggers, executor, tasks)
             .pop()
-            .expect("one stream per subscription")
+            .expect("one stream per trigger")
     }
 
     async fn recv(stream: &mut TaggedChainLogStream) -> Log {
@@ -1084,16 +1089,16 @@ mod tests {
         tasks.shutdown().await;
     }
 
-    /// `open_chain_log_streams` spawns one reconnect task per subscription.
+    /// `open_chain_log_streams` spawns one reconnect task per event trigger.
     #[tokio::test]
-    async fn open_chain_log_streams_opens_one_task_per_subscription() {
+    async fn open_chain_log_streams_opens_one_task_per_trigger() {
         let rpc = MockRpc::new();
         let pool = pool_for(&rpc);
         let manager = TaskManager::new();
         let executor = manager.executor();
         let mut tasks = TaskSet::new();
-        let subs = vec![
-            ChainLogSub {
+        let triggers = vec![
+            EventTrigger {
                 module: ModuleId::parse("mod-a").expect("valid module name"),
                 chain: alloy_chains::Chain::mainnet(),
                 filter: alloy_rpc_types_eth::Filter::default(),
@@ -1101,7 +1106,7 @@ mod tests {
                 initial_cursor: None,
                 max_lookback: None,
             },
-            ChainLogSub {
+            EventTrigger {
                 module: ModuleId::parse("mod-b").expect("valid module name"),
                 chain: alloy_chains::Chain::mainnet(),
                 filter: alloy_rpc_types_eth::Filter::default(),
@@ -1110,8 +1115,8 @@ mod tests {
                 max_lookback: None,
             },
         ];
-        let streams = open_chain_log_streams(&pool, subs, &executor, &mut tasks);
-        assert_eq!(streams.len(), 2, "one stream per subscription");
+        let streams = open_chain_log_streams(&pool, triggers, &executor, &mut tasks);
+        assert_eq!(streams.len(), 2, "one stream per trigger");
         tasks.shutdown().await;
     }
 
@@ -1348,7 +1353,7 @@ mod tests {
         log_node.push_chain_log(alloy_rpc_types_eth::Log::default());
 
         let block_streams = open_block_streams(&pool, &[Chain::mainnet()], &executor, &mut tasks);
-        let log_subs = vec![crate::supervisor::ChainLogSub {
+        let event_triggers = vec![crate::supervisor::EventTrigger {
             module: ModuleId::parse("test-module").expect("valid module name"),
             chain: Chain::from_id(100),
             filter: Filter::default(),
@@ -1356,7 +1361,8 @@ mod tests {
             initial_cursor: None,
             max_lookback: None,
         }];
-        let chain_log_streams = open_chain_log_streams(&pool, log_subs, &executor, &mut tasks);
+        let chain_log_streams =
+            open_chain_log_streams(&pool, event_triggers, &executor, &mut tasks);
 
         // 500 ms only bounds wall time; the assertion is on the tally, so a
         // miss means a broken select arm, not a slow scheduler.
@@ -1402,7 +1408,7 @@ mod tests {
         let executor = manager.executor();
         let mut tasks = TaskSet::new();
 
-        // Two subscription tasks: both must drain before `run()` returns.
+        // Two stream tasks: both must drain before `run()` returns.
         let block_streams = open_block_streams(
             &pool,
             &[Chain::mainnet(), Chain::from_id(100)],

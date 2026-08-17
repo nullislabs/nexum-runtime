@@ -31,8 +31,8 @@ nexum-world = { path = "../nexum-world" }
 alloy-primitives.workspace = true
 # Typed EIP-155 chain id; already in the guest graph via alloy-provider.
 alloy-chains.workspace = true
-# The `Log` type modules receive for chain-log events is alloy's own RPC log,
-# assembled from the WIT record at the binding edge (see `events`).
+# The `Log` type modules receive for event triggers is alloy's own RPC log,
+# assembled from the WIT record at the binding edge (see `sol_events`).
 alloy-rpc-types-eth.workspace = true
 alloy-sol-types.workspace = true
 # The `store` helpers' value codec (`TypedCell`, `TypedMap`, `Counter`).

@@ -4,8 +4,8 @@
 //! component builders, add-ons) through a type-state chain;
 //! [`ReadyBuilder::launch`] opens the backends and hands off to
 //! [`AssembledRuntime::launch`], which installs add-ons, builds the engine and
-//! linker, boots the supervisor, opens subscriptions, spawns the event loop,
-//! and returns a [`RuntimeHandle`]. [`RuntimeBuilder::runtime`] binds a
+//! linker, boots the supervisor, opens the trigger sources, spawns the event
+//! loop, and returns a [`RuntimeHandle`]. [`RuntimeBuilder::runtime`] binds a
 //! [`Runtime`] preset for the common case.
 
 use std::future::IntoFuture;
@@ -24,7 +24,7 @@ use crate::engine_config::{EngineConfig, ModuleEntry, PolicySection};
 use crate::host::component::{
     BuilderContext, ComponentBuilder, Components, ComponentsBuilder, RuntimeTypes,
 };
-use crate::host::extension::{self, EventSources, Extension};
+use crate::host::extension::{self, Extension, SourceContext};
 use crate::host::logs::LogPipeline;
 use crate::host::provider_pool::ProviderPool;
 use crate::preset::Runtime;
@@ -69,14 +69,14 @@ pub enum LaunchRefusal {
         /// How many were tried.
         modules: usize,
     },
-    /// Some modules survived `init`, but no surviving one holds a
-    /// subscription, so the engine would run and never be woken.
+    /// Some modules survived `init`, but no surviving one declares a
+    /// trigger, so the engine would run and never be woken.
     #[error(
-        "every declared [[subscription]] belongs to an init-failed module - \
+        "every declared [[trigger]] belongs to an init-failed module - \
          the engine would idle with nothing to run; fix or remove the \
          failing module(s)"
     )]
-    DeadHoldSubs,
+    DeadHoldTriggers,
 }
 
 /// Ambient inputs the launcher reads.
@@ -296,7 +296,7 @@ impl<T: RuntimeTypes> AssembledRuntime<T> {
         };
 
         let alive = supervisor.alive_count();
-        let plan = supervisor.subscription_plan();
+        let plan = supervisor.trigger_plan();
         info!(
             modules = supervisor.module_count(),
             alive,
@@ -339,29 +339,31 @@ impl<T: RuntimeTypes> AssembledRuntime<T> {
         // The handle keeps the log read side reachable after launch consumes
         // the components.
         let logs = components.logs.clone();
-        // Extension event sources open only for subscription kinds some
-        // live module declares; an extension returns no stream when it has
-        // nothing to observe.
+        // Extension sources open only for trigger kinds some live module
+        // declares; an extension returns no stream when it has nothing to
+        // observe.
         let mut reconnect_tasks = TaskSet::new();
         let mut extension_streams = Vec::new();
         {
-            let mut sources = EventSources::new(
+            let mut sources = SourceContext::new(
                 engine_cfg,
                 &plan.extension_kinds,
                 &executor,
                 &mut reconnect_tasks,
             );
             for ext in &extensions {
-                extension_streams.extend(ext.events(&mut sources)?);
+                extension_streams.extend(ext.open_sources(&mut sources)?);
             }
         }
 
         match plan.viability(extension_streams.len()) {
-            Viability::DeadHoldSubs => return Err(refuse_launch(LaunchRefusal::DeadHoldSubs)),
+            Viability::DeadHoldTriggers => {
+                return Err(refuse_launch(LaunchRefusal::DeadHoldTriggers));
+            }
             Viability::Nothing => {
                 // Nothing to drive: return a handle whose event loop is
                 // already complete so `wait` resolves immediately.
-                info!("no [[subscription]] entries - engine has nothing to run; exiting");
+                info!("no [[trigger]] entries - engine has nothing to run; exiting");
                 let event_loop = executor.spawn(async { TaskExit::ReceiverGone });
                 return Ok(RuntimeHandle {
                     event_loop,
@@ -374,9 +376,9 @@ impl<T: RuntimeTypes> AssembledRuntime<T> {
             Viability::Live => {}
         }
 
-        // Open per-chain block subscriptions + per-module chain-log
-        // subscriptions through the executor, then drive them in the event
-        // loop until shutdown.
+        // Open per-chain block streams + per-module chain-log streams
+        // through the executor, then drive them in the event loop until
+        // shutdown.
         let block_streams = event_loop::open_block_streams(
             &components.chain,
             &plan.block_chains,
@@ -385,7 +387,7 @@ impl<T: RuntimeTypes> AssembledRuntime<T> {
         );
         let chain_log_streams = event_loop::open_chain_log_streams(
             &components.chain,
-            plan.chain_log_subs,
+            plan.event_triggers,
             &executor,
             &mut reconnect_tasks,
         );
@@ -1175,7 +1177,7 @@ mod tests {
         let manifest = TestManifest::new("price-alert")
             .cap("logging")
             .cap("chain")
-            .block_sub(11_155_111)
+            .block_trigger(11_155_111)
             .config(
                 "oracle_address",
                 "0x694AA1769357215DE4FAC081bf1f309aDC325306",
@@ -1210,14 +1212,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn launch_bails_on_an_unconfigured_chain_subscription() {
+    async fn launch_bails_on_an_unconfigured_chain_trigger() {
         let dir = tempfile::tempdir().expect("tempdir");
         let wasm = dir.path().join("missing.wasm");
         let manifest = dir.path().join("component.toml");
         std::fs::write(
             &manifest,
             "[component]\nname = \"example\"\n\n[dependencies]\nlogging = {}\n\n\
-             [[subscription]]\nkind = \"block\"\nchain_id = 424242\n",
+             [[trigger]]\non = \"block\"\nchain_id = 424242\n",
         )
         .expect("write manifest");
 
@@ -1235,7 +1237,7 @@ mod tests {
             .launch()
             .await
         {
-            Ok(_) => panic!("an unconfigured chain subscription must abort launch"),
+            Ok(_) => panic!("an unconfigured chain trigger must abort launch"),
             Err(err) => err,
         };
         Refusal::from(err).variant::<BootRefusal>(|e| {

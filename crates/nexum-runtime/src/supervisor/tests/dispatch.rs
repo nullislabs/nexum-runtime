@@ -274,8 +274,16 @@ async fn multi_chain_dispatch_isolates_modules_by_chain() {
     };
     let mut booted = BootScenario::new()
         .wasm(wasm)
-        .module(TestManifest::new("module-a").cap("logging").block_sub(1))
-        .module(TestManifest::new("module-b").cap("logging").block_sub(100))
+        .module(
+            TestManifest::new("module-a")
+                .cap("logging")
+                .block_trigger(1),
+        )
+        .module(
+            TestManifest::new("module-b")
+                .cap("logging")
+                .block_trigger(100),
+        )
         .boot()
         .await
         .expect("boot");
@@ -285,13 +293,13 @@ async fn multi_chain_dispatch_isolates_modules_by_chain() {
     assert_eq!(
         booted.dispatch_block_on(1).await,
         1,
-        "only module-a subscribed to chain 1",
+        "only module-a declares chain 1",
     );
     assert_eq!(booted.supervisor.alive_count(), 2);
     assert_eq!(
         booted.dispatch_block_on(100).await,
         1,
-        "only module-b subscribed to chain 100",
+        "only module-b declares chain 100",
     );
     assert_eq!(booted.supervisor.alive_count(), 2);
 }
@@ -306,8 +314,16 @@ async fn a_fired_stop_halts_the_block_fan_out() {
     };
     let mut booted = BootScenario::new()
         .wasm(wasm)
-        .module(TestManifest::new("module-a").cap("logging").block_sub(1))
-        .module(TestManifest::new("module-b").cap("logging").block_sub(1))
+        .module(
+            TestManifest::new("module-a")
+                .cap("logging")
+                .block_trigger(1),
+        )
+        .module(
+            TestManifest::new("module-b")
+                .cap("logging")
+                .block_trigger(1),
+        )
         .boot()
         .await
         .expect("boot");
@@ -345,8 +361,8 @@ async fn dispatch_rate_limit_throttles_a_flood_without_starving_others() {
             },
             ..Default::default()
         })
-        .module(TestManifest::new("flood").cap("logging").block_sub(1))
-        .module(TestManifest::new("calm").cap("logging").block_sub(100))
+        .module(TestManifest::new("flood").cap("logging").block_trigger(1))
+        .module(TestManifest::new("calm").cap("logging").block_trigger(100))
         .boot()
         .await
         .expect("boot");
@@ -410,8 +426,12 @@ async fn multi_chain_poisoned_module_does_not_affect_other_chains() {
             .wasm(bomb_wasm),
         )
         .module(
-            Entry::new(TestManifest::new("example").cap("logging").block_sub(100))
-                .wasm(example_wasm),
+            Entry::new(
+                TestManifest::new("example")
+                    .cap("logging")
+                    .block_trigger(100),
+            )
+            .wasm(example_wasm),
         )
         .boot()
         .await

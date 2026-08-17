@@ -1,5 +1,5 @@
 //! Extension seam: what one extension contributes to the host (namespace,
-//! capabilities, linker hook, event sources, and manifest-section install
+//! capabilities, linker hook, trigger sources, and manifest-section install
 //! predicates).
 
 use std::collections::BTreeSet;
@@ -11,7 +11,7 @@ use nexum_tasks::{TaskExecutor, TaskExit, TaskSet};
 use wasmtime::component::Linker;
 pub use wasmtime_wasi::HostWallClock;
 
-use crate::bindings::nexum::host::types::Event;
+use crate::bindings::nexum::host::types::Trigger;
 use crate::engine_config::EngineConfig;
 use crate::host::component::RuntimeTypes;
 use crate::host::state::HostState;
@@ -50,15 +50,18 @@ pub trait Extension<T: RuntimeTypes>: Send + Sync + 'static {
         Ok(())
     }
 
-    /// Subscription kinds this extension's event sources emit; an unknown
-    /// non-core kind is refused at boot.
-    fn subscriptions(&self) -> &'static [&'static str] {
+    /// Trigger kinds this extension's sources emit; an unknown non-core
+    /// kind is refused at boot.
+    fn emits_trigger_kinds(&self) -> &'static [&'static str] {
         &[]
     }
 
-    /// Open the extension's event sources after boot; the event loop merges
+    /// Open the extension's sources after boot; the event loop merges
     /// and dispatches them.
-    fn events(&self, sources: &mut EventSources<'_>) -> anyhow::Result<Vec<ExtensionEventStream>> {
+    fn open_sources(
+        &self,
+        sources: &mut SourceContext<'_>,
+    ) -> anyhow::Result<Vec<ExtensionSource>> {
         let _ = sources;
         Ok(Vec::new())
     }
@@ -76,47 +79,47 @@ pub(crate) fn attach_wall_clock<T: RuntimeTypes>(
     }
 }
 
-/// Event dispatched to every module with a `[[subscription]]` of `kind` whose
-/// filters match `attrs`.
-pub struct ExtensionEvent {
-    /// Manifest subscription kind that routes this event.
-    pub kind: &'static str,
-    /// Routing attributes a subscription's filters match against.
+/// Delivered to every module with a `[[trigger]]` of `extension_kind`
+/// whose filters match `attrs`.
+pub struct ExtensionDelivery {
+    /// Manifest trigger kind that routes this delivery.
+    pub extension_kind: &'static str,
+    /// Routing attributes a trigger's filters match against.
     pub attrs: Vec<(&'static str, String)>,
-    /// The host event delivered to each matching module.
-    pub event: Event,
+    /// The host trigger delivered to each matching module.
+    pub trigger: Trigger,
 }
 
-/// A stream of extension events the event loop merges and drives.
-pub type ExtensionEventStream = Pin<Box<dyn Stream<Item = ExtensionEvent> + Send>>;
+/// A stream of deliveries the event loop merges and drives.
+pub type ExtensionSource = Pin<Box<dyn Stream<Item = ExtensionDelivery> + Send>>;
 
-/// Launch inputs for [`Extension::events`].
-pub struct EventSources<'a> {
+/// Launch inputs for [`Extension::open_sources`].
+pub struct SourceContext<'a> {
     /// The loaded engine config.
     pub config: &'a EngineConfig,
-    /// Extension subscription kinds declared by at least one module.
-    pub subscribed: &'a BTreeSet<String>,
+    /// Extension trigger kinds declared by at least one module.
+    pub demanded_extension_kinds: &'a BTreeSet<String>,
     executor: &'a TaskExecutor,
     tasks: &'a mut TaskSet,
 }
 
-impl<'a> EventSources<'a> {
-    /// Bundle the launch inputs for one [`Extension::events`] pass.
+impl<'a> SourceContext<'a> {
+    /// Bundle the launch inputs for one [`Extension::open_sources`] pass.
     pub fn new(
         config: &'a EngineConfig,
-        subscribed: &'a BTreeSet<String>,
+        demanded_extension_kinds: &'a BTreeSet<String>,
         executor: &'a TaskExecutor,
         tasks: &'a mut TaskSet,
     ) -> Self {
         Self {
             config,
-            subscribed,
+            demanded_extension_kinds,
             executor,
             tasks,
         }
     }
 
-    /// Spawn an event-source task; it must end when its stream's receiver
+    /// Spawn a source task; it must end when its stream's receiver
     /// drops.
     pub fn spawn(&mut self, task: impl Future<Output = ()> + Send + 'static) {
         self.tasks.push(self.executor.spawn(async move {

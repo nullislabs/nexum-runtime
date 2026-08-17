@@ -8,7 +8,7 @@ status: accepted
 > The per-dispatch fuel key was renamed, and the Decision text below carries the current name, `max_fuel_per_dispatch`.
 > `[limits.watch]` and `[limits.quota]` were retired and the per-dispatch deadline moved to `[limits.dispatch].deadline_secs`; the Decision text below carries the current names.
 > [ADR-0019](0019-modules-react-to-triggers.md) retired the export name `on-event`, and the Capabilities text below carries the decided name, `on-trigger`.
-> The WIT rename lands in a later code issue, so the export in the tree may still read `on-event`.
+> The WIT rename landed with #239.
 > [ADR-0022](0022-cut-guest-to-guest-calling.md) landed the digest-pin dial from the Context list as `digest` on the `[[modules]]` entry it pins, not as a `[policy.component]` row; the pin binds one artifact to one entry, so it lives on the entry.
 > ADR-0022 also cut the service load path, so the `[[services]]` Consequence below carries a mark in place.
 
@@ -53,7 +53,7 @@ It fails closed by capacity, not by enumeration: a component the operator never 
 The effective permitted set for a component is the `capabilities` list of its `[policy.component]` row, else the `[policy]` list, else every capability the runtime supports.
 Every `[dependencies]` key the manifest declares must be in the permitted set, or the component refuses at boot.
 The component's imports are already checked against the declared set, so the imports cannot exceed the operator grant either.
-A block or chain-log subscription delivers chain data through `on-trigger` without an import, so it also refuses when the permitted set excludes `chain`.
+A block or event trigger delivers chain data through `on-trigger` without an import, so it also refuses when the permitted set excludes `chain`.
 The grant is whole or the component does not boot, per ADR-0001.
 
 ### Egress

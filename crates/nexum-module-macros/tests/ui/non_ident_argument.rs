@@ -6,7 +6,7 @@ struct Alerts;
 
 #[module(42)]
 impl Alerts {
-    fn on_tick(_payload: u64) -> Result<(), ()> {
+    fn on_schedule(_payload: u64) -> Result<(), ()> {
         Ok(())
     }
 }

@@ -1,6 +1,6 @@
 //! # fuel-bomb (test fixture)
 //!
-//! Exhausts the fuel budget on every `on_event` via an unbounded loop.
+//! Exhausts the fuel budget on every `on_trigger` via an unbounded loop.
 //! The engine traps with `OutOfFuel`; the supervisor must catch it,
 //! mark the module dead, and keep dispatching others. Test-only.
 
@@ -11,7 +11,7 @@ wit_bindgen::generate!({
     path: [
         "../../../wit/nexum-host",
     ],
-    world: "nexum:host/event-module",
+    world: "nexum:host/trigger-module",
     generate_all,
 });
 
@@ -27,7 +27,7 @@ impl Guest for FuelBomb {
         Ok(())
     }
 
-    fn on_event(_event: types::Event) -> Result<(), Fault> {
+    fn on_trigger(_trigger: types::Trigger) -> Result<(), Fault> {
         // Unbounded loop. `std::hint::black_box` prevents the
         // optimiser from constant-folding this away, so the loop
         // genuinely burns wasmtime fuel one branch + add at a time.

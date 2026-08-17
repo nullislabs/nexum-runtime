@@ -12,7 +12,7 @@ wit_bindgen::generate!({
     path: [
         "../../../wit/nexum-host",
     ],
-    world: "nexum:host/event-module",
+    world: "nexum:host/trigger-module",
     generate_all,
 });
 
@@ -44,7 +44,7 @@ impl Guest for FlakyBomb {
         Ok(())
     }
 
-    fn on_event(_event: types::Event) -> Result<(), Fault> {
+    fn on_trigger(_trigger: types::Trigger) -> Result<(), Fault> {
         // Read + increment the attempt counter from local-store.
         // Survives wasm-side state resets (the supervisor's restart
         // path tears down the Store; local-store is host-side and

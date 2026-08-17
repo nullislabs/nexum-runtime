@@ -24,7 +24,8 @@ mod nexum {
                 pub retry_after_ms: Option<u64>,
             }
 
-            pub struct ChainLog {
+            pub struct Log {
+                pub chain_id: u64,
                 pub address: Vec<u8>,
                 pub topics: Vec<Vec<u8>>,
                 pub data: Vec<u8>,
@@ -109,8 +110,9 @@ fn base_block_emits_the_adapter_type() {
 }
 
 #[test]
-fn chain_log_lift_assembles_the_alloy_log() {
-    let lifted: nexum_sdk::events::Log = wire::ChainLog {
+fn log_lift_assembles_the_alloy_log() {
+    let lifted: nexum_sdk::sol_events::Log = wire::Log {
+        chain_id: 1,
         address: vec![0x11; 20],
         topics: vec![vec![0x22; 32]],
         data: vec![1, 2, 3],

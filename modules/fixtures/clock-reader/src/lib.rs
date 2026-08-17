@@ -15,7 +15,7 @@ wit_bindgen::generate!({
     path: [
         "../../../wit/nexum-host",
     ],
-    world: "nexum:host/event-module",
+    world: "nexum:host/trigger-module",
     generate_all,
 });
 
@@ -31,7 +31,7 @@ impl Guest for ClockReader {
         Ok(())
     }
 
-    fn on_event(_event: types::Event) -> Result<(), Fault> {
+    fn on_trigger(_trigger: types::Trigger) -> Result<(), Fault> {
         // Whole seconds since the epoch is parseable and stable: the
         // override pins wall time to an exact instant, so the guest reads
         // that instant back rather than the ambient host clock.

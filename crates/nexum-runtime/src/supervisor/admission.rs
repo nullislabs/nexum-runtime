@@ -8,12 +8,12 @@ use crate::host::component::RuntimeTypes;
 use crate::host::extension::Extension;
 use crate::manifest::{self, CapabilityRegistry};
 
-pub(super) fn extension_subscription_vocabulary<T: RuntimeTypes>(
+pub(super) fn extension_trigger_kinds<T: RuntimeTypes>(
     extensions: &[Arc<dyn Extension<T>>],
 ) -> BTreeSet<&'static str> {
     extensions
         .iter()
-        .flat_map(|ext| ext.subscriptions().iter().copied())
+        .flat_map(|ext| ext.emits_trigger_kinds().iter().copied())
         .collect()
 }
 
@@ -37,7 +37,7 @@ pub(super) fn enforce_extension_sections<T: RuntimeTypes>(
     Ok(())
 }
 
-/// Refuses a name two wired extensions both claim: namespace, subscription
+/// Refuses a name two wired extensions both claim: namespace, trigger
 /// kind, or manifest section.
 pub(super) fn enforce_extension_uniqueness<T: RuntimeTypes>(
     extensions: &[Arc<dyn Extension<T>>],
@@ -50,9 +50,9 @@ pub(super) fn enforce_extension_uniqueness<T: RuntimeTypes>(
         if !namespaces.insert(namespace) {
             return Err(LoadRefusal::ExtensionNamespaceClaimed { namespace });
         }
-        for &kind in ext.subscriptions() {
+        for &kind in ext.emits_trigger_kinds() {
             if !kinds.insert(kind) {
-                return Err(LoadRefusal::SubscriptionKindClaimed { kind });
+                return Err(LoadRefusal::TriggerKindClaimed { kind });
             }
         }
         for &section in ext.manifest_sections() {

@@ -86,8 +86,8 @@ A component that only needs raw JSON calls `host.request(chain_id, method, param
 
 ## Handlers are synchronous
 
-`#[nexum_sdk::module]` dispatches events to synchronous named handlers: `init`, `on_block`, `on_chain_logs`, `on_tick`, and `on_custom`.
-An absent handler is a no-op for that event.
+`#[nexum_sdk::module]` dispatches triggers to synchronous named handlers: `init`, `on_block`, `on_event`, `on_schedule`, and `on_extension`.
+An absent handler is a no-op for that trigger.
 An impl with no recognized handler, or with an `on_`-prefixed name outside the set, is refused at macro expansion.
 There is no `block_on` wrapper around a handler and no provider injection.
 A handler that wants the alloy provider builds it with `host.provider(chain)` and drives the call with `block_on` itself.

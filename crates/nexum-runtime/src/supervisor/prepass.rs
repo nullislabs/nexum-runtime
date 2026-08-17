@@ -11,7 +11,7 @@ use tracing::{info, warn};
 
 use super::store::{ResolvedLimits, resolve_module_limits};
 use crate::engine_config::{EngineConfig, PolicySection};
-use crate::manifest::{self, CapabilityRegistry, LoadedManifest, ParseError, Subscription};
+use crate::manifest::{self, CapabilityRegistry, LoadedManifest, ParseError, Trigger};
 use crate::module_id::ModuleId;
 use crate::refusal::{Refusal, RefusalContext as _};
 
@@ -69,27 +69,27 @@ pub enum BootRefusal {
     /// [`Self::UnconfiguredChain`] for a run on defaults: the fix is
     /// creating engine.toml, not editing it.
     #[error(
-        "module {name} subscribes to chain {chain_id} but no engine.toml was found \
+        "module {name} declares a trigger on chain {chain_id} but no engine.toml was found \
          (running on defaults, no chains configured); create engine.toml with a \
          [chains.{chain_id}] entry"
     )]
     UnconfiguredChainDefaulted {
-        /// The subscriber's `[component].name`.
+        /// The declaring module's `[component].name`.
         name: String,
-        /// The chain the subscription names.
+        /// The chain the trigger names.
         chain_id: u64,
     },
-    /// Chain access is an operator grant, so a manifest subscription
-    /// cannot widen the `[chains]` set from its side of the boundary.
+    /// Chain access is an operator grant, so a manifest trigger cannot
+    /// widen the `[chains]` set from its side of the boundary.
     #[error(
-        "module {name} subscribes to chain {chain_id} but engine.toml declares no \
+        "module {name} declares a trigger on chain {chain_id} but engine.toml declares no \
          [chains.{chain_id}] entry; configured chains: {}",
         fmt_chain_ids(configured)
     )]
     UnconfiguredChain {
-        /// The subscriber's `[component].name`.
+        /// The declaring module's `[component].name`.
         name: String,
-        /// The chain the subscription names.
+        /// The chain the trigger names.
         chain_id: u64,
         /// The chains engine.toml declares.
         configured: BTreeSet<u64>,
@@ -217,16 +217,15 @@ impl ConfiguredChains {
     }
 }
 
-/// Refuse any subscription naming a chain absent from `[chains]`, before any
+/// Refuse any trigger naming a chain absent from `[chains]`, before any
 /// guest code runs.
-pub(super) fn enforce_subscriptions(
+pub(super) fn enforce_triggers(
     name: &str,
     loaded: &LoadedManifest,
     chains: &ConfiguredChains,
 ) -> Result<(), BootRefusal> {
-    for sub in &loaded.subscriptions {
-        let (Subscription::Block { chain_id } | Subscription::ChainLog { chain_id, .. }) = sub
-        else {
+    for trigger in &loaded.triggers {
+        let (Trigger::Block { chain_id } | Trigger::Event { chain_id, .. }) = trigger else {
             continue;
         };
         if !chains.contains(*chain_id) {
@@ -279,7 +278,7 @@ pub(super) fn enforce_total_reservation<'a>(
     Ok(())
 }
 
-/// Every manifest loaded, every name claimed, every subscribed chain gated,
+/// Every manifest loaded, every name claimed, every triggered chain gated,
 /// and the reservation sum bounded, in `engine.toml` order. Limits resolve
 /// once here; `load::module` reuses them, so a clamp warns once per field.
 pub(super) fn run(
@@ -294,7 +293,7 @@ pub(super) fn run(
             .with_refusal_context(|| format!("load module {}", entry.path.display()))?;
         let namespace = manifest_namespace(&loaded);
         claim_namespace(&mut ledger, namespace.as_str(), &entry.path)?;
-        enforce_subscriptions(namespace.as_str(), &loaded, &configured_chains)
+        enforce_triggers(namespace.as_str(), &loaded, &configured_chains)
             .with_refusal_context(|| format!("load module {}", entry.path.display()))?;
         let limits = resolve_module_limits(
             &entry.id,

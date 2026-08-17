@@ -6,7 +6,7 @@ status: accepted
 
 > Amendment: the schema names in this record are historical.
 > The manifest is `component.toml`; a `module.toml` is not read.
-> It defines `[component]`, `[component.resources]`, `[dependencies]`, `[config]`, and `[[subscription]]`, and it admits extension-owned top-level sections that the wired extensions parse.
+> It defines `[component]`, `[component.resources]`, `[dependencies]`, `[config]`, and `[[trigger]]`, and it admits extension-owned top-level sections that the wired extensions parse.
 > `engine.toml` defines `[engine]`, `[limits]`, `[policy]`, `[chains.<id>]`, `[extensions]`, and `[[modules]]`; there is no `[[adapters]]`.
 > The decision itself, two files with one trust direction, is unchanged and stays accepted.
 
@@ -71,7 +71,7 @@ It costs a host interface for the guest to read its grant, a fault case for call
 
 - A deployment needs both files.
   A missing `engine.toml` gives no chains and the default `state_dir`.
-  The engine then refuses at boot every module that subscribes to a chain.
+  The engine then refuses at boot every module that declares a chain trigger.
   A `chain.request` to an unconfigured chain returns an `unsupported` fault.
 - The component digest in `[module]` proves that the artifact matches what the author published.
   It does not prove that the operator authorized the artifact, because one party writes both the hash and the bytes it covers.

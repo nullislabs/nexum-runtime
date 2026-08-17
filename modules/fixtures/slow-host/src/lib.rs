@@ -15,7 +15,7 @@ wit_bindgen::generate!({
     path: [
         "../../../wit/nexum-host",
     ],
-    world: "nexum:host/event-module",
+    world: "nexum:host/trigger-module",
     generate_all,
 });
 
@@ -31,13 +31,13 @@ impl Guest for SlowHost {
         Ok(())
     }
 
-    fn on_event(_event: types::Event) -> Result<(), Fault> {
+    fn on_trigger(_trigger: types::Trigger) -> Result<(), Fault> {
         // A single read-only RPC. The test's mock provider decides how long
         // it takes to answer; the guest just awaits it. `eth_blockNumber`
         // with empty params is the cheapest well-formed request in the
         // permitted read surface.
         let _ = chain::request(1, "eth_blockNumber", "[]");
-        logging::log(logging::Level::Info, "slow-host on_event returned");
+        logging::log(logging::Level::Info, "slow-host on_trigger returned");
         Ok(())
     }
 }

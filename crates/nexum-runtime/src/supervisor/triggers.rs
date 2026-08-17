@@ -1,4 +1,4 @@
-//! Project loaded modules' subscriptions into what the event loop opens;
+//! Project loaded modules' triggers into what the event loop opens;
 //! dead modules are excluded so no stream opens for an unreachable module.
 
 use std::collections::BTreeSet;
@@ -9,28 +9,28 @@ use super::Supervisor;
 use super::cursors::{chainlog_cursor_key, read_chain_log_cursor};
 use crate::bindings::nexum;
 use crate::host::component::RuntimeTypes;
-use crate::manifest::Subscription;
+use crate::manifest::Trigger;
 use crate::module_id::ModuleId;
 
 impl<T: RuntimeTypes> Supervisor<T> {
     /// One pass, one health filter: a dead module contributes to no field,
     /// so no stream of any kind opens for it.
-    pub fn subscription_plan(&self) -> SubscriptionPlan {
+    pub fn trigger_plan(&self) -> TriggerPlan {
         let mut block_chains: Vec<Chain> = Vec::new();
-        let mut chain_log_subs = Vec::new();
+        let mut event_triggers = Vec::new();
         let mut extension_kinds = BTreeSet::new();
-        let mut dead_subscribers = false;
+        let mut dead_hold_triggers = false;
         for module in &self.modules {
             if !module.health.dispatchable() {
-                dead_subscribers |= !module.subscriptions.is_empty();
+                dead_hold_triggers |= !module.triggers.is_empty();
                 continue;
             }
-            for sub in &module.subscriptions {
-                match sub {
-                    Subscription::Block { chain_id } => {
+            for trigger in &module.triggers {
+                match trigger {
+                    Trigger::Block { chain_id } => {
                         block_chains.push(Chain::from_id(*chain_id));
                     }
-                    Subscription::ChainLog {
+                    Trigger::Event {
                         chain_id,
                         address,
                         event_signature,
@@ -39,7 +39,7 @@ impl<T: RuntimeTypes> Supervisor<T> {
                     } => {
                         let filter = build_alloy_filter(*address, *event_signature);
                         let chain = Chain::from_id(*chain_id);
-                        // A `resume` subscription reads its durable cursor
+                        // A `resume` trigger reads its durable cursor
                         // once here at boot; others start at head.
                         let (cursor_key, initial_cursor) = if *resume {
                             let key = chainlog_cursor_key(chain, *address, *event_signature);
@@ -52,7 +52,7 @@ impl<T: RuntimeTypes> Supervisor<T> {
                         } else {
                             (None, None)
                         };
-                        chain_log_subs.push(ChainLogSub {
+                        event_triggers.push(EventTrigger {
                             module: module.name.clone(),
                             chain,
                             filter,
@@ -61,47 +61,47 @@ impl<T: RuntimeTypes> Supervisor<T> {
                             max_lookback: *max_lookback,
                         });
                     }
-                    Subscription::Extension { kind, .. } => {
-                        extension_kinds.insert(kind.clone());
+                    Trigger::Extension { extension_kind, .. } => {
+                        extension_kinds.insert(extension_kind.clone());
                     }
-                    Subscription::Cron { .. } => {}
+                    Trigger::Schedule { .. } => {}
                 }
             }
         }
         block_chains.sort_by_key(|c| c.id());
         block_chains.dedup();
-        SubscriptionPlan {
+        TriggerPlan {
             block_chains,
-            chain_log_subs,
+            event_triggers,
             extension_kinds,
-            dead_subscribers,
+            dead_hold_triggers,
         }
     }
 }
 
 /// Everything the launch path opens, projected once from the live modules.
-pub struct SubscriptionPlan {
+pub struct TriggerPlan {
     /// Sorted by numeric id and deduped.
     pub block_chains: Vec<Chain>,
     /// The stream tags every log with the owning module for routing.
-    pub chain_log_subs: Vec<ChainLogSub>,
-    /// An extension opens an event source only for kinds appearing here.
+    pub event_triggers: Vec<EventTrigger>,
+    /// An extension opens a source only for kinds appearing here.
     pub extension_kinds: BTreeSet<String>,
-    /// A dead module declares at least one subscription.
-    pub dead_subscribers: bool,
+    /// A dead module declares at least one trigger.
+    pub dead_hold_triggers: bool,
 }
 
-impl SubscriptionPlan {
+impl TriggerPlan {
     /// A declared extension kind is not yet a source: the extension gates on
     /// its own service state, so the caller passes how many really opened.
     pub fn viability(&self, open_extension_sources: usize) -> Viability {
         if !self.block_chains.is_empty()
-            || !self.chain_log_subs.is_empty()
+            || !self.event_triggers.is_empty()
             || open_extension_sources > 0
         {
             Viability::Live
-        } else if self.dead_subscribers {
-            Viability::DeadHoldSubs
+        } else if self.dead_hold_triggers {
+            Viability::DeadHoldTriggers
         } else {
             Viability::Nothing
         }
@@ -111,16 +111,16 @@ impl SubscriptionPlan {
 /// The launch verdict; boot-dead is permanent, so it is final at launch.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Viability {
-    /// No module declares a subscription; the engine has nothing to run.
+    /// No module declares a trigger; the engine has nothing to run.
     Nothing,
-    /// Every declared subscription belongs to a dead module.
-    DeadHoldSubs,
-    /// At least one event source drives the engine.
+    /// Every declared trigger belongs to a dead module.
+    DeadHoldTriggers,
+    /// At least one open source drives the engine.
     Live,
 }
 
 /// One module's declared interest in a chain's logs, resolved at boot.
-pub struct ChainLogSub {
+pub struct EventTrigger {
     /// Also the module's store namespace.
     pub module: ModuleId,
     /// Chain the filter runs against; it must have an `engine.toml` entry.
@@ -136,21 +136,20 @@ pub struct ChainLogSub {
     pub max_lookback: Option<u64>,
 }
 
-impl From<&alloy_rpc_types_eth::Log> for nexum::host::types::ChainLog {
-    /// The chain id is not on the alloy log; the batch level supplies it.
-    fn from(log: &alloy_rpc_types_eth::Log) -> Self {
-        Self {
-            address: log.address().as_slice().to_vec(),
-            topics: log.topics().iter().map(|t| t.as_slice().to_vec()).collect(),
-            data: log.inner.data.data.to_vec(),
-            block_hash: log.block_hash.map(|h| h.as_slice().to_vec()),
-            block_number: log.block_number,
-            block_timestamp: log.block_timestamp,
-            transaction_hash: log.transaction_hash.map(|h| h.as_slice().to_vec()),
-            transaction_index: log.transaction_index,
-            log_index: log.log_index,
-            removed: log.removed,
-        }
+/// The chain id is not on the alloy log; the batch level supplies it.
+pub(super) fn wit_log(log: &alloy_rpc_types_eth::Log, chain: Chain) -> nexum::host::types::Log {
+    nexum::host::types::Log {
+        chain_id: chain.id(),
+        address: log.address().as_slice().to_vec(),
+        topics: log.topics().iter().map(|t| t.as_slice().to_vec()).collect(),
+        data: log.inner.data.data.to_vec(),
+        block_hash: log.block_hash.map(|h| h.as_slice().to_vec()),
+        block_number: log.block_number,
+        block_timestamp: log.block_timestamp,
+        transaction_hash: log.transaction_hash.map(|h| h.as_slice().to_vec()),
+        transaction_index: log.transaction_index,
+        log_index: log.log_index,
+        removed: log.removed,
     }
 }
 

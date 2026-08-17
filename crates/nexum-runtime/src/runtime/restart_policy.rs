@@ -1,6 +1,6 @@
 //! Supervisor module restart policy.
 //!
-//! On a trap in `on_event` the supervisor marks the module dead and schedules
+//! On a trap in `on_trigger` the supervisor marks the module dead and schedules
 //! a restart with exponential backoff; the next eligible dispatch retries, and
 //! a successful call resets the failure counter.
 //!

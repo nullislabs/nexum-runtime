@@ -1,4 +1,4 @@
-error: #[nexum_sdk::module] found no recognized handlers on this impl; define at least one of `init`, `on_block`, `on_chain_logs`, `on_tick`, `on_custom`
+error: #[nexum_sdk::module] found no recognized handlers on this impl; define at least one of `init`, `on_block`, `on_event`, `on_schedule`, `on_extension`
  --> tests/ui/no_handlers.rs:9:6
   |
 9 | impl Alerts {

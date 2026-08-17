@@ -1,5 +1,0 @@
-error: unexpected tokens after `subscribes(...)`
- --> tests/ui/tokens_after_subscribes.rs:7:30
-  |
-7 | #[module(subscribes(Transfer), extra)]
-  |                              ^

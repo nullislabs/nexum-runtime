@@ -1,6 +1,6 @@
 //! # example (reference module)
 //!
-//! Minimal reference module: one handler per event, each logging a
+//! Minimal reference module: one handler per trigger, each logging a
 //! one-line summary. The smallest demonstration of
 //! `#[nexum_sdk::module]`, which supplies the wit-bindgen call, host
 //! adapter, dispatch, and `export!`.
@@ -42,29 +42,33 @@ impl ExampleModule {
         Ok(())
     }
 
-    fn on_chain_logs(batch: types::ChainLogs) -> Result<(), Fault> {
-        logging::log(
-            logging::Level::Info,
-            &format!("received {} chain-log entries", batch.logs.len()),
-        );
-        Ok(())
-    }
-
-    fn on_tick(tick: types::Tick) -> Result<(), Fault> {
-        logging::log(
-            logging::Level::Info,
-            &format!("tick fired at {}ms", tick.fired_at),
-        );
-        Ok(())
-    }
-
-    fn on_custom(event: types::CustomEvent) -> Result<(), Fault> {
+    fn on_event(log: types::Log) -> Result<(), Fault> {
         logging::log(
             logging::Level::Info,
             &format!(
-                "custom event kind {} ({} payload bytes)",
-                event.kind,
-                event.payload.len(),
+                "event with {} topics on chain {}",
+                log.topics.len(),
+                log.chain_id,
+            ),
+        );
+        Ok(())
+    }
+
+    fn on_schedule(tick: types::ScheduleTick) -> Result<(), Fault> {
+        logging::log(
+            logging::Level::Info,
+            &format!("schedule fired at {}ms", tick.fired_at),
+        );
+        Ok(())
+    }
+
+    fn on_extension(trigger: types::ExtensionTrigger) -> Result<(), Fault> {
+        logging::log(
+            logging::Level::Info,
+            &format!(
+                "extension trigger kind {} ({} payload bytes)",
+                trigger.extension_kind,
+                trigger.payload.len(),
             ),
         );
         Ok(())

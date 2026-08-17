@@ -24,7 +24,7 @@ pub struct NamespaceCaps {
     pub ifaces: &'static [&'static str],
 }
 
-/// The core namespace: the interfaces the `event-module` world links.
+/// The core namespace: the interfaces the `trigger-module` world links.
 pub const CORE_NAMESPACE: NamespaceCaps = NamespaceCaps {
     prefix: "nexum:host/",
     ifaces: CORE_CAPABILITIES,
@@ -255,7 +255,7 @@ mod tests {
                 .collect(),
             http_allowlist: vec![],
             config: vec![],
-            subscriptions: vec![],
+            triggers: vec![],
             extensions: Default::default(),
         }
     }

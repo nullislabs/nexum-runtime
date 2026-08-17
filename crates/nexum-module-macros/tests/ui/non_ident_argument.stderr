@@ -1,4 +1,4 @@
-error: expected `subscribes(EventType, ...)` or no arguments
+error: expected `sol_events(EventType, ...)` or no arguments
  --> tests/ui/non_ident_argument.rs:7:10
   |
 7 | #[module(42)]

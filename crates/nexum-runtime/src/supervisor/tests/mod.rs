@@ -25,7 +25,7 @@ use super::prepass::{
     NamespaceLedger, claim_namespace, enforce_total_reservation, unconfigured_chain,
 };
 use super::store::resolve_module_limits;
-use super::subscriptions::build_alloy_filter;
+use super::triggers::{build_alloy_filter, wit_log};
 use super::*;
 use crate::bindings::nexum;
 use crate::digest::{ContentDigest, DigestMismatch};

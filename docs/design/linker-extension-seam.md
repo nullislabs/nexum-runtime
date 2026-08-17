@@ -2,7 +2,7 @@
 
 ## What
 
-The core host binds the `nexum:host/event-module` world: the `nexum:host` interfaces (chain, identity, local-store, remote-store, logging) plus the allowlisted `wasi:http` outgoing surface.
+The core host binds the `nexum:host/trigger-module` world: the `nexum:host` interfaces (chain, identity, local-store, remote-store, logging) plus the allowlisted `wasi:http` outgoing surface.
 A domain capability is not a core seam.
 It plugs into the host through an extension assembled at the composition root, so the core runtime compiles and runs with no domain backend at all and no extension registered.
 
@@ -19,7 +19,7 @@ Its members:
   The clock is the WASI override's wall clock when a test sets one, else the real host clock, so extension time and guest time share one source.
 - `manifest_sections`, `admit_worker`: the non-core manifest sections it claims and its install-time predicate over them.
   An `Err` refuses the install fail-fast.
-- `subscriptions`, `events`: the manifest subscription kinds it emits and the event sources it opens once the engine is booted.
+- `emits_trigger_kinds`, `open_sources`: the manifest trigger kinds it emits and the sources it opens once the engine is booted.
 
 An extension defines its own `bindgen!` for its world, which generates a `Host` trait local to the extension, and implements it for the foreign `HostState<T>`.
 That is orphan-legal, because the trait is local.

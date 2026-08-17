@@ -1,0 +1,5 @@
+error: `sol_events(...)` must name at least one event type
+ --> tests/ui/empty_sol_events.rs:8:10
+  |
+8 | #[module(sol_events())]
+  |          ^^^^^^^^^^

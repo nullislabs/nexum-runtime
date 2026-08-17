@@ -8,7 +8,7 @@ A downstream composition root that registers extensions runs the same way, under
 
 - The engine built in release: `cargo build -p nexum-cli --release` gives `target/release/nexum`.
 - Every component `.wasm` artifact present on a path the service user can read.
-- An `engine.toml` with `state_dir` on a persistent path (never `/tmp`), `log_level = "info"`, `[engine.metrics] enabled = true` with `bind_addr = "127.0.0.1:9100"`, one `[chains.<id>]` per subscribed chain with a paid RPC URL, and one `[[modules]]` per module, each with an operator-written `id`.
+- An `engine.toml` with `state_dir` on a persistent path (never `/tmp`), `log_level = "info"`, `[engine.metrics] enabled = true` with `bind_addr = "127.0.0.1:9100"`, one `[chains.<id>]` per triggered chain with a paid RPC URL, and one `[[modules]]` per module, each with an operator-written `id`.
 - `require_component_digest = true` under `[engine]`, with every manifest carrying a `[component].digest` pin.
 - A `digest` on each `[[modules]]` entry, set to the artifact's sha256.
   This is the operator's own pin, in trusted config: the default sibling manifest lives in the same trust domain as the artifact, so its `[component].digest` does not hold against a compromised artifact store.
@@ -76,7 +76,7 @@ WantedBy=multi-user.target
 ```
 
 A stop halts dispatch at the next guest-call boundary, drains the one call in flight, commits its cursor, and exits 0.
-Modules the halt cut out of a block fan-out do not receive that block; an undispatched chain-log event replays at the next start through its `resume` cursor (section 4).
+Modules the halt cut out of a block fan-out do not receive that block; an undispatched event replays at the next start through its `resume` cursor (section 4).
 The drain is bounded by `[limits.shutdown] drain_secs`, which defaults to `deadline_secs` plus 30 s, so an untuned drain outlasts the one deadline-bounded call it can be left waiting on.
 A drain past the bound therefore means a wedged task, not a long dispatch, and it forces exit 1 so `Restart=on-failure` restarts the engine.
 Keep `TimeoutStopSec` above the resolved bound, or systemd's SIGKILL pre-empts the forced exit.
@@ -143,14 +143,14 @@ If a restored file does not open, roll forward from the previous snapshot, or st
 The runtime writes two kinds of key inside each component's own namespace, both after a successful dispatch and both best-effort:
 
 - `last_dispatched_block:<chain_id>`, a u64 little-endian progress marker for block dispatch.
-- `chainlog_cursor:<hex>`, the resume cursor for a `resume = true` chain-log subscription.
+- `chainlog_cursor:<hex>`, the resume cursor for a `resume = true` event trigger.
   The engine reads it once at boot, re-opens at that block, and backfills the gap on reconnect, capped by `max_lookback`.
   A reorg retraction pulls the cursor back.
 
 Every other key in a component's namespace is the component's own.
 
 A forced exit (a drain past `[limits.shutdown] drain_secs`) terminates the process before the in-flight dispatch commits its cursor, and both keys stay at the last committed dispatch.
-A `resume = true` subscription then replays the in-flight event at the next start; a block event is not replayed.
+A `resume = true` trigger then replays the in-flight log at the next start; a block is not replayed.
 
 ## 5. Logs
 
@@ -176,8 +176,8 @@ With `enabled = false` the recorder is still installed, so call sites stay live,
 | Metric | Type | Labels | Meaning |
 |---|---|---|---|
 | `nexum_runtime_boot_refusals_total` | counter | `error_kind` | Boot refusals by error kind. |
-| `nexum_runtime_event_latency_seconds` | histogram | `module`, `event_kind` | Wall-clock seconds to dispatch one event. |
-| `nexum_runtime_dispatch_dropped_total` | counter | `module`, `event_kind`, `reason` | Events dropped before dispatch. `reason = "rate_limited"` is the per-component dispatch rate limit (`[limits.dispatch]`, default `burst = 256` and `refill_per_sec = 128`). `reason = "shutdown"` is a stop landing mid fan-out: the fan-out follows `[[modules]]` order, so the same trailing modules are skipped at every stop. A block is not replayed; a chain-log event is, from its cursor. |
+| `nexum_runtime_event_latency_seconds` | histogram | `module`, `trigger_kind` | Wall-clock seconds to dispatch one trigger. |
+| `nexum_runtime_dispatch_dropped_total` | counter | `module`, `trigger_kind`, `reason` | Triggers dropped before dispatch. `reason = "rate_limited"` is the per-component dispatch rate limit (`[limits.dispatch]`, default `burst = 256` and `refill_per_sec = 128`). `reason = "shutdown"` is a stop landing mid fan-out: the fan-out follows `[[modules]]` order, so the same trailing modules are skipped at every stop. A block is not replayed; an event is, from its cursor. |
 | `nexum_runtime_module_errors_total` | counter | `module`, `error_kind` | Module faults and traps. `error_kind = "trap"` is a wasmtime trap; other values are fault labels. |
 | `nexum_runtime_module_restarts_total` | counter | `module` | Module restart attempts. |
 | `nexum_runtime_module_poisoned` | gauge | `module` | `1` once a module crosses `[limits.poison]` (default 5 failures in 600 s). Stays `1` until the process restarts. |
@@ -304,4 +304,4 @@ A logging-level change also needs a restart.
 - [ADR-0003](adr/0003-local-store-namespacing.md): local-store namespacing.
 - [ADR-0014](adr/0014-local-store-durability-model.md): the local-store durability model.
 - [ADR-0016](adr/0016-component-vocabulary.md): the `[component]` and `[dependencies]` vocabulary.
-- [Component lifecycle, event system, and packaging](02-modules-events-packaging.md).
+- [Component lifecycle, trigger system, and packaging](02-modules-triggers-packaging.md).

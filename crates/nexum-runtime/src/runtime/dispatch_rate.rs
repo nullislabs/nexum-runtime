@@ -1,5 +1,5 @@
 //! Per-module dispatch rate limiter: one token bucket per module, checked
-//! before `on_event`, drops over-rate events. Caps how often a dispatch
+//! before `on_trigger`, drops over-rate triggers. Caps how often a dispatch
 //! starts (fuel/memory/poison cap what one costs); per-module, so a flood
 //! cannot starve other modules. Pure with injected time.
 

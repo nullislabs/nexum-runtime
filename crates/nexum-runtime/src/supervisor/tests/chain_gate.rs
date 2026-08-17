@@ -1,31 +1,31 @@
-//! The configured-chains gate and the chain-facing subscription surface.
+//! The configured-chains gate and the chain-facing trigger surface.
 
 use super::*;
 
 #[tokio::test]
-async fn empty_supervisor_returns_no_subscriptions() {
+async fn empty_supervisor_returns_no_triggers() {
     let booted = BootScenario::over(mock_components())
         .boot()
         .await
         .expect("an empty scenario boots");
-    let plan = booted.supervisor.subscription_plan();
+    let plan = booted.supervisor.trigger_plan();
     assert!(plan.block_chains.is_empty());
-    assert!(plan.chain_log_subs.is_empty());
+    assert!(plan.event_triggers.is_empty());
     assert_eq!(plan.viability(0), Viability::Nothing);
     assert_eq!(booted.supervisor.module_count(), 0);
 }
 
-/// The refusal precedes compile; block and chain-log subscriptions hit the
+/// The refusal precedes compile; block and event triggers hit the
 /// same gate with the same wording.
 #[tokio::test]
-async fn boot_refuses_a_subscription_on_an_unconfigured_chain() {
+async fn boot_refuses_a_trigger_on_an_unconfigured_chain() {
     for manifest in [
         TestManifest::new("example")
             .cap("logging")
-            .block_sub(424_242),
+            .block_trigger(424_242),
         TestManifest::new("example")
             .cap("logging")
-            .chain_log_sub(424_242),
+            .event_trigger(424_242),
     ] {
         BootScenario::new()
             .module(manifest)
@@ -36,7 +36,7 @@ async fn boot_refuses_a_subscription_on_an_unconfigured_chain() {
                     if name == "example")
             })
             // Operator wording pin.
-            .names("module example subscribes to chain 424242")
+            .names("module example declares a trigger on chain 424242")
             .names("[chains.424242]")
             .names("configured chains: 1, 100, 11155111")
             .lacks("compile");
@@ -45,11 +45,11 @@ async fn boot_refuses_a_subscription_on_an_unconfigured_chain() {
 
 /// The single-boot path reads the same configured-chains gate.
 #[tokio::test]
-async fn boot_single_refuses_a_subscription_on_an_unconfigured_chain() {
+async fn boot_single_refuses_a_trigger_on_an_unconfigured_chain() {
     let dir = tempfile::tempdir().expect("tempdir");
     let manifest = TestManifest::new("gated")
         .cap("logging")
-        .block_sub(424_242)
+        .block_trigger(424_242)
         .write_to(dir.path());
     let wasm = dir.path().join("missing.wasm");
 
@@ -64,7 +64,7 @@ async fn boot_single_refuses_a_subscription_on_an_unconfigured_chain() {
             if name == "gated")
     })
     // Operator wording pin.
-    .names("module gated subscribes to chain 424242")
+    .names("module gated declares a trigger on chain 424242")
     .names("configured chains: 1, 100, 11155111")
     .lacks("compile");
 }
@@ -72,32 +72,32 @@ async fn boot_single_refuses_a_subscription_on_an_unconfigured_chain() {
 /// Filter values fail closed at manifest parse: an unparseable address or
 /// topic refuses the boot as a manifest error, before any compile.
 #[tokio::test]
-async fn boot_refuses_an_invalid_chain_log_filter() {
+async fn boot_refuses_an_invalid_event_filter() {
     fn is_address(e: &BootRefusal) -> bool {
         matches!(
             e,
-            BootRefusal::Manifest(ParseError::InvalidChainLogAddress { .. })
+            BootRefusal::Manifest(ParseError::InvalidEventAddress { .. })
         )
     }
     fn is_topic(e: &BootRefusal) -> bool {
         matches!(
             e,
-            BootRefusal::Manifest(ParseError::InvalidChainLogTopic { .. })
+            BootRefusal::Manifest(ParseError::InvalidEventTopic { .. })
         )
     }
     for (manifest, detail, variant) in [
         (
             TestManifest::new("example")
                 .cap("logging")
-                .chain_log_sub_filtered(1, Some("0xabc"), None),
+                .event_trigger_filtered(1, Some("0xabc"), None),
             // Pinned operator wording.
-            "invalid chain-log address \"0xabc\"",
+            "invalid event address \"0xabc\"",
             is_address as fn(&BootRefusal) -> bool,
         ),
         (
             TestManifest::new("example")
                 .cap("logging")
-                .chain_log_sub_filtered(1, None, Some("not-a-topic")),
+                .event_trigger_filtered(1, None, Some("not-a-topic")),
             // Pinned operator wording.
             "invalid topic \"not-a-topic\"",
             is_topic as fn(&BootRefusal) -> bool,
@@ -119,7 +119,7 @@ async fn boot_refuses_an_invalid_chain_log_filter() {
 /// The manifest carries typed filter values, so the collection-time filter
 /// build cannot fail.
 #[tokio::test]
-async fn a_validated_chain_log_filter_survives_to_the_collected_subscription() {
+async fn a_validated_event_filter_survives_to_the_collected_stream() {
     let Some(wasm) = example_wasm_or_skip() else {
         return;
     };
@@ -130,23 +130,21 @@ async fn a_validated_chain_log_filter_survives_to_the_collected_subscription() {
         .module(
             TestManifest::new("example")
                 .cap("logging")
-                .chain_log_sub_filtered(1, Some(address), Some(topic)),
+                .event_trigger_filtered(1, Some(address), Some(topic)),
         )
         .boot()
         .await
         .expect("the example boots alive");
 
-    let subs = booted.supervisor.subscription_plan().chain_log_subs;
-    assert_eq!(
-        subs.len(),
-        1,
-        "the alive module contributes its subscription"
-    );
-    assert_eq!(subs[0].module.as_str(), "example");
-    assert_eq!(subs[0].chain.id(), 1);
-    assert!(subs[0].cursor_key.is_none(), "resume defaults to off");
+    let triggers = booted.supervisor.trigger_plan().event_triggers;
+    assert_eq!(triggers.len(), 1, "the alive module contributes its stream");
+    assert_eq!(triggers[0].module.as_str(), "example");
+    assert_eq!(triggers[0].chain.id(), 1);
+    assert!(triggers[0].cursor_key.is_none(), "resume defaults to off");
     // alloy `Filter` exposes no getter; assert through its serialization.
-    let serialized = serde_json::to_value(&subs[0].filter).unwrap().to_string();
+    let serialized = serde_json::to_value(&triggers[0].filter)
+        .unwrap()
+        .to_string();
     assert!(
         serialized
             .to_lowercase()
@@ -157,15 +155,15 @@ async fn a_validated_chain_log_filter_survives_to_the_collected_subscription() {
 }
 
 #[tokio::test]
-async fn boot_admits_a_block_subscription_on_a_configured_chain_past_the_chain_gate() {
+async fn boot_admits_a_block_trigger_on_a_configured_chain_past_the_chain_gate() {
     BootScenario::new()
-        .module(TestManifest::new("example").cap("logging").block_sub(1))
+        .module(TestManifest::new("example").cap("logging").block_trigger(1))
         .expect_refusal()
         .await
         .variant::<std::io::Error>(|e| e.kind() == std::io::ErrorKind::NotFound)
         // Operator wording pin.
         .names("read component")
-        .lacks("subscribes to chain");
+        .lacks("declares a trigger on chain");
 }
 
 #[tokio::test]
@@ -178,7 +176,7 @@ async fn an_unconfigured_chain_refuses_boot_before_an_earlier_module_loads() {
             Entry::new(
                 TestManifest::new("example")
                     .cap("logging")
-                    .block_sub(424_242),
+                    .block_trigger(424_242),
             )
             .wasm(second),
         )
@@ -191,7 +189,7 @@ async fn an_unconfigured_chain_refuses_boot_before_an_earlier_module_loads() {
         // Operator wording pin.
         .names("load module")
         .names("second.wasm")
-        .names("module example subscribes to chain 424242")
+        .names("module example declares a trigger on chain 424242")
         .names("[chains.424242]")
         .lacks("compile");
 }
@@ -203,7 +201,7 @@ async fn boot_refusal_names_the_missing_engine_toml_on_the_defaulted_path() {
         .module(
             TestManifest::new("example")
                 .cap("logging")
-                .block_sub(424_242),
+                .block_trigger(424_242),
         )
         .expect_refusal()
         .await

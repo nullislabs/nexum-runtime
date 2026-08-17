@@ -1,13 +1,13 @@
-//! Chain-log delivery at the guest WIT edge.
+//! Event delivery at the guest WIT edge.
 //!
 //! Modules receive on-chain logs as the native [`Log`] (alloy's
 //! `eth_getLogs` shape). The host packs each log into the WIT
-//! `chain-log` record; [`ChainLogParts`] borrows its raw fields and
+//! `log` record; [`LogParts`] borrows its raw fields and
 //! `From` rebuilds the alloy value.
 
 use alloy_primitives::{Address, B256, Bytes, Log as PrimitiveLog, LogData};
 
-/// The alloy RPC log delivered to modules for chain-log events.
+/// The alloy RPC log delivered to modules for event triggers.
 pub use alloy_rpc_types_eth::Log;
 
 /// Const so the module macro's topic parity check fails the build, not the run.
@@ -22,12 +22,14 @@ pub const fn contains_topic(needle: &B256, set: &[B256]) -> bool {
     false
 }
 
-/// Borrowed raw fields of a WIT `chain-log` record, assembled into an
+/// Borrowed raw fields of a WIT `log` record, assembled into an
 /// alloy [`Log`] via `From`. Fixed-width byte fields are left-padded
 /// into their EVM word (20 bytes for the address, 32 for topics and
 /// hashes).
 #[derive(Default)]
-pub struct ChainLogParts<'a> {
+pub struct LogParts<'a> {
+    /// Chain the log came from; not part of the alloy [`Log`].
+    pub chain_id: u64,
     /// 20-byte contract address.
     pub address: &'a [u8],
     /// Indexed topics, each a 32-byte word.
@@ -50,8 +52,8 @@ pub struct ChainLogParts<'a> {
     pub removed: bool,
 }
 
-impl From<ChainLogParts<'_>> for Log {
-    fn from(p: ChainLogParts<'_>) -> Self {
+impl From<LogParts<'_>> for Log {
+    fn from(p: LogParts<'_>) -> Self {
         Log {
             inner: PrimitiveLog {
                 address: Address::left_padding_from(p.address),
@@ -100,7 +102,8 @@ mod tests {
         let addr = [0x11u8; 20];
         let topic = [0x22u8; 32];
         let hash = [0x33u8; 32];
-        let log: Log = ChainLogParts {
+        let log: Log = LogParts {
+            chain_id: 1,
             address: &addr,
             topics: &[topic.to_vec()],
             data: &[1, 2, 3],
@@ -126,7 +129,7 @@ mod tests {
 
     #[test]
     fn pending_log_leaves_block_fields_absent() {
-        let log: Log = ChainLogParts {
+        let log: Log = LogParts {
             address: &[0u8; 20],
             ..Default::default()
         }
@@ -140,7 +143,7 @@ mod tests {
 
     #[test]
     fn undersized_word_is_left_padded() {
-        let log: Log = ChainLogParts {
+        let log: Log = LogParts {
             address: &[0u8; 20],
             topics: &[vec![0xab]],
             ..Default::default()
