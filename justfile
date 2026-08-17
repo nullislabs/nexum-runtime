@@ -52,6 +52,9 @@ content range="main..HEAD":
 zero-leak:
     ./scripts/zero-leak.sh
 
+msrv:
+    ./scripts/msrv-lint.sh
+
 # Check the workspace quickly.
 check:
     cargo check --target wasm32-wasip2 -p example
@@ -59,10 +62,10 @@ check:
     cargo check -p nexum-cli
 
 # Run the full CI series locally before pushing. Mirrors
-# .github/workflows/ci.yml one-to-one: house style, the zero-leak gate,
-# rustfmt, clippy, rustdoc, the module wasms the integration tests need, and
-# the workspace test suite via nextest plus the doctests, all under the
-# `-D warnings` the CI workflow sets globally.
+# .github/workflows/ci.yml one-to-one: house style, the zero-leak gate, the
+# MSRV gate, rustfmt, clippy, rustdoc, the module wasms the integration tests
+# need, and the workspace test suite via nextest plus the doctests, all under
+# the `-D warnings` the CI workflow sets globally.
 ci:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -73,6 +76,7 @@ ci:
     export RUSTDOCFLAGS="${RUSTDOCFLAGS:-} -D warnings"
     ./scripts/content-lint.sh "main..HEAD"
     ./scripts/zero-leak.sh
+    ./scripts/msrv-lint.sh
     cargo fmt --all --check
     cargo clippy --workspace --all-targets --all-features -- -D warnings
     cargo doc --workspace --all-features --no-deps

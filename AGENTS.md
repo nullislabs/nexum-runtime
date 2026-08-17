@@ -31,7 +31,8 @@ The videre and shepherd repositories build on the SDK and the runtime published 
 ## Build, test, lint
 
 The workspace uses Rust edition 2024.
-The flake pins the toolchain to Rust 1.94.0, which matches the toolchain CI installs.
+The flake pins the toolchain to Rust 1.94.0, which matches the toolchain CI installs and the `rust-version` every crate inherits.
+`just msrv` proves the three have not drifted, and holds the licence to one inherited SPDX identifier.
 Run `nix develop` to enter the dev shell, or run `direnv allow` once.
 The dev shell supplies the toolchain, the `wasm32-wasip2` target, `cargo-nextest`, `just`, `ripgrep`, and `ast-grep`.
 

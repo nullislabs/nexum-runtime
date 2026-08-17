@@ -2,6 +2,7 @@
 name = "balance-tracker"
 version = "0.1.0"
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "Example module: tracks native-token balances of a list of addresses and emits a log when one changes by more than a threshold. Demonstrates chain::request + local-store + multi-key persistence."

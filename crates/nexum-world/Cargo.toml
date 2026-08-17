@@ -2,6 +2,7 @@
 name = "nexum-world"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "Per-module WIT world synthesis: the core capability table, registry-driven extension rows, manifest parsing, and crate-local WIT package resolution."
