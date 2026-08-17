@@ -12,6 +12,8 @@ status: superseded by ADR-0017; historical
 > [ADR-0021](../adr/0021-provides-and-implements.md) fixed the `[implements]` row shape after this document was written.
 > A row is a table with `component` and `digest`, not the bare `key = "id"` string the `engine.toml` sketch below shows, and the sketch's shape now fails the config parse.
 > The track spelling below is also incomplete: below 0.1 the track is the full version, because every `0.0.z` release is a distinct interface.
+> The consumer grammar in "The author surface" below was not adopted: #205 landed the alias key with an `interface = "<track>"` value, not the interface id in key position, and the concepts table's "Consumer: `[dependencies]`, by interface id" is superseded the same way.
+> The recorded grammar is [ADR-0021](../adr/0021-provides-and-implements.md)'s second amendment, and writing an interface id as a `[dependencies]` key now refuses as an unknown dependency.
 > Read this document for the reasoning, not for the current names or shapes.
 
 A **host capability** is a WIT interface the runtime implements in Rust, named in a namespace the runtime owns, bound into a component's world at build time, and bounded by an operator dial.

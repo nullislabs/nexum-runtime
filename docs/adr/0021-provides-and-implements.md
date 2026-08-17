@@ -5,6 +5,18 @@ amends: 0017-capabilities-and-services.md
 
 # A provides claim is verified by the engine and authorized by the operator
 
+> Amendment: this record was edited after acceptance.
+> The consumer side (#205) landed with a dependency that names only a compatibility track, so it carries no WIT for a structural comparison.
+> The deferred structural check is re-pointed in place, from #205 to the call wiring (#206).
+>
+> Second amendment: the consumer grammar #205 landed is recorded here, since it is the claim's one consumer.
+> A `[dependencies]` entry carrying `interface = "<track>"` depends on a provided interface; the key is the alias the author's own code calls, and the value goes through the same track derivation as the ledger and the `[implements]` key.
+> An interface id in key position would need quoting because of `:` and `/`, and the first unquoted attempt yields a TOML column error that says nothing about interfaces.
+> A bareword key still names a capability, resolved against the core capability table first, so a provided interface can never shadow a capability, and an alias equal to a capability name refuses.
+> A bareword naming a provider component refuses with the corrected `interface` line, a track no loaded component provides refuses at boot blaming the consumer, and a component's own claim never satisfies its own dependency.
+> Five more refusals join the closed `error_kind` set: `invalid_interface_track`, `alias_shadows_capability`, `dependency_names_component`, `interface_not_provided`, `self_interface_dependency`.
+> An interface dependency is outside the `[policy].capabilities` allowlist; [ADR-0018](0018-one-operator-policy-surface.md) records why.
+
 ## Context
 
 [ADR-0017](0017-capabilities-and-services.md) settled that a service is a versioned WIT interface an untrusted guest exports, that the author claims it with `provides`, and that the engine verifies the claim against the component's real exports.
@@ -26,7 +38,8 @@ Only an interface-instance export satisfies it: a bare func export under a match
 The export must name the same interface, on the same compatibility track, at a version no older than the claim.
 A claim no export satisfies refuses with `provides_not_exported`.
 The match is nominal, on name, kind and version.
-No component in the engine holds the interface's WIT, so an empty instance under the claimed name passes; the structural check arrives with the consumer side and the vendored packages it needs (#205).
+No component in the engine holds the interface's WIT, so an empty instance under the claimed name passes.
+Amended per the note above: the structural check arrives with the call wiring (#206), the first stage where a consumer's compiled artifact can carry the imported shape for the engine to compare against the provider's export.
 
 Authorization is the `engine.toml` `[implements]` table, keyed on the interface's compatibility track.
 The track is semver's compatibility range, which is leading-zero sensitive: the major at or above 1.0 (`@2`), `0.minor` below it (`@0.3`), and the full version below 0.1 (`@0.0.7`), because every `0.0.z` release is a distinct interface.

@@ -4,23 +4,67 @@ use std::path::Path;
 
 use tracing::info;
 
-use super::capabilities::CapabilityRegistry;
+use super::capabilities::{CapabilityRegistry, ProvidedInterfaces};
 use super::error::ParseError;
 use super::types::{LoadedManifest, Manifest};
 
 /// Parse and validate `component.toml`; no `[dependencies]` table refuses the
-/// manifest (`required = []` is valid).
-pub fn load(path: &Path, registry: &CapabilityRegistry) -> Result<LoadedManifest, ParseError> {
+/// manifest (`required = []` is valid). The `[dependencies]` cross-check
+/// runs later, in [`resolve_dependencies`].
+pub fn load(path: &Path) -> Result<LoadedManifest, ParseError> {
     let raw = std::fs::read_to_string(path)?;
     let manifest: Manifest = toml::from_str(&raw)?;
     let loaded = LoadedManifest::try_from(manifest)?;
+    if !loaded.dependencies.is_empty() {
+        let names: Vec<&str> = loaded.dependencies.keys().map(String::as_str).collect();
+        info!(target: "manifest", dependencies = %names.join(", "), "dependencies");
+    }
+    if !loaded.interfaces.is_empty() {
+        let names: Vec<String> = loaded
+            .interfaces
+            .iter()
+            .map(|(alias, track)| format!("{alias} = {track}"))
+            .collect();
+        info!(target: "manifest", interfaces = %names.join(", "), "interface dependencies");
+    }
+    if !loaded.http_allowlist.is_empty() {
+        let hosts: Vec<String> = loaded
+            .http_allowlist
+            .iter()
+            .map(ToString::to_string)
+            .collect();
+        info!(target: "manifest", hosts = %hosts.join(", "), "http hosts");
+    }
+    Ok(loaded)
+}
 
-    // The registry cross-check lives here, not in the `TryFrom`
-    // conversion, because it needs the wired registry. The `hosts`
-    // placement check follows it per entry, so an unknown name refuses
-    // as unknown rather than as a misplaced attribute.
+/// Cross-check `[dependencies]` against the wired registry and the
+/// provided interfaces.
+///
+/// This lives here rather than in the `TryFrom` conversion or in [`load`]
+/// because it needs the wired registry and the full provided set: a
+/// dependency may name an interface a later entry provides, so the boot
+/// path calls it once every manifest is parsed and every `provides` claim
+/// is known, still before any compile. A name resolves against the
+/// capability table first (ADR-0016), so a provided interface can never
+/// shadow a capability. Per entry the name check runs before the `hosts`
+/// placement check, so an unknown name refuses as unknown rather than as
+/// a misplaced attribute.
+pub(crate) fn resolve_dependencies(
+    loaded: &LoadedManifest,
+    registry: &CapabilityRegistry,
+    provided: &ProvidedInterfaces,
+) -> Result<(), ParseError> {
     for (name, dep) in &loaded.dependencies {
         if !registry.is_known(name) {
+            // A component's name is never a dependency; the refusal
+            // spells the interface line the author meant.
+            if let Some(track) = provided.track_of(name) {
+                return Err(ParseError::DependencyNamesComponent {
+                    dependency: name.clone(),
+                    interface: track.clone(),
+                });
+            }
             return Err(ParseError::UnknownCapability {
                 name: name.clone(),
                 known: registry.known_names(),
@@ -35,19 +79,33 @@ pub fn load(path: &Path, registry: &CapabilityRegistry) -> Result<LoadedManifest
             });
         }
     }
-    if !loaded.dependencies.is_empty() {
-        let names: Vec<&str> = loaded.dependencies.keys().map(String::as_str).collect();
-        info!(target: "manifest", dependencies = %names.join(", "), "dependencies");
+    for (alias, track) in &loaded.interfaces {
+        if registry.is_known(alias) {
+            return Err(ParseError::AliasShadowsCapability {
+                dependency: alias.clone(),
+                known: registry.known_names(),
+            });
+        }
+        // The prepass refuses a second claimant of one track, so a claim
+        // matching the requested track means the only provider is this
+        // component itself; the provided set alone would resolve it.
+        if let Some(claim) = &loaded.provides
+            && claim.track() == *track
+        {
+            return Err(ParseError::SelfInterfaceDependency {
+                dependency: alias.clone(),
+                interface: track.clone(),
+            });
+        }
+        if !provided.provides(track) {
+            return Err(ParseError::InterfaceNotProvided {
+                dependency: alias.clone(),
+                interface: track.clone(),
+                provided: provided.known_tracks(),
+            });
+        }
     }
-    if !loaded.http_allowlist.is_empty() {
-        let hosts: Vec<String> = loaded
-            .http_allowlist
-            .iter()
-            .map(ToString::to_string)
-            .collect();
-        info!(target: "manifest", hosts = %hosts.join(", "), "http hosts");
-    }
-    Ok(loaded)
+    Ok(())
 }
 
 #[cfg(test)]
@@ -397,10 +455,7 @@ name = "bad"
 chain = {}
 not-a-real-cap = {}
 "#;
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("component.toml");
-        std::fs::write(&path, toml).unwrap();
-        let err = load(&path, &CapabilityRegistry::core()).unwrap_err();
+        let err = load_inline(toml).unwrap_err();
         assert!(
             matches!(err, ParseError::UnknownCapability { ref name, .. } if name == "not-a-real-cap")
         );
@@ -469,10 +524,7 @@ name = "stale"
 [dependencies]
 clock = {}
 "#;
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("component.toml");
-        std::fs::write(&path, toml).unwrap();
-        let err = load(&path, &CapabilityRegistry::core()).unwrap_err();
+        let err = load_inline(toml).unwrap_err();
         assert!(matches!(err, ParseError::UnknownCapability { ref name, .. } if name == "clock"));
     }
 
@@ -489,10 +541,7 @@ chain_id = 1
 label    = "mainnet"
 enabled  = true
 "#;
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("component.toml");
-        std::fs::write(&path, toml).unwrap();
-        let loaded = load(&path, &CapabilityRegistry::core()).unwrap();
+        let loaded = load_inline(toml).unwrap();
         let config: std::collections::HashMap<_, _> = loaded.config.into_iter().collect();
         assert_eq!(config.get("chain_id").map(String::as_str), Some("1"));
         assert_eq!(config.get("label").map(String::as_str), Some("mainnet"));
@@ -592,10 +641,7 @@ max_fuel_per_dispatch = 100000
         for bad in ["../evil", "a/b", "a\\b", "..", "/etc/passwd", "foo/../bar"] {
             // Single-quoted TOML literal string: no backslash-escape processing.
             let toml = format!("[component]\nname = '{bad}'\n");
-            let dir = tempfile::tempdir().unwrap();
-            let path = dir.path().join("component.toml");
-            std::fs::write(&path, toml).unwrap();
-            let err = load(&path, &CapabilityRegistry::core()).unwrap_err();
+            let err = load_inline(&toml).unwrap_err();
             assert!(
                 matches!(err, ParseError::InvalidModuleName(ref n) if n == bad),
                 "expected rejection for {bad:?}, got {err:?}",
@@ -651,23 +697,14 @@ max_fuel_per_dispatch = 100000
 
     #[test]
     fn load_accepts_plain_module_name() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("component.toml");
-        std::fs::write(
-            &path,
-            "[component]\nname = \"twap-monitor\"\n\n[dependencies]\n",
-        )
-        .unwrap();
-        let loaded = load(&path, &CapabilityRegistry::core()).unwrap();
+        let loaded =
+            load_inline("[component]\nname = \"twap-monitor\"\n\n[dependencies]\n").unwrap();
         assert_eq!(loaded.name.as_str(), "twap-monitor");
     }
 
     #[test]
     fn load_rejects_a_missing_dependency_table() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("component.toml");
-        std::fs::write(&path, "[component]\nname = \"bare\"\n").unwrap();
-        let err = load(&path, &CapabilityRegistry::core()).unwrap_err();
+        let err = load_inline("[component]\nname = \"bare\"\n").unwrap_err();
         assert!(matches!(err, ParseError::MissingCapabilities), "{err:?}");
         let msg = err.to_string();
         // Operator wording pin.
@@ -680,14 +717,10 @@ max_fuel_per_dispatch = 100000
         // Silently ignoring the key would drop a declaration the author
         // believes is in effect; the retired key reads as an unknown
         // dependency and is refused by name.
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("component.toml");
-        std::fs::write(
-            &path,
+        let err = load_inline(
             "[component]\nname = \"legacy\"\n\n[dependencies]\nlogging = {}\noptional = []\n",
         )
-        .unwrap();
-        let err = load(&path, &CapabilityRegistry::core()).unwrap_err();
+        .unwrap_err();
         assert!(
             matches!(err, ParseError::UnknownCapability { ref name, .. } if name == "optional"),
             "{err:?}",
@@ -696,18 +729,36 @@ max_fuel_per_dispatch = 100000
 
     #[test]
     fn load_accepts_an_empty_dependency_table() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("component.toml");
-        std::fs::write(&path, "[component]\nname = \"minimal\"\n\n[dependencies]\n").unwrap();
-        let loaded = load(&path, &CapabilityRegistry::core()).unwrap();
+        let loaded = load_inline("[component]\nname = \"minimal\"\n\n[dependencies]\n").unwrap();
         assert!(loaded.dependencies.is_empty());
     }
 
-    fn load_inline(toml: &str) -> Result<LoadedManifest, ParseError> {
+    /// The whole load path a boot takes: parse, then resolve against the
+    /// core registry and the given provided set.
+    fn load_resolved(
+        toml: &str,
+        provided: &ProvidedInterfaces,
+    ) -> Result<LoadedManifest, ParseError> {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("component.toml");
         std::fs::write(&path, toml).unwrap();
-        load(&path, &CapabilityRegistry::core())
+        let loaded = load(&path)?;
+        resolve_dependencies(&loaded, &CapabilityRegistry::core(), provided)?;
+        Ok(loaded)
+    }
+
+    fn load_inline(toml: &str) -> Result<LoadedManifest, ParseError> {
+        load_resolved(toml, &ProvidedInterfaces::default())
+    }
+
+    /// A provided set with one claim, keyed as the prepass ledger keys it.
+    fn provided_by(component: &str, track: &str) -> ProvidedInterfaces {
+        let mut provided = ProvidedInterfaces::default();
+        provided.insert(
+            crate::interface_id::InterfaceTrack::parse(track).expect("valid track"),
+            component,
+        );
+        provided
     }
 
     fn digest_manifest(component_line: &str) -> String {
@@ -790,6 +841,232 @@ max_fuel_per_dispatch = 100000
             .expect_err("an unknown [component] key must refuse");
         assert!(
             matches!(&err, ParseError::Toml(e) if e.to_string().contains("unknown")),
+            "{err:?}",
+        );
+    }
+
+    fn consumer_manifest(dependency_line: &str) -> String {
+        format!("[component]\nname = \"consumer\"\n\n[dependencies]\n{dependency_line}\n")
+    }
+
+    #[test]
+    fn a_dependency_on_a_provided_track_resolves() {
+        let loaded = load_resolved(
+            &consumer_manifest("wallet = { interface = \"acme:pool/quoter@2\" }"),
+            &provided_by("quoter-svc", "acme:pool/quoter@2"),
+        )
+        .expect("a provided track resolves");
+        assert_eq!(
+            loaded
+                .interfaces
+                .get("wallet")
+                .expect("alias parsed")
+                .as_str(),
+            "acme:pool/quoter@2",
+        );
+        assert!(
+            !loaded.dependencies.contains_key("wallet"),
+            "an interface dependency is not a capability dependency",
+        );
+    }
+
+    /// The value is a track, not a full version: a consumer asks for
+    /// compatibility, and the provider's exact version is the provider's
+    /// business.
+    #[test]
+    fn an_interface_value_that_is_not_a_track_refuses_at_parse() {
+        for bad in [
+            "acme:pool/quoter@2.0.0", // full version
+            "acme:pool/quoter@2.0",
+            "acme:pool/quoter",
+            "quoter-svc", // a component name
+            "",
+        ] {
+            let toml = consumer_manifest(&format!("wallet = {{ interface = \"{bad}\" }}"));
+            let err = validate(&toml).expect_err(bad);
+            assert!(
+                matches!(&err, ParseError::InvalidInterfaceTrack { dependency, .. }
+                    if dependency == "wallet"),
+                "{bad}: {err:?}",
+            );
+        }
+        // Operator wording pin.
+        let err = validate(&consumer_manifest(
+            "wallet = { interface = \"acme:pool/quoter@2.0.0\" }",
+        ))
+        .expect_err("a full version is not a track");
+        assert_eq!(
+            err.to_string(),
+            "manifest: [dependencies].wallet: \"acme:pool/quoter@2.0.0\" is not an \
+             interface track (name@major, name@0.minor below 1.0, or name@0.0.patch \
+             below that)",
+        );
+    }
+
+    #[test]
+    fn hosts_on_an_interface_dependency_refuses_as_misplaced() {
+        let toml = consumer_manifest(
+            "wallet = { interface = \"acme:pool/quoter@2\", hosts = [\"api.acme.example\"] }",
+        );
+        let err = validate(&toml).expect_err("hosts on an interface dependency");
+        assert!(
+            matches!(&err, ParseError::MisplacedDependencyAttribute { dependency, attribute: "hosts" }
+                if dependency == "wallet"),
+            "{err:?}",
+        );
+    }
+
+    /// The one alias the misplaced-hosts wording would lie about: `http`
+    /// is the dependency that does take `hosts`, so the parse-time check
+    /// skips it and the refusal names the real defect, the
+    /// capability-named alias.
+    #[test]
+    fn an_http_alias_with_hosts_refuses_as_a_shadowing_alias() {
+        let toml = consumer_manifest(
+            "http = { interface = \"acme:pool/quoter@2\", hosts = [\"api.acme.example\"] }",
+        );
+        let err = load_resolved(&toml, &provided_by("quoter-svc", "acme:pool/quoter@2"))
+            .expect_err("a capability-named alias must refuse as shadowing");
+        assert!(
+            matches!(&err, ParseError::AliasShadowsCapability { dependency, .. }
+                if dependency == "http"),
+            "{err:?}",
+        );
+    }
+
+    /// A component's own claim never satisfies its own dependency: the
+    /// prepass refuses a second claimant of the track, so resolving it
+    /// against the provided set alone would accept a self-loop.
+    #[test]
+    fn a_dependency_on_the_component_own_interface_refuses() {
+        let toml = "[component]\nname = \"quoter-svc\"\n\
+                    provides = \"acme:pool/quoter@2.0.0\"\n\n[dependencies]\n\
+                    self = { interface = \"acme:pool/quoter@2\" }\n";
+        let err = load_resolved(toml, &provided_by("quoter-svc", "acme:pool/quoter@2"))
+            .expect_err("a self-dependency must refuse");
+        assert!(
+            matches!(&err, ParseError::SelfInterfaceDependency { dependency, interface }
+                if dependency == "self" && interface.as_str() == "acme:pool/quoter@2"),
+            "{err:?}",
+        );
+        // Operator wording pin.
+        assert_eq!(
+            err.to_string(),
+            "manifest: [dependencies].self depends on interface acme:pool/quoter@2, \
+             which this component itself provides",
+        );
+    }
+
+    /// Scope rule: the capability table resolves first, so an alias equal
+    /// to any known capability name refuses rather than shadowing it.
+    #[test]
+    fn an_alias_that_is_a_capability_name_refuses() {
+        for taken in ["chain", "http", "wasi-sockets"] {
+            let toml = consumer_manifest(&format!(
+                "{taken} = {{ interface = \"acme:pool/quoter@2\" }}"
+            ));
+            let err = load_resolved(&toml, &provided_by("quoter-svc", "acme:pool/quoter@2"))
+                .expect_err(taken);
+            assert!(
+                matches!(&err, ParseError::AliasShadowsCapability { dependency, .. }
+                    if dependency == taken),
+                "{taken}: {err:?}",
+            );
+        }
+        // Operator wording pin.
+        let err = load_resolved(
+            &consumer_manifest("chain = { interface = \"acme:pool/quoter@2\" }"),
+            &provided_by("quoter-svc", "acme:pool/quoter@2"),
+        )
+        .expect_err("a shadowing alias must refuse");
+        assert_eq!(
+            err.to_string(),
+            "manifest: [dependencies].chain declares an interface under a capability's \
+             name; rename the alias (capabilities: chain, identity, local-store, \
+             remote-store, logging, http, wasi-sockets, wasi-filesystem)",
+        );
+    }
+
+    /// A bareword dependency naming a provider component refuses with the
+    /// corrected interface line, not as a bare unknown name.
+    #[test]
+    fn a_dependency_naming_a_provider_component_spells_the_corrected_line() {
+        let err = load_resolved(
+            &consumer_manifest("quoter-svc = {}"),
+            &provided_by("quoter-svc", "acme:pool/quoter@2"),
+        )
+        .expect_err("a component name is not a dependency");
+        assert!(
+            matches!(&err, ParseError::DependencyNamesComponent { dependency, interface }
+                if dependency == "quoter-svc" && interface.as_str() == "acme:pool/quoter@2"),
+            "{err:?}",
+        );
+        // Operator wording pin, corrected line included.
+        assert_eq!(
+            err.to_string(),
+            "manifest: [dependencies].quoter-svc names a component, not an interface; \
+             that component provides acme:pool/quoter@2, so write \
+             quoter-svc = { interface = \"acme:pool/quoter@2\" }",
+        );
+    }
+
+    /// A bareword naming a non-providing component stays an unknown
+    /// dependency; there is no interface line to correct it to.
+    #[test]
+    fn a_dependency_naming_a_component_without_a_claim_refuses_as_unknown() {
+        let err = load_resolved(
+            &consumer_manifest("quoter-svc = {}"),
+            &provided_by("other-svc", "acme:pool/quoter@2"),
+        )
+        .expect_err("an unknown name refuses");
+        assert!(
+            matches!(&err, ParseError::UnknownCapability { name, .. } if name == "quoter-svc"),
+            "{err:?}",
+        );
+    }
+
+    /// Resolution order is a decision: the core capability table first,
+    /// then the provided interfaces. A component named like a capability
+    /// never captures the capability's bareword.
+    #[test]
+    fn a_bareword_that_is_both_capability_and_component_resolves_as_the_capability() {
+        load_resolved(
+            &consumer_manifest("chain = {}"),
+            &provided_by("chain", "acme:pool/quoter@2"),
+        )
+        .expect("the capability wins over the same-named component");
+    }
+
+    #[test]
+    fn a_track_no_loaded_component_provides_refuses_at_resolution() {
+        let err = load_resolved(
+            &consumer_manifest("wallet = { interface = \"acme:pool/quoter@2\" }"),
+            &ProvidedInterfaces::default(),
+        )
+        .expect_err("no provider, no boot");
+        assert!(
+            matches!(&err, ParseError::InterfaceNotProvided { dependency, interface, provided }
+                if dependency == "wallet"
+                    && interface.as_str() == "acme:pool/quoter@2"
+                    && provided == "none"),
+            "{err:?}",
+        );
+        // Operator wording pin, the empty set reading as `none`.
+        assert_eq!(
+            err.to_string(),
+            "manifest: [dependencies].wallet depends on interface acme:pool/quoter@2 \
+             but no loaded component provides it (provided: none)",
+        );
+
+        // A populated set is listed for the fix.
+        let err = load_resolved(
+            &consumer_manifest("wallet = { interface = \"acme:pool/quoter@2\" }"),
+            &provided_by("signer-svc", "nexum:wallet/signer@1"),
+        )
+        .expect_err("the wrong track still refuses");
+        assert!(
+            matches!(&err, ParseError::InterfaceNotProvided { provided, .. }
+                if provided == "nexum:wallet/signer@1"),
             "{err:?}",
         );
     }

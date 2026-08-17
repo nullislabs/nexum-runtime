@@ -10,6 +10,7 @@ supersedes: 0016-component-vocabulary.md (in part)
 > The Context sentence below, "a component declares a kind and its dependencies", now stands only for the dependencies half.
 > The three concepts this record settles are unchanged.
 > [ADR-0021](0021-provides-and-implements.md) fixes the shapes the Decision below leaves open: the `provides` grammar, the track-keyed `[implements]` row with its digest, and the refusals each gap raises.
+> Its second amendment (#205) also fixes the consumer's spelling, which the Decision and the first Consequence below leave open: the consumer names the interface as the `interface` value of a `[dependencies]` entry, under an author-chosen alias key, and the value is a compatibility track rather than a full version.
 
 ## Context
 

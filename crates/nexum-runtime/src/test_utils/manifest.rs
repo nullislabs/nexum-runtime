@@ -48,6 +48,7 @@ pub struct TestManifest {
     component: Option<String>,
     provides: Option<String>,
     caps: Vec<String>,
+    interfaces: Vec<(String, String)>,
     http_allow: Vec<String>,
     config: Vec<(String, String)>,
     subscriptions: Vec<toml::Table>,
@@ -61,6 +62,7 @@ impl TestManifest {
             component: None,
             provides: None,
             caps: Vec::new(),
+            interfaces: Vec::new(),
             http_allow: Vec::new(),
             config: Vec::new(),
             subscriptions: Vec::new(),
@@ -88,6 +90,12 @@ impl TestManifest {
     /// Several `[dependencies]` keys at once; each lands as one [`cap`](Self::cap).
     pub fn require(mut self, caps: impl IntoIterator<Item = impl Into<String>>) -> Self {
         self.caps.extend(caps.into_iter().map(Into::into));
+        self
+    }
+
+    /// Append an interface dependency: `alias = { interface = "track" }`.
+    pub fn interface_dep(mut self, alias: impl Into<String>, track: impl Into<String>) -> Self {
+        self.interfaces.push((alias.into(), track.into()));
         self
     }
 
@@ -164,6 +172,11 @@ impl TestManifest {
         for cap in &self.caps {
             dependencies.insert(cap.clone(), toml::Table::new().into());
         }
+        for (alias, track) in &self.interfaces {
+            let mut dep = toml::Table::new();
+            dep.insert("interface".into(), track.clone().into());
+            dependencies.insert(alias.clone(), dep.into());
+        }
         if !self.http_allow.is_empty() {
             let hosts: Vec<toml::Value> =
                 self.http_allow.iter().map(|h| h.clone().into()).collect();
@@ -218,17 +231,24 @@ fn subscription(kind: &str, chain_id: u64) -> toml::Table {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::manifest::{CapabilityRegistry, Subscription, load};
+    use crate::manifest::{CapabilityRegistry, ProvidedInterfaces, Subscription, load};
 
     /// Load through the real write-then-parse path with the core registry.
     fn load_core(manifest: &TestManifest) -> crate::manifest::LoadedManifest {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = manifest.write_to(dir.path());
-        load(&path, &CapabilityRegistry::core()).expect("emitted manifest loads")
+        load_path(&path)
     }
 
     fn load_path(path: &Path) -> crate::manifest::LoadedManifest {
-        load(path, &CapabilityRegistry::core()).expect("emitted manifest loads")
+        let loaded = load(path).expect("emitted manifest loads");
+        crate::manifest::resolve_dependencies(
+            &loaded,
+            &CapabilityRegistry::core(),
+            &ProvidedInterfaces::default(),
+        )
+        .expect("emitted dependencies resolve");
+        loaded
     }
 
     #[test]

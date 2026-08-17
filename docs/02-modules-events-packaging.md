@@ -32,12 +32,16 @@ max_fuel_per_dispatch = 500_000_000
 
 # What this component depends on. The engine cross-checks the component's
 # WIT imports against this table before instantiation, and an import
-# outside the declared set refuses the boot.
+# outside the declared set refuses the boot. A bareword key names a host
+# capability. An entry carrying `interface` depends on another
+# component's provided interface: the key is the alias the author's own
+# code calls, and the value is the interface's compatibility track.
 [dependencies]
 chain       = {}
 local-store = {}
 logging     = {}
 http        = { hosts = ["api.cow.fi"] }
+quoter      = { interface = "acme:pool/quoter@2" }
 
 # Event subscriptions: what the runtime feeds this component.
 [[subscription]]
@@ -74,9 +78,19 @@ Key design points:
   The runtime loads each component and runs its `init` first, then derives the subscription plan from the booted supervisor and opens the event sources.
   `call_init` runs during load in `crates/nexum-runtime/src/supervisor/load.rs`, and `subscription_plan` reads the already-booted supervisor in `crates/nexum-runtime/src/supervisor/subscriptions.rs`.
 - **`[dependencies]` drives what the runtime links.**
-  Each key names a core host capability or another component's service, and its table carries the attributes that qualify it.
+  A bareword key names a core host capability, and its table carries the attributes that qualify it.
   A component that declares `http` imports `wasi:http/outgoing-handler`, the SDK's `http::fetch` helper wraps it, and the host checks every outgoing request against the `hosts` list on the `http` dependency.
   See `modules/examples/http-probe` for a complete example.
+- **An entry carrying `interface` depends on a provided interface.**
+  The key is the alias the author's own code calls, and the value is the interface's compatibility track, for example `quoter = { interface = "acme:pool/quoter@2" }`.
+  The value is a track, never a full version: a consumer asks for compatibility, and the provider's exact version is the provider's business.
+  A full version, or any value that is not a track, refuses with `invalid_interface_track`.
+  A name resolves against the core capability table first, so an alias equal to a capability name refuses with `alias_shadows_capability`; rename the alias.
+  A bareword that names a provider component refuses with `dependency_names_component` and prints the corrected `interface` line.
+  A track no loaded component provides refuses at boot with `interface_not_provided`, blaming the consumer, before any artifact is compiled.
+  A component's own `provides` claim never satisfies its own dependency; that refuses with `self_interface_dependency`.
+  The `[policy].capabilities` allowlist bounds capability keys only; the operator authorizes a provided interface through the provider's `[implements]` row instead (see [ADR-0018](adr/0018-one-operator-policy-surface.md) and [ADR-0021](adr/0021-provides-and-implements.md)).
+  Calling the provider is stage 3 of the epic (#206); until it lands, the dependency resolves and refuses correctly, and the interface is not yet callable from the consumer's world.
 - **`provides` is a claim, not authorization.**
   The engine walks the compiled component's exports before instantiation and refuses a claim no interface-instance export satisfies.
   A verified claim still does not load on its own: the operator binds the interface's compatibility track to one `[[modules]].id` in the `engine.toml` `[implements]` table, with a digest pin for the artifact, and an unbound or unpinned implementer refuses at boot.
@@ -84,7 +98,7 @@ Key design points:
   See [ADR-0021](adr/0021-provides-and-implements.md).
 - **The `[dependencies]` table is mandatory.**
   A manifest with no table at all is refused; an empty table is valid and grants nothing.
-  `hosts` qualifies the `http` dependency and nothing else, and it is refused anywhere else rather than silently dropped.
+  `hosts` qualifies the `http` capability dependency and nothing else, and it is refused anywhere else, including on an interface entry, rather than silently dropped.
 - **Chain ids are declared per subscription**, not in a top-level `[chains]` table.
   Each `[[subscription]]` names its own `chain_id`.
   If `engine.toml` carries no `[chains.<id>]` entry for a chain a subscription names, the engine refuses the boot in the prepass, before any component is compiled.

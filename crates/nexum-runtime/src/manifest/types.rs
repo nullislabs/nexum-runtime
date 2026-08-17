@@ -10,6 +10,7 @@ use serde::Deserialize;
 
 use super::error::ParseError;
 use crate::host_pattern::HostPattern;
+use crate::interface_id::InterfaceTrack;
 
 /// Core capability names: the `nexum:host` interfaces linked into every
 /// module. `http` is gated separately (it gates `wasi:http/*`), and
@@ -233,8 +234,9 @@ pub struct ResourceSection {
     pub max_state_bytes: Option<u64>,
 }
 
-/// `[dependencies]`: each key names a host capability or a service, and
-/// its table carries the attributes that qualify it.
+/// `[dependencies]`: each key names a host capability, or is the author's
+/// alias for a provided interface when the entry carries `interface`; the
+/// table carries the attributes that qualify it.
 pub type DependencySection = BTreeMap<String, Dependency>;
 
 /// One dependency's attributes. `deny_unknown_fields` so a misspelled
@@ -246,6 +248,11 @@ pub struct Dependency {
     /// it; load refuses it anywhere else.
     #[serde(default)]
     pub hosts: Vec<String>,
+    /// The provided interface this dependency resolves against, as a
+    /// compatibility track. Present, the key is the alias the author's
+    /// own code calls; absent, the key names a host capability.
+    #[serde(default)]
+    pub interface: Option<String>,
 }
 
 /// Validated manifest: every value check has run, so each field carries
@@ -260,8 +267,12 @@ pub struct LoadedManifest {
     pub provides: Option<crate::interface_id::InterfaceId>,
     /// `[component.resources]` overrides.
     pub resources: ResourceSection,
-    /// `[dependencies]`; presence is validated, an absent table refuses.
+    /// `[dependencies]` entries naming capabilities; presence of the
+    /// table is validated, an absent table refuses.
     pub dependencies: DependencySection,
+    /// `[dependencies]` entries naming provided interfaces: the author's
+    /// alias mapped to the requested compatibility track.
+    pub interfaces: BTreeMap<String, InterfaceTrack>,
     /// Hosts wasi:http outgoing requests may target, each parsed from an
     /// exact hostname or a `*.suffix` wildcard entry.
     pub http_allowlist: Vec<HostPattern>,
@@ -279,9 +290,10 @@ impl TryFrom<Manifest> for LoadedManifest {
     type Error = ParseError;
 
     /// Every context-free value check, in order: name, digest,
-    /// subscriptions, then `[dependencies]` presence. The registry
-    /// cross-check and the `hosts` placement check stay in `load`, which
-    /// holds the registry and refuses an unknown name first.
+    /// subscriptions, then `[dependencies]` presence and the interface
+    /// split. The registry cross-check moves to `resolve_dependencies`,
+    /// which holds the registry and the provided set and refuses an
+    /// unknown name first.
     fn try_from(manifest: Manifest) -> Result<Self, ParseError> {
         // The only producer of a `ModuleId`.
         let name = crate::module_id::ModuleId::parse(&manifest.component.name)?;
@@ -311,9 +323,36 @@ impl TryFrom<Manifest> for LoadedManifest {
             .zip(1..)
             .map(|(table, index)| Subscription::from_table(index, table))
             .collect::<Result<Vec<_>, _>>()?;
-        let dependencies = manifest
+        let raw_dependencies = manifest
             .dependencies
             .ok_or(ParseError::MissingCapabilities)?;
+        let mut dependencies = DependencySection::new();
+        let mut interfaces = BTreeMap::new();
+        for (name, dep) in raw_dependencies {
+            let Some(raw_track) = dep.interface.as_deref() else {
+                dependencies.insert(name, dep);
+                continue;
+            };
+            let track = InterfaceTrack::parse(raw_track).map_err(|source| {
+                ParseError::InvalidInterfaceTrack {
+                    dependency: name.clone(),
+                    source,
+                }
+            })?;
+            // `hosts` qualifies the http capability dependency; an
+            // interface dependency never takes it. The `http` key itself
+            // is exempt: telling the author that `http` does not take
+            // `hosts` would contradict the documented rule, and the real
+            // defect there is the capability-named alias, which
+            // `resolve_dependencies` refuses as such.
+            if !dep.hosts.is_empty() && name != nexum_world::Cap::Http.as_str() {
+                return Err(ParseError::MisplacedDependencyAttribute {
+                    dependency: name,
+                    attribute: "hosts",
+                });
+            }
+            interfaces.insert(name, track);
+        }
         let http_allowlist = dependencies
             .get(nexum_world::Cap::Http.as_str())
             .map(|dep| {
@@ -334,6 +373,7 @@ impl TryFrom<Manifest> for LoadedManifest {
             provides,
             resources: manifest.component.resources,
             dependencies,
+            interfaces,
             http_allowlist,
             config,
             subscriptions,

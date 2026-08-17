@@ -7,12 +7,13 @@
 //! io/clocks/random and `wasi:cli` are ambient; any other `wasi:` interface
 //! is refused fail-closed.
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 
 use nexum_world::WasiCap;
 
 use super::error::{CapabilityError, CapabilityViolation};
 use super::types::{CORE_CAPABILITIES, LoadedManifest};
+use crate::interface_id::InterfaceTrack;
 
 /// A WIT namespace prefix plus the interface names under it that are
 /// capabilities.
@@ -122,6 +123,51 @@ impl CapabilityRegistry {
             }
         }
         None
+    }
+}
+
+/// Every `provides` claim in the loaded set, keyed by compatibility
+/// track, collected before any artifact is compiled. Unlike the
+/// registry's `&'static` names these are owned: a provided interface is
+/// read from a manifest at boot. Kept apart from [`CapabilityRegistry`]
+/// because a track never resolves as a dependency key, only through a
+/// dependency's `interface` value.
+#[derive(Clone, Debug, Default)]
+pub struct ProvidedInterfaces {
+    /// Track to the provider's `[component].name`.
+    tracks: BTreeMap<InterfaceTrack, String>,
+    /// The provider's `[component].name` to its claimed track.
+    components: BTreeMap<String, InterfaceTrack>,
+}
+
+impl ProvidedInterfaces {
+    /// Record a component's claim. A duplicate track refuses in the
+    /// prepass ledger before this map is built.
+    pub fn insert(&mut self, track: InterfaceTrack, component: &str) {
+        self.components.insert(component.to_owned(), track.clone());
+        self.tracks.insert(track, component.to_owned());
+    }
+
+    /// True when a loaded component provides `track`.
+    pub fn provides(&self, track: &InterfaceTrack) -> bool {
+        self.tracks.contains_key(track)
+    }
+
+    /// The track `component` provides, when it is a loaded provider.
+    pub fn track_of(&self, component: &str) -> Option<&InterfaceTrack> {
+        self.components.get(component)
+    }
+
+    /// For error messages: the provided tracks, or `none`.
+    pub fn known_tracks(&self) -> String {
+        if self.tracks.is_empty() {
+            return "none".to_owned();
+        }
+        self.tracks
+            .keys()
+            .map(InterfaceTrack::as_str)
+            .collect::<Vec<_>>()
+            .join(", ")
     }
 }
 
@@ -254,6 +300,7 @@ mod tests {
                 .iter()
                 .map(|s| ((*s).to_owned(), Dependency::default()))
                 .collect(),
+            interfaces: Default::default(),
             http_allowlist: vec![],
             config: vec![],
             subscriptions: vec![],

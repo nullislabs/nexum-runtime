@@ -7,6 +7,8 @@ status: superseded in part by 0017-capabilities-and-services.md, 0019-modules-re
 > Amendment: this record was edited after acceptance.
 > [ADR-0020](0020-retire-component-kind.md) retired the `[component].kind` field: a component states its identity and its dependencies, and nothing classifies the component itself.
 > The word `kind` in the title is superseded, and the `kind` rule and examples in the Decision and the two Consequences that turn on the kind carry marks in place.
+> The consumer side of services (#205, [ADR-0021](0021-provides-and-implements.md)) superseded the dependency-resolution rule below: a dependency key names a host capability only, and a component's service is named by the `interface` value under an author-chosen alias key.
+> The bareword service dependency in the example, `acme-status = {}`, now refuses at boot with the corrected `interface` line.
 
 ## Context
 
@@ -64,6 +66,8 @@ kind = "service"
 A dependency names a host capability or another component's service.
 The engine resolves the name against the core capability table first, then the registered services.
 The two sets may not collide, which world synthesis already enforces.
+Superseded by [ADR-0021](0021-provides-and-implements.md) (#205): a dependency key names a host capability only, and a service is named by the `interface` value under an alias key, so `acme-status = {}` above now refuses.
+The capability-table-first order survives as the rule that an interface alias may not shadow a capability name.
 
 A dependency is a table, so an attribute belongs to the thing it qualifies.
 The outbound HTTP allowlist becomes `hosts` on the `http` dependency rather than a separate section.

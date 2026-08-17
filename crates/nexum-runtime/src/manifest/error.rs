@@ -64,6 +64,66 @@ pub enum ParseError {
         #[source]
         source: crate::interface_id::InvalidInterfaceId,
     },
+    /// A dependency's `interface` value that is not a compatibility track.
+    /// A full version is refused too: a consumer asks for compatibility,
+    /// and the provider's exact version is the provider's business.
+    #[error("manifest: [dependencies].{dependency}: {source}")]
+    InvalidInterfaceTrack {
+        /// The dependency carrying the value.
+        dependency: String,
+        #[source]
+        source: crate::interface_id::InvalidInterfaceTrack,
+    },
+    /// An interface dependency whose alias is a capability name. The
+    /// capability table resolves first, so the alias would shadow it.
+    #[error(
+        "manifest: [dependencies].{dependency} declares an interface under a \
+         capability's name; rename the alias (capabilities: {known})"
+    )]
+    AliasShadowsCapability {
+        /// The colliding alias.
+        dependency: String,
+        /// Comma-joined recognized capability names.
+        known: String,
+    },
+    /// A dependency naming a component where an interface belongs.
+    #[error(
+        "manifest: [dependencies].{dependency} names a component, not an \
+         interface; that component provides {interface}, so write \
+         {dependency} = {{ interface = \"{interface}\" }}"
+    )]
+    DependencyNamesComponent {
+        /// The component name written as a dependency.
+        dependency: String,
+        /// The track the named component provides.
+        interface: crate::interface_id::InterfaceTrack,
+    },
+    /// An interface dependency the declaring component's own `provides`
+    /// claim satisfies. The prepass refuses a second claimant of one
+    /// track, so the only provider is the consumer itself.
+    #[error(
+        "manifest: [dependencies].{dependency} depends on interface \
+         {interface}, which this component itself provides"
+    )]
+    SelfInterfaceDependency {
+        /// The declaring alias.
+        dependency: String,
+        /// The requested track.
+        interface: crate::interface_id::InterfaceTrack,
+    },
+    /// A dependency on a compatibility track no loaded component provides.
+    #[error(
+        "manifest: [dependencies].{dependency} depends on interface \
+         {interface} but no loaded component provides it (provided: {provided})"
+    )]
+    InterfaceNotProvided {
+        /// The declaring alias.
+        dependency: String,
+        /// The requested track.
+        interface: crate::interface_id::InterfaceTrack,
+        /// Comma-joined provided tracks, or `none`.
+        provided: String,
+    },
     /// A `[[subscription]]` table without a string `kind`.
     #[error("manifest: [[subscription]] table {index} must declare a string `kind`")]
     MissingSubscriptionKind {

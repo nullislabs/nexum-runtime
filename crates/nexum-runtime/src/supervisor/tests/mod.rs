@@ -6,6 +6,7 @@ mod cursors;
 mod digest;
 mod dispatch;
 mod e2e;
+mod interface_deps;
 mod ledger;
 mod lifecycle;
 mod provides;

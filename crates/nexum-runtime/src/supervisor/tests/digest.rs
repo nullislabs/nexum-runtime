@@ -57,8 +57,7 @@ fn read_verified_component_requires_a_digest_when_the_flag_is_set() {
 #[test]
 fn read_verified_component_verifies_the_committed_pinned_fixture() {
     let (wat, manifest) = pinned_fixture();
-    let loaded = manifest::load(&manifest, &CapabilityRegistry::core())
-        .expect("the committed fixture manifest loads");
+    let loaded = manifest::load(&manifest).expect("the committed fixture manifest loads");
     let declared = loaded
         .component_digest
         .expect("the fixture manifest carries a pin");

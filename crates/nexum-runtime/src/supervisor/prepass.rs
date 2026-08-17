@@ -12,7 +12,9 @@ use tracing::{info, warn};
 use super::store::{ResolvedLimits, resolve_module_limits};
 use crate::engine_config::{EngineConfig, PolicySection};
 use crate::interface_id::{InterfaceId, InterfaceTrack};
-use crate::manifest::{self, CapabilityRegistry, LoadedManifest, ParseError, Subscription};
+use crate::manifest::{
+    self, CapabilityRegistry, LoadedManifest, ParseError, ProvidedInterfaces, Subscription,
+};
 use crate::module_id::ModuleId;
 use crate::refusal::{Refusal, RefusalContext as _};
 
@@ -190,12 +192,11 @@ pub(super) fn manifest_namespace(loaded: &LoadedManifest) -> ModuleId {
 pub(super) fn load_required_manifest(
     component: &Path,
     explicit: Option<&Path>,
-    registry: &CapabilityRegistry,
 ) -> Result<LoadedManifest, BootRefusal> {
     match resolve_manifest_path(component, explicit).as_deref() {
         Some(p) if p.exists() => {
             info!(manifest = %p.display(), "loading component manifest");
-            Ok(manifest::load(p, registry)?)
+            Ok(manifest::load(p)?)
         }
         // Explicit paths only: sibling discovery requires `.exists()`.
         Some(p) => Err(BootRefusal::ManifestNotFound {
@@ -319,9 +320,23 @@ pub(super) fn enforce_total_reservation<'a>(
     Ok(())
 }
 
-/// Every manifest loaded, every name claimed, every subscribed chain gated,
-/// and the reservation sum bounded, in `engine.toml` order. Limits resolve
-/// once here; `load::module` reuses them, so a clamp warns once per field.
+/// Every `provides` claim in `manifests`, for dependency resolution.
+pub(super) fn provided_interfaces<'a>(
+    manifests: impl IntoIterator<Item = &'a LoadedManifest>,
+) -> ProvidedInterfaces {
+    let mut provided = ProvidedInterfaces::default();
+    for loaded in manifests {
+        if let Some(claim) = &loaded.provides {
+            provided.insert(claim.track(), loaded.name.as_str());
+        }
+    }
+    provided
+}
+
+/// Every manifest loaded, every name claimed, every dependency resolved,
+/// every subscribed chain gated, and the reservation sum bounded, in
+/// `engine.toml` order. Limits resolve once here; `load::module` reuses
+/// them, so a clamp warns once per field.
 pub(super) fn run(
     engine_cfg: &EngineConfig,
     registry: &CapabilityRegistry,
@@ -331,21 +346,32 @@ pub(super) fn run(
     let configured_chains = ConfiguredChains::from_config(engine_cfg);
     let mut manifests = Vec::new();
     for entry in &engine_cfg.modules {
-        let loaded = load_required_manifest(&entry.path, entry.manifest.as_deref(), registry)
+        let loaded = load_required_manifest(&entry.path, entry.manifest.as_deref())
             .with_refusal_context(|| format!("load module {}", entry.path.display()))?;
         let namespace = manifest_namespace(&loaded);
         claim_namespace(&mut ledger, namespace.as_str(), &entry.path)?;
         if let Some(claim) = &loaded.provides {
             claim_interface(&mut interfaces, claim, &entry.path)?;
         }
-        enforce_subscriptions(namespace.as_str(), &loaded, &configured_chains)
-            .with_refusal_context(|| format!("load module {}", entry.path.display()))?;
         let limits = resolve_module_limits(
             &entry.id,
             &loaded.resources,
             &engine_cfg.policy.for_component(&entry.id).ceilings,
         );
         manifests.push((loaded, limits));
+    }
+    // Dependency resolution runs after every manifest is on the ledger,
+    // so an entry may depend on an interface a later entry provides, and
+    // a missing provider still refuses here, before any compile. The
+    // dependency check precedes the chain gate per entry, as it does on
+    // `boot_single`, so one manifest refuses the same class on both paths.
+    let provided = provided_interfaces(manifests.iter().map(|(loaded, _)| loaded));
+    for (entry, (loaded, _)) in engine_cfg.modules.iter().zip(&manifests) {
+        manifest::resolve_dependencies(loaded, registry, &provided)
+            .map_err(BootRefusal::from)
+            .with_refusal_context(|| format!("load module {}", entry.path.display()))?;
+        enforce_subscriptions(loaded.name.as_str(), loaded, &configured_chains)
+            .with_refusal_context(|| format!("load module {}", entry.path.display()))?;
     }
     enforce_total_reservation(
         &engine_cfg.policy,

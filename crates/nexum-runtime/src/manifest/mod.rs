@@ -10,10 +10,11 @@ mod error;
 mod load;
 mod types;
 
+pub(crate) use capabilities::ProvidedInterfaces;
 pub(crate) use capabilities::enforce_capabilities;
 pub use capabilities::{CapabilityRegistry, NamespaceCaps};
 pub(crate) use error::{CapabilityError, ParseError};
-pub(crate) use load::load;
+pub(crate) use load::{load, resolve_dependencies};
 pub use types::ExtensionSections;
 pub(crate) use types::{LoadedManifest, ResourceSection, Subscription};
 // CapabilityViolation and the *Section structs are

@@ -33,7 +33,9 @@ use crate::runtime::poison_policy::PoisonPolicy;
 use admission::{capability_registry, enforce_extension_uniqueness};
 use cursors::ChainLogCursors;
 use load::LoadedModule;
-use prepass::{enforce_subscriptions, load_required_manifest, manifest_namespace};
+use prepass::{
+    enforce_subscriptions, load_required_manifest, manifest_namespace, provided_interfaces,
+};
 
 /// Owns every loaded module.
 pub struct Supervisor<T: RuntimeTypes> {
@@ -128,8 +130,16 @@ impl<T: RuntimeTypes> Supervisor<T> {
         let booted: Result<Self, Refusal> = async {
             let shared = wire_extensions(engine, components, extensions, clocks)?;
             let registry = capability_registry(&shared.extensions);
-            let loaded_manifest =
-                load_required_manifest(&entry.path, entry.manifest.as_deref(), &registry)?;
+            let loaded_manifest = load_required_manifest(&entry.path, entry.manifest.as_deref())?;
+            // The single entry is the whole loaded set, and a component's
+            // own claim never satisfies its own dependency, so every
+            // interface dependency refuses on this path.
+            crate::manifest::resolve_dependencies(
+                &loaded_manifest,
+                &registry,
+                &provided_interfaces([&loaded_manifest]),
+            )
+            .map_err(BootRefusal::from)?;
             enforce_subscriptions(
                 manifest_namespace(&loaded_manifest).as_str(),
                 &loaded_manifest,

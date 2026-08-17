@@ -452,9 +452,12 @@ pub enum WorldError {
     NoManifestDir,
 }
 
-/// The declared dependency names from `[dependencies]` in the manifest
-/// text. A missing or malformed `[dependencies]` table is an
-/// error.
+/// The declared capability names from `[dependencies]` in the manifest
+/// text. An entry carrying `interface` is the author's alias for a
+/// provided interface, not a capability, so it is skipped: the runtime
+/// resolves it against the loaded set at boot, and the call wiring that
+/// would put an import in the world is not built yet (#206). A missing
+/// or malformed `[dependencies]` table is an error.
 pub fn manifest_capabilities(text: &str) -> Result<Vec<String>, WorldError> {
     let value: toml::Table = text.parse().map_err(|source| WorldError::NotToml {
         file: "component.toml",
@@ -467,12 +470,16 @@ pub fn manifest_capabilities(text: &str) -> Result<Vec<String>, WorldError> {
         .get("dependencies")
         .ok_or(WorldError::MissingDependencies)?;
     let table = deps.as_table().ok_or(WorldError::DependenciesNotATable)?;
+    let mut names = Vec::new();
     for (name, spec) in table {
-        if !spec.is_table() {
+        let Some(spec) = spec.as_table() else {
             return Err(WorldError::DependencyNotATable { name: name.clone() });
+        };
+        if spec.get("interface").is_none() {
+            names.push(name.clone());
         }
     }
-    Ok(table.keys().cloned().collect())
+    Ok(names)
 }
 
 /// The distinct chain-log `event_signature` topics from the manifest
@@ -1041,6 +1048,29 @@ http = { hosts = ["api.acme.example"] }
         .unwrap();
         // Keys come back sorted, since the table is a map and not a list.
         assert_eq!(caps, vec!["http", "logging"]);
+    }
+
+    /// The build-time twin of the runtime's dependency split: an entry
+    /// carrying `interface` is not a capability, so `synthesize` never
+    /// sees the alias and the module still compiles.
+    #[test]
+    fn manifest_capabilities_skips_interface_dependencies() {
+        let caps = manifest_capabilities(
+            r#"
+[component]
+name = "consumer"
+
+[dependencies]
+chain  = {}
+wallet = { interface = "acme:pool/quoter@2" }
+"#,
+        )
+        .unwrap();
+        assert_eq!(caps, vec!["chain"]);
+        assert!(
+            synthesize(&caps, &[]).is_ok(),
+            "the alias must not reach synthesize as an unknown dependency"
+        );
     }
 
     #[test]

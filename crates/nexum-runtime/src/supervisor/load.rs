@@ -288,7 +288,10 @@ pub(super) async fn instantiate_module<T: RuntimeTypes>(
 
 /// `[policy].capabilities` bounds what a manifest may declare, so the
 /// component's imports (already checked against the declared set) cannot
-/// exceed the operator grant either.
+/// exceed the operator grant either. Interface dependencies are outside
+/// it: the operator authorizes a provided interface through the
+/// provider's `[implements]` row, not through the consumer's grant
+/// (ADR-0018, amended).
 fn enforce_policy_capabilities(
     id: &str,
     loaded: &LoadedManifest,
@@ -381,10 +384,11 @@ fn enforce_implements<'a>(
 /// module `init` and `on-event` funcs.
 ///
 /// The match is nominal: name, kind and version, never the interface's
-/// surface, so an empty instance under the claimed name passes. Nothing
-/// in the engine holds the interface's WIT to compare against until WIT
-/// distribution lands with the consumer side (#205), which is also when a
-/// caller could first be misled by the gap.
+/// surface, so an empty instance under the claimed name passes. A
+/// consumer's dependency (#205) carries only a track, so nothing in the
+/// engine holds the interface's WIT to compare against until the call
+/// wiring lands (#206), which is also when a caller could first be
+/// misled by the gap.
 pub(super) fn enforce_provides<'a>(
     id: &str,
     path: &Path,

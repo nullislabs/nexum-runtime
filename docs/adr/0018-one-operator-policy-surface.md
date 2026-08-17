@@ -5,6 +5,10 @@ status: accepted
 # One operator policy surface
 
 > Amendment: this record was edited after acceptance.
+> The consumer side of provided interfaces (#205, [ADR-0021](0021-provides-and-implements.md)) added `[dependencies]` entries carrying `interface = "<track>"`, which did not exist when the Capabilities rule below was written.
+> The rule's "every `[dependencies]` key" covers capability keys only; an interface entry is outside the permitted set.
+> A capability is restricted and a service is selected ([ADR-0017](0017-capabilities-and-services.md)), so the two never share a config shape: the operator authorizes a provided interface through the provider's `[implements]` row, and without that row no provider loads and the consumer refuses at boot.
+> Whether the operator also gates which consumers may call a provided interface is a call-wiring question and lands with #206, not through this allowlist.
 > The per-dispatch fuel key was renamed, and the Decision text below carries the current name, `max_fuel_per_dispatch`.
 > `[limits.watch]` and `[limits.quota]` were retired and the per-dispatch deadline moved to `[limits.dispatch].deadline_secs`; the Decision text below carries the current names.
 > [ADR-0019](0019-modules-react-to-triggers.md) retired the export name `on-event`, and the Capabilities text below carries the decided name, `on-trigger`.
@@ -50,6 +54,7 @@ It fails closed by capacity, not by enumeration: a component the operator never 
 
 The effective permitted set for a component is the `capabilities` list of its `[policy.component]` row, else the `[policy]` list, else every capability the runtime supports.
 Every `[dependencies]` key the manifest declares must be in the permitted set, or the component refuses at boot.
+Amended per the note above: a `[dependencies]` entry carrying `interface` is outside the permitted set, and its authorization is the provider's `[implements]` row.
 The component's imports are already checked against the declared set, so the imports cannot exceed the operator grant either.
 A block or chain-log subscription delivers chain data through `on-trigger` without an import, so it also refuses when the permitted set excludes `chain`.
 The grant is whole or the component does not boot, per ADR-0001.
