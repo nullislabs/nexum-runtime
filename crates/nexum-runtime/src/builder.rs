@@ -247,25 +247,15 @@ impl<T: RuntimeTypes> AssembledRuntime<T> {
                      configured component, so it gets the [policy] defaults"
                 );
             }
-            if !engine_cfg.implements.is_empty() {
-                warn!(
-                    "ignoring engine.toml [implements] rows: the override is not a \
-                     configured component, so no binding can authorize it"
-                );
-            }
             // The override is not any configured component, and its file
             // stem is not an operator-written id, so no [policy.component]
             // row may bind to it (ADR-0018); the stem is display-only.
-            // [implements] binds on the same id column, so it is cleared
-            // for the same reason: a `provides` claimant refuses here.
             let policy = PolicySection {
                 component: Default::default(),
                 ..engine_cfg.policy.clone()
             };
-            let implements = crate::engine_config::ImplementsSection::default();
             let env = supervisor::BootEnv {
                 policy: &policy,
-                implements: &implements,
                 ..supervisor::BootEnv::from_config(engine_cfg)
             };
             let id = wasm
@@ -276,6 +266,9 @@ impl<T: RuntimeTypes> AssembledRuntime<T> {
                 id,
                 path: wasm,
                 manifest,
+                // No [[modules]] entry describes the override, so no
+                // operator pin can apply to it.
+                digest: None,
             };
             Supervisor::boot_single(
                 &engine,
@@ -1137,6 +1130,7 @@ mod tests {
             id: stem.clone(),
             path: dir.path().join("unrelated.wasm"),
             manifest: None,
+            digest: None,
         });
         config.policy.component.insert(
             stem,
@@ -1158,52 +1152,6 @@ mod tests {
             .expect("the row must not bind to the override");
         handle.shutdown();
         handle.wait().await.expect("clean shutdown");
-    }
-
-    /// As the policy-row rule above, for `[implements]`: the override's
-    /// file stem is author-controlled, so a row keyed to it must not
-    /// authorize the override's `provides` claim. The claimant refuses as
-    /// unbound rather than silently loading (ADR-0018).
-    #[tokio::test]
-    async fn a_module_source_override_never_binds_an_implements_row() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let wasm = dir.path().join("claimant.wasm");
-        std::fs::write(&wasm, b"never read: the refusal precedes the read").expect("write wasm");
-        let manifest = TestManifest::new("claimant")
-            .provides("acme:pool/quoter@2.0.0")
-            .write_to(dir.path());
-        let stem = "claimant".to_owned();
-
-        let mut config = EngineConfig::default();
-        config.engine.state_dir = dir.path().join("state");
-        config.modules.push(ModuleEntry {
-            id: stem.clone(),
-            path: dir.path().join("unrelated.wasm"),
-            manifest: None,
-        });
-        config.implements.insert(
-            crate::interface_id::InterfaceTrack::parse("acme:pool/quoter@2").expect("valid track"),
-            crate::engine_config::Implementer {
-                component: stem,
-                digest: None,
-            },
-        );
-
-        let err = RuntimeBuilder::new(&config)
-            .with_types::<CoreRuntime>()
-            .with_module_source(Some(wasm), Some(manifest))
-            .with_components(ComponentsBuilder::new(
-                ProviderPoolBuilder,
-                LocalStoreBuilder,
-            ))
-            .launch()
-            .await
-            .err()
-            .expect("an override claimant must refuse as unbound");
-        Refusal::from(err).variant::<crate::supervisor::LoadRefusal>(|e| {
-            matches!(e, crate::supervisor::LoadRefusal::ImplementerUnbound { bound, .. }
-                if bound == "nothing")
-        });
     }
 
     /// Every module failing `init` aborts launch instead of idling.

@@ -6,6 +6,11 @@ amends: 0017-capabilities-and-services.md, 0019-modules-react-to-triggers.md
 
 # A component declares no kind
 
+> Amendment: this record was edited after acceptance.
+> [ADR-0022](0022-cut-guest-to-guest-calling.md) removed `provides`, so the Context argument that `provides` would restate what the engine verifies is gone with it.
+> The retirement stands on the independent ground this record also states: nothing in the runtime branched on the parsed kind.
+> The affected sentences carry marks in place.
+
 ## Context
 
 [ADR-0016](0016-component-vocabulary.md) gave the manifest a `[component].kind` field spelled `module` or `service`.
@@ -17,6 +22,7 @@ Nothing in the runtime branches on the parsed kind.
 `ComponentKind` was parsed, validated, and stored, and its only readers were the tests that asserted the round trip.
 No manifest in the tree carries the field.
 `provides` (#207) will restate, per interface, what the engine already verifies, so `kind` would be a second author-written statement of a fact the engine derives.
+Superseded by [ADR-0022](0022-cut-guest-to-guest-calling.md): `provides` was removed, so the sentence above no longer supports this retirement; the no-reader ground above does.
 A fact the engine derives must not also be author-declared, because two sources can disagree and each disagreement forces a precedence rule, a refusal, or a silent winner.
 
 ## Decision
@@ -74,3 +80,4 @@ Its header now marks both as retired, so the #207 plan must not reintroduce the 
   `nexum-world` reads `component.toml` untyped, so a stale manifest still compiles its wasm and refuses only when the engine loads it.
 - #207 adds `provides` and the verification of it.
   This record clears the field ahead of that work and adds nothing in its place.
+  Superseded by [ADR-0022](0022-cut-guest-to-guest-calling.md): the #207 work shipped and was then cut; the cleared field stays cleared.

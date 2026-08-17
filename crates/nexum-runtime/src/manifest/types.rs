@@ -201,11 +201,6 @@ pub(crate) struct ComponentSection {
     /// bytes before compile.
     #[serde(default)]
     pub digest: Option<String>,
-    /// The interface this component exports, as a full interface id. A
-    /// claim, not a fact: load verifies it against the real exports, and
-    /// only an operator `[implements]` row authorizes it (ADR-0001).
-    #[serde(default)]
-    pub provides: Option<String>,
     /// Per-component resource requests; each unset field inherits the
     /// component's `[policy]` ceiling and never widens it.
     #[serde(default)]
@@ -233,8 +228,8 @@ pub struct ResourceSection {
     pub max_state_bytes: Option<u64>,
 }
 
-/// `[dependencies]`: each key names a host capability or a service, and
-/// its table carries the attributes that qualify it.
+/// `[dependencies]`: each key names a host capability, and its table
+/// carries the attributes that qualify it.
 pub type DependencySection = BTreeMap<String, Dependency>;
 
 /// One dependency's attributes. `deny_unknown_fields` so a misspelled
@@ -256,8 +251,6 @@ pub struct LoadedManifest {
     pub name: crate::module_id::ModuleId,
     /// `[component].digest` parsed to its typed digest.
     pub component_digest: Option<crate::digest::ContentDigest>,
-    /// `[component].provides` parsed to its typed interface id.
-    pub provides: Option<crate::interface_id::InterfaceId>,
     /// `[component.resources]` overrides.
     pub resources: ResourceSection,
     /// `[dependencies]`; presence is validated, an absent table refuses.
@@ -295,16 +288,6 @@ impl TryFrom<Manifest> for LoadedManifest {
                 value: manifest.component.digest.clone().unwrap_or_default(),
                 source,
             })?;
-        let provides = manifest
-            .component
-            .provides
-            .as_deref()
-            .map(crate::interface_id::InterfaceId::parse)
-            .transpose()
-            .map_err(|source| ParseError::InvalidInterfaceId {
-                value: manifest.component.provides.clone().unwrap_or_default(),
-                source,
-            })?;
         let subscriptions = manifest
             .subscriptions
             .into_iter()
@@ -331,7 +314,6 @@ impl TryFrom<Manifest> for LoadedManifest {
         Ok(Self {
             name,
             component_digest,
-            provides,
             resources: manifest.component.resources,
             dependencies,
             http_allowlist,

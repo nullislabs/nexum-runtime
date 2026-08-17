@@ -1,5 +1,5 @@
 ---
-status: superseded in part by 0017-capabilities-and-services.md, 0019-modules-react-to-triggers.md, and 0020-retire-component-kind.md
+status: superseded in part by 0017-capabilities-and-services.md, 0019-modules-react-to-triggers.md, 0020-retire-component-kind.md, and 0022-cut-guest-to-guest-calling.md
 ---
 
 # A component declares a kind and its dependencies
@@ -7,6 +7,7 @@ status: superseded in part by 0017-capabilities-and-services.md, 0019-modules-re
 > Amendment: this record was edited after acceptance.
 > [ADR-0020](0020-retire-component-kind.md) retired the `[component].kind` field: a component states its identity and its dependencies, and nothing classifies the component itself.
 > The word `kind` in the title is superseded, and the `kind` rule and examples in the Decision and the two Consequences that turn on the kind carry marks in place.
+> [ADR-0022](0022-cut-guest-to-guest-calling.md) cut guest-to-guest calling: the Decision clause that a dependency names another component's service is retired, and it carries a mark in place.
 
 ## Context
 
@@ -62,6 +63,7 @@ kind = "service"
 ```
 
 A dependency names a host capability or another component's service.
+Superseded by [ADR-0022](0022-cut-guest-to-guest-calling.md): the service half is retired, and a dependency names a host capability.
 The engine resolves the name against the core capability table first, then the registered services.
 The two sets may not collide, which world synthesis already enforces.
 

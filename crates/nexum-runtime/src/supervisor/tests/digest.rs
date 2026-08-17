@@ -40,6 +40,31 @@ fn read_verified_component_rejects_a_mismatched_digest() {
 }
 
 #[test]
+fn read_verified_component_rejects_a_mismatched_operator_pin() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("tampered.wasm");
+    std::fs::write(&path, b"not the pinned bytes").expect("write artifact");
+
+    let engine = test_wasmtime_engine();
+    let declared = wrong_digest();
+    let pins = DigestPolicy {
+        operator: Some(&declared),
+        author: None,
+        require_author: false,
+    };
+    let err = read_verified_component(&engine, &path, pins)
+        .err()
+        .expect("a mismatched operator pin must refuse the component");
+    Refusal::from(err)
+        .variant::<DigestMismatch>(|e| {
+            e.pin == crate::digest::DigestPin::Operator && e.declared == declared
+        })
+        // Operator wording pin: the fix is in engine.toml, not the manifest.
+        .names("[[modules]].digest in engine.toml")
+        .lacks("compile");
+}
+
+#[test]
 fn read_verified_component_requires_a_digest_when_the_flag_is_set() {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("unpinned.wasm");
@@ -49,6 +74,27 @@ fn read_verified_component_requires_a_digest_when_the_flag_is_set() {
     let err = read_verified_component(&engine, &path, DigestPolicy::author(None, true))
         .err()
         .expect("an unpinned artifact must refuse under the flag");
+    Refusal::from(err)
+        .variant::<LoadRefusal>(|e| matches!(e, LoadRefusal::DigestUnpinned { .. }))
+        .lacks("compile");
+}
+
+#[test]
+fn read_verified_component_requires_an_author_pin_despite_an_operator_pin() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("operator-pinned.wasm");
+    std::fs::write(&path, b"operator pinned bytes").expect("write artifact");
+
+    let engine = test_wasmtime_engine();
+    let matching = ContentDigest::of_bytes(b"operator pinned bytes");
+    let pins = DigestPolicy {
+        operator: Some(&matching),
+        author: None,
+        require_author: true,
+    };
+    let err = read_verified_component(&engine, &path, pins)
+        .err()
+        .expect("a matching operator pin must not satisfy the author-pin flag");
     Refusal::from(err)
         .variant::<LoadRefusal>(|e| matches!(e, LoadRefusal::DigestUnpinned { .. }))
         .lacks("compile");
@@ -185,12 +231,94 @@ async fn e2e_boot_single_accepts_a_matching_pinned_digest() {
 }
 
 #[tokio::test]
+async fn boot_refuses_a_mismatched_operator_pin_before_compile() {
+    let scenario = BootScenario::new();
+    let wasm = scenario.dir().join("module.wasm");
+    std::fs::write(&wasm, b"drifted artifact bytes").expect("write artifact");
+    scenario
+        .module(
+            Entry::new(TestManifest::new("pinned-wrong"))
+                .wasm(wasm)
+                .digest(wrong_digest()),
+        )
+        .expect_refusal()
+        .await
+        .variant::<DigestMismatch>(|e| {
+            e.pin == crate::digest::DigestPin::Operator
+                && e.declared == wrong_digest()
+                && e.actual == ContentDigest::of_bytes(b"drifted artifact bytes")
+        })
+        .names("[[modules]].digest in engine.toml")
+        .lacks("compile");
+}
+
+/// Both pins present and disagreeing: at most one matches the bytes, so
+/// the artifact refuses; the operator's expectation is reported first.
+#[tokio::test]
+async fn disagreeing_operator_and_author_pins_refuse() {
+    let scenario = BootScenario::new();
+    let wasm = scenario.dir().join("torn.wasm");
+    std::fs::write(&wasm, b"torn pin bytes").expect("write artifact");
+    let actual = ContentDigest::of_bytes(b"torn pin bytes");
+    scenario
+        .module(
+            Entry::new(TestManifest::new("torn-pins").component_digest(actual.to_string()))
+                .wasm(wasm)
+                .digest(wrong_digest()),
+        )
+        .expect_refusal()
+        .await
+        .variant::<DigestMismatch>(|e| {
+            e.pin == crate::digest::DigestPin::Operator
+                && e.declared == wrong_digest()
+                && e.actual == actual
+        })
+        .lacks("compile");
+}
+
+#[tokio::test]
+async fn e2e_boot_accepts_a_matching_operator_pin() {
+    let Some(wasm) = example_wasm_or_skip() else {
+        return;
+    };
+    let digest = ContentDigest::of_bytes(&std::fs::read(&wasm).expect("read example wasm"));
+    let booted = BootScenario::new()
+        .module(
+            Entry::new(TestManifest::new("example").cap("logging"))
+                .wasm(wasm)
+                .digest(digest),
+        )
+        .boot()
+        .await
+        .expect("a matching operator pin boots");
+    assert_eq!(booted.supervisor.alive_count(), 1);
+}
+
+#[tokio::test]
 async fn boot_requires_a_module_digest_when_the_engine_flag_is_set() {
     let scenario = BootScenario::new().require_digest();
     let wasm = scenario.dir().join("module.wasm");
     std::fs::write(&wasm, b"unpinned artifact bytes").expect("write artifact");
     scenario
         .module(Entry::new(TestManifest::new("unpinned")).wasm(wasm))
+        .expect_refusal()
+        .await
+        .variant::<LoadRefusal>(|e| matches!(e, LoadRefusal::DigestUnpinned { .. }))
+        .lacks("compile");
+}
+
+#[tokio::test]
+async fn boot_requires_a_manifest_pin_despite_a_matching_operator_pin() {
+    let scenario = BootScenario::new().require_digest();
+    let wasm = scenario.dir().join("module.wasm");
+    std::fs::write(&wasm, b"operator pinned bytes").expect("write artifact");
+    let matching = ContentDigest::of_bytes(b"operator pinned bytes");
+    scenario
+        .module(
+            Entry::new(TestManifest::new("operator-pinned"))
+                .wasm(wasm)
+                .digest(matching),
+        )
         .expect_refusal()
         .await
         .variant::<LoadRefusal>(|e| matches!(e, LoadRefusal::DigestUnpinned { .. }))

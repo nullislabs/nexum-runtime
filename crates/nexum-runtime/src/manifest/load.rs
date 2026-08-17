@@ -747,47 +747,13 @@ max_fuel_per_dispatch = 100000
         assert_eq!(digest.to_string(), pin);
     }
 
+    /// The property ADR-0020 relied on for `kind`, now holding for the
+    /// `provides` field ADR-0022 retired: a stale manifest refuses at
+    /// parse rather than silently ignoring the claim.
     #[test]
-    fn load_parses_a_valid_provides_claim_and_round_trips() {
-        let loaded = load_inline(&digest_manifest("provides = \"nexum:wallet/signer@2.0.0\""))
-            .expect("valid provides loads");
-        let claim = loaded.provides.expect("provides parsed");
-        assert_eq!(claim.to_string(), "nexum:wallet/signer@2.0.0");
-    }
-
-    #[test]
-    fn load_defaults_an_absent_provides_to_none() {
-        let loaded = load_inline(&digest_manifest("")).expect("absent provides loads");
-        assert!(loaded.provides.is_none());
-    }
-
-    #[test]
-    fn load_rejects_a_malformed_provides_claim() {
-        for (label, bad) in [
-            ("truncated version", "nexum:wallet/signer@2.0"),
-            ("bare major", "nexum:wallet/signer@2"),
-            ("no version", "nexum:wallet/signer"),
-            ("no package", "signer@2.0.0"),
-            ("no namespace", "wallet/signer@2.0.0"),
-            ("no interface", "nexum:wallet@2.0.0"),
-            ("empty", ""),
-        ] {
-            let err =
-                load_inline(&digest_manifest(&format!("provides = \"{bad}\""))).expect_err(label);
-            assert!(
-                matches!(err, ParseError::InvalidInterfaceId { ref value, .. } if value == bad),
-                "{label}: {err:?}",
-            );
-        }
-    }
-
-    /// The property ADR-0020 relied on for `kind`: a stale engine reading
-    /// a `provides` manifest refuses at parse rather than silently
-    /// ignoring the claim; here its neighbour, a misspelt `provides`.
-    #[test]
-    fn load_rejects_a_misspelt_provides_key() {
-        let err = load_inline(&digest_manifest("provdes = \"nexum:wallet/signer@2.0.0\""))
-            .expect_err("an unknown [component] key must refuse");
+    fn load_rejects_a_retired_provides_key() {
+        let err = load_inline(&digest_manifest("provides = \"nexum:wallet/signer@2.0.0\""))
+            .expect_err("the retired [component].provides key must refuse");
         assert!(
             matches!(&err, ParseError::Toml(e) if e.to_string().contains("unknown")),
             "{err:?}",

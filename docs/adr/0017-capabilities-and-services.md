@@ -8,8 +8,11 @@ supersedes: 0016-component-vocabulary.md (in part)
 > Amendment: this record was edited after acceptance.
 > [ADR-0020](0020-retire-component-kind.md) retired the `[component].kind` field.
 > The Context sentence below, "a component declares a kind and its dependencies", now stands only for the dependencies half.
-> The three concepts this record settles are unchanged.
-> [ADR-0021](0021-provides-and-implements.md) fixes the shapes the Decision below leaves open: the `provides` grammar, the track-keyed `[implements]` row with its digest, and the refusals each gap raises.
+> [ADR-0021](0021-provides-and-implements.md) fixed the shapes the Decision below leaves open, and [ADR-0022](0022-cut-guest-to-guest-calling.md) then cut guest-to-guest calling entirely: `provides`, the `[implements]` table, and the service edge below are gone from the tree.
+> The Service concept below is therefore vocabulary without machinery, kept for the record.
+> The deletion under "What this deletes" (#233) was argued partly on a replacement ADR-0022 removed; it now stands on its independent merits, marked in place below.
+> A host-calls-guest seam is expected to return for the plugin engine; adding one is not re-litigating that deletion, because the defects that justified it were in the deleted path itself, not in host-calls-guest as such.
+> The `wac` alternative under "Alternatives rejected" carries a mark in place: its union-of-imports ground is superseded, and the rejection stands on ADR-0022's store-scoped grounds.
 
 ## Context
 
@@ -64,6 +67,8 @@ The operator already records it, in the `[implements]` binding.
 
 So `ServiceKind`, `ServiceInstance`, `HostService`, `Extension::provider`, `Extension::service`, `ServiceKinds` and the parallel admission path they drive are removed.
 An extension that needs a guest component to implement its capability declares that interface and lets the operator bind a service to it, through the same mechanism every other service edge uses.
+Superseded by [ADR-0022](0022-cut-guest-to-guest-calling.md): the service-edge replacement in the sentence above no longer exists.
+The removal stands regardless, on grounds this record also states and that were independently real: the deleted path was an unused parallel admission path with a second registry, and #204 reported a shadowing defect in it.
 
 The one thing the deleted path can do that a service edge cannot is carry a resource handle, because a trampoline marshals plain data between two stores.
 The `nexum:host` WIT is deliberately resource-free, so nothing is lost.
@@ -95,3 +100,5 @@ One table cannot make that difference legible, and the engine must not treat the
 Rejected previously and still rejected.
 One component is one `Store`, and the memory ceiling, fuel, local-store namespace, restart window and capability grant all hang off that.
 Composed, a plugin with no chain grant is indistinguishable from a module that has one.
+Superseded ground, marked by [ADR-0022](0022-cut-guest-to-guest-calling.md): the indistinguishability sentence above rests on composed imports becoming the union of the parts, which is true of `wac` but no longer inherent to the Component Model since `implements` and `external-id` merged.
+The rejection stands, on the store-scoped grounds in ADR-0022's "One component is one `Store`, re-grounded": resource limits, fuel and epoch deadlines, and host-function caller identity are per-`Store` in wasmtime, under any composition mode.

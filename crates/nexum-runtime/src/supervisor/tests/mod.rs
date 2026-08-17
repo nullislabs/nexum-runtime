@@ -8,7 +8,6 @@ mod dispatch;
 mod e2e;
 mod ledger;
 mod lifecycle;
-mod provides;
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -108,15 +107,14 @@ async fn try_boot_single(
         id: "single".to_owned(),
         path: wasm.to_path_buf(),
         manifest: manifest.map(Path::to_path_buf),
+        digest: None,
     };
     let limits = ResolvedModuleLimits::default();
     let policy = PolicySection::default();
-    let implements = crate::engine_config::ImplementsSection::default();
     let env = BootEnv {
         limits: &limits,
         policy: &policy,
         configured_chains: test_chains(),
-        implements: &implements,
         require_component_digest: require_digest,
     };
     let result = Supervisor::boot_single(

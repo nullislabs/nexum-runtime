@@ -92,8 +92,8 @@ pub enum DigestParseError {
 /// send the operator to edit the wrong one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, derive_more::Display)]
 pub enum DigestPin {
-    /// `[implements].<track>.digest`, in the trusted `engine.toml`.
-    #[display("[implements] digest in engine.toml")]
+    /// `[[modules]].digest`, in the trusted `engine.toml`.
+    #[display("[[modules]].digest in engine.toml")]
     Operator,
     /// `[component].digest`, in the author-supplied manifest.
     #[display("[component].digest in the manifest")]
@@ -228,6 +228,6 @@ mod tests {
         // wording must not serve both.
         assert!(msg.contains("[component].digest in the manifest"), "{msg}");
         let msg = message(DigestPin::Operator);
-        assert!(msg.contains("[implements] digest in engine.toml"), "{msg}");
+        assert!(msg.contains("[[modules]].digest in engine.toml"), "{msg}");
     }
 }
