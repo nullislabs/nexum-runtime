@@ -2,6 +2,7 @@
 name = "price-alert"
 version = "0.1.0"
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "Example module: polls a Chainlink price oracle every block and emits a Warn log when the price crosses a config-supplied threshold."

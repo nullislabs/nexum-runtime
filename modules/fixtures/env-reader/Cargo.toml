@@ -2,6 +2,7 @@
 name = "env-reader"
 version = "0.1.0"
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "Test fixture: on every event counts the guest-visible environment variables, process arguments, and stdin bytes through std and logs all three. Lets a test assert the guest observes an empty wasi:cli/environment and an empty wasi:cli/stdin end to end."

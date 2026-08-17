@@ -2,6 +2,7 @@
 name = "http-probe"
 version = "0.1.0"
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "Example module: fetches an allowlisted URL over wasi:http on every block and verifies the off-list path is denied."
