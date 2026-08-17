@@ -94,7 +94,7 @@ pub enum BootRefusal {
         /// The chains engine.toml declares.
         configured: BTreeSet<u64>,
     },
-    /// N in-ceiling components can still oversubscribe the host together;
+    /// N in-ceiling components can still overcommit the host together;
     /// `[policy.total]` bounds the declared sum.
     #[error(
         "component {id} takes the summed memory reservation to {sum} bytes, \
@@ -219,7 +219,7 @@ impl ConfiguredChains {
 
 /// Refuse any trigger naming a chain absent from `[chains]`, before any
 /// guest code runs.
-pub(super) fn enforce_triggers(
+pub(super) fn enforce_trigger_chains(
     name: &str,
     loaded: &LoadedManifest,
     chains: &ConfiguredChains,
@@ -293,7 +293,7 @@ pub(super) fn run(
             .with_refusal_context(|| format!("load module {}", entry.path.display()))?;
         let namespace = manifest_namespace(&loaded);
         claim_namespace(&mut ledger, namespace.as_str(), &entry.path)?;
-        enforce_triggers(namespace.as_str(), &loaded, &configured_chains)
+        enforce_trigger_chains(namespace.as_str(), &loaded, &configured_chains)
             .with_refusal_context(|| format!("load module {}", entry.path.display()))?;
         let limits = resolve_module_limits(
             &entry.id,

@@ -72,7 +72,7 @@ pub const METRICS: &[Metric] = &[
     Metric {
         name: "nexum_runtime_stream_reconnects_total",
         kind: Kind::Counter,
-        help: "Chain subscription reconnects by chain.",
+        help: "Stream reconnects by kind and chain; kind \"chain-log\" also carries module.",
     },
 ];
 

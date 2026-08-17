@@ -26,7 +26,7 @@ thiserror.workspace = true
 # Newtype boilerplate (`Display`, `AsRef`, `From`) for identity wrappers.
 derive_more.workspace = true
 # `strum::IntoStaticStr`: the snake_case variant name is the tracing
-# `source` field (`LogSource`) and the boot-refusal `error_kind` label.
+# `channel` field (`LogChannel`) and the boot-refusal `error_kind` label.
 strum.workspace = true
 # Full-semver interface ids and their compatibility tracks.
 semver.workspace = true

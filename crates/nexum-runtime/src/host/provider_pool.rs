@@ -161,9 +161,9 @@ impl ProviderPool {
         })
     }
 
-    /// Follow canonical block headers on `chain`: WS via
-    /// `eth_subscribe(newHeads)`, HTTP by polling at the chain's block time.
-    pub async fn subscribe_blocks(&self, chain: Chain) -> Result<BlockStream, PoolError> {
+    /// Canonical block headers on `chain`: WS via `eth_subscribe(newHeads)`,
+    /// HTTP by polling at the chain's block time.
+    pub async fn open_block_source(&self, chain: Chain) -> Result<BlockStream, PoolError> {
         let ep = self
             .providers
             .get(&chain)
@@ -197,7 +197,7 @@ impl ProviderPool {
     /// Canonical (reorg-aware) log stream on `chain` from `start_block`. Each
     /// item is one block's batch (possibly with no logs); reorg rollbacks
     /// carry `removed == true`.
-    pub fn watch_chain_logs(
+    pub fn open_event_source(
         &self,
         chain: Chain,
         filter: Filter,
@@ -311,11 +311,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn empty_pool_rejects_block_subscribe() {
+    async fn empty_pool_rejects_open_block_source() {
         let pool = ProviderPool::empty();
         // Can't use .unwrap_err() because BlockStream doesn't impl Debug.
         assert!(matches!(
-            pool.subscribe_blocks(Chain::from_id(1)).await,
+            pool.open_block_source(Chain::from_id(1)).await,
             Err(PoolError::UnknownChain(c)) if c == Chain::from_id(1)
         ));
     }
@@ -330,12 +330,12 @@ mod tests {
     }
 
     #[test]
-    fn empty_pool_rejects_watch_chain_logs() {
+    fn empty_pool_rejects_open_event_source() {
         let pool = ProviderPool::empty();
         let filter = alloy_rpc_types_eth::Filter::new();
         // Can't use .unwrap_err() because CanonicalLogStream doesn't impl Debug.
         assert!(matches!(
-            pool.watch_chain_logs(Chain::from_id(1), filter, 0),
+            pool.open_event_source(Chain::from_id(1), filter, 0),
             Err(PoolError::UnknownChain(c)) if c == Chain::from_id(1)
         ));
     }
@@ -521,10 +521,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn http_config_block_subscribe_takes_poll_path() {
+    async fn http_config_block_source_takes_poll_path() {
         use wiremock::{Mock, MockServer, ResponseTemplate, matchers::any};
 
-        // An HTTP transport has no pubsub, so `subscribe_blocks` must fall
+        // An HTTP transport has no pubsub, so `open_block_source` must fall
         // back to polling rather than erroring. The head fetch
         // (`eth_blockNumber`) is the only call made at setup - the block
         // poller stream is lazy - so one mocked response proves the poll
@@ -543,7 +543,7 @@ mod tests {
         // BlockStream doesn't impl Debug, so assert on `is_ok` rather than
         // unwrapping.
         assert!(
-            pool.subscribe_blocks(Chain::from_id(1)).await.is_ok(),
+            pool.open_block_source(Chain::from_id(1)).await.is_ok(),
             "http config should open the block poll path without erroring",
         );
     }

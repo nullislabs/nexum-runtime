@@ -78,14 +78,14 @@ pub(super) fn commit_chain_log_cursor<S: StateStore>(
                 warn!(
                     module = %module,
                     error = %e,
-                    "failed to persist chain-log cursor",
+                    "failed to persist event source cursor",
                 );
             }
         }
         Err(e) => warn!(
             module = %module,
             error = %e,
-            "failed to open module store for chain-log cursor",
+            "failed to open module store for event source cursor",
         ),
     }
 }

@@ -14,7 +14,7 @@ use crate::engine_config::{OutboundHttpLimits, PolicyCeilings};
 use crate::host::component::{RuntimeTypes, StateHandle, StateStore};
 use crate::host::extension::Extension;
 use crate::host::http::HttpGate;
-use crate::host::logs::{LogSource, RunId, StdioStream};
+use crate::host::logs::{LogChannel, RunId, StdioStream};
 use crate::host::state::HostState;
 use crate::host_pattern::HostPattern;
 use crate::manifest::ResourceSection;
@@ -181,12 +181,12 @@ fn build<T: RuntimeTypes>(
         .stdout(StdioStream::new(
             router.clone(),
             run.clone(),
-            LogSource::Stdout,
+            LogChannel::Stdout,
         ))
         .stderr(StdioStream::new(
             router.clone(),
             run.clone(),
-            LogSource::Stderr,
+            LogChannel::Stderr,
         ));
     if let Some(clocks) = &shared.clocks {
         builder.wall_clock(SharedWallClock(clocks.wall.clone()));

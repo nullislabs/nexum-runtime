@@ -21,7 +21,7 @@ use alloy_chains::Chain;
 use alloy_rpc_types_eth::{Header, Log};
 
 use super::clock::ManualClock;
-use super::manifest::ManifestSource;
+use super::manifest::ManifestInput;
 use super::rpc::FakeNode;
 use super::scenario::{BootScenario, Booted, Entry};
 use super::{HARNESS_POLL_INTERVAL, MockStateStore, MockTypes, Prebuilt};
@@ -35,7 +35,7 @@ use crate::host::logs::{LogPipeline, LogRecord};
 /// backends. A manifest is mandatory.
 pub struct TestRuntimeBuilder {
     wasm: PathBuf,
-    manifest: ManifestSource,
+    manifest: ManifestInput,
     extensions: Vec<Arc<dyn Extension<MockTypes>>>,
     limits: ModuleLimits,
     chain: FakeNode,
@@ -49,7 +49,7 @@ impl TestRuntime {
     pub fn builder(wasm: impl Into<PathBuf>) -> TestRuntimeBuilder {
         TestRuntimeBuilder {
             wasm: wasm.into(),
-            manifest: ManifestSource::Beside,
+            manifest: ManifestInput::Beside,
             extensions: Vec::new(),
             limits: ModuleLimits::default(),
             chain: FakeNode::new(),
@@ -63,13 +63,13 @@ impl TestRuntime {
 impl TestRuntimeBuilder {
     /// Load the manifest from an existing file.
     pub fn manifest_path(mut self, path: impl Into<PathBuf>) -> Self {
-        self.manifest = ManifestSource::Path(path.into());
+        self.manifest = ManifestInput::Path(path.into());
         self
     }
 
     /// Write `toml` to a temp file at launch and load the module from it.
     pub fn manifest_inline(mut self, toml: impl Into<String>) -> Self {
-        self.manifest = ManifestSource::Toml(toml.into());
+        self.manifest = ManifestInput::Toml(toml.into());
         self
     }
 
@@ -324,8 +324,8 @@ mod tests {
             .await
             .expect("the on_trigger log line lands after dispatch");
         assert_eq!(
-            record.source,
-            crate::host::logs::LogSource::HostInterface,
+            record.channel,
+            crate::host::logs::LogChannel::HostInterface,
             "the example module logs through the host interface",
         );
 
@@ -795,8 +795,8 @@ mod tests {
         // The line is a host-interface log carrying exactly the pinned
         // seconds, parsed back to guard against a substring false positive.
         assert_eq!(
-            record.source,
-            crate::host::logs::LogSource::HostInterface,
+            record.channel,
+            crate::host::logs::LogChannel::HostInterface,
             "the fixture logs through the host interface",
         );
         let logged: u64 = record

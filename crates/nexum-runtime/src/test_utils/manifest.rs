@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 /// How a test supplies the manifest: the three shapes the loader must
 /// handle, including the absent one.
 #[derive(Debug, Clone, derive_more::From)]
-pub enum ManifestSource {
+pub enum ManifestInput {
     /// No explicit path; the loader falls back to discovery beside the component.
     Beside,
     /// A path handed to the loader as-is, existing or not.
@@ -16,7 +16,7 @@ pub enum ManifestSource {
     Toml(String),
 }
 
-impl ManifestSource {
+impl ManifestInput {
     /// Materialize inline text at `path`; [`Beside`](Self::Beside) resolves to nothing.
     pub fn resolve(&self, path: &Path) -> Option<PathBuf> {
         match self {
@@ -30,7 +30,7 @@ impl ManifestSource {
     }
 }
 
-impl From<TestManifest> for ManifestSource {
+impl From<TestManifest> for ManifestInput {
     fn from(manifest: TestManifest) -> Self {
         Self::Toml(manifest.to_toml())
     }
@@ -417,18 +417,18 @@ on = "event"
         let dir = tempfile::tempdir().expect("tempdir");
         let at = dir.path().join("component.toml");
 
-        assert_eq!(ManifestSource::Beside.resolve(&at), None);
+        assert_eq!(ManifestInput::Beside.resolve(&at), None);
         assert!(!at.exists(), "a discovered manifest writes nothing");
 
         let explicit = dir.path().join("absent.toml");
         assert_eq!(
-            ManifestSource::from(explicit.clone()).resolve(&at),
+            ManifestInput::from(explicit.clone()).resolve(&at),
             Some(explicit),
             "an explicit path passes through untouched",
         );
         assert!(!at.exists(), "an explicit path writes nothing");
 
-        let inline = ManifestSource::from(TestManifest::new("inline").cap("logging"));
+        let inline = ManifestInput::from(TestManifest::new("inline").cap("logging"));
         assert_eq!(inline.resolve(&at).as_deref(), Some(at.as_path()));
         assert_eq!(load_path(&at).name.as_str(), "inline");
     }

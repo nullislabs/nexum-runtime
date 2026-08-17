@@ -3,14 +3,14 @@
 use super::*;
 
 #[tokio::test]
-async fn empty_supervisor_returns_no_triggers() {
+async fn empty_supervisor_returns_an_empty_source_plan() {
     let booted = BootScenario::over(mock_components())
         .boot()
         .await
         .expect("an empty scenario boots");
-    let plan = booted.supervisor.trigger_plan();
+    let plan = booted.supervisor.source_plan();
     assert!(plan.block_chains.is_empty());
-    assert!(plan.event_triggers.is_empty());
+    assert!(plan.event_sources.is_empty());
     assert_eq!(plan.viability(0), Viability::Nothing);
     assert_eq!(booted.supervisor.module_count(), 0);
 }
@@ -136,13 +136,13 @@ async fn a_validated_event_filter_survives_to_the_collected_stream() {
         .await
         .expect("the example boots alive");
 
-    let triggers = booted.supervisor.trigger_plan().event_triggers;
-    assert_eq!(triggers.len(), 1, "the alive module contributes its stream");
-    assert_eq!(triggers[0].module.as_str(), "example");
-    assert_eq!(triggers[0].chain.id(), 1);
-    assert!(triggers[0].cursor_key.is_none(), "resume defaults to off");
+    let sources = booted.supervisor.source_plan().event_sources;
+    assert_eq!(sources.len(), 1, "the alive module contributes its stream");
+    assert_eq!(sources[0].module.as_str(), "example");
+    assert_eq!(sources[0].chain.id(), 1);
+    assert!(sources[0].cursor_key.is_none(), "resume defaults to off");
     // alloy `Filter` exposes no getter; assert through its serialization.
-    let serialized = serde_json::to_value(&triggers[0].filter)
+    let serialized = serde_json::to_value(&sources[0].filter)
         .unwrap()
         .to_string();
     assert!(

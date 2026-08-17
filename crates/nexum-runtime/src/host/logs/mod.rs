@@ -6,7 +6,7 @@
 //! event and the retention store. [`LogPipeline`] is the shared handle,
 //! carrying the write side and the store's read side.
 //!
-//! One guest panic yields three records distinguished by [`LogSource`]
+//! One guest panic yields three records distinguished by [`LogChannel`]
 //! (stderr, host logging call, supervisor death), redundancy covering
 //! channels that survive different failure modes.
 
@@ -47,11 +47,11 @@ impl RunId {
 }
 
 /// Which capture point produced a record; the snake_case name is the tracing
-/// `source` field.
+/// `channel` field.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, IntoStaticStr)]
 #[strum(serialize_all = "snake_case")]
 #[non_exhaustive]
-pub enum LogSource {
+pub enum LogChannel {
     /// The `nexum:host/logging` glue: an explicit guest `log` call.
     HostInterface,
     /// A line captured from the guest's stdout pipe.
@@ -70,7 +70,7 @@ pub struct LogRecord {
     /// Wall-clock capture time.
     pub ts: SystemTime,
     /// Capture point of origin.
-    pub source: LogSource,
+    pub channel: LogChannel,
     /// Line severity.
     pub level: Level,
     /// The line text.
@@ -79,11 +79,11 @@ pub struct LogRecord {
 
 impl LogRecord {
     /// Record stamped at the current instant.
-    pub fn now(run: RunId, source: LogSource, level: Level, message: String) -> Self {
+    pub fn now(run: RunId, channel: LogChannel, level: Level, message: String) -> Self {
         Self {
             run,
             ts: SystemTime::now(),
-            source,
+            channel,
             level,
             message,
         }
@@ -133,18 +133,18 @@ impl LogRouter {
 fn emit_tracing(record: &LogRecord) {
     let module = record.run.module.as_str();
     let run = record.run.seq;
-    let source: &'static str = record.source.into();
+    let channel: &'static str = record.channel.into();
     let message = record.message.as_str();
     if record.level == Level::TRACE {
-        tracing::trace!(module, run, source, "{message}");
+        tracing::trace!(module, run, channel, "{message}");
     } else if record.level == Level::DEBUG {
-        tracing::debug!(module, run, source, "{message}");
+        tracing::debug!(module, run, channel, "{message}");
     } else if record.level == Level::INFO {
-        tracing::info!(module, run, source, "{message}");
+        tracing::info!(module, run, channel, "{message}");
     } else if record.level == Level::WARN {
-        tracing::warn!(module, run, source, "{message}");
+        tracing::warn!(module, run, channel, "{message}");
     } else {
-        tracing::error!(module, run, source, "{message}");
+        tracing::error!(module, run, channel, "{message}");
     }
 }
 
@@ -225,14 +225,14 @@ mod tests {
         let router = LogRouter::new(store.clone());
         router.record(LogRecord::now(
             RunId::new(test_module_id(), 0),
-            LogSource::HostInterface,
+            LogChannel::HostInterface,
             Level::INFO,
             "hello".to_owned(),
         ));
         let appended = store.appended.lock().unwrap();
         assert_eq!(appended.len(), 1, "retention consumer saw the record");
         assert_eq!(appended[0].message, "hello");
-        assert_eq!(appended[0].source, LogSource::HostInterface);
+        assert_eq!(appended[0].channel, LogChannel::HostInterface);
     }
 
     #[test]
@@ -245,7 +245,7 @@ mod tests {
         let run = RunId::new(test_module_id(), 0);
         pipeline.router().record(LogRecord::now(
             run.clone(),
-            LogSource::Stdout,
+            LogChannel::Stdout,
             Level::INFO,
             "line".to_owned(),
         ));
@@ -257,10 +257,10 @@ mod tests {
     }
 
     #[test]
-    fn source_names_are_snake_case_for_the_tracing_field() {
-        let s: &'static str = LogSource::HostInterface.into();
+    fn channel_names_are_snake_case_for_the_tracing_field() {
+        let s: &'static str = LogChannel::HostInterface.into();
         assert_eq!(s, "host_interface");
-        let s: &'static str = LogSource::Panic.into();
+        let s: &'static str = LogChannel::Panic.into();
         assert_eq!(s, "panic");
     }
 }

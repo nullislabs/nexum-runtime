@@ -395,12 +395,12 @@ mod tests {
         }
 
         let sink = Sink::default();
-        let subscriber = tracing_subscriber::fmt()
+        let collector = tracing_subscriber::fmt()
             .with_max_level(tracing::Level::DEBUG)
             .with_ansi(false)
             .with_writer(sink.clone())
             .finish();
-        tracing::subscriber::with_default(subscriber, || {
+        tracing::subscriber::with_default(collector, || {
             let _ = store_fault(
                 "mod-a",
                 "set",

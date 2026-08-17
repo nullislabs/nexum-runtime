@@ -216,7 +216,7 @@ mod tests {
     use tracing_core::Level;
 
     use super::*;
-    use crate::host::logs::{LogSource, RECORD_OVERHEAD};
+    use crate::host::logs::{LogChannel, RECORD_OVERHEAD};
 
     fn limits(bytes_per_run: usize, runs_retained: usize) -> LogRetentionLimits {
         LogRetentionLimits {
@@ -232,7 +232,7 @@ mod tests {
     fn record(run: &RunId, message: &str) -> LogRecord {
         LogRecord::now(
             run.clone(),
-            LogSource::Stdout,
+            LogChannel::Stdout,
             Level::INFO,
             message.to_owned(),
         )

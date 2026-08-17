@@ -306,7 +306,7 @@ async fn host_interface_records_are_retrievable_after_a_run() {
     assert!(
         page.records
             .iter()
-            .all(|r| r.source == LogSource::HostInterface),
+            .all(|r| r.channel == LogChannel::HostInterface),
         "the example module logs only through the host interface",
     );
     assert!(
@@ -344,7 +344,7 @@ async fn dying_run_leaves_a_panic_record() {
     let panic = page
         .records
         .iter()
-        .find(|r| r.source == LogSource::Panic)
+        .find(|r| r.channel == LogChannel::Panic)
         .expect("a panic record on the dead run");
     assert_eq!(panic.level, Level::ERROR);
     assert!(panic.message.contains("terminated"));
@@ -376,17 +376,18 @@ async fn facade_panic_leaves_stderr_host_interface_and_panic_records() {
     let runs = booted.logs().list_runs("panic-bomb");
     assert_eq!(runs.len(), 1);
     let page = booted.logs().read(&runs[0].run, 0);
-    let find = |source: LogSource, needle: &str| {
+    let find = |channel: LogChannel, needle: &str| {
         page.records
             .iter()
-            .find(|r| r.source == source && r.message.contains(needle))
+            .find(|r| r.channel == channel && r.message.contains(needle))
     };
-    let stderr = find(LogSource::Stderr, "detonated").expect("the hook's stderr line was captured");
+    let stderr =
+        find(LogChannel::Stderr, "detonated").expect("the hook's stderr line was captured");
     assert_eq!(stderr.level, Level::WARN, "stderr copy is warn");
     let host =
-        find(LogSource::HostInterface, "detonated").expect("the hook's sink call was captured");
+        find(LogChannel::HostInterface, "detonated").expect("the hook's sink call was captured");
     assert_eq!(host.level, Level::ERROR, "sink copy is error");
     let death =
-        find(LogSource::Panic, "terminated").expect("the supervisor synthesized the death record");
+        find(LogChannel::Panic, "terminated").expect("the supervisor synthesized the death record");
     assert_eq!(death.level, Level::ERROR, "death record is error");
 }

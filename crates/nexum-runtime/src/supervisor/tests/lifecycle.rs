@@ -62,13 +62,13 @@ async fn init_failure_marks_module_dead_excluding_dispatch_and_triggers() {
         0,
         "no live module declares chain 11155111 blocks",
     );
-    let plan = booted.supervisor.trigger_plan();
+    let plan = booted.supervisor.source_plan();
     assert!(
         plan.block_chains.is_empty(),
         "dead module must not contribute block chains",
     );
     assert!(
-        plan.event_triggers.is_empty(),
+        plan.event_sources.is_empty(),
         "dead module must not contribute chain-log streams",
     );
     assert_eq!(
@@ -78,9 +78,9 @@ async fn init_failure_marks_module_dead_excluding_dispatch_and_triggers() {
     );
 }
 
-/// Positive control: the alive module's triggers survive the filter.
+/// Positive control: the alive module's source survives the filter.
 #[tokio::test]
-async fn alive_module_triggers_survive_alongside_dead_module() {
+async fn alive_module_source_survives_alongside_dead_module() {
     let Some(price_alert_wasm) = module_wasm_or_skip("price-alert") else {
         return;
     };
@@ -103,7 +103,7 @@ async fn alive_module_triggers_survive_alongside_dead_module() {
         1,
         "only the example is alive"
     );
-    let plan = booted.supervisor.trigger_plan();
+    let plan = booted.supervisor.source_plan();
     assert_eq!(
         plan.block_chains.iter().map(|c| c.id()).collect::<Vec<_>>(),
         vec![1],
@@ -165,9 +165,9 @@ async fn dead_module_extension_kind_is_excluded_from_the_plan() {
         .await
         .expect("both modules load; only price-alert's init fails");
 
-    let plan = booted.supervisor.trigger_plan();
+    let plan = booted.supervisor.source_plan();
     assert_eq!(
-        plan.extension_kinds
+        plan.demanded_extension_kinds
             .iter()
             .map(String::as_str)
             .collect::<Vec<_>>(),
@@ -207,8 +207,12 @@ async fn a_declared_extension_kind_alone_is_not_viable() {
         .await
         .expect("the example boots alive");
 
-    let plan = booted.supervisor.trigger_plan();
-    assert_eq!(plan.extension_kinds.len(), 1, "the live kind is declared");
+    let plan = booted.supervisor.source_plan();
+    assert_eq!(
+        plan.demanded_extension_kinds.len(),
+        1,
+        "the live kind is declared"
+    );
     assert_eq!(
         plan.viability(0),
         Viability::Nothing,

@@ -46,7 +46,7 @@ pub type ExtensionSections = BTreeMap<String, toml::Value>;
 #[derive(Debug, Clone)]
 pub enum Trigger {
     /// A new block; one stream per chain id, fanned out to every module
-    /// watching that chain.
+    /// with a block trigger on that chain.
     Block {
         /// EVM chain id.
         chain_id: u64,

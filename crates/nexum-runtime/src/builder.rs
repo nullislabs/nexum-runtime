@@ -4,7 +4,7 @@
 //! component builders, add-ons) through a type-state chain;
 //! [`ReadyBuilder::launch`] opens the backends and hands off to
 //! [`AssembledRuntime::launch`], which installs add-ons, builds the engine and
-//! linker, boots the supervisor, opens the trigger sources, spawns the event
+//! linker, boots the supervisor, opens the sources, spawns the event
 //! loop, and returns a [`RuntimeHandle`]. [`RuntimeBuilder::runtime`] binds a
 //! [`Runtime`] preset for the common case.
 
@@ -296,7 +296,7 @@ impl<T: RuntimeTypes> AssembledRuntime<T> {
         };
 
         let alive = supervisor.alive_count();
-        let plan = supervisor.trigger_plan();
+        let plan = supervisor.source_plan();
         info!(
             modules = supervisor.module_count(),
             alive,
@@ -347,7 +347,7 @@ impl<T: RuntimeTypes> AssembledRuntime<T> {
         {
             let mut sources = SourceContext::new(
                 engine_cfg,
-                &plan.extension_kinds,
+                &plan.demanded_extension_kinds,
                 &executor,
                 &mut reconnect_tasks,
             );
@@ -387,7 +387,7 @@ impl<T: RuntimeTypes> AssembledRuntime<T> {
         );
         let chain_log_streams = event_loop::open_chain_log_streams(
             &components.chain,
-            plan.event_triggers,
+            plan.event_sources,
             &executor,
             &mut reconnect_tasks,
         );

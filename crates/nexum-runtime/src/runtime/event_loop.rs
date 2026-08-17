@@ -4,12 +4,12 @@
 //! and retracts a reorged delivered tail.
 //!
 //! `open_block_streams` and `open_chain_log_streams` each spawn one
-//! reconnect-aware task per trigger or chain: it opens the stream, pumps items to
-//! an mpsc channel, and on drop waits `restart_policy::backoff_for` before
-//! reopening, resetting the backoff once the stream has been healthy for
-//! `HEALTHY_WINDOW`. The tasks exit with [`TaskExit::ReceiverGone`] when `run`
-//! drops the receivers; their handles collect into a [`TaskSet`] the loop
-//! drains on shutdown.
+//! reconnect-aware task per event source or chain: it opens the stream,
+//! pumps items to an mpsc channel, and on drop waits
+//! `restart_policy::backoff_for` before reopening, resetting the backoff
+//! once the stream has been healthy for `HEALTHY_WINDOW`. The tasks exit
+//! with [`TaskExit::ReceiverGone`] when `run` drops the receivers; their
+//! handles collect into a [`TaskSet`] the loop drains on shutdown.
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -29,7 +29,7 @@ use crate::host::extension::{ExtensionDelivery, ExtensionSource};
 use crate::host::provider_pool::ProviderPool;
 use crate::module_id::ModuleId;
 use crate::runtime::restart_policy::{backoff_for, jitter_seed};
-use crate::supervisor::{EventTrigger, Supervisor};
+use crate::supervisor::{EventSource, Supervisor};
 use nexum_tasks::{TaskExecutor, TaskExit, TaskSet};
 
 /// Uninterrupted-event duration before the backoff counter resets to 0.
@@ -37,7 +37,7 @@ const HEALTHY_WINDOW: Duration = Duration::from_secs(60);
 
 /// Silence between block events beyond which the next event logs a gap-closed
 /// line, surfacing an alloy-internal transport reconnect that produced no
-/// `stream ended` event.
+/// `source ended` event.
 const BLOCK_GAP_LOG_THRESHOLD: Duration = Duration::from_secs(60);
 
 /// Channel buffer for each reconnect task.
@@ -46,7 +46,7 @@ const RECONNECT_CHANNEL_BUF: usize = 64;
 /// Block-gap size at or above which a re-open logs a large-backfill notice.
 const LARGE_GAP_LOG_THRESHOLD: u64 = 1_000;
 
-/// Open one reconnect-aware block-subscription task per chain, spawned via
+/// Open one reconnect-aware block-source task per chain, spawned via
 /// `executor` with handles pushed into `tasks` for graceful shutdown.
 pub fn open_block_streams(
     pool: &ProviderPool,
@@ -67,30 +67,30 @@ pub fn open_block_streams(
     streams
 }
 
-/// Open one reconnect-aware chain-log task per event trigger; see
+/// Open one reconnect-aware chain-log task per event source; see
 /// [`open_block_streams`].
 pub fn open_chain_log_streams(
     pool: &ProviderPool,
-    triggers: Vec<EventTrigger>,
+    sources: Vec<EventSource>,
     executor: &TaskExecutor,
     tasks: &mut TaskSet,
 ) -> Vec<TaggedChainLogStream> {
     let mut streams = Vec::new();
-    for trigger in triggers {
+    for source in sources {
         let (tx, rx) = mpsc::channel::<TaggedChainLog>(RECONNECT_CHANNEL_BUF);
         let pool = pool.clone();
         let resume = ChainLogResume {
-            // The cursor key is constant per trigger and cloned onto every
+            // The cursor key is constant per source and cloned onto every
             // log; `Arc` keeps that clone cheap.
-            cursor_key: trigger.cursor_key.map(Arc::from),
-            initial_cursor: trigger.initial_cursor,
-            max_lookback: trigger.max_lookback,
+            cursor_key: source.cursor_key.map(Arc::from),
+            initial_cursor: source.initial_cursor,
+            max_lookback: source.max_lookback,
         };
         tasks.push(executor.spawn(reconnecting_chain_log_task(
             pool,
-            trigger.module,
-            trigger.chain,
-            trigger.filter,
+            source.module,
+            source.chain,
+            source.filter,
             resume,
             tx,
         )));
@@ -118,7 +118,7 @@ async fn backoff_pause(attempt: &mut u32, seed: u64, log: impl FnOnce(u32, u64))
     tokio::time::sleep(backoff).await;
 }
 
-/// Reconnect-aware loop for one chain's block subscription: re-opens the
+/// Reconnect-aware loop for one chain's block source: re-opens the
 /// stream with exponential backoff after every drop or error.
 async fn reconnecting_block_task(
     pool: ProviderPool,
@@ -130,12 +130,12 @@ async fn reconnecting_block_task(
     let mut attempt: u32 = 0;
     let mut last_event: Option<Instant> = None;
     loop {
-        match pool.subscribe_blocks(chain).await {
+        match pool.open_block_source(chain).await {
             Ok(mut inner) => {
                 if attempt == 0 {
-                    info!(chain_id, "block subscription open");
+                    info!(chain_id, "block source open");
                 } else {
-                    info!(chain_id, attempt, "block subscription reopened");
+                    info!(chain_id, attempt, "block source reopened");
                     metrics::counter!(
                         "nexum_runtime_stream_reconnects_total",
                         "kind" => "block",
@@ -148,14 +148,14 @@ async fn reconnecting_block_task(
                     if attempt > 0
                         && last_event.is_some_and(|t| now.duration_since(t) >= HEALTHY_WINDOW)
                     {
-                        info!(chain_id, "block stream healthy - resetting backoff");
+                        info!(chain_id, "block source healthy - resetting backoff");
                         attempt = 0;
                     }
                     // Detect transport-layer reconnects that
                     // alloy handled internally - `inner.next().await`
                     // keeps yielding events but with a long gap. The
-                    // engine's reconnect path (`stream ended` -> wait
-                    // backoff -> `subscription reopened`) does not fire
+                    // engine's reconnect path (`source ended` -> wait
+                    // backoff -> `source reopened`) does not fire
                     // for these, so without this log a soak operator
                     // sees an `alloy_transport_ws::native` ERROR
                     // followed by silence indistinguishable from a
@@ -168,7 +168,7 @@ async fn reconnecting_block_task(
                             chain_id,
                             gap_s,
                             kind = "block",
-                            "stream gap closed - first event after silence \
+                            "source gap closed - first event after silence \
                              (likely an alloy-internal transport reconnect)"
                         );
                     }
@@ -181,23 +181,23 @@ async fn reconnecting_block_task(
                         return TaskExit::ReceiverGone;
                     }
                 }
-                warn!(chain_id, "block stream ended (WebSocket dropped?)");
+                warn!(chain_id, "block source ended (WebSocket dropped?)");
             }
             Err(err) => {
-                warn!(chain_id, error = %err, "block subscription failed");
+                warn!(chain_id, error = %err, "block source open failed");
             }
         }
         backoff_pause(&mut attempt, seed, |attempt, backoff_ms| {
             warn!(
                 chain_id,
-                attempt, backoff_ms, "reconnecting block subscription after backoff",
+                attempt, backoff_ms, "reconnecting block source after backoff",
             );
         })
         .await;
     }
 }
 
-/// Per-trigger resume and backfill knobs for a chain-log task.
+/// Per-source resume and backfill knobs for a chain-log task.
 struct ChainLogResume {
     /// Durable cursor key; `Some` for a `resume` trigger.
     cursor_key: Option<Arc<str>>,
@@ -215,7 +215,7 @@ struct DeliveredTail {
     logs: Vec<alloy_rpc_types_eth::Log>,
 }
 
-/// Poller-backed loop for one (module, chain) event trigger; a
+/// Poller-backed loop for one (module, chain) event source; a
 /// re-open resumes past the scanned range and retracts a reorged tail.
 async fn reconnecting_chain_log_task(
     pool: ProviderPool,
@@ -250,7 +250,7 @@ async fn reconnecting_chain_log_task(
                         error = %err,
                         attempt,
                         backoff_ms,
-                        "chain-log provider lookup failed - retrying after backoff",
+                        "event source provider lookup failed - retrying after backoff",
                     );
                 })
                 .await;
@@ -267,7 +267,7 @@ async fn reconnecting_chain_log_task(
                         error = %err,
                         attempt,
                         backoff_ms,
-                        "chain-log head fetch failed - retrying after backoff",
+                        "event source head fetch failed - retrying after backoff",
                     );
                 })
                 .await;
@@ -288,7 +288,7 @@ async fn reconnecting_chain_log_task(
                             tail_block = t.number,
                             attempt,
                             backoff_ms,
-                            "chain-log tail hash unconfirmed - retrying after backoff",
+                            "event source tail hash unconfirmed - retrying after backoff",
                         );
                     })
                     .await;
@@ -309,7 +309,7 @@ async fn reconnecting_chain_log_task(
                     chain_id,
                     skipped_from = start_block,
                     skipped_to = floor,
-                    "chain-log gap exceeds max_lookback - skipping the oldest missed blocks",
+                    "event source gap exceeds max_lookback - skipping the oldest missed blocks",
                 );
                 start_block = floor;
             }
@@ -323,20 +323,20 @@ async fn reconnecting_chain_log_task(
                 from = start_block,
                 to = head,
                 blocks = head.saturating_sub(start_block),
-                "chain-log poller backfilling a large gap"
+                "event source backfilling a large gap"
             );
         }
-        match pool.watch_chain_logs(chain, filter.clone(), start_block) {
+        match pool.open_event_source(chain, filter.clone(), start_block) {
             Ok(mut inner) => {
                 if attempt == 0 {
-                    info!(module = %module, chain_id, start_block, "chain-log poller open");
+                    info!(module = %module, chain_id, start_block, "event source open");
                 } else {
                     info!(
                         module = %module,
                         chain_id,
                         attempt,
                         start_block,
-                        "chain-log poller reopened"
+                        "event source reopened"
                     );
                     metrics::counter!(
                         "nexum_runtime_stream_reconnects_total",
@@ -357,7 +357,7 @@ async fn reconnecting_chain_log_task(
                         module = %module,
                         chain_id,
                         tail_block = t.number,
-                        "chain-log tail reorged while disconnected - retracting its logs",
+                        "event source tail reorged while disconnected - retracting its logs",
                     );
                     for mut log in t.logs {
                         log.removed = true;
@@ -375,7 +375,7 @@ async fn reconnecting_chain_log_task(
                         info!(
                             module = %module,
                             chain_id,
-                            "chain-log stream healthy - resetting backoff"
+                            "event source healthy - resetting backoff"
                         );
                         attempt = 0;
                     }
@@ -419,20 +419,20 @@ async fn reconnecting_chain_log_task(
                                 module = %module,
                                 chain_id,
                                 error = %err,
-                                "chain-log poller error - reopening"
+                                "event source error - reopening"
                             );
                             break;
                         }
                     }
                 }
-                warn!(module = %module, chain_id, "chain-log poller stream ended - reopening");
+                warn!(module = %module, chain_id, "event source ended - reopening");
             }
             Err(err) => {
                 warn!(
                     module = %module,
                     chain_id,
                     error = %err,
-                    "chain-log poller open failed"
+                    "event source open failed"
                 );
             }
         }
@@ -442,7 +442,7 @@ async fn reconnecting_chain_log_task(
                 chain_id,
                 attempt,
                 backoff_ms,
-                "reconnecting chain-log poller after backoff",
+                "reconnecting event source after backoff",
             );
         })
         .await;
@@ -460,7 +460,7 @@ pub type TaggedBlockStream = std::pin::Pin<
 >;
 /// `(module, chain, log, cursor_key)`; `cursor_key` is `Some` for `resume`.
 pub type TaggedChainLog = (ModuleId, Chain, alloy_rpc_types_eth::Log, Option<Arc<str>>);
-/// Stream of [`TaggedChainLog`], merged across every subscribed chain.
+/// Stream of [`TaggedChainLog`], merged across every open event source.
 pub type TaggedChainLogStream =
     std::pin::Pin<Box<dyn futures::Stream<Item = TaggedChainLog> + Send>>;
 /// Drive the supervisor with triggers until `shutdown` resolves.
@@ -470,7 +470,7 @@ pub type TaggedChainLogStream =
 /// supervisor's stop probe between the per-module calls of one trigger. The
 /// in-flight call finishes before the loop exits; the guard `shutdown`
 /// yields is held until return, so the drain covers that call and its
-/// cursor commit. Returns the `(blocks, chain_logs)` dispatch tally.
+/// cursor commit. Returns the `(blocks, events)` dispatch tally.
 pub async fn run<T: RuntimeTypes, G>(
     supervisor: &mut Supervisor<T>,
     block_streams: Vec<TaggedBlockStream>,
@@ -504,7 +504,7 @@ pub async fn run<T: RuntimeTypes, G>(
     };
     let mut shutdown = Box::pin(shutdown);
     let mut dispatched_blocks: u64 = 0;
-    let mut dispatched_chain_logs: u64 = 0;
+    let mut dispatched_events: u64 = 0;
     let mut dispatched_extension_triggers: u64 = 0;
     let started = Instant::now();
     loop {
@@ -538,7 +538,7 @@ pub async fn run<T: RuntimeTypes, G>(
                     timestamp: header.timestamp.saturating_mul(1000),
                 }),
                 Some(Err((chain, err))) => {
-                    warn!(chain_id = chain.id(), error = %err, "block stream error - continuing");
+                    warn!(chain_id = chain.id(), error = %err, "block source error - continuing");
                     continue;
                 }
                 None => NextTrigger::StreamPanic("block"),
@@ -547,7 +547,7 @@ pub async fn run<T: RuntimeTypes, G>(
                 Some((module, chain, log, cursor_key)) => {
                     NextTrigger::Event(module, chain, Box::new(log), cursor_key)
                 }
-                None => NextTrigger::StreamPanic("chain-log"),
+                None => NextTrigger::StreamPanic("event"),
             },
             next = extension_deliveries.next() => match next {
                 Some(delivery) => NextTrigger::Extension(delivery),
@@ -565,7 +565,7 @@ pub async fn run<T: RuntimeTypes, G>(
                 supervisor
                     .dispatch_event(&module, chain, *log, cursor_key.as_deref())
                     .await;
-                dispatched_chain_logs += 1;
+                dispatched_events += 1;
             }
             NextTrigger::Extension(delivery) => {
                 supervisor.dispatch_extension_trigger(delivery).await;
@@ -582,13 +582,13 @@ pub async fn run<T: RuntimeTypes, G>(
                 tasks.shutdown().await;
                 info!(
                     dispatched_blocks,
-                    dispatched_chain_logs,
+                    dispatched_events,
                     dispatched_extension_triggers,
                     uptime_secs = started.elapsed().as_secs(),
                     "graceful shutdown complete",
                 );
                 drop(guard);
-                return (dispatched_blocks, dispatched_chain_logs);
+                return (dispatched_blocks, dispatched_events);
             }
             NextTrigger::StreamPanic(kind) => {
                 // Reconnect tasks should loop forever.
@@ -602,7 +602,7 @@ pub async fn run<T: RuntimeTypes, G>(
                     kind,
                     "reconnect task ended unexpectedly - shutting down for engine restart"
                 );
-                return (dispatched_blocks, dispatched_chain_logs);
+                return (dispatched_blocks, dispatched_events);
             }
         }
     }
@@ -725,7 +725,7 @@ mod tests {
         tasks: &mut TaskSet,
         initial_cursor: Option<u64>,
     ) -> TaggedChainLogStream {
-        let triggers = vec![EventTrigger {
+        let sources = vec![EventSource {
             module: ModuleId::parse("mod").expect("valid module name"),
             chain: alloy_chains::Chain::mainnet(),
             filter: alloy_rpc_types_eth::Filter::default(),
@@ -733,9 +733,9 @@ mod tests {
             initial_cursor,
             max_lookback: None,
         }];
-        open_chain_log_streams(pool, triggers, executor, tasks)
+        open_chain_log_streams(pool, sources, executor, tasks)
             .pop()
-            .expect("one stream per trigger")
+            .expect("one stream per source")
     }
 
     async fn recv(stream: &mut TaggedChainLogStream) -> Log {
@@ -1089,16 +1089,16 @@ mod tests {
         tasks.shutdown().await;
     }
 
-    /// `open_chain_log_streams` spawns one reconnect task per event trigger.
+    /// `open_chain_log_streams` spawns one reconnect task per event source.
     #[tokio::test]
-    async fn open_chain_log_streams_opens_one_task_per_trigger() {
+    async fn open_chain_log_streams_opens_one_task_per_source() {
         let rpc = MockRpc::new();
         let pool = pool_for(&rpc);
         let manager = TaskManager::new();
         let executor = manager.executor();
         let mut tasks = TaskSet::new();
-        let triggers = vec![
-            EventTrigger {
+        let sources = vec![
+            EventSource {
                 module: ModuleId::parse("mod-a").expect("valid module name"),
                 chain: alloy_chains::Chain::mainnet(),
                 filter: alloy_rpc_types_eth::Filter::default(),
@@ -1106,7 +1106,7 @@ mod tests {
                 initial_cursor: None,
                 max_lookback: None,
             },
-            EventTrigger {
+            EventSource {
                 module: ModuleId::parse("mod-b").expect("valid module name"),
                 chain: alloy_chains::Chain::mainnet(),
                 filter: alloy_rpc_types_eth::Filter::default(),
@@ -1115,8 +1115,8 @@ mod tests {
                 max_lookback: None,
             },
         ];
-        let streams = open_chain_log_streams(&pool, triggers, &executor, &mut tasks);
-        assert_eq!(streams.len(), 2, "one stream per trigger");
+        let streams = open_chain_log_streams(&pool, sources, &executor, &mut tasks);
+        assert_eq!(streams.len(), 2, "one stream per source");
         tasks.shutdown().await;
     }
 
@@ -1151,7 +1151,7 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
-    async fn block_subscription_reopens_after_a_failed_open() {
+    async fn block_source_reopens_after_a_failed_open() {
         let rpc = MockRpc::new();
         rpc.push_script(vec![rpc_err("node down at boot")]);
         let pool = pool_for(&rpc);
@@ -1177,7 +1177,7 @@ mod tests {
             }
         })
         .await
-        .expect("the reopened subscription delivers");
+        .expect("the reopened source delivers");
         assert_eq!(header.number, 5);
         tasks.shutdown().await;
     }
@@ -1353,7 +1353,7 @@ mod tests {
         log_node.push_chain_log(alloy_rpc_types_eth::Log::default());
 
         let block_streams = open_block_streams(&pool, &[Chain::mainnet()], &executor, &mut tasks);
-        let event_triggers = vec![crate::supervisor::EventTrigger {
+        let event_sources = vec![crate::supervisor::EventSource {
             module: ModuleId::parse("test-module").expect("valid module name"),
             chain: Chain::from_id(100),
             filter: Filter::default(),
@@ -1361,13 +1361,12 @@ mod tests {
             initial_cursor: None,
             max_lookback: None,
         }];
-        let chain_log_streams =
-            open_chain_log_streams(&pool, event_triggers, &executor, &mut tasks);
+        let chain_log_streams = open_chain_log_streams(&pool, event_sources, &executor, &mut tasks);
 
         // 500 ms only bounds wall time; the assertion is on the tally, so a
         // miss means a broken select arm, not a slow scheduler.
         let shutdown = tokio::time::sleep(Duration::from_millis(500));
-        let (blocks, chain_logs) = tokio::time::timeout(
+        let (blocks, events) = tokio::time::timeout(
             Duration::from_secs(10),
             run(
                 &mut booted.supervisor,
@@ -1382,7 +1381,7 @@ mod tests {
         .expect("run() must return once shutdown fires");
         assert_eq!(blocks, 1, "the queued block must be drained and dispatched");
         assert_eq!(
-            chain_logs, 1,
+            events, 1,
             "the queued chain-log must be drained and dispatched",
         );
     }

@@ -15,7 +15,7 @@ use super::lifecycle::{revive_one, sweep};
 use crate::bindings::nexum;
 use crate::host::component::RuntimeTypes;
 use crate::host::extension::ExtensionDelivery;
-use crate::host::logs::{LogRecord, LogSource};
+use crate::host::logs::{LogChannel, LogRecord};
 use crate::manifest::Trigger;
 use crate::module_id::ModuleId;
 
@@ -133,7 +133,7 @@ impl<T: RuntimeTypes> Supervisor<T> {
 
         let block_number = log.block_number;
         let removed = log.removed;
-        let trigger = nexum::host::types::Trigger::Event(super::triggers::wit_log(&log, chain));
+        let trigger = nexum::host::types::Trigger::Event(super::sources::wit_log(&log, chain));
         let ok = matches!(
             self.dispatch_to(
                 idx,
@@ -334,7 +334,7 @@ impl<T: RuntimeTypes> Supervisor<T> {
                 // trap already went to host tracing.
                 router.record(LogRecord::now(
                     module.live.run.clone(),
-                    LogSource::Panic,
+                    LogChannel::Panic,
                     Level::ERROR,
                     format!("run terminated abnormally: {}", trap.root_cause()),
                 ));

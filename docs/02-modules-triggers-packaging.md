@@ -67,7 +67,7 @@ Key design points:
 - **`[[trigger]]` tables are declarative.**
   A component does not open its own sources imperatively.
   The runtime loads each component and runs its `init` first, then derives the plan from the booted supervisor and opens the sources.
-  `call_init` runs during load in `crates/nexum-runtime/src/supervisor/load.rs`, and `trigger_plan` reads the already-booted supervisor in `crates/nexum-runtime/src/supervisor/triggers.rs`.
+  `call_init` runs during load in `crates/nexum-runtime/src/supervisor/load.rs`, and `source_plan` reads the already-booted supervisor in `crates/nexum-runtime/src/supervisor/sources.rs`.
 - **`[dependencies]` drives what the runtime links.**
   Each key names a host capability, and its table carries the attributes that qualify it.
   A component that declares `http` imports `wasi:http/outgoing-handler`, the SDK's `http::fetch` helper wraps it, and the host checks every outgoing request against the `hosts` list on the `http` dependency.
