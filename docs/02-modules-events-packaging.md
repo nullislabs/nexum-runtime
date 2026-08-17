@@ -144,7 +144,7 @@ stateDiagram-v2
 
 Load itself is ordered: the prepass resolves every manifest, claims namespaces, and gates subscribed chains against `[chains]`; then modules load.
 
-The backoff schedule doubles from 1 s and caps at 300 s: 1, 2, 4, 8, 16, 32, 64, 128, 256, then 300 s.
+The backoff schedule doubles from 1 s and caps at 300 s, jittered into the upper half of each step so modules that failed together do not retry together.
 The poison policy is 5 failures inside 600 s by default, configurable under `[limits.poison]`.
 A failed restart defers the next attempt and does not itself count toward the poison window.
 A successful dispatch resets the module's failure count.

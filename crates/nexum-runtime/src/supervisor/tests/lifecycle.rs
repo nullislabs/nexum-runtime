@@ -255,12 +255,13 @@ async fn the_same_init_fault_kills_at_boot_and_only_defers_on_restart() {
     let died_at = Instant::now();
     booted.supervisor.modules[0]
         .health
-        .record_trap(died_at, policy);
+        .record_trap(died_at, policy, 0);
     let due = died_at + Duration::from_secs(5);
     sweep(
         &booted.supervisor.shared,
         std::slice::from_mut(&mut booted.supervisor.modules[0]),
         due,
+        None,
     )
     .await;
 
@@ -454,16 +455,10 @@ async fn poison_pill_quarantines_module_after_threshold() {
     assert_eq!(booted.dispatch_block_on(1).await, 0);
     assert_eq!(booted.supervisor.poisoned_count(), 0, "2 traps < threshold");
 
-    // The restart before trap 2 kept the count, so the curve climbed to 2 s
-    // and nothing is due here; a resetting restart would land trap 3 now.
-    tokio::time::sleep(Duration::from_millis(1_200)).await;
-    assert_eq!(booted.dispatch_block_on(1).await, 0);
-    assert_eq!(
-        booted.supervisor.poisoned_count(),
-        0,
-        "no restart is due 1.2 s into a 2 s backoff",
-    );
-    tokio::time::sleep(Duration::from_millis(1_000)).await;
+    // Clear the whole count-2 band, which jitter puts anywhere in 1 s to 2 s.
+    // That the restart kept the count is `a_restart_keeps_the_failure_curve`,
+    // which asserts it on a fixed seed instead of racing the clock.
+    tokio::time::sleep(Duration::from_millis(2_200)).await;
 
     // Trap 3: poisoned.
     assert_eq!(booted.dispatch_block_on(1).await, 0);

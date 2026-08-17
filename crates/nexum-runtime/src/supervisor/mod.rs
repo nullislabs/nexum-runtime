@@ -18,6 +18,7 @@ pub use subscriptions::{ChainLogSub, SubscriptionPlan, Viability};
 
 use std::sync::Arc;
 
+use nexum_tasks::Shutdown;
 use tracing::info;
 use wasmtime::Engine;
 use wasmtime::component::Linker;
@@ -41,6 +42,9 @@ pub struct Supervisor<T: RuntimeTypes> {
     policy: PoisonPolicy,
     /// In-memory mirror of the persisted chain-log cursors.
     chain_log_cursors: ChainLogCursors,
+    /// Once fired, the dispatch fan-out halts between guest calls, so the
+    /// shutdown drain covers at most one in-flight call.
+    stop: Option<Shutdown>,
 }
 
 /// Boot inputs derived from [`EngineConfig`], bundled once at the call site.
@@ -142,10 +146,22 @@ impl<T: RuntimeTypes> Supervisor<T> {
                 modules: vec![loaded],
                 policy: env.limits.poison,
                 chain_log_cursors: ChainLogCursors::default(),
+                stop: None,
             })
         }
         .await;
         booted.inspect_err(count_boot_refusal)
+    }
+
+    /// Halt the dispatch fan-out between guest calls once `stop` fires; a
+    /// skipped chain-log event replays through its resume cursor, a skipped
+    /// block does not.
+    pub fn stop_on(&mut self, stop: Shutdown) {
+        self.stop = Some(stop);
+    }
+
+    fn stop_requested(&self) -> bool {
+        self.stop.as_ref().is_some_and(Shutdown::is_fired)
     }
 
     /// Modules the supervisor holds, alive or not.
@@ -230,6 +246,7 @@ fn assemble<T: RuntimeTypes>(
         modules,
         policy,
         chain_log_cursors: ChainLogCursors::default(),
+        stop: None,
     }
 }
 

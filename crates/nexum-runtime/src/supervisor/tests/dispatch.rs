@@ -296,6 +296,38 @@ async fn multi_chain_dispatch_isolates_modules_by_chain() {
     assert_eq!(booted.supervisor.alive_count(), 2);
 }
 
+/// A shutdown drain must cover at most one guest call, so a fired stop
+/// halts the block fan-out before the next call while an unfired one
+/// changes nothing.
+#[tokio::test]
+async fn a_fired_stop_halts_the_block_fan_out() {
+    let Some(wasm) = example_wasm_or_skip() else {
+        return;
+    };
+    let mut booted = BootScenario::new()
+        .wasm(wasm)
+        .module(TestManifest::new("module-a").cap("logging").block_sub(1))
+        .module(TestManifest::new("module-b").cap("logging").block_sub(1))
+        .boot()
+        .await
+        .expect("boot");
+
+    let manager = nexum_tasks::TaskManager::new();
+    booted.supervisor.stop_on(manager.subscribe());
+    assert_eq!(
+        booted.dispatch_block_on(1).await,
+        2,
+        "an unfired stop leaves the fan-out whole",
+    );
+
+    manager.shutdown_signal().fire();
+    assert_eq!(
+        booted.dispatch_block_on(1).await,
+        0,
+        "a fired stop halts the fan-out before the next guest call",
+    );
+}
+
 /// A tiny `[limits.dispatch]` (burst = 2, refill = 1/s) drains the flooded
 /// bucket almost immediately; the calm module's bucket is untouched.
 #[tokio::test]

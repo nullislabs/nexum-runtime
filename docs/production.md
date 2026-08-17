@@ -39,11 +39,12 @@ Group=nexum
 WorkingDirectory=/opt/nexum
 ExecStart=/opt/nexum/bin/nexum --engine-config /etc/nexum/engine.toml
 
-# SIGINT/SIGTERM ends the event loop between dispatches: it drains the
-# in-flight dispatch, commits its cursor, and exits 0. The internal drain
-# deadline is 10s and is not configurable; 30s leaves headroom.
+# TimeoutStopSec must exceed the engine's resolved shutdown drain, which
+# the `supervisor ready` line reports as shutdown_drain_secs. It defaults to
+# [limits.dispatch] deadline_secs + 30, so raising the deadline raises it too.
+# (150s untuned), or SIGKILL pre-empts the drain.
 KillSignal=SIGINT
-TimeoutStopSec=30s
+TimeoutStopSec=180s
 
 # Hardening.
 NoNewPrivileges=true
@@ -73,6 +74,14 @@ Environment=RUST_BACKTRACE=1
 [Install]
 WantedBy=multi-user.target
 ```
+
+A stop halts dispatch at the next guest-call boundary, drains the one call in flight, commits its cursor, and exits 0.
+Modules the halt cut out of a block fan-out do not receive that block; an undispatched chain-log event replays at the next start through its `resume` cursor (section 4).
+The drain is bounded by `[limits.shutdown] drain_secs`, which defaults to `deadline_secs` plus 30 s, so an untuned drain outlasts the one deadline-bounded call it can be left waiting on.
+A drain past the bound therefore means a wedged task, not a long dispatch, and it forces exit 1 so `Restart=on-failure` restarts the engine.
+Keep `TimeoutStopSec` above the resolved bound, or systemd's SIGKILL pre-empts the forced exit.
+The engine logs that bound as `shutdown_drain_secs` on the `supervisor ready` line at every start, so read it there rather than recomputing it.
+Raising `deadline_secs` raises the drain default with it, and the unit below does not follow.
 
 Bring it up:
 
@@ -140,6 +149,9 @@ The runtime writes two kinds of key inside each component's own namespace, both 
 
 Every other key in a component's namespace is the component's own.
 
+A forced exit (a drain past `[limits.shutdown] drain_secs`) terminates the process before the in-flight dispatch commits its cursor, and both keys stay at the last committed dispatch.
+A `resume = true` subscription then replays the in-flight event at the next start; a block event is not replayed.
+
 ## 5. Logs
 
 The engine emits JSON `tracing` events on stdout, one flat object per line.
@@ -165,7 +177,7 @@ With `enabled = false` the recorder is still installed, so call sites stay live,
 |---|---|---|---|
 | `nexum_runtime_boot_refusals_total` | counter | `error_kind` | Boot refusals by error kind. |
 | `nexum_runtime_event_latency_seconds` | histogram | `module`, `event_kind` | Wall-clock seconds to dispatch one event. |
-| `nexum_runtime_dispatch_dropped_total` | counter | `module`, `event_kind` | Events dropped by the per-component dispatch rate limit (`[limits.dispatch]`, default `burst = 256` and `refill_per_sec = 128`). |
+| `nexum_runtime_dispatch_dropped_total` | counter | `module`, `event_kind`, `reason` | Events dropped before dispatch. `reason = "rate_limited"` is the per-component dispatch rate limit (`[limits.dispatch]`, default `burst = 256` and `refill_per_sec = 128`). `reason = "shutdown"` is a stop landing mid fan-out: the fan-out follows `[[modules]]` order, so the same trailing modules are skipped at every stop. A block is not replayed; a chain-log event is, from its cursor. |
 | `nexum_runtime_module_errors_total` | counter | `module`, `error_kind` | Module faults and traps. `error_kind = "trap"` is a wasmtime trap; other values are fault labels. |
 | `nexum_runtime_module_restarts_total` | counter | `module` | Module restart attempts. |
 | `nexum_runtime_module_poisoned` | gauge | `module` | `1` once a module crosses `[limits.poison]` (default 5 failures in 600 s). Stays `1` until the process restarts. |
@@ -279,6 +291,8 @@ A logging-level change also needs a restart.
 ## 10. Pre-upgrade
 
 - Read the changelog for breaking config or manifest changes.
+- Diff the installed unit against the unit in section 2, apply the differences, and `sudo systemctl daemon-reload`.
+  A `TimeoutStopSec` below the release's drain bound turns every stop into a SIGKILL with no log line.
 - Cold-backup the local store (section 3).
 - Stage the new binary, run it once against the production `engine.toml`, and confirm it boots before you stop it.
 - Swap the binary and `sudo systemctl restart nexum`.
