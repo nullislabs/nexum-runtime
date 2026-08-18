@@ -232,7 +232,7 @@ fn build<T: RuntimeTypes>(
 
 /// The same `extensions` slice must drive this and capability enforcement:
 /// an import instantiates only if that extension's hook is linked.
-pub fn build_linker<T: RuntimeTypes>(
+pub fn build_linker<T: RuntimeTypes<State = HostState<T>>>(
     engine: &Engine,
     extensions: &[Arc<dyn Extension<T>>],
 ) -> Result<Linker<HostState<T>>, RuntimeError> {

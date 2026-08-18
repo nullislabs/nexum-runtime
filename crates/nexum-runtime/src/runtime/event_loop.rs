@@ -27,6 +27,7 @@ use crate::bindings::nexum;
 use crate::host::component::RuntimeTypes;
 use crate::host::extension::{ExtensionDelivery, ExtensionSource};
 use crate::host::provider_pool::ProviderPool;
+use crate::host::state::HostState;
 use crate::runtime::restart_policy::{backoff_for, jitter_seed};
 use crate::supervisor::{EventSource, Supervisor};
 use nexum_primitives::module_id::ModuleId;
@@ -471,7 +472,7 @@ pub type TaggedChainLogStream =
 /// in-flight call finishes before the loop exits; the guard `shutdown`
 /// yields is held until return, so the drain covers that call and its
 /// cursor commit. Returns the `(blocks, events)` dispatch tally.
-pub async fn run<T: RuntimeTypes, G>(
+pub async fn run<T: RuntimeTypes<State = HostState<T>>, G>(
     supervisor: &mut Supervisor<T>,
     block_streams: Vec<TaggedBlockStream>,
     chain_log_streams: Vec<TaggedChainLogStream>,

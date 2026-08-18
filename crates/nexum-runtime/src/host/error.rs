@@ -6,7 +6,7 @@ use alloy_transport::TransportError;
 
 use crate::bindings::nexum::host::chain::{ChainError, RpcError};
 use crate::bindings::nexum::host::types::{Fault, RateLimit};
-use crate::host::local_store_redb::StorageError;
+use crate::host::component::StoreError;
 use crate::host::provider_pool::PoolError;
 
 /// Fieldless on purpose: no runtime string can enter the set, so nothing
@@ -53,20 +53,20 @@ impl LocalStoreFaultMessage {
     }
 }
 
-/// The only route from a [`StorageError`] to a guest [`Fault`]. Deliberately
+/// The only route from a [`StoreError`] to a guest [`Fault`]. Deliberately
 /// not a `From` impl: `?` would skip the log below, and only that log keeps
-/// the quota value and the redb text for the operator.
+/// the quota value and the backend text for the operator.
 pub(crate) fn store_fault(
     module: impl std::fmt::Display,
     verb: &'static str,
-    err: StorageError,
+    err: StoreError,
 ) -> Fault {
     let refusal = matches!(
         err,
-        StorageError::QuotaExceeded { .. }
-            | StorageError::QuotaUnsatisfiable { .. }
-            | StorageError::ApplyOpsExceeded { .. }
-            | StorageError::ApplyBytesExceeded { .. }
+        StoreError::QuotaExceeded { .. }
+            | StoreError::QuotaUnsatisfiable { .. }
+            | StoreError::ApplyOpsExceeded { .. }
+            | StoreError::ApplyBytesExceeded { .. }
     );
     if refusal {
         // Below WARN: a module sitting at its quota or batch cap would
@@ -76,26 +76,21 @@ pub(crate) fn store_fault(
         tracing::warn!(module = %module, verb, error = %err, "local-store verb failed");
     }
     match err {
-        StorageError::QuotaExceeded { .. } => {
+        StoreError::QuotaExceeded { .. } => {
             Fault::Denied(LocalStoreFaultMessage::QuotaExhausted.text().to_owned())
         }
-        StorageError::QuotaUnsatisfiable { .. } => {
+        StoreError::QuotaUnsatisfiable { .. } => {
             Fault::Denied(LocalStoreFaultMessage::WriteNeverFits.text().to_owned())
         }
-        StorageError::ApplyOpsExceeded { .. } => {
+        StoreError::ApplyOpsExceeded { .. } => {
             Fault::InvalidInput(LocalStoreFaultMessage::ApplyOpsOverCap.text().to_owned())
         }
-        StorageError::ApplyBytesExceeded { .. } => {
+        StoreError::ApplyBytesExceeded { .. } => {
             Fault::InvalidInput(LocalStoreFaultMessage::ApplyBytesOverCap.text().to_owned())
         }
         // Exhaustive on purpose: a new variant must pick its projection
         // here before it can reach a guest.
-        StorageError::Open(_)
-        | StorageError::Txn(_)
-        | StorageError::Table(_)
-        | StorageError::Storage(_)
-        | StorageError::Commit(_)
-        | StorageError::InvalidNamespace(_) => {
+        StoreError::Backend(_) | StoreError::InvalidNamespace(_) => {
             Fault::Internal(LocalStoreFaultMessage::BackendFailure.text().to_owned())
         }
     }
@@ -306,7 +301,7 @@ mod tests {
         let exhausted = store_fault(
             "m",
             "set",
-            StorageError::QuotaExceeded {
+            StoreError::QuotaExceeded {
                 needed: 987_654_321,
                 quota: 123_456_789,
             },
@@ -314,7 +309,7 @@ mod tests {
         let never_fits = store_fault(
             "m",
             "set",
-            StorageError::QuotaUnsatisfiable {
+            StoreError::QuotaUnsatisfiable {
                 needed: 987_654_321,
                 quota: 123_456_789,
             },
@@ -335,7 +330,7 @@ mod tests {
         let ops = store_fault(
             "m",
             "apply",
-            StorageError::ApplyOpsExceeded {
+            StoreError::ApplyOpsExceeded {
                 ops: 4096,
                 cap: 1024,
             },
@@ -343,7 +338,7 @@ mod tests {
         let bytes = store_fault(
             "m",
             "apply",
-            StorageError::ApplyBytesExceeded {
+            StoreError::ApplyBytesExceeded {
                 bytes: 1 << 30,
                 cap: 4 << 20,
             },
@@ -358,12 +353,12 @@ mod tests {
 
     #[test]
     fn backend_faults_are_internal_and_carry_no_upstream_text() {
-        // A real redb error wrapping path-bearing io text, and the
+        // A backend failure wrapping path-bearing io text, and the
         // host-built namespace refusal.
         let io = std::io::Error::other("I/O error: /var/lib/nexum/state/local-store.redb");
         for err in [
-            StorageError::Storage(io.into()),
-            StorageError::InvalidNamespace("module namespace must not be empty".into()),
+            StoreError::Backend(io.into()),
+            StoreError::InvalidNamespace("module namespace must not be empty".into()),
         ] {
             let fault = store_fault("m", "get", err);
             let Fault::Internal(msg) = fault else {
@@ -407,13 +402,13 @@ mod tests {
             let _ = store_fault(
                 "mod-a",
                 "set",
-                StorageError::QuotaExceeded {
+                StoreError::QuotaExceeded {
                     needed: 987_654_321,
                     quota: 123_456_789,
                 },
             );
             let io = std::io::Error::other("I/O error: /var/lib/nexum/state/local-store.redb");
-            let _ = store_fault("mod-a", "get", StorageError::Storage(io.into()));
+            let _ = store_fault("mod-a", "get", StoreError::Backend(io.into()));
         });
         let out = String::from_utf8(sink.0.lock().expect("sink lock").clone())
             .expect("log output is UTF-8");
@@ -743,8 +738,12 @@ mod tests {
                 // A `From` impl would let `?` reach the guest while skipping
                 // the operator log in `store_fault`.
                 assert!(
-                    !code.contains("From<StorageError>"),
-                    "the storage projection must stay a logging function, not a From impl",
+                    code.contains("StoreError"),
+                    "the funnel no longer names the store seam error, so this guard scans nothing",
+                );
+                assert!(
+                    !code.contains("From<StoreError>"),
+                    "the store projection must stay a logging function, not a From impl",
                 );
                 continue;
             }
@@ -754,7 +753,7 @@ mod tests {
                 "RpcError{",
                 "Self::Fault(",
                 "Self::Rpc(",
-                "From<StorageError>",
+                "From<StoreError>",
                 "Self::Unsupported(",
                 "Self::Unavailable(",
                 "Self::Denied(",

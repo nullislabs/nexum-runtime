@@ -18,6 +18,7 @@ use crate::host::extension::Extension;
 use crate::host::local_store_redb::LocalStore;
 use crate::host::logs::LogPipeline;
 use crate::host::provider_pool::ProviderPool;
+use crate::host::state::HostState;
 
 /// A bundled runtime assembly: the [`RuntimeTypes`] lattice plus the component
 /// builders, extensions, and add-ons the launcher needs.
@@ -26,7 +27,7 @@ use crate::host::provider_pool::ProviderPool;
 /// also implementing it.
 pub trait Runtime: crate::sealed::SealedRuntime {
     /// The lattice the preset assembles.
-    type Types: RuntimeTypes;
+    type Types: RuntimeTypes<State = HostState<Self::Types>>;
     /// Builds the concrete chain [`ProviderPool`].
     type ChainBuilder: ComponentBuilder<Output = ProviderPool>;
     /// Builds the store backend ([`RuntimeTypes::Store`]).
@@ -64,6 +65,7 @@ impl crate::sealed::SealedRuntimeTypes for CoreRuntime {}
 impl crate::sealed::SealedRuntime for CoreRuntime {}
 
 impl RuntimeTypes for CoreRuntime {
+    type State = HostState<Self>;
     type Store = LocalStore;
 }
 

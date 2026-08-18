@@ -11,7 +11,7 @@ pub use builder::{
     LogPipelineBuilder, ProviderPoolBuilder,
 };
 pub use runtime_types::{Handle, RuntimeTypes};
-pub use state::{StateHandle, StateStore};
+pub use state::{StateHandle, StateStore, StoreError, WriteOp};
 
 /// Permitted read surface, re-exported from `nexum-world`.
 pub use nexum_world::ChainMethod;

@@ -16,10 +16,11 @@ use crate::bindings::nexum;
 use crate::host::component::RuntimeTypes;
 use crate::host::extension::ExtensionDelivery;
 use crate::host::logs::{LogChannel, LogRecord};
+use crate::host::state::HostState;
 use crate::manifest::Trigger;
 use nexum_primitives::module_id::ModuleId;
 
-impl<T: RuntimeTypes> Supervisor<T> {
+impl<T: RuntimeTypes<State = HostState<T>>> Supervisor<T> {
     /// The restart sweep runs first; returns the number of modules invoked.
     pub async fn dispatch_block(&mut self, block: nexum::host::types::Block) -> usize {
         let chain = Chain::from_id(block.chain_id);

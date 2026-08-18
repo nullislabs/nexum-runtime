@@ -1,13 +1,10 @@
 //! In-memory [`StateStore`] fake: per-namespace `HashMap`, no redb, no disk.
 
-// StorageError embeds redb error types; same allowance as the seam it mirrors.
-#![allow(clippy::result_large_err)]
-
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-use crate::host::component::{StateHandle, StateStore};
-use crate::host::local_store_redb::{MAX_APPLY_OPS, MAX_APPLY_VALUE_BYTES, StorageError, WriteOp};
+use crate::host::component::{StateHandle, StateStore, StoreError, WriteOp};
+use crate::host::local_store_redb::{MAX_APPLY_OPS, MAX_APPLY_VALUE_BYTES};
 
 type Namespaces = HashMap<String, HashMap<String, Vec<u8>>>;
 
@@ -36,11 +33,11 @@ pub struct MockStateHandle {
 impl StateStore for MockStateStore {
     type Handle = MockStateHandle;
 
-    fn module(&self, namespace: &str) -> Result<MockStateHandle, StorageError> {
+    fn module(&self, namespace: &str) -> Result<MockStateHandle, StoreError> {
         // Reject the empty namespace so the handle always has a real prefix,
         // matching the redb-backed store.
         if namespace.is_empty() {
-            return Err(StorageError::InvalidNamespace(
+            return Err(StoreError::InvalidNamespace(
                 "module namespace must not be empty".into(),
             ));
         }
@@ -64,7 +61,7 @@ impl StateHandle for MockStateHandle {
         self
     }
 
-    fn get(&self, key: &str) -> Result<Option<Vec<u8>>, StorageError> {
+    fn get(&self, key: &str) -> Result<Option<Vec<u8>>, StoreError> {
         Ok(self
             .lock()
             .get(&self.namespace)
@@ -72,7 +69,7 @@ impl StateHandle for MockStateHandle {
             .cloned())
     }
 
-    fn set(&self, key: &str, value: &[u8]) -> Result<(), StorageError> {
+    fn set(&self, key: &str, value: &[u8]) -> Result<(), StoreError> {
         let mut map = self.lock();
         let ns = map.entry(self.namespace.clone()).or_default();
         if let Some(quota) = self.quota_bytes {
@@ -85,12 +82,12 @@ impl StateHandle for MockStateHandle {
             let projected = used.saturating_sub(old) + entry;
             if projected > quota {
                 return Err(if entry > quota {
-                    StorageError::QuotaUnsatisfiable {
+                    StoreError::QuotaUnsatisfiable {
                         needed: entry,
                         quota,
                     }
                 } else {
-                    StorageError::QuotaExceeded {
+                    StoreError::QuotaExceeded {
                         needed: projected,
                         quota,
                     }
@@ -101,14 +98,14 @@ impl StateHandle for MockStateHandle {
         Ok(())
     }
 
-    fn delete(&self, key: &str) -> Result<(), StorageError> {
+    fn delete(&self, key: &str) -> Result<(), StoreError> {
         if let Some(m) = self.lock().get_mut(&self.namespace) {
             m.remove(key);
         }
         Ok(())
     }
 
-    fn list_keys(&self, prefix: &str) -> Result<Vec<String>, StorageError> {
+    fn list_keys(&self, prefix: &str) -> Result<Vec<String>, StoreError> {
         let map = self.lock();
         let mut keys: Vec<String> = map
             .get(&self.namespace)
@@ -122,9 +119,9 @@ impl StateHandle for MockStateHandle {
         Ok(keys)
     }
 
-    fn apply(&self, ops: &[WriteOp]) -> Result<(), StorageError> {
+    fn apply(&self, ops: &[WriteOp]) -> Result<(), StoreError> {
         if ops.len() > MAX_APPLY_OPS {
-            return Err(StorageError::ApplyOpsExceeded {
+            return Err(StoreError::ApplyOpsExceeded {
                 ops: ops.len(),
                 cap: MAX_APPLY_OPS,
             });
@@ -137,7 +134,7 @@ impl StateHandle for MockStateHandle {
             })
             .sum();
         if value_bytes > MAX_APPLY_VALUE_BYTES {
-            return Err(StorageError::ApplyBytesExceeded {
+            return Err(StoreError::ApplyBytesExceeded {
                 bytes: value_bytes,
                 cap: MAX_APPLY_VALUE_BYTES,
             });
@@ -167,12 +164,12 @@ impl StateHandle for MockStateHandle {
             let projected = used.saturating_sub(released) + charged;
             if projected > quota {
                 return Err(if charged > quota {
-                    StorageError::QuotaUnsatisfiable {
+                    StoreError::QuotaUnsatisfiable {
                         needed: charged,
                         quota,
                     }
                 } else {
-                    StorageError::QuotaExceeded {
+                    StoreError::QuotaExceeded {
                         needed: projected,
                         quota,
                     }

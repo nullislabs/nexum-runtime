@@ -9,5 +9,6 @@ pub struct MockTypes;
 impl crate::sealed::SealedRuntimeTypes for MockTypes {}
 
 impl RuntimeTypes for MockTypes {
+    type State = crate::host::state::HostState<Self>;
     type Store = MockStateStore;
 }
