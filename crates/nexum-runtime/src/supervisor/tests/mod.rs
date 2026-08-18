@@ -24,20 +24,20 @@ use super::dispatch::with_dispatch_deadline;
 use super::prepass::{
     NamespaceLedger, claim_namespace, enforce_total_reservation, unconfigured_chain,
 };
+use super::sources::{build_alloy_filter, wit_log};
 use super::store::resolve_module_limits;
-use super::triggers::{build_alloy_filter, wit_log};
 use super::*;
 use crate::bindings::nexum;
 use crate::digest::{ContentDigest, DigestMismatch};
 use crate::engine_config::{
     ComponentPolicy, ModuleLimits, PolicyCeilings, PolicySection, ResolvedModuleLimits, TotalPolicy,
 };
-use crate::host::logs::LogSource;
+use crate::host::logs::LogChannel;
 use crate::host::provider_pool::ProviderPool;
 use crate::manifest::{self, CapabilityError, CapabilityRegistry, ParseError, ResourceSection};
 use crate::preset::CoreRuntime;
 use crate::test_utils::{
-    BootScenario, Entry, ManifestSource, Refusal, TestManifest, example_wasm_or_skip,
+    BootScenario, Entry, ManifestInput, Refusal, TestManifest, example_wasm_or_skip,
     mock_components, module_wasm_or_skip, test_wasmtime_engine,
 };
 

@@ -1,6 +1,6 @@
 //! Per-store stdout/stderr capture: a [`StdoutStream`] line-buffering guest
 //! output and routing each line as a [`LogRecord`] tagged with its run and
-//! source.
+//! channel.
 
 use std::io;
 use std::pin::Pin;
@@ -12,27 +12,27 @@ use wasmtime_wasi::cli::{IsTerminal, StdoutStream};
 
 use tracing_core::Level;
 
-use super::{LogRecord, LogRouter, LogSource, RunId};
+use super::{LogChannel, LogRecord, LogRouter, RunId};
 
 /// Cap on an unterminated in-flight line; crossing it force-flushes the
 /// buffer as one record.
 const MAX_LINE_BYTES: usize = 1 << 20;
 
 /// Per-store stdout or stderr sink; each [`StdoutStream::async_stream`] yields
-/// a line-splitting writer bound to the run and source.
+/// a line-splitting writer bound to the run and channel.
 pub struct StdioStream {
     router: Arc<LogRouter>,
     run: RunId,
-    source: LogSource,
+    channel: LogChannel,
 }
 
 impl StdioStream {
-    /// Sink routing `source` lines for `run` through `router`.
-    pub fn new(router: Arc<LogRouter>, run: RunId, source: LogSource) -> Self {
+    /// Sink routing `channel` lines for `run` through `router`.
+    pub fn new(router: Arc<LogRouter>, run: RunId, channel: LogChannel) -> Self {
         Self {
             router,
             run,
-            source,
+            channel,
         }
     }
 }
@@ -48,7 +48,7 @@ impl StdoutStream for StdioStream {
         Box::new(LineWriter {
             router: self.router.clone(),
             run: self.run.clone(),
-            source: self.source,
+            channel: self.channel,
             buf: Vec::new(),
         })
     }
@@ -59,7 +59,7 @@ impl StdoutStream for StdioStream {
 struct LineWriter {
     router: Arc<LogRouter>,
     run: RunId,
-    source: LogSource,
+    channel: LogChannel,
     buf: Vec<u8>,
 }
 
@@ -72,13 +72,13 @@ impl LineWriter {
             route_line(
                 &self.router,
                 &self.run,
-                self.source,
+                self.channel,
                 &line[..line.len() - 1],
             );
         }
         if self.buf.len() > MAX_LINE_BYTES {
             let chunk = std::mem::take(&mut self.buf);
-            route_line(&self.router, &self.run, self.source, &chunk);
+            route_line(&self.router, &self.run, self.channel, &chunk);
         }
     }
 
@@ -89,20 +89,20 @@ impl LineWriter {
             return;
         }
         let rest = std::mem::take(&mut self.buf);
-        route_line(&self.router, &self.run, self.source, &rest);
+        route_line(&self.router, &self.run, self.channel, &rest);
     }
 }
 
 /// Level for a captured line: stdout INFO, stderr WARN.
-fn level_for(source: LogSource) -> Level {
-    match source {
-        LogSource::Stderr => Level::WARN,
+fn level_for(channel: LogChannel) -> Level {
+    match channel {
+        LogChannel::Stderr => Level::WARN,
         _ => Level::INFO,
     }
 }
 
 /// Decode and route one line, dropping a trailing `\r` and skipping empties.
-fn route_line(router: &LogRouter, run: &RunId, source: LogSource, bytes: &[u8]) {
+fn route_line(router: &LogRouter, run: &RunId, channel: LogChannel, bytes: &[u8]) {
     let bytes = bytes.strip_suffix(b"\r").unwrap_or(bytes);
     if bytes.is_empty() {
         return;
@@ -110,8 +110,8 @@ fn route_line(router: &LogRouter, run: &RunId, source: LogSource, bytes: &[u8]) 
     let message = String::from_utf8_lossy(bytes).into_owned();
     router.record(LogRecord::now(
         run.clone(),
-        source,
-        level_for(source),
+        channel,
+        level_for(channel),
         message,
     ));
 }
@@ -153,7 +153,7 @@ mod tests {
     use tokio::io::AsyncWriteExt;
 
     use super::*;
-    use crate::host::logs::{LogPipeline, LogRecord, LogSource, RunId, RunLogStore};
+    use crate::host::logs::{LogChannel, LogPipeline, LogRecord, RunId, RunLogStore};
 
     /// Store recording every appended message for assertions.
     #[derive(Default)]
@@ -173,7 +173,7 @@ mod tests {
         }
     }
 
-    fn setup(source: LogSource) -> (LineWriter, Arc<CaptureStore>) {
+    fn setup(channel: LogChannel) -> (LineWriter, Arc<CaptureStore>) {
         let store = Arc::new(CaptureStore::default());
         let pipeline = LogPipeline::new(store.clone());
         let writer = LineWriter {
@@ -182,7 +182,7 @@ mod tests {
                 crate::module_id::ModuleId::parse("m").expect("valid module name"),
                 0,
             ),
-            source,
+            channel,
             buf: Vec::new(),
         };
         (writer, store)
@@ -200,14 +200,14 @@ mod tests {
 
     #[tokio::test]
     async fn splits_on_newlines() {
-        let (mut w, store) = setup(LogSource::Stdout);
+        let (mut w, store) = setup(LogChannel::Stdout);
         w.write_all(b"alpha\nbeta\n").await.unwrap();
         assert_eq!(messages(&store), ["alpha", "beta"]);
     }
 
     #[tokio::test]
     async fn buffers_a_partial_line_until_the_newline_arrives() {
-        let (mut w, store) = setup(LogSource::Stdout);
+        let (mut w, store) = setup(LogChannel::Stdout);
         w.write_all(b"partial").await.unwrap();
         assert!(messages(&store).is_empty(), "no newline yet");
         w.write_all(b" line\n").await.unwrap();
@@ -219,7 +219,7 @@ mod tests {
         // The euro sign is three bytes; splitting mid-code-point across
         // two writes must not corrupt the decoded line.
         let euro = "\u{20ac}".as_bytes();
-        let (mut w, store) = setup(LogSource::Stdout);
+        let (mut w, store) = setup(LogChannel::Stdout);
         w.write_all(&euro[..1]).await.unwrap();
         w.write_all(&euro[1..]).await.unwrap();
         w.write_all(b"\n").await.unwrap();
@@ -228,7 +228,7 @@ mod tests {
 
     #[tokio::test]
     async fn interleaved_writes_accumulate_into_one_line() {
-        let (mut w, store) = setup(LogSource::Stdout);
+        let (mut w, store) = setup(LogChannel::Stdout);
         for chunk in [&b"a"[..], b"b", b"c", b"\n", b"d", b"e", b"\n"] {
             w.write_all(chunk).await.unwrap();
         }
@@ -237,7 +237,7 @@ mod tests {
 
     #[tokio::test]
     async fn final_unterminated_line_is_flushed_on_drop() {
-        let (mut w, store) = setup(LogSource::Stdout);
+        let (mut w, store) = setup(LogChannel::Stdout);
         w.write_all(b"no trailing newline").await.unwrap();
         assert!(messages(&store).is_empty(), "buffered, not yet flushed");
         drop(w);
@@ -246,30 +246,30 @@ mod tests {
 
     #[tokio::test]
     async fn empty_lines_are_skipped() {
-        let (mut w, store) = setup(LogSource::Stdout);
+        let (mut w, store) = setup(LogChannel::Stdout);
         w.write_all(b"\n\nkept\n\n").await.unwrap();
         assert_eq!(messages(&store), ["kept"]);
     }
 
     #[tokio::test]
     async fn trailing_carriage_return_is_trimmed() {
-        let (mut w, store) = setup(LogSource::Stdout);
+        let (mut w, store) = setup(LogChannel::Stdout);
         w.write_all(b"crlf\r\n").await.unwrap();
         assert_eq!(messages(&store), ["crlf"]);
     }
 
     #[tokio::test]
     async fn stderr_lines_carry_the_warn_level() {
-        let (mut w, store) = setup(LogSource::Stderr);
+        let (mut w, store) = setup(LogChannel::Stderr);
         w.write_all(b"oops\n").await.unwrap();
         let records = store.records.lock().unwrap();
-        assert_eq!(records[0].source, LogSource::Stderr);
+        assert_eq!(records[0].channel, LogChannel::Stderr);
         assert_eq!(records[0].level, Level::WARN);
     }
 
     #[tokio::test]
     async fn over_long_unterminated_line_is_force_flushed() {
-        let (mut w, store) = setup(LogSource::Stdout);
+        let (mut w, store) = setup(LogChannel::Stdout);
         let flood = vec![b'x'; MAX_LINE_BYTES + 1];
         w.write_all(&flood).await.unwrap();
         // The force-flush bounds host memory without waiting for a newline.

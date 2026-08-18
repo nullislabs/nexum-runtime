@@ -157,7 +157,7 @@ A `resume = true` trigger then replays the in-flight log at the next start; a bl
 The engine emits JSON `tracing` events on stdout, one flat object per line.
 `--pretty-logs` switches to the human format.
 Every event carries `timestamp`, `level`, `target` (the crate and module path), and `message`.
-A guest log line is mirrored into host tracing at the guest's own level with `module`, `run`, and `source` fields, and guest stdout and stderr are captured line by line.
+A guest log line is mirrored into host tracing at the guest's own level with `module`, `run`, and `channel` fields, and guest stdout and stderr are captured line by line.
 Production should not see `ERROR` from `nexum_runtime::*`.
 
 `RUST_LOG` wins over `[engine] log_level`, which is itself a full `EnvFilter` directive rather than a bare level.
@@ -269,7 +269,7 @@ The chain interface has no batch verb; the guest SDK lowers a batch of RPC reque
 `nexum_runtime_chain_request_total{outcome="err"}` is the degradation signal.
 
 Resource ceilings live in `engine.toml` `[policy]` and apply to every component; a `[policy.component.<id>]` row, keyed on `[[modules]].id`, overrides them for one.
-`[policy.total].max_memory_bytes` bounds the summed reservations, and an oversubscribed set refuses at boot naming the entry that crossed it.
+`[policy.total].max_memory_bytes` bounds the summed reservations, and an overcommitted set refuses at boot naming the entry that crossed it.
 A `[component.resources]` field in a manifest narrows a ceiling for one component and can never widen it.
 A component that consistently traps on fuel exhaustion is a bug, not a tuning miss.
 

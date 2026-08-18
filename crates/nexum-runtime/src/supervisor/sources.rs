@@ -1,4 +1,4 @@
-//! Project loaded modules' triggers into what the event loop opens;
+//! Project loaded modules' triggers into the sources the host opens;
 //! dead modules are excluded so no stream opens for an unreachable module.
 
 use std::collections::BTreeSet;
@@ -15,10 +15,10 @@ use crate::module_id::ModuleId;
 impl<T: RuntimeTypes> Supervisor<T> {
     /// One pass, one health filter: a dead module contributes to no field,
     /// so no stream of any kind opens for it.
-    pub fn trigger_plan(&self) -> TriggerPlan {
+    pub fn source_plan(&self) -> SourcePlan {
         let mut block_chains: Vec<Chain> = Vec::new();
-        let mut event_triggers = Vec::new();
-        let mut extension_kinds = BTreeSet::new();
+        let mut event_sources = Vec::new();
+        let mut demanded_extension_kinds = BTreeSet::new();
         let mut dead_hold_triggers = false;
         for module in &self.modules {
             if !module.health.dispatchable() {
@@ -52,7 +52,7 @@ impl<T: RuntimeTypes> Supervisor<T> {
                         } else {
                             (None, None)
                         };
-                        event_triggers.push(EventTrigger {
+                        event_sources.push(EventSource {
                             module: module.name.clone(),
                             chain,
                             filter,
@@ -62,7 +62,7 @@ impl<T: RuntimeTypes> Supervisor<T> {
                         });
                     }
                     Trigger::Extension { extension_kind, .. } => {
-                        extension_kinds.insert(extension_kind.clone());
+                        demanded_extension_kinds.insert(extension_kind.clone());
                     }
                     Trigger::Schedule { .. } => {}
                 }
@@ -70,33 +70,33 @@ impl<T: RuntimeTypes> Supervisor<T> {
         }
         block_chains.sort_by_key(|c| c.id());
         block_chains.dedup();
-        TriggerPlan {
+        SourcePlan {
             block_chains,
-            event_triggers,
-            extension_kinds,
+            event_sources,
+            demanded_extension_kinds,
             dead_hold_triggers,
         }
     }
 }
 
 /// Everything the launch path opens, projected once from the live modules.
-pub struct TriggerPlan {
+pub struct SourcePlan {
     /// Sorted by numeric id and deduped.
     pub block_chains: Vec<Chain>,
     /// The stream tags every log with the owning module for routing.
-    pub event_triggers: Vec<EventTrigger>,
+    pub event_sources: Vec<EventSource>,
     /// An extension opens a source only for kinds appearing here.
-    pub extension_kinds: BTreeSet<String>,
+    pub demanded_extension_kinds: BTreeSet<String>,
     /// A dead module declares at least one trigger.
     pub dead_hold_triggers: bool,
 }
 
-impl TriggerPlan {
+impl SourcePlan {
     /// A declared extension kind is not yet a source: the extension gates on
     /// its own service state, so the caller passes how many really opened.
     pub fn viability(&self, open_extension_sources: usize) -> Viability {
         if !self.block_chains.is_empty()
-            || !self.event_triggers.is_empty()
+            || !self.event_sources.is_empty()
             || open_extension_sources > 0
         {
             Viability::Live
@@ -119,8 +119,8 @@ pub enum Viability {
     Live,
 }
 
-/// One module's declared interest in a chain's logs, resolved at boot.
-pub struct EventTrigger {
+/// One chain-log source to open, resolved from a module's event trigger.
+pub struct EventSource {
     /// Also the module's store namespace.
     pub module: ModuleId,
     /// Chain the filter runs against; it must have an `engine.toml` entry.

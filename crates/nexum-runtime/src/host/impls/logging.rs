@@ -5,7 +5,7 @@ use tracing_core::Level;
 
 use crate::bindings::nexum;
 use crate::host::component::RuntimeTypes;
-use crate::host::logs::{LogRecord, LogSource};
+use crate::host::logs::{LogChannel, LogRecord};
 use crate::host::state::HostState;
 
 impl<T: RuntimeTypes> nexum::host::logging::Host for HostState<T> {
@@ -22,7 +22,7 @@ impl<T: RuntimeTypes> nexum::host::logging::Host for HostState<T> {
         };
         self.log_router.record(LogRecord::now(
             self.run.clone(),
-            LogSource::HostInterface,
+            LogChannel::HostInterface,
             level,
             message,
         ));

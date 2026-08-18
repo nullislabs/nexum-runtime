@@ -8,13 +8,13 @@ mod dispatch;
 mod lifecycle;
 pub(crate) mod load;
 pub(crate) mod prepass;
+mod sources;
 mod store;
-mod triggers;
 
 pub use load::LoadRefusal;
 pub use prepass::{BootRefusal, ConfiguredChains};
+pub use sources::{EventSource, SourcePlan, Viability};
 pub use store::{WasiClockOverride, build_linker};
-pub use triggers::{EventTrigger, TriggerPlan, Viability};
 
 use std::sync::Arc;
 
@@ -32,7 +32,7 @@ use crate::runtime::poison_policy::PoisonPolicy;
 use admission::{capability_registry, enforce_extension_uniqueness};
 use cursors::ChainLogCursors;
 use load::LoadedModule;
-use prepass::{enforce_triggers, load_required_manifest, manifest_namespace};
+use prepass::{enforce_trigger_chains, load_required_manifest, manifest_namespace};
 
 /// Owns every loaded module.
 pub struct Supervisor<T: RuntimeTypes> {
@@ -128,7 +128,7 @@ impl<T: RuntimeTypes> Supervisor<T> {
             let registry = capability_registry(&shared.extensions);
             let loaded_manifest =
                 load_required_manifest(&entry.path, entry.manifest.as_deref(), &registry)?;
-            enforce_triggers(
+            enforce_trigger_chains(
                 manifest_namespace(&loaded_manifest).as_str(),
                 &loaded_manifest,
                 &env.configured_chains,

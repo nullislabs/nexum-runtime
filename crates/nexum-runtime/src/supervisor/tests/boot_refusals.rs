@@ -72,7 +72,7 @@ async fn boot_refuses_a_component_without_a_manifest() {
     let scenario = BootScenario::new();
     let orphan = scenario.dir().join("orphan.wasm");
     scenario
-        .module(Entry::new(ManifestSource::Beside).wasm(orphan))
+        .module(Entry::new(ManifestInput::Beside).wasm(orphan))
         .expect_refusal()
         .await
         .variant::<BootRefusal>(|e| {
@@ -230,7 +230,7 @@ async fn a_component_policy_row_overrides_the_global_capability_set() {
 /// Two in-ceiling components still refuse together when their declared
 /// reservations cross `[policy.total]`; the refusal names the second.
 #[tokio::test]
-async fn boot_refuses_an_oversubscribed_component_set() {
+async fn boot_refuses_an_overcommitted_component_set() {
     BootScenario::new()
         .policy(PolicySection {
             total: TotalPolicy {

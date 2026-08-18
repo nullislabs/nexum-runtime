@@ -8,7 +8,7 @@ use alloy_chains::Chain;
 use derive_more::From;
 use tempfile::TempDir;
 
-use super::manifest::{ManifestSource, TestManifest};
+use super::manifest::{ManifestInput, TestManifest};
 use super::{in_memory_logs, test_chain_configs};
 use crate::digest::ContentDigest;
 use crate::engine_config::{ChainConfig, EngineConfig, ModuleEntry, ModuleLimits, PolicySection};
@@ -25,13 +25,13 @@ use crate::test_utils::wasm::test_wasmtime_engine;
 pub struct Entry {
     id: Option<String>,
     wasm: Option<PathBuf>,
-    manifest: ManifestSource,
+    manifest: ManifestInput,
     digest: Option<ContentDigest>,
 }
 
 impl Entry {
     /// An entry loading `manifest` on the scenario-wide component.
-    pub fn new(manifest: impl Into<ManifestSource>) -> Self {
+    pub fn new(manifest: impl Into<ManifestInput>) -> Self {
         Self {
             id: None,
             wasm: None,
@@ -594,7 +594,7 @@ mod tests {
         let scenario = BootScenario::new();
         let orphan = scenario.dir().join("orphan.wasm");
         scenario
-            .module(Entry::new(ManifestSource::Beside).wasm(orphan))
+            .module(Entry::new(ManifestInput::Beside).wasm(orphan))
             .expect_refusal()
             .await
             .variant::<BootRefusal>(|e| {

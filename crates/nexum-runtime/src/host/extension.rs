@@ -1,5 +1,5 @@
 //! Extension seam: what one extension contributes to the host (namespace,
-//! capabilities, linker hook, trigger sources, and manifest-section install
+//! capabilities, linker hook, sources, and manifest-section install
 //! predicates).
 
 use std::collections::BTreeSet;

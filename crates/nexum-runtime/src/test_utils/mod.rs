@@ -45,7 +45,7 @@ pub mod wasm;
 
 pub use builders::Prebuilt;
 pub use harness::{TestRuntime, TestRuntimeBuilder};
-pub use manifest::{ManifestSource, TestManifest, manifest};
+pub use manifest::{ManifestInput, TestManifest, manifest};
 pub use scenario::{BootScenario, Booted, Entry, Refusal};
 pub use store::{MockStateHandle, MockStateStore};
 pub use types::MockTypes;
@@ -168,14 +168,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn subscribe_blocks_yields_pushed_headers() {
+    async fn open_block_source_yields_pushed_headers() {
         let node = FakeNode::new();
         let pool = node.pool(&[Chain::from_id(1)], HARNESS_POLL_INTERVAL);
         let mut header: alloy_rpc_types_eth::Header = alloy_rpc_types_eth::Header::default();
         header.inner.number = 7;
         node.push_block(header);
         let mut stream = pool
-            .subscribe_blocks(Chain::from_id(1))
+            .open_block_source(Chain::from_id(1))
             .await
             .expect("block stream");
         let item = stream
@@ -187,12 +187,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn watch_chain_logs_yields_pushed_logs() {
+    async fn open_event_source_yields_pushed_logs() {
         let node = FakeNode::new();
         let pool = node.pool(&[Chain::from_id(1)], HARNESS_POLL_INTERVAL);
         node.push_chain_log(alloy_rpc_types_eth::Log::default());
         let mut stream = pool
-            .watch_chain_logs(Chain::from_id(1), Default::default(), 1)
+            .open_event_source(Chain::from_id(1), Default::default(), 1)
             .expect("chain-log poller stream");
         let batch = stream
             .next()
