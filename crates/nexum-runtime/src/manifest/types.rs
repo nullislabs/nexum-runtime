@@ -9,7 +9,7 @@ use alloy_primitives::{Address, B256};
 use serde::Deserialize;
 
 use super::error::ParseError;
-use crate::host_pattern::HostPattern;
+use nexum_primitives::host_pattern::HostPattern;
 
 /// Core capability names: the `nexum:host` interfaces linked into every
 /// module. `http` is gated separately (it gates `wasi:http/*`), and
@@ -249,9 +249,9 @@ pub struct Dependency {
 #[derive(Debug)]
 pub struct LoadedManifest {
     /// `[component].name` parsed into the namespace.
-    pub name: crate::module_id::ModuleId,
+    pub name: nexum_primitives::module_id::ModuleId,
     /// `[component].digest` parsed to its typed digest.
-    pub component_digest: Option<crate::digest::ContentDigest>,
+    pub component_digest: Option<nexum_primitives::digest::ContentDigest>,
     /// `[component.resources]` overrides.
     pub resources: ResourceSection,
     /// `[dependencies]`; presence is validated, an absent table refuses.
@@ -278,7 +278,7 @@ impl TryFrom<Manifest> for LoadedManifest {
     /// holds the registry and refuses an unknown name first.
     fn try_from(manifest: Manifest) -> Result<Self, ParseError> {
         // The only producer of a `ModuleId`.
-        let name = crate::module_id::ModuleId::parse(&manifest.component.name)?;
+        let name = nexum_primitives::module_id::ModuleId::parse(&manifest.component.name)?;
         let component_digest = manifest
             .component
             .digest

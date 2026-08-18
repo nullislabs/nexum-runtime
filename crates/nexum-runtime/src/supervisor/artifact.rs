@@ -11,8 +11,8 @@ use wasmtime::component::Component;
 use wasmtime::{CodeBuilder, Engine};
 
 use super::load::LoadRefusal;
-use crate::digest::{ContentDigest, DigestMismatch, DigestPin};
 use crate::error::{EngineRefusal, RuntimeError};
+use nexum_primitives::digest::{ContentDigest, DigestMismatch, DigestPin};
 
 /// Digest expectations for one artifact. The operator's `[[modules]]`
 /// pin and the author's `[component].digest` are independent: both are

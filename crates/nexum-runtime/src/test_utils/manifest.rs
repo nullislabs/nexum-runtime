@@ -307,8 +307,8 @@ mod tests {
         assert_eq!(
             loaded.http_allowlist,
             [
-                crate::host_pattern::HostPattern::from("127.0.0.1"),
-                crate::host_pattern::HostPattern::from("*.acme.example"),
+                nexum_primitives::host_pattern::HostPattern::from("127.0.0.1"),
+                nexum_primitives::host_pattern::HostPattern::from("*.acme.example"),
             ]
         );
         assert_eq!(

@@ -28,7 +28,7 @@ run: build-module build-engine
 
 # Run host engine unit tests.
 test:
-    cargo nextest run -p nexum-runtime
+    cargo nextest run -p nexum-runtime -p nexum-primitives --all-features
 
 # Build module + engine, then run E2E integration tests.
 test-e2e: build-module build-engine

@@ -38,7 +38,9 @@ The trait layer is the part that carries the most weight here, because it is wha
 
 Layer 0, `nexum-primitives`.
 It holds `module_id`, `interface_id`, `digest` and `host_pattern`, which is about 800 lines.
-Its dependencies are `derive_more`, `sha2` and `thiserror`.
+Its default dependencies are `const-hex`, `derive_more`, `semver`, `serde`, `sha2` and `thiserror`.
+`digest` reaches hex through `const-hex` directly rather than through the `alloy-primitives` re-export of it, which keeps `DigestParseError::Hex` on the same error type without linking alloy.
+`impl From<ModuleId> for metrics::SharedString` lives in this crate because the orphan rule allows it in no other, and it sits behind an off-by-default `metrics` feature that `nexum-runtime` enables.
 The name has no `runtime` in it because the layer is not specific to the runtime product, in the manner of `alloy-primitives` under `alloy-*`.
 `nexum-world` continues to sit at this level as the WIT and capability vocabulary.
 

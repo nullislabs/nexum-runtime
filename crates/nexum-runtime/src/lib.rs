@@ -33,16 +33,12 @@ pub mod sealed {
 pub mod addons;
 pub mod bindings;
 mod builder;
-mod digest;
 mod engine_config;
 pub mod error;
 mod host;
-mod host_pattern;
-mod interface_id;
 pub mod manifest;
 #[path = "metrics.rs"]
 mod metric_names;
-mod module_id;
 mod preset;
 mod runtime;
 pub mod supervisor;
@@ -52,7 +48,6 @@ pub mod test_utils;
 
 /// Engine-side configuration (`engine.toml`) and its resolved forms.
 pub mod config {
-    pub use crate::digest::{ContentDigest, DigestPin};
     pub use crate::engine_config::{
         ChainConfig, ChainLimitsSection, ComponentPolicy, DispatchLimitsSection, EffectivePolicy,
         EngineConfig, EngineSection, HttpLimitsSection, LogLimitsSection, LogRetentionLimits,
@@ -60,10 +55,11 @@ pub mod config {
         PolicyCeilings, PolicySection, ResolvedModuleLimits, RpcEndpoint, RpcTransport,
         ShutdownLimitsSection, TotalPolicy, load_or_default,
     };
-    pub use crate::host_pattern::HostPattern;
     pub use crate::runtime::dispatch_rate::DispatchRatePolicy;
     pub use crate::runtime::poison_policy::PoisonPolicy;
     pub use ipnet::IpNet;
+    pub use nexum_primitives::digest::{ContentDigest, DigestPin};
+    pub use nexum_primitives::host_pattern::HostPattern;
     pub use url::Url;
 }
 
@@ -117,5 +113,5 @@ pub use builder::{
     AssembledRuntime, LaunchContext, PresetBuilder, PresetComponentsBuilder, ReadyBuilder,
     RuntimeBuilder, RuntimeHandle, TypedBuilder,
 };
-pub use module_id::ModuleId;
+pub use nexum_primitives::module_id::ModuleId;
 pub use preset::{CoreRuntime, Runtime};

@@ -17,7 +17,7 @@ use crate::host::component::RuntimeTypes;
 use crate::host::extension::ExtensionDelivery;
 use crate::host::logs::{LogChannel, LogRecord};
 use crate::manifest::Trigger;
-use crate::module_id::ModuleId;
+use nexum_primitives::module_id::ModuleId;
 
 impl<T: RuntimeTypes> Supervisor<T> {
     /// The restart sweep runs first; returns the number of modules invoked.

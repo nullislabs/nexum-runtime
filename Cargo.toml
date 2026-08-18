@@ -3,6 +3,7 @@ members = [
     "crates/nexum-cli",
     "crates/nexum-launch",
     "crates/nexum-module-macros",
+    "crates/nexum-primitives",
     "crates/nexum-runtime",
     "crates/nexum-sdk",
     "crates/nexum-sdk-test",
@@ -180,6 +181,9 @@ rand = "0.10"
 
 # Hex codec for test fixtures and receipt rendering.
 hex = "0.4"
+
+# Must resolve with what `alloy-primitives` re-exports, or `const_hex::FromHexError` becomes two types.
+const-hex = { version = "1.19", default-features = false, features = ["alloc", "core-error"] }
 
 # Content digests for loaded component bytes.
 sha2 = "0.10"

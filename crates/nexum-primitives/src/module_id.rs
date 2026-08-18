@@ -8,7 +8,6 @@ use thiserror::Error;
 
 /// Why a `[component].name` cannot become a [`ModuleId`].
 #[derive(Clone, Debug, Eq, Error, PartialEq)]
-#[non_exhaustive]
 pub enum InvalidModuleName {
     /// Absent, empty, or whitespace only.
     #[error("[component].name is missing or blank; declare a non-empty name")]
@@ -63,6 +62,7 @@ impl Borrow<str> for ModuleId {
 
 /// Hands a metric label the backing `Arc` instead of a copy, so a
 /// per-dispatch label value is a refcount bump over the same bytes.
+#[cfg(feature = "metrics")]
 impl From<ModuleId> for metrics::SharedString {
     fn from(id: ModuleId) -> Self {
         Self::from_shared(id.0)
@@ -92,6 +92,7 @@ mod tests {
         assert_eq!(map.get("other"), None);
     }
 
+    #[cfg(feature = "metrics")]
     #[test]
     fn metric_label_value_is_the_bare_namespace() {
         let id = id("twap-monitor");

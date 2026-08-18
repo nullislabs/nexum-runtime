@@ -20,15 +20,15 @@ use super::store::{HostStore, ResolvedLimits, StoreSpec, fresh_run_store};
 use super::{BootEnv, Shared};
 use crate::bindings::nexum::host::types::Fault;
 use crate::bindings::{Config, TriggerModule};
-use crate::digest::ContentDigest;
 use crate::engine_config::ModuleEntry;
 use crate::error::{EngineRefusal, RefusalContext as _, RuntimeError};
 use crate::host::component::RuntimeTypes;
 use crate::host::logs::RunId;
 use crate::host::state::HostState;
 use crate::manifest::{self, CapabilityRegistry, LoadedManifest, Trigger};
-use crate::module_id::ModuleId;
 use crate::runtime::dispatch_rate::TokenBucket;
+use nexum_primitives::digest::ContentDigest;
+use nexum_primitives::module_id::ModuleId;
 
 /// Admission refusals ahead of instantiation; the wording is operator-pinned.
 // `IntoStaticStr`: the snake_case variant name is the `error_kind` label;

@@ -13,7 +13,7 @@ use super::store::{ResolvedLimits, resolve_module_limits};
 use crate::engine_config::{EngineConfig, PolicySection};
 use crate::error::{RefusalContext as _, RuntimeError};
 use crate::manifest::{self, CapabilityRegistry, LoadedManifest, ParseError, Trigger};
-use crate::module_id::ModuleId;
+use nexum_primitives::module_id::ModuleId;
 
 /// Refusals before any compile; the wording is operator-pinned.
 // `IntoStaticStr`: the snake_case variant name is the `error_kind` label;

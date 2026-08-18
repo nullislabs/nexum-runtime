@@ -3297,6 +3297,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "nexum-primitives"
+version = "0.1.0"
+dependencies = [
+ "const-hex",
+ "derive_more",
+ "metrics",
+ "semver 1.0.28",
+ "serde",
+ "sha2",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "nexum-runtime"
 version = "0.1.0"
 dependencies = [
@@ -3319,6 +3332,7 @@ dependencies = [
  "metrics",
  "metrics-exporter-prometheus",
  "metrics-util",
+ "nexum-primitives",
  "nexum-runtime",
  "nexum-tasks",
  "nexum-world",
@@ -3327,7 +3341,6 @@ dependencies = [
  "semver 1.0.28",
  "serde",
  "serde_json",
- "sha2",
  "strum",
  "tempfile",
  "thiserror 2.0.18",

@@ -82,7 +82,7 @@ pub enum EngineConfigError {
         value: String,
         /// Why the digest refused.
         #[source]
-        source: crate::digest::DigestParseError,
+        source: nexum_primitives::digest::DigestParseError,
     },
 }
 

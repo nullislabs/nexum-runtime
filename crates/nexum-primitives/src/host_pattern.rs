@@ -78,7 +78,7 @@ impl fmt::Display for HostPattern {
 
 /// Whether `host` matches any allowlist pattern. Case-insensitive and
 /// host-only (no scheme or port; IPv6 literals keep their brackets).
-pub(crate) fn host_allowed(host: &str, allowlist: &[HostPattern]) -> bool {
+pub fn host_allowed(host: &str, allowlist: &[HostPattern]) -> bool {
     allowlist.iter().any(|pattern| pattern.matches(host))
 }
 

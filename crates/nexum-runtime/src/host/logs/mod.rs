@@ -19,7 +19,7 @@ use std::time::SystemTime;
 use strum::IntoStaticStr;
 use tracing_core::Level;
 
-use crate::module_id::ModuleId;
+use nexum_primitives::module_id::ModuleId;
 
 pub use stdio::StdioStream;
 pub use store::{InMemoryRunLogStore, LogPage, RunLogStore, RunMeta};

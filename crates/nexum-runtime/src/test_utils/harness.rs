@@ -283,7 +283,7 @@ mod tests {
 
     /// A block manifest plus a `[component].digest` pin of the wasm's bytes.
     fn pinned_block_manifest(name: &str, chain_id: u64, wasm: &std::path::Path) -> String {
-        let digest = crate::digest::ContentDigest::of_bytes(
+        let digest = nexum_primitives::digest::ContentDigest::of_bytes(
             &std::fs::read(wasm).expect("read module wasm for pinning"),
         );
         manifest(name)

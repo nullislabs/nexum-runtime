@@ -28,7 +28,6 @@ use super::sources::{build_alloy_filter, wit_log};
 use super::store::resolve_module_limits;
 use super::*;
 use crate::bindings::nexum;
-use crate::digest::{ContentDigest, DigestMismatch};
 use crate::engine_config::{
     ComponentPolicy, ModuleLimits, PolicyCeilings, PolicySection, ResolvedModuleLimits, TotalPolicy,
 };
@@ -44,6 +43,7 @@ use crate::test_utils::{
     BootScenario, Entry, ManifestInput, Refusal, TestManifest, example_wasm_or_skip,
     mock_components, module_wasm_or_skip, test_wasmtime_engine,
 };
+use nexum_primitives::digest::{ContentDigest, DigestMismatch};
 
 type DefaultSupervisor = Supervisor<CoreRuntime>;
 

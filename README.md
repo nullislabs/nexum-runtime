@@ -7,6 +7,7 @@ This repository is the leaf of the Nullis runtime stack: it carries no cross-rep
 ## Layout
 
 - `crates/nexum-runtime` - the engine host: wasmtime embedding, supervisor, capability providers, metrics.
+- `crates/nexum-primitives` - module and interface identity, content digests, and host allowlist patterns.
 - `crates/nexum-cli` - the bare `nexum` engine binary.
 - `crates/nexum-launch` - shared launch surface (config loading, logging, presets).
 - `crates/nexum-sdk` - the guest-side SDK modules build against.
