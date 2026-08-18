@@ -261,14 +261,10 @@ impl<T: RuntimeTypes> AssembledRuntime<T> {
                 .file_stem()
                 .map(|s| s.to_string_lossy().into_owned())
                 .unwrap_or_else(|| "module".to_owned());
-            let entry = ModuleEntry {
-                id,
-                path: wasm,
-                manifest,
-                // No [[modules]] entry describes the override, so no
-                // operator pin can apply to it.
-                digest: None,
-            };
+            // No [[modules]] entry describes the override, so no
+            // operator pin can apply to it.
+            let mut entry = ModuleEntry::new(id, wasm);
+            entry.manifest = manifest;
             Supervisor::boot_single(
                 &engine,
                 &linker,
@@ -1173,12 +1169,10 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let mut config = EngineConfig::default();
         config.engine.state_dir = dir.path().join("state");
-        config.modules.push(ModuleEntry {
-            id: stem.clone(),
-            path: dir.path().join("unrelated.wasm"),
-            manifest: None,
-            digest: None,
-        });
+        config.modules.push(ModuleEntry::new(
+            stem.clone(),
+            dir.path().join("unrelated.wasm"),
+        ));
         config.policy.component.insert(
             stem,
             crate::engine_config::ComponentPolicy {

@@ -380,10 +380,9 @@ mod tests {
                 request_timeout_secs: timeout_secs,
             },
         );
-        EngineConfig {
-            chains,
-            ..Default::default()
-        }
+        let mut cfg = EngineConfig::default();
+        cfg.chains = chains;
+        cfg
     }
 
     #[tokio::test]

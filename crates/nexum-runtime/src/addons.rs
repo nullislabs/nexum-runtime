@@ -150,10 +150,9 @@ mod tests {
     /// An enabled exporter with an unparseable bind address fails at install.
     #[test]
     fn prometheus_add_on_rejects_an_invalid_bind_addr() {
-        let metrics = MetricsSection {
-            enabled: true,
-            bind_addr: "not-a-socket-addr".to_owned(),
-        };
+        let mut metrics = MetricsSection::default();
+        metrics.enabled = true;
+        metrics.bind_addr = "not-a-socket-addr".to_owned();
         let ctx = AddOnsContext { metrics: &metrics };
         let err = match PrometheusAddOn.install(&ctx) {
             Ok(_) => panic!("invalid bind_addr must not install"),

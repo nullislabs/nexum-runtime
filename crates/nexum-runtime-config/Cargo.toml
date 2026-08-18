@@ -1,0 +1,24 @@
+[package]
+name = "nexum-runtime-config"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "engine.toml configuration for the Nexum runtime: chains, limits, and operator policy."
+
+[lints]
+workspace = true
+
+[dependencies]
+alloy-chains.workspace = true
+ipnet.workspace = true
+nexum-primitives = { path = "../nexum-primitives" }
+serde.workspace = true
+thiserror.workspace = true
+toml.workspace = true
+tracing.workspace = true
+url.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

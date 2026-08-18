@@ -262,26 +262,22 @@ impl<T: RuntimeTypes> BootScenario<T> {
             )
         };
 
-        let mut config = EngineConfig {
-            limits: self
-                .limits
-                .try_into()
-                .expect("scenario [limits] must carry no zero"),
-            policy: self.policy,
-            chains: self.chains,
-            ..Default::default()
-        };
+        let mut config = EngineConfig::default();
+        config.limits = self
+            .limits
+            .try_into()
+            .expect("scenario [limits] must carry no zero");
+        config.policy = self.policy;
+        config.chains = self.chains;
         config.engine.state_dir = dir.clone();
         config.engine.require_component_digest = self.require_digest;
         config.defaulted = self.defaulted;
         for (i, entry) in self.modules.into_iter().enumerate() {
             let (id, path, manifest, digest) = resolve(i, entry);
-            config.modules.push(ModuleEntry {
-                id,
-                path,
-                manifest,
-                digest,
-            });
+            let mut module = ModuleEntry::new(id, path);
+            module.manifest = manifest;
+            module.digest = digest;
+            config.modules.push(module);
         }
         (
             config,
@@ -678,13 +674,12 @@ mod tests {
     fn entries_carry_their_component_manifest_and_operator_limits() {
         let scenario = BootScenario::new()
             .wasm("guest.wasm")
-            .limits(ModuleLimits {
-                poison: crate::engine_config::PoisonLimitsSection {
+            .limits(crate::test_utils::limits_with(|limits| {
+                limits.poison = crate::engine_config::PoisonLimitsSection {
                     max_failures: Some(3),
                     window_secs: Some(60),
-                },
-                ..Default::default()
-            })
+                }
+            }))
             .module(TestManifest::new("a").cap("logging"))
             .module(Entry::new(TestManifest::new("b").cap("logging")).wasm("other.wasm"));
         // Holding _launch keeps the manifest tempdir alive for the asserts.

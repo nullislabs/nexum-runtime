@@ -29,7 +29,7 @@ use super::store::resolve_module_limits;
 use super::*;
 use crate::bindings::nexum;
 use crate::engine_config::{
-    ComponentPolicy, ModuleLimits, PolicyCeilings, PolicySection, ResolvedModuleLimits, TotalPolicy,
+    ComponentPolicy, PolicyCeilings, PolicySection, ResolvedModuleLimits, TotalPolicy,
 };
 use crate::error::RuntimeError;
 use crate::host::logs::LogChannel;
@@ -40,7 +40,7 @@ use crate::preset::CoreRuntime;
 use crate::supervisor::load::LoadRefusal;
 use crate::supervisor::prepass::BootRefusal;
 use crate::test_utils::{
-    BootScenario, Entry, ManifestInput, Refusal, TestManifest, example_wasm_or_skip,
+    BootScenario, Entry, ManifestInput, Refusal, TestManifest, example_wasm_or_skip, limits_with,
     mock_components, module_wasm_or_skip, test_wasmtime_engine,
 };
 use nexum_primitives::digest::{ContentDigest, DigestMismatch};
@@ -73,10 +73,9 @@ fn test_components(store: crate::host::local_store_redb::LocalStore) -> Componen
 }
 
 fn test_chains() -> ConfiguredChains {
-    ConfiguredChains::from_config(&EngineConfig {
-        chains: crate::test_utils::test_chain_configs(),
-        ..EngineConfig::default()
-    })
+    let mut config = EngineConfig::default();
+    config.chains = crate::test_utils::test_chain_configs();
+    ConfiguredChains::from_config(&config)
 }
 
 /// The caller-held `TempDir` cleans up the store on drop.
@@ -107,12 +106,8 @@ async fn try_boot_single(
     let engine = test_wasmtime_engine();
     let linker = make_linker(&engine);
     let (dir, store) = temp_local_store();
-    let entry = ModuleEntry {
-        id: "single".to_owned(),
-        path: wasm.to_path_buf(),
-        manifest: manifest.map(Path::to_path_buf),
-        digest: None,
-    };
+    let mut entry = ModuleEntry::new("single", wasm);
+    entry.manifest = manifest.map(Path::to_path_buf);
     let limits = ResolvedModuleLimits::default();
     let policy = PolicySection::default();
     let env = BootEnv {

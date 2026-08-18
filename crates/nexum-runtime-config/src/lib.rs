@@ -1,17 +1,21 @@
-//! Engine-side runtime configuration (`engine.toml`): chain RPC
-//! endpoints, local-store location, and per-module resource limits.
-//! Distinct from a module's `component.toml` manifest.
-//!
-//! Load order: `--engine-config` path, else `engine.toml` in the cwd,
-//! else defaults (no chains, `state_dir = ./data`).
+//! Engine-side runtime configuration (`engine.toml`).
+
+// `with_env` in the `load` tests calls `std::env::set_var`, which is
+// unsafe as of the 2024 edition.
+#![cfg_attr(not(test), forbid(unsafe_code))]
 
 mod chain;
+mod dispatch_rate;
 mod error;
 mod limits;
 mod load;
+mod poison_policy;
 mod policy;
 
 pub use chain::{ChainConfig, RpcEndpoint, RpcEndpointError, RpcTransport};
+pub use dispatch_rate::{
+    DEFAULT_DISPATCH_BURST, DEFAULT_DISPATCH_REFILL_PER_SEC, DispatchRatePolicy,
+};
 pub use error::{EngineConfigError, EnvVarError};
 pub use limits::{
     ChainLimitsSection, DispatchLimitsSection, HttpLimitsSection, LogLimitsSection,
@@ -19,6 +23,7 @@ pub use limits::{
     ResolvedModuleLimits, ShutdownLimitsSection,
 };
 pub use load::load_or_default;
+pub use poison_policy::{POISON_MAX_FAILURES, POISON_WINDOW, PoisonPolicy, should_poison};
 pub use policy::{ComponentPolicy, EffectivePolicy, PolicyCeilings, PolicySection, TotalPolicy};
 
 use std::collections::{HashMap, HashSet};

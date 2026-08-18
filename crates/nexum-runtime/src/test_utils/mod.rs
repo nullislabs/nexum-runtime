@@ -75,6 +75,15 @@ use crate::host::logs::LogPipeline;
 
 pub(crate) const HARNESS_POLL_INTERVAL: Duration = Duration::from_millis(20);
 
+#[cfg(test)]
+pub(crate) fn limits_with(
+    set: impl FnOnce(&mut crate::engine_config::ModuleLimits),
+) -> crate::engine_config::ModuleLimits {
+    let mut limits = crate::engine_config::ModuleLimits::default();
+    set(&mut limits);
+    limits
+}
+
 /// A fresh in-memory [`LogPipeline`] at default retention limits.
 pub(crate) fn in_memory_logs() -> LogPipeline {
     LogPipeline::in_memory(ResolvedModuleLimits::default().logs)

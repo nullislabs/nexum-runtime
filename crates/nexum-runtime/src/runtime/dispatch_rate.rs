@@ -1,52 +1,9 @@
 //! Per-module dispatch rate limiter: one token bucket per module, checked
-//! before `on_trigger`, drops over-rate triggers. Caps how often a dispatch
-//! starts (fuel/memory/poison cap what one costs); per-module, so a flood
-//! cannot starve other modules. Pure with injected time.
-
-use std::num::NonZeroU32;
+//! before `on_trigger`, drops over-rate triggers. Pure with injected time.
 
 use tokio::time::Instant;
 
-/// A literal as non-zero; a zero fails the build.
-const fn nz(n: u32) -> NonZeroU32 {
-    match NonZeroU32::new(n) {
-        Some(v) => v,
-        None => panic!("zero constant"),
-    }
-}
-
-/// Token-bucket thresholds from `[limits.dispatch]`, else
-/// [`DispatchRatePolicy::default`]. Non-zero by type: a zero in either
-/// field would drop every dispatch forever.
-#[derive(Debug, Clone, Copy)]
-pub struct DispatchRatePolicy {
-    /// Bucket capacity: the burst allowance. One dispatch consumes one token.
-    pub capacity: NonZeroU32,
-    /// Tokens replenished per second: the sustained ceiling.
-    pub refill_per_sec: NonZeroU32,
-}
-
-impl DispatchRatePolicy {
-    /// Pair a burst allowance with the rate that refills it.
-    pub const fn new(capacity: NonZeroU32, refill_per_sec: NonZeroU32) -> Self {
-        Self {
-            capacity,
-            refill_per_sec,
-        }
-    }
-}
-
-impl Default for DispatchRatePolicy {
-    fn default() -> Self {
-        Self::new(DEFAULT_DISPATCH_BURST, DEFAULT_DISPATCH_REFILL_PER_SEC)
-    }
-}
-
-/// Production default burst allowance.
-pub const DEFAULT_DISPATCH_BURST: NonZeroU32 = nz(256);
-
-/// Production default sustained ceiling, in dispatches per second.
-pub const DEFAULT_DISPATCH_REFILL_PER_SEC: NonZeroU32 = nz(128);
+use crate::engine_config::DispatchRatePolicy;
 
 /// Per-module token-bucket state; fractional tokens, starts full.
 #[derive(Debug)]
@@ -88,15 +45,17 @@ impl TokenBucket {
 
 #[cfg(test)]
 mod tests {
+    use std::num::NonZeroU32;
     use std::time::Duration;
 
     use super::*;
 
-    #[test]
-    fn default_is_production_constants() {
-        let p = DispatchRatePolicy::default();
-        assert_eq!(p.capacity, DEFAULT_DISPATCH_BURST);
-        assert_eq!(p.refill_per_sec, DEFAULT_DISPATCH_REFILL_PER_SEC);
+    /// A literal as non-zero; a zero fails the build.
+    const fn nz(n: u32) -> NonZeroU32 {
+        match NonZeroU32::new(n) {
+            Some(v) => v,
+            None => panic!("zero constant"),
+        }
     }
 
     #[test]

@@ -53,7 +53,7 @@ pub fn load(path: &Path, registry: &CapabilityRegistry) -> Result<LoadedManifest
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::manifest::types::Trigger;
+    use crate::types::Trigger;
 
     /// Parse and validate an inline manifest, skipping the registry
     /// cross-check `load` adds.

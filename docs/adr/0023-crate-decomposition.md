@@ -47,6 +47,8 @@ The name has no `runtime` in it because the layer is not specific to the runtime
 Layer 1, `nexum-runtime-manifest` and `nexum-runtime-config`.
 `nexum-runtime-manifest` holds the manifest layer, which is about 1,730 lines.
 `nexum-runtime-config` holds `engine_config` and the two value modules that `engine_config` currently reaches upward for, which is about 2,500 lines.
+The two value modules did not move whole: `dispatch_rate` splits, and only `DispatchRatePolicy` with its default constants moves down beside all of `poison_policy`.
+`TokenBucket` stays in the engine because it holds a `tokio::time::Instant`, which keeps tokio off `nexum-runtime-config`.
 
 Layer 2, `nexum-runtime-api`.
 It holds traits and the types those traits name: `Extension`, `ExtensionError`, `RuntimeTypes`, `StateStore` and `WasiClockOverride`.

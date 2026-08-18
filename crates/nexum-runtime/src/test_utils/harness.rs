@@ -458,13 +458,12 @@ mod tests {
 
         let mut rt = TestRuntime::builder(wasm)
             .manifest_inline(example_block_manifest())
-            .limits(ModuleLimits {
-                logs: LogLimitsSection {
+            .limits(crate::test_utils::limits_with(|limits| {
+                limits.logs = LogLimitsSection {
                     bytes_per_run: Some(1),
                     runs_retained: None,
-                },
-                ..Default::default()
-            })
+                }
+            }))
             .launch()
             .await
             .expect("launch example with tight log limits");
@@ -699,12 +698,11 @@ mod tests {
 
         let builder = TestRuntime::builder(wasm)
             .manifest_inline(price_alert_manifest())
-            .limits(ModuleLimits {
-                chain: ChainLimitsSection {
+            .limits(crate::test_utils::limits_with(|limits| {
+                limits.chain = ChainLimitsSection {
                     response_body_max_bytes: Some(16),
-                },
-                ..Default::default()
-            });
+                }
+            }));
         builder.chain().on_method(ChainMethod::EthCall, result);
 
         let mut rt = builder

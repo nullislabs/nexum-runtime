@@ -180,17 +180,13 @@ fn dispatch_deadline_resolves_override_and_default_and_refuses_zero() {
         "unset resolves to the built-in default",
     );
 
-    let overridden = ResolvedModuleLimits::try_from(ModuleLimits {
-        dispatch: deadline_secs(5),
-        ..ModuleLimits::default()
-    })
-    .expect("a non-zero override resolves");
+    let overridden =
+        ResolvedModuleLimits::try_from(limits_with(|limits| limits.dispatch = deadline_secs(5)))
+            .expect("a non-zero override resolves");
     assert_eq!(overridden.dispatch_deadline, Duration::from_secs(5));
 
-    let degenerate = ResolvedModuleLimits::try_from(ModuleLimits {
-        dispatch: deadline_secs(0),
-        ..ModuleLimits::default()
-    });
+    let degenerate =
+        ResolvedModuleLimits::try_from(limits_with(|limits| limits.dispatch = deadline_secs(0)));
     assert!(
         degenerate.is_err(),
         "a zero deadline must refuse at load, not saturate",
@@ -222,10 +218,7 @@ async fn dispatch_deadline_cuts_off_a_blocked_host_call_and_recovers() {
         &node,
         crate::test_utils::MockStateStore::new(),
     ))
-    .limits(ModuleLimits {
-        dispatch: deadline_secs(1),
-        ..ModuleLimits::default()
-    })
+    .limits(limits_with(|limits| limits.dispatch = deadline_secs(1)))
     .wasm(wasm)
     .module(workspace_manifest(
         "modules/fixtures/slow-host/component.toml",
@@ -353,14 +346,13 @@ async fn dispatch_rate_limit_throttles_a_flood_without_starving_others() {
     };
     let mut booted = BootScenario::new()
         .wasm(wasm)
-        .limits(ModuleLimits {
-            dispatch: DispatchLimitsSection {
+        .limits(limits_with(|limits| {
+            limits.dispatch = DispatchLimitsSection {
                 burst: Some(2),
                 refill_per_sec: Some(1),
                 ..Default::default()
-            },
-            ..Default::default()
-        })
+            }
+        }))
         .module(TestManifest::new("flood").cap("logging").block_trigger(1))
         .module(TestManifest::new("calm").cap("logging").block_trigger(100))
         .boot()
@@ -412,13 +404,12 @@ async fn multi_chain_poisoned_module_does_not_affect_other_chains() {
     };
     // Tight `[limits.poison]`: 2 failures in 60 s quarantines.
     let mut booted = BootScenario::new()
-        .limits(ModuleLimits {
-            poison: crate::engine_config::PoisonLimitsSection {
+        .limits(limits_with(|limits| {
+            limits.poison = crate::engine_config::PoisonLimitsSection {
                 max_failures: Some(2),
                 window_secs: Some(60),
-            },
-            ..Default::default()
-        })
+            }
+        }))
         .module(
             Entry::new(workspace_manifest(
                 "modules/fixtures/fuel-bomb/component.toml",
