@@ -16,12 +16,9 @@ pub use crate::supervisor::prepass::BootRefusal;
 pub use nexum_primitives::digest::{DigestMismatch, DigestParseError};
 pub use nexum_primitives::interface_id::{InvalidInterfaceId, InvalidInterfaceTrack};
 pub use nexum_primitives::module_id::InvalidModuleName;
+pub use nexum_runtime_api::BoxError;
 pub use semver::Error as SemverError;
 pub use url::ParseError as UrlParseError;
-
-/// The error an implementor-facing seam takes, so implementing one needs
-/// no `anyhow` dependency.
-pub type BoxError = Box<dyn std::error::Error + Send + Sync + 'static>;
 
 /// A wasmtime seam failure: engine, linker, compile, store, instantiate,
 /// a host call trapping under `init`, and the local-store namespace open.

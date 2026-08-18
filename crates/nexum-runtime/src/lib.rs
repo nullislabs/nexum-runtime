@@ -24,12 +24,14 @@ pub use {
 /// [`component::RuntimeTypes`]: implement alongside the trait.
 #[doc(hidden)]
 pub mod sealed {
-    pub trait SealedRuntimeTypes {}
+    pub use nexum_runtime_api::sealed::SealedRuntimeTypes;
+
     pub trait SealedRuntime {}
 }
 
+pub use nexum_runtime_api::bindings;
+
 pub mod addons;
-pub mod bindings;
 mod builder;
 pub mod error;
 mod host;
@@ -74,12 +76,10 @@ pub mod config {
 pub mod component {
     pub use crate::host::component::{
         BuildError, BuilderContext, ChainMethod, ComponentBuilder, Components, ComponentsBuilder,
-        Handle, LocalStoreBuilder, LogPipelineBuilder, ProviderPoolBuilder, RuntimeTypes,
-        StateHandle, StateStore, StoreError, WriteOp,
+        Handle, LocalStoreBuilder, LogPipelineBuilder, MAX_APPLY_OPS, MAX_APPLY_VALUE_BYTES,
+        ProviderPoolBuilder, RuntimeTypes, StateHandle, StateStore, StoreError, WriteOp,
     };
-    pub use crate::host::local_store_redb::{
-        LocalStore, MAX_APPLY_OPS, MAX_APPLY_VALUE_BYTES, ModuleStore, StorageError,
-    };
+    pub use crate::host::local_store_redb::{LocalStore, ModuleStore, StorageError};
     pub use crate::host::provider_pool::{
         BlockStream, CanonicalLogBatch, CanonicalLogStream, PoolError, ProviderPool,
     };

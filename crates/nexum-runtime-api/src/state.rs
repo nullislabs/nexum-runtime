@@ -1,7 +1,13 @@
 //! Local-store seam: process-wide store vending per-module namespaced
 //! handles.
 
-use crate::error::BoxError;
+use crate::BoxError;
+
+/// Cap on ops per [`StateHandle::apply`] batch.
+pub const MAX_APPLY_OPS: usize = 1024;
+
+/// Cap on total set-value bytes per [`StateHandle::apply`] batch.
+pub const MAX_APPLY_VALUE_BYTES: u64 = 4 * 1024 * 1024;
 
 /// One write in a [`StateHandle::apply`] batch.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -22,7 +28,6 @@ pub enum WriteOp {
 
 /// A refusal or failure from a [`StateStore`] or [`StateHandle`] call.
 #[derive(Debug, thiserror::Error)]
-#[non_exhaustive]
 pub enum StoreError {
     /// The namespace cannot name a store partition.
     #[error("invalid namespace: {0}")]

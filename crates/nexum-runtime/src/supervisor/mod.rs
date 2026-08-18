@@ -11,9 +11,10 @@ pub(crate) mod prepass;
 mod sources;
 mod store;
 
+pub use nexum_runtime_api::WasiClockOverride;
 pub use prepass::ConfiguredChains;
 pub use sources::{EventSource, SourcePlan, Viability};
-pub use store::{WasiClockOverride, build_linker};
+pub use store::build_linker;
 
 use std::sync::Arc;
 

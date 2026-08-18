@@ -1,7 +1,7 @@
 //! The RuntimeTypes lattice: one trait naming the assembly's seams, so every
 //! generic signature takes one parameter.
 
-use crate::host::component::StateStore;
+use crate::state::StateStore;
 
 /// The seams a runtime assembly provides. The marker bound is
 /// reserved for semver evolution. The chain backend is not a seam.

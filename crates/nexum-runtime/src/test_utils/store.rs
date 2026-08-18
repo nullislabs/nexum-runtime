@@ -3,8 +3,9 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-use crate::host::component::{StateHandle, StateStore, StoreError, WriteOp};
-use crate::host::local_store_redb::{MAX_APPLY_OPS, MAX_APPLY_VALUE_BYTES};
+use crate::host::component::{
+    MAX_APPLY_OPS, MAX_APPLY_VALUE_BYTES, StateHandle, StateStore, StoreError, WriteOp,
+};
 
 type Namespaces = HashMap<String, HashMap<String, Vec<u8>>>;
 

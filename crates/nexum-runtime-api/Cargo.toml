@@ -1,0 +1,20 @@
+[package]
+name = "nexum-runtime-api"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Seam traits for the Nexum runtime: extensions, backend builders, the state store, and the generated WIT types."
+
+[lints]
+workspace = true
+
+[dependencies]
+futures.workspace = true
+nexum-runtime-config = { path = "../nexum-runtime-config" }
+nexum-runtime-manifest = { path = "../nexum-runtime-manifest" }
+nexum-tasks = { path = "../nexum-tasks" }
+thiserror.workspace = true
+wasmtime.workspace = true
+wasmtime-wasi.workspace = true
