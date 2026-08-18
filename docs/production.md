@@ -176,14 +176,14 @@ With `enabled = false` the recorder is still installed, so call sites stay live,
 | Metric | Type | Labels | Meaning |
 |---|---|---|---|
 | `nexum_runtime_boot_refusals_total` | counter | `error_kind` | Boot refusals by error kind. |
-| `nexum_runtime_event_latency_seconds` | histogram | `module`, `trigger_kind` | Wall-clock seconds to dispatch one trigger. |
+| `nexum_runtime_dispatch_latency_seconds` | histogram | `module`, `trigger_kind` | Wall-clock seconds to dispatch one trigger. |
 | `nexum_runtime_dispatch_dropped_total` | counter | `module`, `trigger_kind`, `reason` | Triggers dropped before dispatch. `reason = "rate_limited"` is the per-component dispatch rate limit (`[limits.dispatch]`, default `burst = 256` and `refill_per_sec = 128`). `reason = "shutdown"` is a stop landing mid fan-out: the fan-out follows `[[modules]]` order, so the same trailing modules are skipped at every stop. A block is not replayed; an event is, from its cursor. |
 | `nexum_runtime_module_errors_total` | counter | `module`, `error_kind` | Module faults and traps. `error_kind = "trap"` is a wasmtime trap; other values are fault labels. |
 | `nexum_runtime_module_restarts_total` | counter | `module` | Module restart attempts. |
 | `nexum_runtime_module_poisoned` | gauge | `module` | `1` once a module crosses `[limits.poison]` (default 5 failures in 600 s). Stays `1` until the process restarts. |
 | `nexum_runtime_chain_request_total` | counter | `chain_id`, `method`, `outcome` | Every `chain::request`. A method outside the read surface is counted as `method="<denied>"` with `outcome="err"`. The `outcome="err"` rate is the RPC-degraded signal. |
 | `nexum_runtime_chain_response_capped_total` | counter | `chain_id`, `method` | Responses rejected for exceeding `[limits.chain] response_body_max_bytes` (default 1 MiB). |
-| `nexum_runtime_stream_reconnects_total` | counter | `kind`, `chain_id`, `module` | Stream reconnects. `kind="block"` is per chain; `kind="chain-log"` also carries `module`. |
+| `nexum_runtime_source_reconnects_total` | counter | `source_kind`, `chain_id`, `module` | Source reconnects. `source_kind="block"` is per chain; `source_kind="chain-log"` also carries `module`. |
 
 `crates/nexum-runtime/src/metrics.rs` is the single source of the name set, and a test refuses any emitted name the table does not carry.
 
@@ -230,7 +230,7 @@ groups:
           summary: "Nexum RPC error rate above 5% on chain {{ $labels.chain_id }}"
 
       - alert: NexumReconnectStorm
-        expr: rate(nexum_runtime_stream_reconnects_total[5m]) > 0.1
+        expr: rate(nexum_runtime_source_reconnects_total[5m]) > 0.1
         for: 5m
         labels: { severity: ticket }
         annotations:
@@ -239,7 +239,7 @@ groups:
       - alert: NexumDispatchLatency
         expr: |
           histogram_quantile(0.95,
-            sum by (module, le) (rate(nexum_runtime_event_latency_seconds_bucket[10m]))) > 5
+            sum by (module, le) (rate(nexum_runtime_dispatch_latency_seconds_bucket[10m]))) > 5
         for: 15m
         labels: { severity: ticket }
         annotations:

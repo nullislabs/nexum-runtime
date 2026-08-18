@@ -280,7 +280,7 @@ impl<T: RuntimeTypes> Supervisor<T> {
                     "dispatch ok"
                 );
                 metrics::histogram!(
-                    "nexum_runtime_event_latency_seconds",
+                    "nexum_runtime_dispatch_latency_seconds",
                     "module" => module.name.to_string(),
                     "trigger_kind" => trigger_kind,
                 )
