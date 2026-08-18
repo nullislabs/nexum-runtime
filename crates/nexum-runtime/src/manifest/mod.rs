@@ -10,10 +10,10 @@ pub(crate) mod error;
 mod load;
 mod types;
 
-pub use crate::interface_id::{InterfaceId, InterfaceTrack};
 pub(crate) use capabilities::enforce_capabilities;
 pub use capabilities::{CapabilityRegistry, NamespaceCaps};
 pub(crate) use error::ParseError;
 pub(crate) use load::load;
+pub use nexum_primitives::interface_id::{InterfaceId, InterfaceTrack};
 pub use types::ExtensionSections;
 pub(crate) use types::{LoadedManifest, ResourceSection, Trigger};

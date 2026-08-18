@@ -17,9 +17,9 @@ use crate::host::extension::Extension;
 use crate::host::http::HttpGate;
 use crate::host::logs::{LogChannel, RunId, StdioStream};
 use crate::host::state::HostState;
-use crate::host_pattern::HostPattern;
 use crate::manifest::ResourceSection;
-use crate::module_id::ModuleId;
+use nexum_primitives::host_pattern::HostPattern;
+use nexum_primitives::module_id::ModuleId;
 
 pub(super) type HostStore<T> = Store<HostState<T>>;
 

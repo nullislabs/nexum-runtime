@@ -28,8 +28,8 @@ use std::path::PathBuf;
 use alloy_chains::Chain;
 use serde::Deserialize;
 
-use crate::digest::ContentDigest;
 use chain::{RawChainConfig, resolve_chains};
+use nexum_primitives::digest::ContentDigest;
 use policy::{RawPolicySection, resolve_policy};
 
 /// A literal as non-zero; a zero fails the build.

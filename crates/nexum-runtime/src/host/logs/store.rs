@@ -8,7 +8,7 @@ use std::time::SystemTime;
 
 use super::{LogRecord, RunId};
 use crate::engine_config::LogRetentionLimits;
-use crate::module_id::ModuleId;
+use nexum_primitives::module_id::ModuleId;
 
 /// A page of a run's retained records plus the cursor to resume from.
 #[derive(Debug, Clone, Default)]

@@ -5,17 +5,17 @@
 use thiserror::Error;
 
 pub use crate::builder::LaunchRefusal;
-pub use crate::digest::{DigestMismatch, DigestParseError};
 pub use crate::engine_config::{EngineConfigError, EnvVarError, RpcEndpointError};
 pub use crate::host::component::BuildError;
 pub use crate::host::extension::ExtensionError;
 pub use crate::host::local_store_redb::StorageError;
 pub use crate::host::provider_pool::PoolError;
-pub use crate::interface_id::{InvalidInterfaceId, InvalidInterfaceTrack};
 pub use crate::manifest::error::{CapabilityError, CapabilityViolation, ParseError};
-pub use crate::module_id::InvalidModuleName;
 pub use crate::supervisor::load::LoadRefusal;
 pub use crate::supervisor::prepass::BootRefusal;
+pub use nexum_primitives::digest::{DigestMismatch, DigestParseError};
+pub use nexum_primitives::interface_id::{InvalidInterfaceId, InvalidInterfaceTrack};
+pub use nexum_primitives::module_id::InvalidModuleName;
 pub use semver::Error as SemverError;
 pub use url::ParseError as UrlParseError;
 
@@ -335,9 +335,9 @@ mod tests {
             "Digest" => (
                 DigestMismatch {
                     path: PathBuf::from("pinned.wasm"),
-                    pin: crate::digest::DigestPin::Author,
-                    declared: crate::digest::ContentDigest::of_bytes(b"declared"),
-                    actual: crate::digest::ContentDigest::of_bytes(b"actual"),
+                    pin: nexum_primitives::digest::DigestPin::Author,
+                    declared: nexum_primitives::digest::ContentDigest::of_bytes(b"declared"),
+                    actual: nexum_primitives::digest::ContentDigest::of_bytes(b"actual"),
                 }
                 .into(),
                 Some("digest_mismatch"),

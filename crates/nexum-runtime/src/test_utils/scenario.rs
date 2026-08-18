@@ -10,7 +10,6 @@ use tempfile::TempDir;
 
 use super::manifest::{ManifestInput, TestManifest};
 use super::{in_memory_logs, test_chain_configs};
-use crate::digest::ContentDigest;
 use crate::engine_config::{ChainConfig, EngineConfig, ModuleEntry, ModuleLimits, PolicySection};
 use crate::error::RuntimeError;
 use crate::host::component::{Components, RuntimeTypes};
@@ -21,6 +20,7 @@ use crate::host::provider_pool::ProviderPool;
 use crate::preset::CoreRuntime;
 use crate::supervisor::{Supervisor, WasiClockOverride, build_linker};
 use crate::test_utils::wasm::test_wasmtime_engine;
+use nexum_primitives::digest::ContentDigest;
 
 /// One `[[modules]]` entry.
 pub struct Entry {

@@ -57,7 +57,7 @@ fn read_verified_component_rejects_a_mismatched_operator_pin() {
         .expect("a mismatched operator pin must refuse the component");
     Refusal::from(err)
         .variant::<DigestMismatch>(|e| {
-            e.pin == crate::digest::DigestPin::Operator && e.declared == declared
+            e.pin == nexum_primitives::digest::DigestPin::Operator && e.declared == declared
         })
         // Operator wording pin: the fix is in engine.toml, not the manifest.
         .names("[[modules]].digest in engine.toml")
@@ -187,7 +187,7 @@ async fn boot_single_refuses_a_mismatched_component_digest() {
     let (_store, result) = try_boot_single(&wasm, Some(&manifest), false, None).await;
     Refusal::from(result.err().expect("a stale pin must refuse the boot"))
         .variant::<DigestMismatch>(|e| {
-            e.pin == crate::digest::DigestPin::Author
+            e.pin == nexum_primitives::digest::DigestPin::Author
                 && e.declared == wrong_digest()
                 && e.actual == ContentDigest::of_bytes(b"drifted artifact bytes")
         })
@@ -244,7 +244,7 @@ async fn boot_refuses_a_mismatched_operator_pin_before_compile() {
         .expect_refusal()
         .await
         .variant::<DigestMismatch>(|e| {
-            e.pin == crate::digest::DigestPin::Operator
+            e.pin == nexum_primitives::digest::DigestPin::Operator
                 && e.declared == wrong_digest()
                 && e.actual == ContentDigest::of_bytes(b"drifted artifact bytes")
         })
@@ -269,7 +269,7 @@ async fn disagreeing_operator_and_author_pins_refuse() {
         .expect_refusal()
         .await
         .variant::<DigestMismatch>(|e| {
-            e.pin == crate::digest::DigestPin::Operator
+            e.pin == nexum_primitives::digest::DigestPin::Operator
                 && e.declared == wrong_digest()
                 && e.actual == actual
         })

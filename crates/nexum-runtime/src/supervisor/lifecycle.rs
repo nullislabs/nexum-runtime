@@ -12,11 +12,11 @@ use tracing::{error, info};
 use super::Shared;
 use super::load::{LoadedModule, instantiate_module};
 use super::store::{build_linker, fresh_run_store};
-use crate::digest::ContentDigest;
 use crate::host::component::RuntimeTypes;
-use crate::module_id::ModuleId;
 use crate::runtime::poison_policy::{PoisonPolicy, should_poison};
 use crate::runtime::restart_policy::{backoff_for, jitter_seed};
+use nexum_primitives::digest::ContentDigest;
+use nexum_primitives::module_id::ModuleId;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum LifecycleState {

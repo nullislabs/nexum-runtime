@@ -16,6 +16,7 @@ The videre and shepherd repositories build on the SDK and the runtime published 
 ## Layout
 
 - `crates/nexum-runtime` - the engine host: wasmtime embedding, supervisor, capability providers, and metrics.
+- `crates/nexum-primitives` - module and interface identity, content digests, and host allowlist patterns.
 - `crates/nexum-cli` - the bare `nexum` engine binary, composed over `nexum-launch` with the `CoreRuntime` preset.
 - `crates/nexum-launch` - the generic launcher: CLI parsing, config loading, tracing setup, and the run loop for a preset.
 - `crates/nexum-sdk` - the guest-side SDK that modules build against, host-neutral and domain-free.

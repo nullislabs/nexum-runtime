@@ -10,7 +10,7 @@ use super::cursors::{chainlog_cursor_key, read_chain_log_cursor};
 use crate::bindings::nexum;
 use crate::host::component::RuntimeTypes;
 use crate::manifest::Trigger;
-use crate::module_id::ModuleId;
+use nexum_primitives::module_id::ModuleId;
 
 impl<T: RuntimeTypes> Supervisor<T> {
     /// One pass, one health filter: a dead module contributes to no field,

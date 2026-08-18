@@ -203,7 +203,9 @@ async fn e2e_policy_http_allow_narrows_the_author_list_through_boot() {
             component: [(
                 "m0".to_owned(),
                 ComponentPolicy {
-                    http_allow: Some(vec![crate::host_pattern::HostPattern::from("127.0.0.1")]),
+                    http_allow: Some(vec![nexum_primitives::host_pattern::HostPattern::from(
+                        "127.0.0.1",
+                    )]),
                     ..ComponentPolicy::default()
                 },
             )]
@@ -243,7 +245,7 @@ async fn boot_carries_policy_egress_into_the_store_spec() {
         return;
     };
     let deny: ipnet::IpNet = "203.0.113.0/24".parse().expect("test CIDR");
-    let allow = crate::host_pattern::HostPattern::from("api.cow.fi");
+    let allow = nexum_primitives::host_pattern::HostPattern::from("api.cow.fi");
     let booted = BootScenario::new()
         .wasm(wasm)
         .policy(PolicySection {

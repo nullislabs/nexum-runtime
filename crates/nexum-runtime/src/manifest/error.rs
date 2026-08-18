@@ -3,7 +3,7 @@
 use strum::{IntoStaticStr, VariantNames};
 use thiserror::Error;
 
-use crate::module_id::InvalidModuleName;
+use nexum_primitives::module_id::InvalidModuleName;
 
 /// Errors from loading or validating a manifest.
 // `IntoStaticStr`: the snake_case variant name is the stable per-class
@@ -59,7 +59,7 @@ pub enum ParseError {
         value: String,
         /// Why it failed to parse.
         #[source]
-        source: crate::digest::DigestParseError,
+        source: nexum_primitives::digest::DigestParseError,
     },
     /// A `[[trigger]]` table without a string `on`.
     #[error("manifest: [[trigger]] table {index} must declare a string `on`")]

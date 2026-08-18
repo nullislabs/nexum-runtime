@@ -28,7 +28,7 @@ use wasmtime_wasi_http::p2::{
 use super::component::RuntimeTypes;
 use super::state::HostState;
 use crate::engine_config::OutboundHttpLimits;
-use crate::host_pattern::{HostPattern, host_allowed};
+use nexum_primitives::host_pattern::{HostPattern, host_allowed};
 
 /// Per-module outbound HTTP policy.
 pub struct HttpGate {

@@ -27,9 +27,9 @@ use crate::bindings::nexum;
 use crate::host::component::RuntimeTypes;
 use crate::host::extension::{ExtensionDelivery, ExtensionSource};
 use crate::host::provider_pool::ProviderPool;
-use crate::module_id::ModuleId;
 use crate::runtime::restart_policy::{backoff_for, jitter_seed};
 use crate::supervisor::{EventSource, Supervisor};
+use nexum_primitives::module_id::ModuleId;
 use nexum_tasks::{TaskExecutor, TaskExit, TaskSet};
 
 /// Uninterrupted-event duration before the backoff counter resets to 0.

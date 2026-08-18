@@ -11,7 +11,7 @@ const SCHEME: &str = "sha256";
 /// sha256 digest of an artifact's bytes; `Display` is the canonical
 /// lowercase `sha256:<hex>` the manifest grammar parses back.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, derive_more::Display)]
-#[display("{SCHEME}:{}", alloy_primitives::hex::encode(_0))]
+#[display("{SCHEME}:{}", const_hex::encode(_0))]
 pub struct ContentDigest([u8; 32]);
 
 impl ContentDigest {
@@ -38,19 +38,15 @@ impl FromStr for ContentDigest {
         if payload.starts_with("0x") || payload.starts_with("0X") {
             return Err(DigestParseError::Hex {
                 value: s.to_owned(),
-                source: alloy_primitives::hex::FromHexError::InvalidHexCharacter {
-                    c: 'x',
-                    index: 1,
-                },
+                source: const_hex::FromHexError::InvalidHexCharacter { c: 'x', index: 1 },
             });
         }
-        let digest =
-            alloy_primitives::hex::decode_to_array::<_, 32>(payload).map_err(|source| {
-                DigestParseError::Hex {
-                    value: s.to_owned(),
-                    source,
-                }
-            })?;
+        let digest = const_hex::decode_to_array::<_, 32>(payload).map_err(|source| {
+            DigestParseError::Hex {
+                value: s.to_owned(),
+                source,
+            }
+        })?;
         if digest == [0u8; 32] {
             return Err(DigestParseError::Uncommitted);
         }
@@ -80,7 +76,7 @@ pub enum DigestParseError {
         value: String,
         /// Which character the decode stopped on.
         #[source]
-        source: alloy_primitives::hex::FromHexError,
+        source: const_hex::FromHexError,
     },
     /// All-zero digest: the uncommitted sentinel, never a real pin.
     #[error("digest is the all-zero uncommitted sentinel; omit `component` instead")]

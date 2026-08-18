@@ -23,8 +23,6 @@ wasmtime-wasi-http.workspace = true
 # Async + error plumbing.
 anyhow.workspace = true
 thiserror.workspace = true
-# Newtype boilerplate (`Display`, `AsRef`, `From`) for identity wrappers.
-derive_more.workspace = true
 # `strum::IntoStaticStr`: the snake_case variant name is the tracing
 # `channel` field (`LogChannel`) and the boot-refusal `error_kind` label.
 strum.workspace = true
@@ -46,6 +44,7 @@ nexum-tasks = { path = "../nexum-tasks" }
 # Single-source capability and fault-label vocabularies; the registry's
 # core interface set is emitted from its table.
 nexum-world = { path = "../nexum-world" }
+nexum-primitives = { path = "../nexum-primitives", features = ["metrics"] }
 
 # Manifest parsing.
 serde.workspace = true
@@ -98,12 +97,10 @@ redb.workspace = true
 # Misc.
 url.workspace = true
 
-# sha256 content digests for loaded component bytes.
-sha2.workspace = true
-
 # Enabled by `test-utils`: the `TestRuntime` harness temp-files inline
 # manifests before boot, and the in-process mock RPC transports implement
 # the tower service seam over alloy's JSON-RPC packet types.
+derive_more = { workspace = true, optional = true }
 tempfile = { workspace = true, optional = true }
 tower = { workspace = true, optional = true }
 alloy-json-rpc = { workspace = true, optional = true }
@@ -115,7 +112,13 @@ metrics-util = { workspace = true, optional = true }
 # and `MockTypes` lattice, the manually-driven `ManualClock`, and the
 # `TestRuntime` harness. Off by default; a downstream test crate opts in.
 # The self dev-dependency below turns it on for this crate's own tests.
-test-utils = ["dep:tempfile", "dep:tower", "dep:alloy-json-rpc", "dep:metrics-util"]
+test-utils = [
+    "dep:derive_more",
+    "dep:tempfile",
+    "dep:tower",
+    "dep:alloy-json-rpc",
+    "dep:metrics-util",
+]
 
 [dev-dependencies]
 # Self dev-dependency enabling `test-utils` for this crate's own test, doc,

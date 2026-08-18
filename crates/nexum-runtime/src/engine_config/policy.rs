@@ -5,7 +5,7 @@ use std::num::{NonZeroU64, NonZeroUsize};
 use ipnet::IpNet;
 use serde::Deserialize;
 
-use crate::host_pattern::HostPattern;
+use nexum_primitives::host_pattern::HostPattern;
 
 use super::error::{EngineConfigError, nonzero_u64, nonzero_usize, zero_field};
 use super::{nz_u64, nz_usize};
