@@ -102,6 +102,7 @@ impl LocalStore {
 impl ModuleStore {
     /// Cap this handle's namespace at `quota_bytes` on-disk; over-cap writes
     /// return [`StorageError::QuotaExceeded`].
+    #[must_use]
     pub fn with_quota(mut self, quota_bytes: u64) -> Self {
         self.quota_bytes = Some(quota_bytes);
         self

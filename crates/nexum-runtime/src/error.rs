@@ -45,7 +45,6 @@ impl std::error::Error for EngineRefusal {
 /// A refusal from the boot path, or a frame wrapping one.
 #[derive(Debug, Error)]
 #[cfg_attr(test, derive(strum::VariantNames))]
-#[non_exhaustive]
 pub enum RuntimeError {
     /// Refused before any compile: manifests, namespace claims, and the
     /// configured-chains gate.

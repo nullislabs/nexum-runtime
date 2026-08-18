@@ -42,18 +42,21 @@ impl Entry {
     }
 
     /// Operator-written id; unset, the entry gets `m<index>`.
+    #[must_use]
     pub fn id(mut self, id: impl Into<String>) -> Self {
         self.id = Some(id.into());
         self
     }
 
     /// Load this entry from `wasm` rather than the scenario-wide component.
+    #[must_use]
     pub fn wasm(mut self, wasm: impl Into<PathBuf>) -> Self {
         self.wasm = Some(wasm.into());
         self
     }
 
     /// The operator's `[[modules]].digest` pin for this entry's artifact.
+    #[must_use]
     pub fn digest(mut self, digest: ContentDigest) -> Self {
         self.digest = Some(digest);
         self
@@ -137,24 +140,28 @@ impl<T: RuntimeTypes> BootScenario<T> {
     }
 
     /// Scenario-wide component; unset, entries point at a nonexistent path.
+    #[must_use]
     pub fn wasm(mut self, wasm: impl Into<PathBuf>) -> Self {
         self.wasm = Some(wasm.into());
         self
     }
 
     /// Add a `[[modules]]` entry.
+    #[must_use]
     pub fn module(mut self, entry: impl Into<Entry>) -> Self {
         self.modules.push(entry.into());
         self
     }
 
     /// Replace the whole `[limits]` section.
+    #[must_use]
     pub fn limits(mut self, limits: ModuleLimits) -> Self {
         self.limits = limits;
         self
     }
 
     /// Replace the whole `[policy]` section.
+    #[must_use]
     pub fn policy(mut self, policy: PolicySection) -> Self {
         self.policy = policy;
         self
@@ -163,6 +170,7 @@ impl<T: RuntimeTypes> BootScenario<T> {
     /// Operator-permitted destinations, as `[limits.http].permit_destinations`.
     /// A test serving over loopback needs this: the address rules refuse
     /// loopback by default and a module allowlist cannot widen them.
+    #[must_use]
     pub fn permit_destinations(
         mut self,
         addrs: impl IntoIterator<Item = std::net::IpAddr>,
@@ -172,12 +180,14 @@ impl<T: RuntimeTypes> BootScenario<T> {
     }
 
     /// Replace the `[chains]` set; defaults to [`test_chain_configs`].
+    #[must_use]
     pub fn chains(mut self, chains: HashMap<Chain, ChainConfig>) -> Self {
         self.chains = chains;
         self
     }
 
     /// Model a run without any engine.toml: no chains, defaulted config.
+    #[must_use]
     pub fn defaulted_chains(mut self) -> Self {
         self.chains = HashMap::new();
         self.defaulted = true;
@@ -185,12 +195,14 @@ impl<T: RuntimeTypes> BootScenario<T> {
     }
 
     /// Refuse any entry whose manifest lacks a component digest pin.
+    #[must_use]
     pub fn require_digest(mut self) -> Self {
         self.require_digest = true;
         self
     }
 
     /// Wire extensions; they reach the linker and the boot gates together.
+    #[must_use]
     pub fn extensions(
         mut self,
         extensions: impl IntoIterator<Item = Arc<dyn Extension<T>>>,
@@ -200,6 +212,7 @@ impl<T: RuntimeTypes> BootScenario<T> {
     }
 
     /// Unset keeps the ambient host clocks.
+    #[must_use]
     pub fn clock(mut self, clocks: WasiClockOverride) -> Self {
         self.clocks = Some(clocks);
         self

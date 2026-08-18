@@ -126,6 +126,7 @@ impl<C, S> ComponentsBuilder<C, S> {
 
 impl<C, S, L> ComponentsBuilder<C, S, L> {
     /// Replace the log pipeline builder.
+    #[must_use]
     pub fn with_logs<L2>(self, logs: L2) -> ComponentsBuilder<C, S, L2> {
         ComponentsBuilder {
             chain: self.chain,

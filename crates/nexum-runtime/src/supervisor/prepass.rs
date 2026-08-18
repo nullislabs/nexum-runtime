@@ -20,7 +20,6 @@ use crate::module_id::ModuleId;
 // `VariantNames` lets the label-set test enumerate without a value.
 #[derive(Debug, Error, IntoStaticStr, VariantNames)]
 #[strum(serialize_all = "snake_case")]
-#[non_exhaustive]
 pub enum BootRefusal {
     /// Every module derives one keccak local-store namespace from the name,
     /// so a second claimant would alias the first one's state.

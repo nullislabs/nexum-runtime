@@ -38,7 +38,6 @@ use crate::supervisor::{self, Supervisor, Viability};
 // `VariantNames` lets the label-set test enumerate without a value.
 #[derive(Debug, thiserror::Error, IntoStaticStr, VariantNames)]
 #[strum(serialize_all = "snake_case")]
-#[non_exhaustive]
 pub enum LaunchRefusal {
     /// The event-loop task ended before the launcher observed a shutdown,
     /// so nothing is left to dispatch to.
@@ -471,6 +470,7 @@ impl<'a> RuntimeBuilder<'a> {
     }
 
     /// Bind the [`RuntimeTypes`] lattice.
+    #[must_use]
     pub fn with_types<T: RuntimeTypes>(self) -> TypedBuilder<'a, T> {
         TypedBuilder {
             config: self.config,
@@ -484,12 +484,14 @@ impl<'a> RuntimeBuilder<'a> {
 
     /// Bind a `Default` [`Runtime`] preset by marker; sugar over
     /// [`with_runtime`](Self::with_runtime).
+    #[must_use]
     pub fn runtime<R: Runtime + Default>(self) -> PresetBuilder<'a, R> {
         self.with_runtime(R::default())
     }
 
     /// Bind a [`Runtime`] preset by value, carrying pre-built backends into
     /// the launch.
+    #[must_use]
     pub fn with_runtime<R: Runtime>(self, preset: R) -> PresetBuilder<'a, R> {
         PresetBuilder {
             config: self.config,
@@ -515,6 +517,7 @@ pub struct PresetBuilder<'a, R: Runtime> {
 
 impl<'a, R: Runtime> PresetBuilder<'a, R> {
     /// Append extensions on top of the preset's own.
+    #[must_use]
     pub fn with_extensions(
         mut self,
         extensions: impl IntoIterator<Item = Arc<dyn Extension<R::Types>>>,
@@ -525,6 +528,7 @@ impl<'a, R: Runtime> PresetBuilder<'a, R> {
 
     /// Set the single-module source override, taking precedence over engine.toml
     /// `[[modules]]`. Both `None` runs the configured modules.
+    #[must_use]
     pub fn with_module_source(mut self, wasm: Option<PathBuf>, manifest: Option<PathBuf>) -> Self {
         self.wasm = wasm;
         self.manifest = manifest;
@@ -533,6 +537,7 @@ impl<'a, R: Runtime> PresetBuilder<'a, R> {
 
     /// Override the per-store WASI wall and monotonic clocks, including stores
     /// rebuilt on restart. Omitting it leaves the ambient host clocks.
+    #[must_use]
     pub fn with_wasi_clocks(mut self, clocks: WasiClockOverride) -> Self {
         self.clocks = Some(clocks);
         self
@@ -541,6 +546,7 @@ impl<'a, R: Runtime> PresetBuilder<'a, R> {
     /// Override the preset's component builders before launch; `map` swaps one
     /// seam while the preset's extensions and add-ons carry through. Mirror of
     /// [`TypedBuilder::with_components`].
+    #[must_use]
     pub fn with_components<C, S, L>(
         self,
         map: impl FnOnce(
@@ -639,6 +645,7 @@ pub struct TypedBuilder<'a, T: RuntimeTypes> {
 
 impl<'a, T: RuntimeTypes> TypedBuilder<'a, T> {
     /// Add the extensions.
+    #[must_use]
     pub fn with_extensions(
         mut self,
         extensions: impl IntoIterator<Item = Arc<dyn Extension<T>>>,
@@ -649,6 +656,7 @@ impl<'a, T: RuntimeTypes> TypedBuilder<'a, T> {
 
     /// Set the single-module source override, taking precedence over engine.toml
     /// `[[modules]]`. Both `None` runs the configured modules.
+    #[must_use]
     pub fn with_module_source(mut self, wasm: Option<PathBuf>, manifest: Option<PathBuf>) -> Self {
         self.wasm = wasm;
         self.manifest = manifest;
@@ -657,12 +665,14 @@ impl<'a, T: RuntimeTypes> TypedBuilder<'a, T> {
 
     /// Override the per-store WASI wall and monotonic clocks, including stores
     /// rebuilt on restart. Omitting it leaves the ambient host clocks.
+    #[must_use]
     pub fn with_wasi_clocks(mut self, clocks: WasiClockOverride) -> Self {
         self.clocks = Some(clocks);
         self
     }
 
     /// Bind the component builders that open the backends at launch.
+    #[must_use]
     pub fn with_components<C, S, L>(
         self,
         components: ComponentsBuilder<C, S, L>,
@@ -694,6 +704,7 @@ pub struct ReadyBuilder<'a, T: RuntimeTypes, C, S, L> {
 impl<T: RuntimeTypes, C, S, L> ReadyBuilder<'_, T, C, S, L> {
     /// Bind the cross-cutting add-on set installed before the engine boots;
     /// defaults to none.
+    #[must_use]
     pub fn with_add_ons(mut self, add_ons: AddOns) -> Self {
         self.add_ons = add_ons;
         self

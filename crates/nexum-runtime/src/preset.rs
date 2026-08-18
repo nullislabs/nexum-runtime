@@ -36,6 +36,7 @@ pub trait Runtime: crate::sealed::SealedRuntime {
 
     /// Component builders that open the backends at launch; consumes the
     /// preset, so a value-bound preset hands over owned, pre-built backends.
+    #[must_use]
     fn components(
         self,
     ) -> ComponentsBuilder<Self::ChainBuilder, Self::StoreBuilder, Self::LogsBuilder>;
