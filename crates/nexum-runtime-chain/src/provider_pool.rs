@@ -25,9 +25,8 @@ use serde_json::value::RawValue;
 use thiserror::Error;
 use tracing::info;
 
-use crate::engine_config::EngineConfig;
-use crate::error::RuntimeError;
-use crate::host::component::ChainMethod;
+use nexum_runtime_config::EngineConfig;
+use nexum_world::ChainMethod;
 
 /// Head re-poll cadence for chains without a block-time hint; known chains
 /// derive it from [`Chain::average_blocktime_hint`].
@@ -66,9 +65,9 @@ pub struct ProviderPool {
 }
 
 impl ProviderPool {
-    /// Open one provider per chain in `cfg.chains`; connection failures
-    /// land in [`RuntimeError::Pool`] and are fatal at boot.
-    pub async fn from_config(cfg: &EngineConfig) -> Result<Self, RuntimeError> {
+    /// Open one provider per chain in `cfg.chains`; a connection failure is
+    /// fatal at boot.
+    pub async fn from_config(cfg: &EngineConfig) -> Result<Self, PoolError> {
         let mut providers: HashMap<Chain, ChainEndpoint> = HashMap::new();
         // Sort by numeric id so the boot logs are deterministic
         // (`Chain` is not `Ord`).
@@ -288,7 +287,6 @@ pub type CanonicalLogStream =
 
 /// RPC failures pass through alloy's typed error, classified at the WIT edge.
 #[derive(Debug, Error)]
-#[non_exhaustive]
 pub enum PoolError {
     /// Chain absent from the engine config.
     #[error("unknown chain {0} (no engine.toml entry)")]
@@ -314,6 +312,21 @@ pub enum PoolError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn timeout_in_source_chain(err: &(dyn std::error::Error + 'static)) -> bool {
+        let mut cursor = Some(err);
+        while let Some(e) = cursor {
+            if e.downcast_ref::<reqwest::Error>()
+                .is_some_and(reqwest::Error::is_timeout)
+                || e.downcast_ref::<std::io::Error>()
+                    .is_some_and(|io| io.kind() == std::io::ErrorKind::TimedOut)
+            {
+                return true;
+            }
+            cursor = e.source();
+        }
+        false
+    }
 
     #[tokio::test]
     async fn empty_pool_rejects_lookups() {
@@ -371,7 +384,7 @@ mod tests {
 
     /// As [`test_config`], with an explicit per-request timeout.
     fn test_config_with_timeout(chain: Chain, rpc_url: &str, timeout_secs: u64) -> EngineConfig {
-        use crate::engine_config::{ChainConfig, EngineConfig, RpcEndpoint};
+        use nexum_runtime_config::{ChainConfig, EngineConfig, RpcEndpoint};
         let mut chains = HashMap::new();
         chains.insert(
             chain,
@@ -486,18 +499,16 @@ mod tests {
             .request(Chain::from_id(1), ChainMethod::EthBlockNumber, "[]".into())
             .await
             .unwrap_err();
-        // The reqwest and tokio timeouts race; whichever wins, the guest
-        // must see the dedicated timeout fault.
-        let chain_err = crate::bindings::nexum::host::chain::ChainError::from(err);
-        assert!(
-            matches!(
-                chain_err,
-                crate::bindings::nexum::host::chain::ChainError::Fault(
-                    crate::bindings::nexum::host::types::Fault::Timeout
-                )
+        // The reqwest and tokio timeouts race; whichever wins must
+        // classify as a timeout.
+        match &err {
+            PoolError::Timeout => {}
+            PoolError::Rpc(source) => assert!(
+                timeout_in_source_chain(source),
+                "expected a client-level timeout, got: {err:?}"
             ),
-            "expected a timeout fault, got: {chain_err:?}"
-        );
+            other => panic!("expected a timeout classification, got: {other:?}"),
+        }
         assert!(
             started.elapsed() < Duration::from_secs(30),
             "request must fail at the configured timeout, not the 60 s hang",

@@ -164,7 +164,7 @@ impl LogPipeline {
 
     /// Pipeline over the byte-bounded in-memory backend, sized by
     /// `[limits.logs]`.
-    pub fn in_memory(limits: crate::engine_config::LogRetentionLimits) -> Self {
+    pub fn in_memory(limits: nexum_runtime_config::LogRetentionLimits) -> Self {
         Self::new(Arc::new(InMemoryRunLogStore::new(limits)))
     }
 
@@ -237,7 +237,7 @@ mod tests {
 
     #[test]
     fn pipeline_read_side_reaches_the_backend() {
-        let limits = crate::engine_config::LogRetentionLimits {
+        let limits = nexum_runtime_config::LogRetentionLimits {
             bytes_per_run: std::num::NonZeroUsize::new(1024).unwrap(),
             runs_retained: std::num::NonZeroUsize::new(4).unwrap(),
         };

@@ -46,8 +46,12 @@ nexum-tasks = { path = "../nexum-tasks" }
 nexum-world = { path = "../nexum-world" }
 nexum-primitives = { path = "../nexum-primitives", features = ["metrics"] }
 nexum-runtime-api = { path = "../nexum-runtime-api" }
+nexum-runtime-chain = { path = "../nexum-runtime-chain" }
 nexum-runtime-config = { path = "../nexum-runtime-config" }
+nexum-runtime-http = { path = "../nexum-runtime-http" }
+nexum-runtime-logs = { path = "../nexum-runtime-logs" }
 nexum-runtime-manifest = { path = "../nexum-runtime-manifest" }
+nexum-runtime-store = { path = "../nexum-runtime-store" }
 
 toml.workspace = true
 ipnet.workspace = true
@@ -66,14 +70,6 @@ tracing-core.workspace = true
 metrics.workspace = true
 metrics-exporter-prometheus.workspace = true
 
-# Typed HTTP request/URI values for the wasi:http allowlist gate, plus
-# the body trait + combinators the gate's response-body cap wraps
-# incoming bodies with.
-http.workspace = true
-http-body.workspace = true
-http-body-util.workspace = true
-bytes.workspace = true
-
 # `chain` backend. Each configured chain owns a `DynProvider` built
 # from a `WsConnect`/`Http` transport so the host's `request` impl can
 # hand a raw `(method, params)` pair to alloy's JSON-RPC layer without
@@ -82,7 +78,6 @@ alloy-provider = { workspace = true, features = ["ws", "ipc", "pubsub", "reqwest
 alloy-rpc-client.workspace = true
 alloy-rpc-types-eth.workspace = true
 alloy-transport.workspace = true
-alloy-transport-ws.workspace = true
 alloy-primitives.workspace = true
 # Typed EIP-155 chain ids for engine config keys, the provider/orderbook
 # pools, and the chain seam.
@@ -121,6 +116,7 @@ test-utils = [
     "dep:tower",
     "dep:alloy-json-rpc",
     "dep:metrics-util",
+    "nexum-runtime-chain/test-utils",
 ]
 
 [dev-dependencies]

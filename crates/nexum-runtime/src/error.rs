@@ -136,13 +136,18 @@ impl RuntimeError {
     }
 }
 
-/// Sees through a slot that boxed a `RuntimeError`, so a chain-connect
-/// failure arrives as [`RuntimeError::Pool`] and not nested one deeper.
+/// Sees through a slot that boxed a `RuntimeError` or a `PoolError`, so a
+/// chain-connect failure arrives as [`RuntimeError::Pool`] and not nested
+/// one deeper.
 impl From<BuildError> for RuntimeError {
     fn from(err: BuildError) -> Self {
         fn see_through(source: BoxError, slot: fn(BoxError) -> BuildError) -> RuntimeError {
-            match source.downcast::<RuntimeError>() {
-                Ok(nested) => *nested,
+            let source = match source.downcast::<RuntimeError>() {
+                Ok(nested) => return *nested,
+                Err(source) => source,
+            };
+            match source.downcast::<PoolError>() {
+                Ok(pool) => RuntimeError::Pool(*pool),
                 Err(source) => RuntimeError::Backend(slot(source)),
             }
         }
@@ -440,6 +445,12 @@ mod tests {
         assert!(
             matches!(converted, RuntimeError::Pool(_)),
             "expected the nested Pool refusal, got {converted:?}",
+        );
+        let bare: BoxError = Box::new(PoolError::Timeout);
+        let converted = RuntimeError::from(BuildError::Chain(bare));
+        assert!(
+            matches!(converted, RuntimeError::Pool(_)),
+            "expected the bare Pool refusal, got {converted:?}",
         );
         let foreign = RuntimeError::from(BuildError::Chain(Box::from("connect refused")));
         assert!(

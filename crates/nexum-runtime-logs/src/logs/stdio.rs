@@ -153,7 +153,7 @@ mod tests {
     use tokio::io::AsyncWriteExt;
 
     use super::*;
-    use crate::host::logs::{LogChannel, LogPipeline, LogRecord, RunId, RunLogStore};
+    use crate::logs::{LogChannel, LogPipeline, LogRecord, RunId, RunLogStore};
 
     /// Store recording every appended message for assertions.
     #[derive(Default)]
@@ -165,11 +165,11 @@ mod tests {
         fn append(&self, record: LogRecord) {
             self.records.lock().unwrap().push(record);
         }
-        fn list_runs(&self, _module: &str) -> Vec<crate::host::logs::RunMeta> {
+        fn list_runs(&self, _module: &str) -> Vec<crate::logs::RunMeta> {
             Vec::new()
         }
-        fn read(&self, _run: &RunId, _cursor: u64) -> crate::host::logs::LogPage {
-            crate::host::logs::LogPage::default()
+        fn read(&self, _run: &RunId, _cursor: u64) -> crate::logs::LogPage {
+            crate::logs::LogPage::default()
         }
     }
 

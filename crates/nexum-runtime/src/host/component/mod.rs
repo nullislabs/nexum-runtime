@@ -4,13 +4,14 @@
 
 mod builder;
 
-pub use builder::{
-    BuildError, ComponentsBuilder, LocalStoreBuilder, LogPipelineBuilder, ProviderPoolBuilder,
-};
+pub use builder::{BuildError, ComponentsBuilder};
 pub use nexum_runtime_api::{
     BuilderContext, ComponentBuilder, Handle, MAX_APPLY_OPS, MAX_APPLY_VALUE_BYTES, RuntimeTypes,
     StateHandle, StateStore, StoreError, WriteOp,
 };
+pub use nexum_runtime_chain::ProviderPoolBuilder;
+pub use nexum_runtime_logs::LogPipelineBuilder;
+pub use nexum_runtime_store::LocalStoreBuilder;
 
 /// Permitted read surface, re-exported from `nexum-world`.
 pub use nexum_world::ChainMethod;

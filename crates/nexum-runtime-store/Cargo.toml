@@ -1,0 +1,23 @@
+[package]
+name = "nexum-runtime-store"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "The redb local-store backend for the Nexum runtime."
+
+[lints]
+workspace = true
+
+[dependencies]
+# keccak256 derives the per-module namespace prefix.
+alloy-primitives.workspace = true
+nexum-runtime-api = { path = "../nexum-runtime-api" }
+redb.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+nexum-tasks = { path = "../nexum-tasks" }
+tempfile.workspace = true
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

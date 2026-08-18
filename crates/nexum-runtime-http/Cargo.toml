@@ -1,0 +1,28 @@
+[package]
+name = "nexum-runtime-http"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "The outbound wasi:http gate for the Nexum runtime: allowlist, limits, and destination rules."
+
+[lints]
+workspace = true
+
+[dependencies]
+bytes.workspace = true
+http.workspace = true
+http-body.workspace = true
+http-body-util.workspace = true
+ipnet.workspace = true
+nexum-primitives = { path = "../nexum-primitives" }
+nexum-runtime-config = { path = "../nexum-runtime-config" }
+tokio = { workspace = true, features = ["net", "time"] }
+tracing.workspace = true
+wasmtime-wasi.workspace = true
+wasmtime-wasi-http.workspace = true
+
+[dev-dependencies]
+nexum-tasks = { path = "../nexum-tasks" }
+tokio = { workspace = true, features = ["io-util", "macros", "rt-multi-thread", "sync"] }

@@ -65,12 +65,17 @@ The seams in this layer name no implementation type, which is what unpicks the `
 The engine projects each variant to a guest-visible fault, and the attribute would have forced a wildcard arm that sends a future variant to an internal fault with nothing failing to compile.
 The seams must hold this shape before any code moves, because a seam that names a concrete type drags that type's crate with it.
 
-Layer 3, the implementation crates.
-`nexum-runtime-wasm` holds the wasmtime embedding and the capability providers.
+Layer 3, the capability crates.
 `nexum-runtime-store` holds the redb local store.
 `nexum-runtime-chain` holds the provider pool.
 `nexum-runtime-http` holds the outbound egress gate.
-Each depends on layer 2 and not on its siblings.
+`nexum-runtime-logs` holds the module-log pipeline.
+Each is a true sibling: it never depends on another of the four.
+The store, chain and logs crates depend on `nexum-runtime-api`; the http gate needs no seam edge once the `WasiHttpView` impl stays with `HostState`.
+`nexum-runtime-wasm` sits above them and holds the wasmtime embedding: `HostState`, the WIT `Host` impls, and the component wiring.
+The `WasiHttpView` impl for `HostState` is orphan-pinned to the crate that owns `HostState`, so it stays with the embedding and not with the gate.
+`impl From<PoolError> for ChainError` becomes an orphan once `PoolError` leaves the engine crate, so the projection is the free function `pool_fault` in the fault funnel, beside `store_fault`.
+`ProviderPool::from_config` returns `Result<Self, PoolError>` rather than the composed `RuntimeError`, which can only live above every capability crate.
 
 Layer 4, `nexum-runtime-supervisor`.
 It holds the supervisor and the event loop, which is about 5,000 lines.
@@ -130,7 +135,7 @@ Rejected because it draws one boundary and leaves the `host` and `supervisor` kn
 
 ## Consequences
 
-- #145 publishes eleven crates in lockstep rather than one, and each carries the inherited SPDX identifier and MSRV.
+- #145 publishes twelve crates in lockstep rather than one, and each carries the inherited SPDX identifier and MSRV.
 - #260 designs the facade for the top of this stack rather than for one crate, so the two issues are sequenced and not parallel.
 - The three reversed edges are corrected as part of the phase that moves the crate they block.
 - `test-utils` stops being a feature on `nexum-runtime`, and a downstream test crate depends on `nexum-runtime-testing` instead.
