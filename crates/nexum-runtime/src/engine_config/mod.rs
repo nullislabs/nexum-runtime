@@ -53,6 +53,7 @@ const fn nz_u64(n: u64) -> NonZeroU64 {
 /// `[chains]` keys, so this type never carries an unvalidated key.
 #[derive(Debug, Default, Deserialize)]
 #[serde(try_from = "RawEngineConfig")]
+#[non_exhaustive]
 pub struct EngineConfig {
     /// Process-wide settings: state directory, log level, metrics.
     pub engine: EngineSection,
@@ -152,6 +153,7 @@ struct RawModuleEntry {
 /// standalone parse validates the digest exactly as the config load does.
 #[derive(Debug, Deserialize)]
 #[serde(try_from = "RawModuleEntry")]
+#[non_exhaustive]
 pub struct ModuleEntry {
     /// Operator-written identity; the `[policy.component.<id>]` key. The
     /// author-supplied `[component].name` never binds policy (ADR-0001).
@@ -164,6 +166,18 @@ pub struct ModuleEntry {
     /// exact bytes handed to the compiler. Independent of the author's
     /// `[component].digest`: both are verified when present.
     pub digest: Option<ContentDigest>,
+}
+
+impl ModuleEntry {
+    /// Leaves the manifest to sibling discovery and the artifact unpinned.
+    pub fn new(id: impl Into<String>, path: impl Into<std::path::PathBuf>) -> Self {
+        Self {
+            id: id.into(),
+            path: path.into(),
+            manifest: None,
+            digest: None,
+        }
+    }
 }
 
 impl TryFrom<RawModuleEntry> for ModuleEntry {
@@ -192,6 +206,7 @@ impl TryFrom<RawModuleEntry> for ModuleEntry {
 /// `[engine]`: settings that apply to the process, not to one module.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[non_exhaustive]
 pub struct EngineSection {
     /// Root of the on-disk state. Each module gets a namespace under it.
     #[serde(default = "default_state_dir")]
@@ -234,6 +249,7 @@ fn default_log_backfill_concurrency() -> usize {
 /// via a Prometheus HTTP exporter. Default disabled.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[non_exhaustive]
 pub struct MetricsSection {
     /// Bind the HTTP listener. False still installs the recorder.
     #[serde(default)]

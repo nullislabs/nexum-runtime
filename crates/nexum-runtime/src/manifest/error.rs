@@ -127,7 +127,6 @@ pub struct CapabilityViolation {
 // `VariantNames` lets the label-set test enumerate without a value.
 #[derive(Debug, Error, IntoStaticStr, VariantNames)]
 #[strum(serialize_all = "snake_case")]
-#[non_exhaustive]
 pub enum CapabilityError {
     /// A gated import was not declared in `[dependencies]`.
     #[error(transparent)]

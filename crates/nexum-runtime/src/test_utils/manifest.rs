@@ -66,36 +66,42 @@ impl TestManifest {
     }
 
     /// Set `[component].digest` to a content-digest pin.
+    #[must_use]
     pub fn component_digest(mut self, digest: impl Into<String>) -> Self {
         self.component = Some(digest.into());
         self
     }
 
     /// Append a `[dependencies]` key; the table is emitted even when empty.
+    #[must_use]
     pub fn cap(mut self, cap: impl Into<String>) -> Self {
         self.caps.push(cap.into());
         self
     }
 
     /// Several `[dependencies]` keys at once; each lands as one [`cap`](Self::cap).
+    #[must_use]
     pub fn require(mut self, caps: impl IntoIterator<Item = impl Into<String>>) -> Self {
         self.caps.extend(caps.into_iter().map(Into::into));
         self
     }
 
     /// Append a host to the `http` dependency; implies that dependency.
+    #[must_use]
     pub fn http_allow(mut self, host: impl Into<String>) -> Self {
         self.http_allow.push(host.into());
         self
     }
 
     /// Add a `[[trigger]]` on new blocks for one chain.
+    #[must_use]
     pub fn block_trigger(mut self, chain_id: u64) -> Self {
         self.triggers.push(trigger("block", chain_id));
         self
     }
 
     /// Append an unfiltered `event` trigger on `chain_id`.
+    #[must_use]
     pub fn event_trigger(mut self, chain_id: u64) -> Self {
         self.triggers.push(trigger("event", chain_id));
         self
@@ -103,6 +109,7 @@ impl TestManifest {
 
     /// Append a filtered `event` trigger; an omitted filter key is absent
     /// from the emitted table, never empty.
+    #[must_use]
     pub fn event_trigger_filtered(
         mut self,
         chain_id: u64,
@@ -121,6 +128,7 @@ impl TestManifest {
     }
 
     /// Append an extension trigger; no filters admits every delivery of the kind.
+    #[must_use]
     pub fn extension_trigger(mut self, kind: &str, filters: &[(&str, &str)]) -> Self {
         let mut table = toml::Table::new();
         table.insert("on".into(), kind.into());
@@ -132,6 +140,7 @@ impl TestManifest {
     }
 
     /// Append a `[config]` key; values are TOML strings.
+    #[must_use]
     pub fn config(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
         self.config.push((key.into(), value.into()));
         self

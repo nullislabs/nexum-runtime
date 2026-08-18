@@ -35,7 +35,6 @@ use crate::runtime::dispatch_rate::TokenBucket;
 // `VariantNames` lets the label-set test enumerate without a value.
 #[derive(Debug, ThisError, IntoStaticStr, VariantNames)]
 #[strum(serialize_all = "snake_case")]
-#[non_exhaustive]
 pub enum LoadRefusal {
     /// Either a typo in the section key or the claiming extension is not
     /// wired into this composition.

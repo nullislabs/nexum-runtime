@@ -16,15 +16,10 @@ async fn main() -> anyhow::Result<()> {
     // installs one.
     tracing_subscriber::fmt().init();
 
-    let cfg = EngineConfig {
-        modules: vec![ModuleEntry {
-            id: "example".to_owned(),
-            path: "target/wasm32-wasip2/release/example.wasm".into(),
-            manifest: Some("modules/example/component.toml".into()),
-            digest: None,
-        }],
-        ..EngineConfig::default()
-    };
+    let mut cfg = EngineConfig::default();
+    let mut entry = ModuleEntry::new("example", "target/wasm32-wasip2/release/example.wasm");
+    entry.manifest = Some("modules/example/component.toml".into());
+    cfg.modules.push(entry);
 
     // Bind the default preset and launch: the component builders open the
     // backends, the add-ons install, and the event loop runs until shutdown.

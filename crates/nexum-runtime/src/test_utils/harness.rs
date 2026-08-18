@@ -63,24 +63,28 @@ impl TestRuntime {
 
 impl TestRuntimeBuilder {
     /// Load the manifest from an existing file.
+    #[must_use]
     pub fn manifest_path(mut self, path: impl Into<PathBuf>) -> Self {
         self.manifest = ManifestInput::Path(path.into());
         self
     }
 
     /// Write `toml` to a temp file at launch and load the module from it.
+    #[must_use]
     pub fn manifest_inline(mut self, toml: impl Into<String>) -> Self {
         self.manifest = ManifestInput::Toml(toml.into());
         self
     }
 
     /// Register an extension.
+    #[must_use]
     pub fn extension(mut self, extension: Arc<dyn Extension<MockTypes>>) -> Self {
         self.extensions.push(extension);
         self
     }
 
     /// Register several extensions at once.
+    #[must_use]
     pub fn extensions(
         mut self,
         extensions: impl IntoIterator<Item = Arc<dyn Extension<MockTypes>>>,
@@ -91,6 +95,7 @@ impl TestRuntimeBuilder {
 
     /// Replace the `[limits]` the launch resolves; defaults to the
     /// production defaults.
+    #[must_use]
     pub fn limits(mut self, limits: ModuleLimits) -> Self {
         self.limits = limits;
         self
