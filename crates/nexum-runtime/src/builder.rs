@@ -21,6 +21,7 @@ use wasmtime::Engine;
 
 use crate::addons::{AddOnHandle, AddOns, AddOnsContext};
 use crate::engine_config::{EngineConfig, ModuleEntry, PolicySection};
+use crate::error::{EngineRefusal, RuntimeError};
 use crate::host::component::{
     BuilderContext, ComponentBuilder, Components, ComponentsBuilder, RuntimeTypes,
 };
@@ -28,7 +29,6 @@ use crate::host::extension::{self, Extension, SourceContext};
 use crate::host::logs::LogPipeline;
 use crate::host::provider_pool::ProviderPool;
 use crate::preset::Runtime;
-use crate::refusal::Refusal;
 use crate::runtime::event_loop;
 pub use crate::supervisor::WasiClockOverride;
 use crate::supervisor::{self, Supervisor, Viability};
@@ -114,7 +114,7 @@ impl RuntimeHandle {
     /// Block until the loop stops (on its own, on shutdown, or on a critical
     /// task ending), bounding the final flush by `[limits.shutdown]
     /// drain_secs`; a drain past that bound forces exit 1.
-    pub async fn wait(self) -> anyhow::Result<()> {
+    pub async fn wait(self) -> Result<(), RuntimeError> {
         let RuntimeHandle {
             event_loop,
             mut tasks,
@@ -155,21 +155,19 @@ impl RuntimeHandle {
 }
 
 /// Map an event-loop join outcome to the [`wait`](RuntimeHandle::wait) result.
-fn finish_wait(joined: Option<TaskExit>) -> anyhow::Result<()> {
+fn finish_wait(joined: Option<TaskExit>) -> Result<(), RuntimeError> {
     match joined {
         Some(_) => Ok(()),
         None => Err(refuse_launch(LaunchRefusal::EventLoopGone)),
     }
 }
 
-/// Count the refusal under its `error_kind`, then hand it to the `anyhow`
-/// caller as a [`Refusal`] value an embedder can downcast and match on.
-/// [`Refusal::error_kind`] withholds the label from the wait-time
-/// [`LaunchRefusal::EventLoopGone`], so that one counts nothing.
-fn refuse_launch(refusal: LaunchRefusal) -> anyhow::Error {
-    let refusal = Refusal::from(refusal);
+/// Counts the refusal under its `error_kind`. The wait-time
+/// [`LaunchRefusal::EventLoopGone`] has no label, so it counts nothing.
+fn refuse_launch(refusal: LaunchRefusal) -> RuntimeError {
+    let refusal = RuntimeError::from(refusal);
     supervisor::count_boot_refusal(&refusal);
-    refusal.into()
+    refusal
 }
 
 /// The wasmtime config every engine, launch and test alike, is built from.
@@ -200,7 +198,7 @@ pub struct AssembledRuntime<T: RuntimeTypes> {
 
 impl<T: RuntimeTypes> AssembledRuntime<T> {
     /// Run the imperative launch sequence and return the running handle.
-    pub async fn launch(self, ctx: LaunchContext<'_>) -> anyhow::Result<RuntimeHandle> {
+    pub async fn launch(self, ctx: LaunchContext<'_>) -> Result<RuntimeHandle, RuntimeError> {
         let AssembledRuntime {
             components,
             extensions,
@@ -223,10 +221,11 @@ impl<T: RuntimeTypes> AssembledRuntime<T> {
         let add_on_handles = add_ons
             .iter()
             .map(|add_on| add_on.install(&addons_ctx))
-            .collect::<anyhow::Result<Vec<_>>>()?;
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(RuntimeError::AddOn)?;
 
         // wasmtime engine + linker - one of each, shared across modules.
-        let engine = Engine::new(&wasmtime_config())?;
+        let engine = Engine::new(&wasmtime_config()).map_err(EngineRefusal::new)?;
 
         // Extensions receive the effective wall clock before linking, so
         // their host-side time and guest WASI time share one source.
@@ -432,7 +431,7 @@ async fn open_and_launch<T, C, S, L>(
     manifest: Option<PathBuf>,
     clocks: Option<WasiClockOverride>,
     components: ComponentsBuilder<C, S, L>,
-) -> anyhow::Result<RuntimeHandle>
+) -> Result<RuntimeHandle, RuntimeError>
 where
     T: RuntimeTypes,
     C: ComponentBuilder<Output = ProviderPool>,
@@ -567,7 +566,7 @@ impl<'a, R: Runtime> PresetBuilder<'a, R> {
 
     /// Open the preset's backends and launch, driving
     /// [`AssembledRuntime::launch`] with a fresh [`TaskManager`].
-    pub async fn launch(self) -> anyhow::Result<RuntimeHandle> {
+    pub async fn launch(self) -> Result<RuntimeHandle, RuntimeError> {
         let Self {
             config,
             preset,
@@ -613,7 +612,7 @@ where
 {
     /// Open the overridden backends and launch, otherwise as
     /// [`PresetBuilder::launch`].
-    pub async fn launch(self) -> anyhow::Result<RuntimeHandle> {
+    pub async fn launch(self) -> Result<RuntimeHandle, RuntimeError> {
         open_and_launch(
             self.config,
             self.extensions,
@@ -710,7 +709,7 @@ where
 {
     /// Open the backends and launch, driving [`AssembledRuntime::launch`]
     /// with a fresh [`TaskManager`].
-    pub async fn launch(self) -> anyhow::Result<RuntimeHandle> {
+    pub async fn launch(self) -> Result<RuntimeHandle, RuntimeError> {
         open_and_launch(
             self.config,
             self.extensions,
@@ -734,7 +733,7 @@ mod tests {
     use crate::addons::{AddOns, RuntimeAddOn};
     use crate::engine_config::EngineConfig;
     use crate::host::component::{LocalStoreBuilder, LogPipelineBuilder, ProviderPoolBuilder};
-    use crate::host::extension::HostWallClock;
+    use crate::host::extension::{ExtensionError, HostWallClock};
     use crate::host::state::HostState;
     use crate::manifest::NamespaceCaps;
     use crate::preset::{CoreRuntime, Runtime as RuntimePreset};
@@ -765,6 +764,26 @@ mod tests {
         Refusal::from(err).variant::<LaunchRefusal>(|e| matches!(e, LaunchRefusal::NothingToRun));
     }
 
+    #[tokio::test]
+    async fn an_embedder_matches_a_boot_refusal_without_downcasting() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut config = EngineConfig::default();
+        config.engine.state_dir = dir.path().join("state");
+
+        let err = match RuntimeBuilder::new(&config)
+            .runtime::<CoreRuntime>()
+            .launch()
+            .await
+        {
+            Ok(_) => panic!("default config declares no modules; launch must bail"),
+            Err(err) => err,
+        };
+        match err {
+            crate::error::RuntimeError::Launch(LaunchRefusal::NothingToRun) => {}
+            other => panic!("expected the typed NothingToRun arm, got: {other}"),
+        }
+    }
+
     /// Every launch refusal site routes through [`refuse_launch`], so this
     /// pins the emitted name, the label key, and the increment for the
     /// launch classes; the wait-time event-loop failure counts nothing.
@@ -788,8 +807,11 @@ mod tests {
             hits[0].value,
         );
         assert!(
-            err.downcast_ref::<crate::refusal::Refusal>().is_some(),
-            "the anyhow root is the Refusal value an embedder matches on",
+            matches!(
+                err,
+                crate::error::RuntimeError::Launch(LaunchRefusal::NothingToRun)
+            ),
+            "the returned value is the RuntimeError an embedder matches on",
         );
 
         let (_, samples) = capture_metrics(|| refuse_launch(LaunchRefusal::EventLoopGone));
@@ -816,7 +838,7 @@ mod tests {
                 ifaces: &[],
             }
         }
-        fn link(&self, _linker: &mut Linker<HostState<CoreRuntime>>) -> anyhow::Result<()> {
+        fn link(&self, _linker: &mut Linker<HostState<CoreRuntime>>) -> Result<(), ExtensionError> {
             self.linked.fetch_add(1, Ordering::SeqCst);
             Ok(())
         }
@@ -902,7 +924,7 @@ mod tests {
                 ifaces: &[],
             }
         }
-        fn link(&self, _linker: &mut Linker<HostState<CoreRuntime>>) -> anyhow::Result<()> {
+        fn link(&self, _linker: &mut Linker<HostState<CoreRuntime>>) -> Result<(), ExtensionError> {
             Ok(())
         }
         fn attach_clock(&self, wall: Arc<dyn HostWallClock + Send + Sync>) {
@@ -1053,7 +1075,10 @@ mod tests {
 
     impl ComponentBuilder for CountingLogsBuilder {
         type Output = LogPipeline;
-        async fn build(self, ctx: &BuilderContext<'_>) -> anyhow::Result<LogPipeline> {
+        async fn build(
+            self,
+            ctx: &BuilderContext<'_>,
+        ) -> Result<LogPipeline, crate::error::BoxError> {
             self.0.fetch_add(1, Ordering::SeqCst);
             Ok(LogPipeline::in_memory(ctx.config.limits.logs))
         }
@@ -1251,7 +1276,10 @@ mod tests {
     async fn assembled_runtime_installs_add_ons_before_boot() {
         struct CountingAddOn(Arc<AtomicUsize>);
         impl RuntimeAddOn for CountingAddOn {
-            fn install(&self, _ctx: &AddOnsContext<'_>) -> anyhow::Result<AddOnHandle> {
+            fn install(
+                &self,
+                _ctx: &AddOnsContext<'_>,
+            ) -> Result<AddOnHandle, crate::error::BoxError> {
                 self.0.fetch_add(1, Ordering::SeqCst);
                 Ok(AddOnHandle::named("counting"))
             }

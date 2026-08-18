@@ -8,5 +8,5 @@ use nexum_runtime::preset::CoreRuntime;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    nexum_launch::run("nexum", CoreRuntime).await
+    Ok(nexum_launch::run("nexum", CoreRuntime).await?)
 }

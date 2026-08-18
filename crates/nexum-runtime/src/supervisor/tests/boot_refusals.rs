@@ -3,8 +3,8 @@
 use super::*;
 
 // The counter's label mapping and the closed `error_kind` set are pinned
-// by the tests in `crate::refusal`, on `Refusal` values rather than on a
-// downcast chain.
+// by the tests in `crate::error`, on `RuntimeError` values rather than on
+// a downcast chain.
 
 /// The real counter at the real call site: a boot through the supervisor
 /// increments `nexum_runtime_boot_refusals_total` under the refusal's

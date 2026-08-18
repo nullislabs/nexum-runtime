@@ -12,7 +12,6 @@ workspace = true
 [dependencies]
 nexum-runtime = { path = "../nexum-runtime" }
 
-anyhow.workspace = true
 clap.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true

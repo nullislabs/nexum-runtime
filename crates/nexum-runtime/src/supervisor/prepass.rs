@@ -11,9 +11,9 @@ use tracing::{info, warn};
 
 use super::store::{ResolvedLimits, resolve_module_limits};
 use crate::engine_config::{EngineConfig, PolicySection};
+use crate::error::{RefusalContext as _, RuntimeError};
 use crate::manifest::{self, CapabilityRegistry, LoadedManifest, ParseError, Trigger};
 use crate::module_id::ModuleId;
-use crate::refusal::{Refusal, RefusalContext as _};
 
 /// Refusals before any compile; the wording is operator-pinned.
 // `IntoStaticStr`: the snake_case variant name is the `error_kind` label;
@@ -284,7 +284,7 @@ pub(super) fn enforce_total_reservation<'a>(
 pub(super) fn run(
     engine_cfg: &EngineConfig,
     registry: &CapabilityRegistry,
-) -> Result<Vec<(LoadedManifest, ResolvedLimits)>, Refusal> {
+) -> Result<Vec<(LoadedManifest, ResolvedLimits)>, RuntimeError> {
     let mut ledger = NamespaceLedger::new();
     let configured_chains = ConfiguredChains::from_config(engine_cfg);
     let mut manifests = Vec::new();

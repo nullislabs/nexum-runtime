@@ -22,12 +22,12 @@ use crate::bindings::nexum::host::types::Fault;
 use crate::bindings::{Config, TriggerModule};
 use crate::digest::ContentDigest;
 use crate::engine_config::ModuleEntry;
+use crate::error::{EngineRefusal, RefusalContext as _, RuntimeError};
 use crate::host::component::RuntimeTypes;
 use crate::host::logs::RunId;
 use crate::host::state::HostState;
 use crate::manifest::{self, CapabilityRegistry, LoadedManifest, Trigger};
 use crate::module_id::ModuleId;
-use crate::refusal::{Refusal, RefusalContext as _};
 use crate::runtime::dispatch_rate::TokenBucket;
 
 /// Admission refusals ahead of instantiation; the wording is operator-pinned.
@@ -157,8 +157,8 @@ fn admit_and_verify<T: RuntimeTypes, R>(
     loaded_manifest: &LoadedManifest,
     registry: &CapabilityRegistry,
     pins: DigestPolicy<'_>,
-    admit: impl FnOnce() -> Result<R, Refusal>,
-) -> Result<(R, Component, ContentDigest), Refusal> {
+    admit: impl FnOnce() -> Result<R, RuntimeError>,
+) -> Result<(R, Component, ContentDigest), RuntimeError> {
     enforce_extension_sections(owner, &loaded_manifest.extensions, &shared.extensions)?;
     let admitted = admit()?;
     let (component, digest) = read_verified_component(&shared.engine, path, pins)?;
@@ -268,7 +268,7 @@ pub(super) async fn module<T: RuntimeTypes>(
     loaded_manifest: LoadedManifest,
     resolved: ResolvedLimits,
     env: &BootEnv<'_>,
-) -> Result<LoadedModule<T>, Refusal> {
+) -> Result<LoadedModule<T>, RuntimeError> {
     let BootEnv {
         limits: limits_cfg,
         policy,
@@ -339,8 +339,11 @@ pub(super) async fn module<T: RuntimeTypes>(
         spec,
         dispatch_deadline: limits_cfg.dispatch_deadline,
     };
-    let (run, mut store) = fresh_run_store(shared, &module_namespace, 0, &seed.spec)?;
-    let (bindings, init) = instantiate_module(linker, &seed, &module_namespace, &mut store).await?;
+    let (run, mut store) =
+        fresh_run_store(shared, &module_namespace, 0, &seed.spec).map_err(EngineRefusal::new)?;
+    let (bindings, init) = instantiate_module(linker, &seed, &module_namespace, &mut store)
+        .await
+        .map_err(EngineRefusal::new)?;
     // A failed `init` leaves guest state uninitialized, so the module loads dead.
     let init_succeeded = match init {
         Ok(()) => {

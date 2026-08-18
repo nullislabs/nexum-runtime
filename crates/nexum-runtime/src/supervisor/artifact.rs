@@ -12,7 +12,7 @@ use wasmtime::{CodeBuilder, Engine};
 
 use super::load::LoadRefusal;
 use crate::digest::{ContentDigest, DigestMismatch, DigestPin};
-use crate::refusal::Refusal;
+use crate::error::{EngineRefusal, RuntimeError};
 
 /// Digest expectations for one artifact. The operator's `[[modules]]`
 /// pin and the author's `[component].digest` are independent: both are
@@ -44,9 +44,10 @@ pub(super) fn read_verified_component(
     engine: &Engine,
     path: &Path,
     pins: DigestPolicy<'_>,
-) -> Result<(Component, ContentDigest), Refusal> {
-    let bytes =
-        std::fs::read(path).with_context(|| format!("read component {}", path.display()))?;
+) -> Result<(Component, ContentDigest), RuntimeError> {
+    let bytes = std::fs::read(path)
+        .with_context(|| format!("read component {}", path.display()))
+        .map_err(EngineRefusal::new)?;
     let actual = ContentDigest::of_bytes(&bytes);
     if let Some(operator) = pins.operator {
         if actual != *operator {
@@ -92,6 +93,7 @@ pub(super) fn read_verified_component(
         .and_then(|builder| builder.compile_component())
         // wasmtime::Error is not StdError, so anyhow's with_context needs the bridge.
         .map_err(Error::from)
-        .with_context(|| format!("compile {}", path.display()))?;
+        .with_context(|| format!("compile {}", path.display()))
+        .map_err(EngineRefusal::new)?;
     Ok((component, actual))
 }

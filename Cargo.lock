@@ -3276,7 +3276,6 @@ dependencies = [
 name = "nexum-launch"
 version = "0.1.0"
 dependencies = [
- "anyhow",
  "clap",
  "nexum-runtime",
  "tracing",

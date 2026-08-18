@@ -17,7 +17,10 @@ fn extension_sections_must_be_claimed() {
                 ifaces: &[],
             }
         }
-        fn link(&self, _linker: &mut Linker<HostState<CoreRuntime>>) -> anyhow::Result<()> {
+        fn link(
+            &self,
+            _linker: &mut Linker<HostState<CoreRuntime>>,
+        ) -> Result<(), crate::host::extension::ExtensionError> {
             Ok(())
         }
         fn manifest_sections(&self) -> &'static [&'static str] {
@@ -59,7 +62,10 @@ fn extension_claims_must_be_unique() {
                 ifaces: &[],
             }
         }
-        fn link(&self, _linker: &mut Linker<HostState<CoreRuntime>>) -> anyhow::Result<()> {
+        fn link(
+            &self,
+            _linker: &mut Linker<HostState<CoreRuntime>>,
+        ) -> Result<(), crate::host::extension::ExtensionError> {
             Ok(())
         }
         fn emits_trigger_kinds(&self) -> &'static [&'static str] {

@@ -27,6 +27,7 @@ use super::scenario::{BootScenario, Booted, Entry};
 use super::{HARNESS_POLL_INTERVAL, MockStateStore, MockTypes, Prebuilt};
 use crate::builder::{RuntimeBuilder, RuntimeHandle};
 use crate::engine_config::{EngineConfig, ModuleLimits};
+use crate::error::{BoxError, RuntimeError};
 use crate::host::component::{Components, ComponentsBuilder};
 use crate::host::extension::Extension;
 use crate::host::logs::{LogPipeline, LogRecord};
@@ -111,10 +112,10 @@ impl TestRuntimeBuilder {
     }
 
     /// Open the module and start the runtime through the public builder path.
-    pub async fn launch(self) -> anyhow::Result<TestRuntime> {
+    pub async fn launch(self) -> Result<TestRuntime, RuntimeError> {
         // A temp directory roots any inline manifest and stands in as the
         // (unused, in-memory backends) state directory.
-        let tmp = tempfile::tempdir()?;
+        let tmp = tempfile::tempdir().expect("harness tempdir");
 
         let manifest = self.manifest.resolve(&tmp.path().join("component.toml"));
 
@@ -153,7 +154,7 @@ impl TestRuntimeBuilder {
     /// Consumes the builder, so clone the [`chain`](Self::chain),
     /// [`store`](Self::store) and [`clock`](Self::clock) handles first if
     /// you still need to drive the mocks.
-    pub async fn boot_supervisor(self) -> anyhow::Result<Booted<MockTypes>> {
+    pub async fn boot_supervisor(self) -> Result<Booted<MockTypes>, RuntimeError> {
         let pool = self.chain.pool(&self.chains, HARNESS_POLL_INTERVAL);
         BootScenario::over(Components {
             chain: pool,
@@ -217,7 +218,7 @@ impl TestRuntime {
     /// Await a `module` log record whose message contains `needle`.
     /// Notification-driven, so it resolves as soon as the dispatched event's
     /// record lands; the 5s bound is a failure backstop.
-    pub async fn wait_for_log(&self, module: &str, needle: &str) -> anyhow::Result<LogRecord> {
+    pub async fn wait_for_log(&self, module: &str, needle: &str) -> Result<LogRecord, BoxError> {
         let logs = self.logs();
         let appended = logs.appended();
         let matched = async {
@@ -240,7 +241,11 @@ impl TestRuntime {
         };
         tokio::time::timeout(Duration::from_secs(5), matched)
             .await
-            .map_err(|_| anyhow::anyhow!("no {module} log record matched {needle:?} within 5s"))
+            .map_err(|_| {
+                BoxError::from(format!(
+                    "no {module} log record matched {needle:?} within 5s"
+                ))
+            })
     }
 
     /// Signal the event loop to stop; the in-flight dispatch finishes first.
@@ -249,7 +254,7 @@ impl TestRuntime {
     }
 
     /// Await the event loop's completion after a [`shutdown`](Self::shutdown).
-    pub async fn wait(self) -> anyhow::Result<()> {
+    pub async fn wait(self) -> Result<(), RuntimeError> {
         self.handle.wait().await
     }
 }
@@ -406,7 +411,7 @@ mod tests {
             fn link(
                 &self,
                 _linker: &mut wasmtime::component::Linker<crate::host::state::HostState<MockTypes>>,
-            ) -> anyhow::Result<()> {
+            ) -> Result<(), crate::host::extension::ExtensionError> {
                 self.0.fetch_add(1, Ordering::SeqCst);
                 Ok(())
             }

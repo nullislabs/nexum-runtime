@@ -18,8 +18,7 @@ use alloy_provider::{CanonicalEvent, DynProvider, Provider, ProviderBuilder, WsC
 use alloy_rpc_client::ClientBuilder;
 use alloy_rpc_types_eth::{Filter, Header, Log};
 use alloy_transport::layers::RetryBackoffLayer;
-use alloy_transport::{RpcError, TransportError};
-use anyhow::Context as _;
+use alloy_transport::{RpcError, TransportError, TransportErrorKind};
 use futures::stream::Stream;
 use futures::stream::StreamExt as _;
 use serde_json::value::RawValue;
@@ -27,6 +26,7 @@ use thiserror::Error;
 use tracing::info;
 
 use crate::engine_config::EngineConfig;
+use crate::error::RuntimeError;
 use crate::host::component::ChainMethod;
 
 /// Head re-poll cadence for chains without a block-time hint; known chains
@@ -67,8 +67,8 @@ pub struct ProviderPool {
 
 impl ProviderPool {
     /// Open one provider per chain in `cfg.chains`; connection failures
-    /// propagate and are fatal at boot.
-    pub async fn from_config(cfg: &EngineConfig) -> anyhow::Result<Self> {
+    /// land in [`RuntimeError::Pool`] and are fatal at boot.
+    pub async fn from_config(cfg: &EngineConfig) -> Result<Self, RuntimeError> {
         let mut providers: HashMap<Chain, ChainEndpoint> = HashMap::new();
         // Sort by numeric id so the boot logs are deterministic
         // (`Chain` is not `Ord`).
@@ -89,13 +89,19 @@ impl ProviderPool {
                     .layer(retry_layer())
                     .ws(WsConnect::new(endpoint.url().as_str()))
                     .await
-                    .with_context(|| format!("connect chain {chain}"))?;
+                    .map_err(|source| PoolError::Connect {
+                        chain: *chain,
+                        source,
+                    })?;
                 ProviderBuilder::new().connect_client(client).erased()
             } else {
                 let http = reqwest::Client::builder()
                     .timeout(timeout)
                     .build()
-                    .with_context(|| format!("connect chain {chain}"))?;
+                    .map_err(|e| PoolError::Connect {
+                        chain: *chain,
+                        source: TransportErrorKind::custom(e),
+                    })?;
                 let client = ClientBuilder::default()
                     .layer(retry_layer())
                     .http_with_client(http, endpoint.url().clone());
@@ -287,6 +293,15 @@ pub enum PoolError {
     /// Chain absent from the engine config.
     #[error("unknown chain {0} (no engine.toml entry)")]
     UnknownChain(Chain),
+    /// A configured chain's provider refused to open at boot.
+    #[error("connect chain {chain}: {source}")]
+    Connect {
+        /// The chain whose provider refused.
+        chain: Chain,
+        /// Why it failed.
+        #[source]
+        source: TransportError,
+    },
     /// The configured per-request timeout elapsed.
     #[error("rpc request timed out")]
     Timeout,

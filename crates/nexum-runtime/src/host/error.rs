@@ -127,6 +127,9 @@ impl From<PoolError> for ChainError {
             // revert or an unreachable endpoint.
             PoolError::Timeout => ChainError::Fault(Fault::Timeout),
             PoolError::Rpc(source) => classify_rpc(&source),
+            // Boot-time only: `from_config` refuses before any guest runs,
+            // so the request path never sees this arm.
+            PoolError::Connect { source, .. } => classify_rpc(&source),
         }
     }
 }

@@ -24,10 +24,10 @@ use wasmtime::Engine;
 use wasmtime::component::Linker;
 
 use crate::engine_config::{EngineConfig, ModuleEntry, PolicySection, ResolvedModuleLimits};
+use crate::error::{RefusalContext as _, RuntimeError};
 use crate::host::component::{Components, RuntimeTypes};
 use crate::host::extension::Extension;
 use crate::host::state::HostState;
-use crate::refusal::{Refusal, RefusalContext as _};
 use crate::runtime::poison_policy::PoisonPolicy;
 use admission::{capability_registry, enforce_extension_uniqueness};
 use cursors::ChainLogCursors;
@@ -93,8 +93,8 @@ impl<T: RuntimeTypes> Supervisor<T> {
         components: &Components<T>,
         extensions: &[Arc<dyn Extension<T>>],
         clocks: Option<WasiClockOverride>,
-    ) -> Result<Self, Refusal> {
-        let booted: Result<Self, Refusal> = async {
+    ) -> Result<Self, RuntimeError> {
+        let booted: Result<Self, RuntimeError> = async {
             let shared = wire_extensions(engine, components, extensions, clocks)?;
             let registry = capability_registry(&shared.extensions);
             let module_manifests = prepass::run(engine_cfg, &registry)?;
@@ -122,8 +122,8 @@ impl<T: RuntimeTypes> Supervisor<T> {
         env: &BootEnv<'_>,
         extensions: &[Arc<dyn Extension<T>>],
         clocks: Option<WasiClockOverride>,
-    ) -> Result<Self, Refusal> {
-        let booted: Result<Self, Refusal> = async {
+    ) -> Result<Self, RuntimeError> {
+        let booted: Result<Self, RuntimeError> = async {
             let shared = wire_extensions(engine, components, extensions, clocks)?;
             let registry = capability_registry(&shared.extensions);
             let loaded_manifest =
@@ -187,10 +187,10 @@ impl<T: RuntimeTypes> Supervisor<T> {
     }
 }
 
-/// Counts a refusal under its [`Refusal::error_kind`] label; a refusal
+/// Counts a refusal under its [`RuntimeError::error_kind`] label; a refusal
 /// without a label goes uncounted. The launcher's refusal sites in
 /// `builder` call it too, so a launch refusal counts like a boot one.
-pub(crate) fn count_boot_refusal(refusal: &Refusal) {
+pub(crate) fn count_boot_refusal(refusal: &RuntimeError) {
     let Some(kind) = refusal.error_kind() else {
         return;
     };
@@ -203,7 +203,7 @@ fn wire_extensions<T: RuntimeTypes>(
     components: &Components<T>,
     extensions: &[Arc<dyn Extension<T>>],
     clocks: Option<WasiClockOverride>,
-) -> Result<Shared<T>, Refusal> {
+) -> Result<Shared<T>, RuntimeError> {
     enforce_extension_uniqueness(extensions)?;
     Ok(Shared {
         engine: engine.clone(),
@@ -222,8 +222,8 @@ async fn load_modules<L>(
         &ModuleEntry,
         crate::manifest::LoadedManifest,
         store::ResolvedLimits,
-    ) -> Result<L, Refusal>,
-) -> Result<Vec<L>, Refusal> {
+    ) -> Result<L, RuntimeError>,
+) -> Result<Vec<L>, RuntimeError> {
     let mut out = Vec::with_capacity(entries.len());
     for (entry, (manifest, resolved)) in entries.iter().zip(manifests) {
         let loaded = load(entry, manifest, resolved)

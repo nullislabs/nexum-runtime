@@ -11,6 +11,7 @@ use wasmtime_wasi::{HostMonotonicClock, HostWallClock, WasiCtxBuilder};
 use super::Shared;
 use crate::bindings::TriggerModule;
 use crate::engine_config::{OutboundHttpLimits, PolicyCeilings};
+use crate::error::{EngineRefusal, RuntimeError};
 use crate::host::component::{RuntimeTypes, StateHandle, StateStore};
 use crate::host::extension::Extension;
 use crate::host::http::HttpGate;
@@ -234,15 +235,15 @@ fn build<T: RuntimeTypes>(
 pub fn build_linker<T: RuntimeTypes>(
     engine: &Engine,
     extensions: &[Arc<dyn Extension<T>>],
-) -> anyhow::Result<Linker<HostState<T>>> {
+) -> Result<Linker<HostState<T>>, RuntimeError> {
     let mut linker = Linker::<HostState<T>>::new(engine);
-    TriggerModule::add_to_linker::<HostState<T>, HasSelf<HostState<T>>>(&mut linker, |state| {
-        state
-    })?;
-    wasmtime_wasi::p2::add_to_linker_async(&mut linker)?;
+    TriggerModule::add_to_linker::<HostState<T>, HasSelf<HostState<T>>>(&mut linker, |state| state)
+        .map_err(EngineRefusal::new)?;
+    wasmtime_wasi::p2::add_to_linker_async(&mut linker).map_err(EngineRefusal::new)?;
     // wasi:http only; the p2 call above already covers the shared
     // wasi:io/wasi:clocks interfaces.
-    wasmtime_wasi_http::p2::add_only_http_to_linker_async(&mut linker)?;
+    wasmtime_wasi_http::p2::add_only_http_to_linker_async(&mut linker)
+        .map_err(EngineRefusal::new)?;
     for ext in extensions {
         ext.link(&mut linker)?;
     }

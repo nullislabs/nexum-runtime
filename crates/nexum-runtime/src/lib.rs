@@ -31,6 +31,7 @@ pub mod bindings;
 pub mod builder;
 pub mod digest;
 pub mod engine_config;
+pub mod error;
 pub mod host;
 pub mod host_pattern;
 pub mod interface_id;
@@ -38,7 +39,6 @@ pub mod manifest;
 pub mod metrics;
 pub mod module_id;
 pub mod preset;
-pub mod refusal;
 pub mod runtime;
 pub mod supervisor;
 
