@@ -22,12 +22,13 @@ use tracing::info;
 use wasmtime::Engine;
 use wasmtime::component::Linker;
 
-use crate::engine_config::{EngineConfig, ModuleEntry, PolicySection, ResolvedModuleLimits};
+use crate::engine_config::{
+    EngineConfig, ModuleEntry, PoisonPolicy, PolicySection, ResolvedModuleLimits,
+};
 use crate::error::{RefusalContext as _, RuntimeError};
 use crate::host::component::{Components, RuntimeTypes};
 use crate::host::extension::Extension;
 use crate::host::state::HostState;
-use crate::runtime::poison_policy::PoisonPolicy;
 use admission::{capability_registry, enforce_extension_uniqueness};
 use cursors::ChainLogCursors;
 use load::LoadedModule;

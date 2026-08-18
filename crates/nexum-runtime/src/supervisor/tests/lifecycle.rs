@@ -435,13 +435,12 @@ async fn poison_pill_quarantines_module_after_threshold() {
         return;
     };
     let mut booted = BootScenario::new()
-        .limits(ModuleLimits {
-            poison: crate::engine_config::PoisonLimitsSection {
+        .limits(limits_with(|limits| {
+            limits.poison = crate::engine_config::PoisonLimitsSection {
                 max_failures: Some(3),
                 window_secs: Some(60),
-            },
-            ..Default::default()
-        })
+            }
+        }))
         .wasm(wasm)
         .module(workspace_manifest(
             "modules/fixtures/fuel-bomb/component.toml",

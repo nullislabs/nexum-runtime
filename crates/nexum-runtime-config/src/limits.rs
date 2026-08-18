@@ -4,10 +4,10 @@ use std::time::Duration;
 
 use serde::Deserialize;
 
-use crate::runtime::dispatch_rate::{
+use crate::dispatch_rate::{
     DEFAULT_DISPATCH_BURST, DEFAULT_DISPATCH_REFILL_PER_SEC, DispatchRatePolicy,
 };
-use crate::runtime::poison_policy::{POISON_MAX_FAILURES, POISON_WINDOW, PoisonPolicy};
+use crate::poison_policy::{POISON_MAX_FAILURES, POISON_WINDOW, PoisonPolicy};
 
 use super::error::{EngineConfigError, nonzero_secs, nonzero_u32, nonzero_usize, zero_field};
 use super::nz_usize;
@@ -357,7 +357,7 @@ pub struct LogRetentionLimits {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::engine_config::{EngineConfig, RawEngineConfig};
+    use crate::{EngineConfig, RawEngineConfig};
 
     #[test]
     fn http_limits_default_when_absent() {

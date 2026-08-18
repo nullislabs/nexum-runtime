@@ -241,7 +241,7 @@ pub(super) fn resolve_policy(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::engine_config::{EngineConfig, RawEngineConfig};
+    use crate::{EngineConfig, RawEngineConfig};
 
     #[test]
     fn policy_component_rows_override_and_fall_back() {

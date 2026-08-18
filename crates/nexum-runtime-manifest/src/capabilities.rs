@@ -25,7 +25,7 @@ pub struct NamespaceCaps {
 }
 
 /// The core namespace: the interfaces the `trigger-module` world links.
-pub const CORE_NAMESPACE: NamespaceCaps = NamespaceCaps {
+pub(crate) const CORE_NAMESPACE: NamespaceCaps = NamespaceCaps {
     prefix: "nexum:host/",
     ifaces: CORE_CAPABILITIES,
 };
@@ -173,7 +173,7 @@ pub fn enforce_capabilities<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::manifest::types::{Dependency, ResourceSection};
+    use crate::types::{Dependency, ResourceSection};
 
     /// A registry with one extension namespace registered, mirroring
     /// what a composition root assembles.

@@ -1,0 +1,24 @@
+[package]
+name = "nexum-runtime-manifest"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "component.toml parsing and capability enforcement for the Nexum runtime."
+
+[lints]
+workspace = true
+
+[dependencies]
+alloy-primitives.workspace = true
+nexum-primitives = { path = "../nexum-primitives" }
+nexum-world = { path = "../nexum-world" }
+serde.workspace = true
+strum.workspace = true
+thiserror.workspace = true
+toml.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

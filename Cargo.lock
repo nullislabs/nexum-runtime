@@ -3334,6 +3334,8 @@ dependencies = [
  "metrics-util",
  "nexum-primitives",
  "nexum-runtime",
+ "nexum-runtime-config",
+ "nexum-runtime-manifest",
  "nexum-tasks",
  "nexum-world",
  "redb",
@@ -3355,6 +3357,36 @@ dependencies = [
  "wasmtime-wasi",
  "wasmtime-wasi-http",
  "wiremock",
+]
+
+[[package]]
+name = "nexum-runtime-config"
+version = "0.1.0"
+dependencies = [
+ "alloy-chains",
+ "ipnet",
+ "nexum-primitives",
+ "serde",
+ "tempfile",
+ "thiserror 2.0.18",
+ "toml 1.1.2+spec-1.1.0",
+ "tracing",
+ "url",
+]
+
+[[package]]
+name = "nexum-runtime-manifest"
+version = "0.1.0"
+dependencies = [
+ "alloy-primitives",
+ "nexum-primitives",
+ "nexum-world",
+ "serde",
+ "strum",
+ "tempfile",
+ "thiserror 2.0.18",
+ "toml 1.1.2+spec-1.1.0",
+ "tracing",
 ]
 
 [[package]]

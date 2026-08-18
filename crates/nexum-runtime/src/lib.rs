@@ -6,9 +6,7 @@
 //! CI by `scripts/zero-leak.sh`.
 
 #![cfg_attr(not(test), warn(unused_crate_dependencies))]
-// Not unconditional: `with_env` in the `engine_config` tests calls
-// `std::env::set_var`, which is unsafe as of the 2024 edition.
-#![cfg_attr(not(test), forbid(unsafe_code))]
+#![forbid(unsafe_code)]
 
 // alloy split its API across multiple crates; we depend on the
 // transports directly so cargo resolves the right feature set, but
@@ -33,33 +31,42 @@ pub mod sealed {
 pub mod addons;
 pub mod bindings;
 mod builder;
-mod engine_config;
 pub mod error;
 mod host;
-pub mod manifest;
 #[path = "metrics.rs"]
 mod metric_names;
 mod preset;
 mod runtime;
 pub mod supervisor;
 
+pub(crate) use nexum_runtime_config as engine_config;
+
+/// `component.toml` parser and capability enforcement.
+pub mod manifest {
+    pub use nexum_primitives::interface_id::{InterfaceId, InterfaceTrack};
+    pub(crate) use nexum_runtime_manifest::error;
+    pub use nexum_runtime_manifest::{CapabilityRegistry, ExtensionSections, NamespaceCaps};
+    pub(crate) use nexum_runtime_manifest::{
+        LoadedManifest, ParseError, ResourceSection, Trigger, enforce_capabilities, load,
+    };
+}
+
 #[cfg(feature = "test-utils")]
 pub mod test_utils;
 
 /// Engine-side configuration (`engine.toml`) and its resolved forms.
 pub mod config {
-    pub use crate::engine_config::{
-        ChainConfig, ChainLimitsSection, ComponentPolicy, DispatchLimitsSection, EffectivePolicy,
-        EngineConfig, EngineSection, HttpLimitsSection, LogLimitsSection, LogRetentionLimits,
-        MetricsSection, ModuleEntry, ModuleLimits, OutboundHttpLimits, PoisonLimitsSection,
-        PolicyCeilings, PolicySection, ResolvedModuleLimits, RpcEndpoint, RpcTransport,
-        ShutdownLimitsSection, TotalPolicy, load_or_default,
-    };
-    pub use crate::runtime::dispatch_rate::DispatchRatePolicy;
-    pub use crate::runtime::poison_policy::PoisonPolicy;
     pub use ipnet::IpNet;
     pub use nexum_primitives::digest::{ContentDigest, DigestPin};
     pub use nexum_primitives::host_pattern::HostPattern;
+    pub use nexum_runtime_config::{
+        ChainConfig, ChainLimitsSection, ComponentPolicy, DispatchLimitsSection,
+        DispatchRatePolicy, EffectivePolicy, EngineConfig, EngineSection, HttpLimitsSection,
+        LogLimitsSection, LogRetentionLimits, MetricsSection, ModuleEntry, ModuleLimits,
+        OutboundHttpLimits, PoisonLimitsSection, PoisonPolicy, PolicyCeilings, PolicySection,
+        ResolvedModuleLimits, RpcEndpoint, RpcTransport, ShutdownLimitsSection, TotalPolicy,
+        load_or_default,
+    };
     pub use url::Url;
 }
 

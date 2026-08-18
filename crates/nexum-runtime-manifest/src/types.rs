@@ -14,7 +14,7 @@ use nexum_primitives::host_pattern::HostPattern;
 /// Core capability names: the `nexum:host` interfaces linked into every
 /// module. `http` is gated separately (it gates `wasi:http/*`), and
 /// extensions register their own namespaces.
-pub const CORE_CAPABILITIES: &[&str] = &nexum_world::CORE_IFACES;
+pub(crate) const CORE_CAPABILITIES: &[&str] = &nexum_world::CORE_IFACES;
 
 /// Raw deserialized manifest; every value stays as written until the
 /// `TryFrom<Manifest>` conversion into [`LoadedManifest`] validates it.
