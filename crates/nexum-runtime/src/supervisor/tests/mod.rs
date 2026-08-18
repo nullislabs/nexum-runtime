@@ -32,6 +32,7 @@ use crate::digest::{ContentDigest, DigestMismatch};
 use crate::engine_config::{
     ComponentPolicy, ModuleLimits, PolicyCeilings, PolicySection, ResolvedModuleLimits, TotalPolicy,
 };
+use crate::error::RuntimeError;
 use crate::host::logs::LogChannel;
 use crate::host::provider_pool::ProviderPool;
 use crate::manifest::{self, CapabilityError, CapabilityRegistry, ParseError, ResourceSection};
@@ -99,7 +100,7 @@ async fn try_boot_single(
     manifest: Option<&Path>,
     require_digest: bool,
     clocks: Option<WasiClockOverride>,
-) -> (tempfile::TempDir, anyhow::Result<DefaultSupervisor>) {
+) -> (tempfile::TempDir, Result<DefaultSupervisor, RuntimeError>) {
     let engine = test_wasmtime_engine();
     let linker = make_linker(&engine);
     let (dir, store) = temp_local_store();
@@ -126,7 +127,6 @@ async fn try_boot_single(
         &core_extensions(),
         clocks,
     )
-    .await
-    .map_err(anyhow::Error::from);
+    .await;
     (dir, result)
 }

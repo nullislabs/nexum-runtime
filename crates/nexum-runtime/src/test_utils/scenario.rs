@@ -12,6 +12,7 @@ use super::manifest::{ManifestInput, TestManifest};
 use super::{in_memory_logs, test_chain_configs};
 use crate::digest::ContentDigest;
 use crate::engine_config::{ChainConfig, EngineConfig, ModuleEntry, ModuleLimits, PolicySection};
+use crate::error::RuntimeError;
 use crate::host::component::{Components, RuntimeTypes};
 use crate::host::extension::{Extension, attach_wall_clock};
 use crate::host::local_store_redb::LocalStore;
@@ -206,7 +207,7 @@ impl<T: RuntimeTypes> BootScenario<T> {
 
     /// Write the manifests, build the engine, and boot the supervisor.
     /// The error side is what a refusal test asserts on.
-    pub async fn boot(self) -> anyhow::Result<Booted<T>> {
+    pub async fn boot(self) -> Result<Booted<T>, RuntimeError> {
         let (config, launch) = self.split();
         let engine = test_wasmtime_engine();
         attach_wall_clock(&launch.extensions, launch.clocks.as_ref());
@@ -330,36 +331,32 @@ impl<T: RuntimeTypes> Booted<T> {
     }
 }
 
-/// A boot error under assertion. Wraps `anyhow::Error` so a test can
+/// A boot error under assertion. Wraps [`RuntimeError`] so a test can
 /// reach the typed root instead of matching on a `Display` substring.
 #[derive(Debug, From)]
-pub struct Refusal(anyhow::Error);
-
-impl From<crate::refusal::Refusal> for Refusal {
-    fn from(refusal: crate::refusal::Refusal) -> Self {
-        Self(refusal.into())
-    }
-}
+pub struct Refusal(RuntimeError);
 
 impl Refusal {
     /// The typed root under the context wraps, for `matches!` on a variant.
     pub fn root<E: std::error::Error + Send + Sync + 'static>(&self) -> Option<&E> {
-        self.0.chain().find_map(|cause| {
-            if let Some(err) = cause.downcast_ref::<E>() {
+        let top: &(dyn std::error::Error + 'static) = &self.0;
+        if let Some(err) = top.downcast_ref::<E>() {
+            return Some(err);
+        }
+        // The typed cause sits inside the `RuntimeError` value, not as a
+        // chain element of its own; a nested `RuntimeError` (one a hook
+        // boxed) unwraps the same way.
+        let mut cause = Some(self.0.cause());
+        while let Some(current) = cause {
+            if let Some(err) = current.downcast_ref::<E>() {
                 return Some(err);
             }
-            // A boot refusal crosses the chain as one `Refusal` value; its
-            // typed cause sits inside it, not as a chain element of its own.
-            let refusal = cause.downcast_ref::<crate::refusal::Refusal>()?;
-            let mut cause = Some(refusal.cause());
-            while let Some(current) = cause {
-                if let Some(err) = current.downcast_ref::<E>() {
-                    return Some(err);
-                }
-                cause = current.source();
-            }
-            None
-        })
+            cause = match current.downcast_ref::<RuntimeError>() {
+                Some(nested) => Some(nested.cause()),
+                None => current.source(),
+            };
+        }
+        None
     }
 
     /// Assert the chain carries an `E` matching `pred`.
@@ -400,7 +397,14 @@ impl Refusal {
 
     /// The rendered context chain, outermost cause first.
     fn chain(&self) -> String {
-        format!("{:#}", self.0)
+        let mut rendered = self.0.to_string();
+        let mut cause = std::error::Error::source(&self.0);
+        while let Some(current) = cause {
+            rendered.push_str(": ");
+            rendered.push_str(&current.to_string());
+            cause = current.source();
+        }
+        rendered
     }
 }
 
@@ -431,7 +435,7 @@ mod tests {
         fn link(
             &self,
             _linker: &mut wasmtime::component::Linker<crate::host::state::HostState<CoreRuntime>>,
-        ) -> anyhow::Result<()> {
+        ) -> Result<(), crate::host::extension::ExtensionError> {
             Ok(())
         }
 
@@ -458,7 +462,7 @@ mod tests {
         fn link(
             &self,
             _linker: &mut wasmtime::component::Linker<crate::host::state::HostState<CoreRuntime>>,
-        ) -> anyhow::Result<()> {
+        ) -> Result<(), crate::host::extension::ExtensionError> {
             Ok(())
         }
 
@@ -711,9 +715,14 @@ mod tests {
         assert!(config.chains.is_empty());
     }
 
+    /// A refusal over the engine arm.
+    fn wrapped(err: anyhow::Error) -> Refusal {
+        Refusal(crate::error::EngineRefusal::new(err).into())
+    }
+
     #[test]
     fn names_and_lacks_read_the_whole_context_chain() {
-        let refusal = Refusal(anyhow::anyhow!("root cause").context("outer context"));
+        let refusal = wrapped(anyhow::anyhow!("root cause").context("outer context"));
         refusal
             .names("outer context")
             .names("root cause")
@@ -723,13 +732,13 @@ mod tests {
     #[test]
     #[should_panic(expected = "refusal does not name")]
     fn names_panics_on_an_absent_needle() {
-        Refusal(anyhow::anyhow!("boom")).names("quiet");
+        wrapped(anyhow::anyhow!("boom")).names("quiet");
     }
 
     #[test]
     #[should_panic(expected = "refusal names")]
     fn lacks_panics_on_a_present_needle() {
-        Refusal(anyhow::anyhow!("boom")).lacks("boom");
+        wrapped(anyhow::anyhow!("boom")).lacks("boom");
     }
 
     fn not_found() -> anyhow::Error {
@@ -738,20 +747,33 @@ mod tests {
 
     #[test]
     fn variant_finds_the_typed_root_under_context_wraps() {
-        Refusal(not_found().context("outer context"))
+        wrapped(not_found().context("outer context"))
             .variant::<std::io::Error>(|e| e.kind() == std::io::ErrorKind::NotFound);
+    }
+
+    #[test]
+    fn variant_finds_a_runtime_error_arm_at_the_top() {
+        Refusal(RuntimeError::from(
+            crate::builder::LaunchRefusal::NothingToRun,
+        ))
+        .variant::<RuntimeError>(|e| {
+            matches!(
+                e,
+                RuntimeError::Launch(crate::builder::LaunchRefusal::NothingToRun)
+            )
+        });
     }
 
     #[test]
     #[should_panic(expected = "refusal carries no")]
     fn variant_panics_on_an_absent_type() {
-        Refusal(anyhow::anyhow!("boom")).variant::<std::io::Error>(|_| true);
+        wrapped(anyhow::anyhow!("boom")).variant::<std::io::Error>(|_| true);
     }
 
     #[test]
     #[should_panic(expected = "refusal variant mismatch")]
     fn variant_panics_on_a_failed_predicate() {
-        Refusal(not_found())
+        wrapped(not_found())
             .variant::<std::io::Error>(|e| e.kind() == std::io::ErrorKind::PermissionDenied);
     }
 }

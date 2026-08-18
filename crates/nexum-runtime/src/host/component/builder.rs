@@ -7,6 +7,7 @@ use std::path::Path;
 
 use nexum_tasks::TaskExecutor;
 
+use crate::error::BoxError;
 use crate::host::component::{Components, RuntimeTypes};
 use crate::host::local_store_redb::LocalStore;
 use crate::host::logs::LogPipeline;
@@ -31,7 +32,7 @@ pub trait ComponentBuilder {
     fn build(
         self,
         ctx: &BuilderContext<'_>,
-    ) -> impl Future<Output = anyhow::Result<Self::Output>> + Send;
+    ) -> impl Future<Output = Result<Self::Output, BoxError>> + Send;
 }
 
 /// Builds the [`ProviderPool`] from `[chains]`.
@@ -40,8 +41,10 @@ pub struct ProviderPoolBuilder;
 impl ComponentBuilder for ProviderPoolBuilder {
     type Output = ProviderPool;
 
-    async fn build(self, ctx: &BuilderContext<'_>) -> anyhow::Result<ProviderPool> {
-        ProviderPool::from_config(ctx.config).await
+    async fn build(self, ctx: &BuilderContext<'_>) -> Result<ProviderPool, BoxError> {
+        ProviderPool::from_config(ctx.config)
+            .await
+            .map_err(Into::into)
     }
 }
 
@@ -52,22 +55,23 @@ pub struct LocalStoreBuilder;
 impl ComponentBuilder for LocalStoreBuilder {
     type Output = LocalStore;
 
-    async fn build(self, ctx: &BuilderContext<'_>) -> anyhow::Result<LocalStore> {
+    async fn build(self, ctx: &BuilderContext<'_>) -> Result<LocalStore, BoxError> {
         // create_dir_all and LocalStore::open (which fsyncs on create) are
         // blocking syscalls; keep them off the async executor.
         let data_dir = ctx.data_dir.to_path_buf();
         ctx.executor
             .spawn_blocking(move || {
                 std::fs::create_dir_all(&data_dir).map_err(|e| {
-                    anyhow::anyhow!("create data directory {}: {e}", data_dir.display())
+                    BoxError::from(format!("create data directory {}: {e}", data_dir.display()))
                 })?;
                 let path = data_dir.join("local-store.redb");
-                LocalStore::open(&path)
-                    .map_err(|e| anyhow::anyhow!("open local-store at {}: {e}", path.display()))
+                LocalStore::open(&path).map_err(|e| {
+                    BoxError::from(format!("open local-store at {}: {e}", path.display()))
+                })
             })
             .join()
             .await
-            .ok_or_else(|| anyhow::anyhow!("local-store open task ended abnormally"))?
+            .ok_or_else(|| BoxError::from("local-store open task ended abnormally"))?
     }
 }
 
@@ -78,7 +82,7 @@ pub struct LogPipelineBuilder;
 impl ComponentBuilder for LogPipelineBuilder {
     type Output = LogPipeline;
 
-    async fn build(self, ctx: &BuilderContext<'_>) -> anyhow::Result<LogPipeline> {
+    async fn build(self, ctx: &BuilderContext<'_>) -> Result<LogPipeline, BoxError> {
         Ok(LogPipeline::in_memory(ctx.config.limits.logs))
     }
 }
@@ -89,13 +93,13 @@ impl ComponentBuilder for LogPipelineBuilder {
 pub enum BuildError {
     /// The chain backend builder failed.
     #[error("build the chain backend: {0}")]
-    Chain(anyhow::Error),
+    Chain(#[source] BoxError),
     /// The store backend builder failed.
     #[error("build the store backend: {0}")]
-    Store(anyhow::Error),
+    Store(#[source] BoxError),
     /// The log pipeline builder failed.
     #[error("build the log pipeline: {0}")]
-    Logs(anyhow::Error),
+    Logs(#[source] BoxError),
 }
 
 /// Assembles the core and log-pipeline builders into a [`Components`]

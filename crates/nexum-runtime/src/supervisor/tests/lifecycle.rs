@@ -129,7 +129,10 @@ impl Extension<CoreRuntime> for Ticker {
             ifaces: &[],
         }
     }
-    fn link(&self, _linker: &mut Linker<HostState<CoreRuntime>>) -> anyhow::Result<()> {
+    fn link(
+        &self,
+        _linker: &mut Linker<HostState<CoreRuntime>>,
+    ) -> Result<(), crate::host::extension::ExtensionError> {
         Ok(())
     }
     fn emits_trigger_kinds(&self) -> &'static [&'static str] {

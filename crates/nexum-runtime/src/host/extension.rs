@@ -8,15 +8,78 @@ use std::sync::Arc;
 
 use futures::Stream;
 use nexum_tasks::{TaskExecutor, TaskExit, TaskSet};
+use thiserror::Error;
 use wasmtime::component::Linker;
 pub use wasmtime_wasi::HostWallClock;
 
 use crate::bindings::nexum::host::types::Trigger;
 use crate::engine_config::EngineConfig;
+use crate::error::BoxError;
 use crate::host::component::RuntimeTypes;
 use crate::host::state::HostState;
 use crate::manifest::{ExtensionSections, NamespaceCaps};
 use crate::supervisor::WasiClockOverride;
+
+/// A refusal from one [`Extension`] hook.
+///
+/// Build one with the constructors: `.map_err(|e| ExtensionError::link(NS, e))`.
+#[derive(Debug, Error)]
+#[non_exhaustive]
+pub enum ExtensionError {
+    /// [`Extension::link`] failed.
+    #[error("extension {namespace}: link failed: {source}")]
+    Link {
+        /// The failing extension's namespace.
+        namespace: &'static str,
+        /// Why it failed.
+        #[source]
+        source: BoxError,
+    },
+    /// [`Extension::admit_worker`] refused a worker.
+    #[error("extension refused worker {worker}: {source}")]
+    Admit {
+        /// The refused worker's namespace.
+        worker: String,
+        /// Why it refused.
+        #[source]
+        source: BoxError,
+    },
+    /// [`Extension::open_sources`] failed.
+    #[error("extension {namespace}: open sources failed: {source}")]
+    Source {
+        /// The failing extension's namespace.
+        namespace: &'static str,
+        /// Why it failed.
+        #[source]
+        source: BoxError,
+    },
+}
+
+impl ExtensionError {
+    /// A [`Link`](Self::Link) refusal.
+    pub fn link(namespace: &'static str, source: impl Into<BoxError>) -> Self {
+        Self::Link {
+            namespace,
+            source: source.into(),
+        }
+    }
+
+    /// An [`Admit`](Self::Admit) refusal.
+    pub fn admit(worker: impl Into<String>, source: impl Into<BoxError>) -> Self {
+        Self::Admit {
+            worker: worker.into(),
+            source: source.into(),
+        }
+    }
+
+    /// Named after the hook, since `source` belongs to [`std::error::Error`].
+    pub fn open_sources(namespace: &'static str, source: impl Into<BoxError>) -> Self {
+        Self::Source {
+            namespace,
+            source: source.into(),
+        }
+    }
+}
 
 /// One runtime extension; a module importing its interface boots only if both
 /// the linker entry and the capability namespace are registered.
@@ -29,7 +92,7 @@ pub trait Extension<T: RuntimeTypes>: Send + Sync + 'static {
 
     /// Add the extension's imports to a worker linker, after core interfaces
     /// and before instantiation.
-    fn link(&self, linker: &mut Linker<HostState<T>>) -> anyhow::Result<()>;
+    fn link(&self, linker: &mut Linker<HostState<T>>) -> Result<(), ExtensionError>;
 
     /// The effective host wall clock, handed once per launch before
     /// [`link`](Self::link): the WASI override's wall clock when set, else real.
@@ -45,7 +108,11 @@ pub trait Extension<T: RuntimeTypes>: Send + Sync + 'static {
 
     /// Admit one worker at install over its manifest sections; `Err`
     /// refuses fail-fast.
-    fn admit_worker(&self, worker: &str, sections: &ExtensionSections) -> anyhow::Result<()> {
+    fn admit_worker(
+        &self,
+        worker: &str,
+        sections: &ExtensionSections,
+    ) -> Result<(), ExtensionError> {
         let _ = (worker, sections);
         Ok(())
     }
@@ -61,7 +128,7 @@ pub trait Extension<T: RuntimeTypes>: Send + Sync + 'static {
     fn open_sources(
         &self,
         sources: &mut SourceContext<'_>,
-    ) -> anyhow::Result<Vec<ExtensionSource>> {
+    ) -> Result<Vec<ExtensionSource>, ExtensionError> {
         let _ = sources;
         Ok(Vec::new())
     }

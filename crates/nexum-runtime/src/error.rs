@@ -1,30 +1,52 @@
-//! The one refusal value the boot path returns.
+//! The one typed error the public runtime surface returns.
 //!
-//! [`Refusal`] composes the typed refusal vocabulary from the supervisor,
-//! the launcher, and the manifest layer, so the boot-refusal counter
-//! matches on a value instead of downcasting an `anyhow` chain. The
-//! `error_kind` metric label set is closed: [`Refusal::error_kind`] is
-//! exhaustive over the arms, and the test below pins the resulting set.
-//! The one untyped seam is [`Refusal::Other`]: the extension admit hooks
-//! return `anyhow::Error`, so a typed refusal they carry is recovered
-//! best-effort rather than lost.
+//! The `error_kind` label set is closed, and the test below pins it.
 
 use thiserror::Error;
 
 use crate::builder::LaunchRefusal;
 use crate::digest::DigestMismatch;
+use crate::engine_config::EngineConfigError;
+use crate::host::component::BuildError;
+use crate::host::extension::ExtensionError;
+use crate::host::provider_pool::PoolError;
 use crate::manifest::CapabilityError;
 use crate::supervisor::{BootRefusal, LoadRefusal};
 
-/// A refusal from the boot path, or the context and untyped failures
-/// wrapping one.
+/// The error an implementor-facing seam takes, so implementing one needs
+/// no `anyhow` dependency.
+pub type BoxError = Box<dyn std::error::Error + Send + Sync + 'static>;
+
+/// A wasmtime seam failure: engine, linker, compile, store, instantiate,
+/// a host call trapping under `init`, and the local-store namespace open.
 ///
-/// Arms delegate their `Display` to the wrapped type, so the operator
-/// reads the same wording the wrapped refusal carries.
+/// The field stays private because `wasmtime::Error` is `anyhow::Error`.
+#[derive(Debug)]
+pub struct EngineRefusal(anyhow::Error);
+
+impl EngineRefusal {
+    pub(crate) fn new(inner: impl Into<anyhow::Error>) -> Self {
+        Self(inner.into())
+    }
+}
+
+impl std::fmt::Display for EngineRefusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(&self.0, f)
+    }
+}
+
+impl std::error::Error for EngineRefusal {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        self.0.source()
+    }
+}
+
+/// A refusal from the boot path, or a frame wrapping one.
 #[derive(Debug, Error)]
 #[cfg_attr(test, derive(strum::VariantNames))]
 #[non_exhaustive]
-pub enum Refusal {
+pub enum RuntimeError {
     /// Refused before any compile: manifests, namespace claims, and the
     /// configured-chains gate.
     #[error(transparent)]
@@ -41,28 +63,37 @@ pub enum Refusal {
     /// The artifact's bytes hash differently from the manifest's pin.
     #[error(transparent)]
     Digest(#[from] DigestMismatch),
-    /// A context frame naming where the wrapped refusal arose.
+    /// The engine config failed to load or validate.
+    #[error(transparent)]
+    Config(#[from] EngineConfigError),
+    /// A chain provider failed to open at boot.
+    #[error(transparent)]
+    Pool(#[from] PoolError),
+    /// A backend slot builder failed.
+    #[error(transparent)]
+    Backend(BuildError),
+    /// An add-on failed to install.
+    #[error(transparent)]
+    AddOn(BoxError),
+    /// An extension hook refused.
+    #[error(transparent)]
+    Extension(#[from] ExtensionError),
+    /// A frame naming where the wrapped error arose.
     #[error("{context}")]
     Context {
-        /// The frame's message, outermost first, anyhow-style.
+        /// Outermost frame first, anyhow-style.
         context: String,
-        /// The refusal the frame wraps.
-        source: Box<Refusal>,
+        /// The wrapped error.
+        source: Box<RuntimeError>,
     },
-    /// A boot failure outside the refusal vocabulary, from the `anyhow`
-    /// seams: the extension admit hooks and the wasmtime calls.
+    /// A wasmtime seam failed.
     #[error(transparent)]
-    Other(#[from] anyhow::Error),
+    Engine(#[from] EngineRefusal),
 }
 
-impl Refusal {
-    /// The `error_kind` label the boot-refusal counter records; `None`
-    /// goes uncounted: an untyped [`Refusal::Other`] with no recoverable
-    /// class, or the wait-time [`LaunchRefusal::EventLoopGone`].
-    ///
-    /// Exhaustive over the arms with no wildcard: a new arm fails to
-    /// compile until it names a label here, and the label-set test pins
-    /// the resulting set.
+impl RuntimeError {
+    /// The `error_kind` label the boot-refusal counter records. `None`
+    /// goes uncounted.
     pub fn error_kind(&self) -> Option<&'static str> {
         match self {
             Self::Context { source, .. } => source.error_kind(),
@@ -71,13 +102,13 @@ impl Refusal {
             Self::Launch(refusal) => launch_kind(refusal),
             Self::Capability(violation) => Some(violation.into()),
             Self::Digest(_) => Some("digest_mismatch"),
-            Self::Other(err) => err.chain().find_map(untyped_kind),
+            Self::Config(_) | Self::Pool(_) | Self::Backend(_) | Self::AddOn(_) => None,
+            Self::Extension(err) => chained_kind(std::error::Error::source(err)),
+            Self::Engine(engine) => engine.0.chain().find_map(untyped_kind),
         }
     }
 
-    /// The refusal under any context frames, as a downcastable error:
-    /// the typed refusal for the typed arms, the wrapped untyped error
-    /// for [`Refusal::Other`].
+    /// The error under any context frames, as a downcastable value.
     pub fn cause(&self) -> &(dyn std::error::Error + 'static) {
         match self {
             Self::Boot(refusal) => refusal,
@@ -85,16 +116,38 @@ impl Refusal {
             Self::Launch(refusal) => refusal,
             Self::Capability(violation) => violation,
             Self::Digest(mismatch) => mismatch,
+            Self::Config(err) => err,
+            Self::Pool(err) => err,
+            Self::Backend(err) => err,
+            Self::AddOn(err) => &**err,
+            Self::Extension(err) => err,
             Self::Context { source, .. } => source.cause(),
-            Self::Other(err) => &**err,
+            Self::Engine(engine) => &*engine.0,
         }
     }
 
-    /// Wrap in a [`Refusal::Context`] frame.
     pub(crate) fn context(self, context: String) -> Self {
         Self::Context {
             context,
             source: Box::new(self),
+        }
+    }
+}
+
+/// Sees through a slot that boxed a `RuntimeError`, so a chain-connect
+/// failure arrives as [`RuntimeError::Pool`] and not nested one deeper.
+impl From<BuildError> for RuntimeError {
+    fn from(err: BuildError) -> Self {
+        fn see_through(source: BoxError, slot: fn(BoxError) -> BuildError) -> RuntimeError {
+            match source.downcast::<RuntimeError>() {
+                Ok(nested) => *nested,
+                Err(source) => RuntimeError::Backend(slot(source)),
+            }
+        }
+        match err {
+            BuildError::Chain(source) => see_through(source, BuildError::Chain),
+            BuildError::Store(source) => see_through(source, BuildError::Store),
+            BuildError::Logs(source) => see_through(source, BuildError::Logs),
         }
     }
 }
@@ -117,13 +170,21 @@ fn launch_kind(refusal: &LaunchRefusal) -> Option<&'static str> {
     }
 }
 
-/// Best-effort bridge for [`Refusal::Other`]: the extension admit hooks
-/// return `anyhow::Error`, so a typed refusal an embedder's hook raises
-/// arrives untyped and only a downcast can recover its class. In-tree
-/// boot code returns the typed arms and never takes this path.
+fn chained_kind(mut cause: Option<&(dyn std::error::Error + 'static)>) -> Option<&'static str> {
+    while let Some(current) = cause {
+        if let Some(kind) = untyped_kind(current) {
+            return Some(kind);
+        }
+        cause = current.source();
+    }
+    None
+}
+
+/// Recovers the class of a typed refusal an embedder's hook boxed. No
+/// in-tree boot path reaches it.
 fn untyped_kind(cause: &(dyn std::error::Error + 'static)) -> Option<&'static str> {
-    if let Some(refusal) = cause.downcast_ref::<Refusal>() {
-        return refusal.error_kind();
+    if let Some(error) = cause.downcast_ref::<RuntimeError>() {
+        return error.error_kind();
     }
     if let Some(refusal) = cause.downcast_ref::<BootRefusal>() {
         return Some(boot_kind(refusal));
@@ -144,12 +205,11 @@ fn untyped_kind(cause: &(dyn std::error::Error + 'static)) -> Option<&'static st
 
 /// `with_context` for the fallibles on the boot path.
 pub(crate) trait RefusalContext<T> {
-    /// Wrap the error side in a [`Refusal::Context`] frame.
-    fn with_refusal_context(self, context: impl FnOnce() -> String) -> Result<T, Refusal>;
+    fn with_refusal_context(self, context: impl FnOnce() -> String) -> Result<T, RuntimeError>;
 }
 
-impl<T, E: Into<Refusal>> RefusalContext<T> for Result<T, E> {
-    fn with_refusal_context(self, context: impl FnOnce() -> String) -> Result<T, Refusal> {
+impl<T, E: Into<RuntimeError>> RefusalContext<T> for Result<T, E> {
+    fn with_refusal_context(self, context: impl FnOnce() -> String) -> Result<T, RuntimeError> {
         self.map_err(|err| err.into().context(context()))
     }
 }
@@ -164,8 +224,7 @@ mod tests {
     use super::*;
     use crate::manifest::ParseError;
 
-    /// The closed `error_kind` value set: an operator contract, so a
-    /// change here is a deliberate diff.
+    /// An operator contract: a change here is a deliberate diff.
     const PINNED_LABELS: &[&str] = &[
         // BootRefusal, with `manifest` split into the ParseError classes.
         "namespace_claimed",
@@ -211,9 +270,8 @@ mod tests {
         "digest_mismatch",
     ];
 
-    /// The labels one arm's `error_kind` can yield, keyed by the arm's
-    /// name from `Refusal::VARIANTS`. An arm absent here panics, so a
-    /// new arm cannot ship labels the pin never saw.
+    /// Keyed by arm name from `RuntimeError::VARIANTS`, so a new arm
+    /// panics until it names its labels.
     fn arm_labels(arm: &str) -> Vec<&'static str> {
         match arm {
             "Boot" => BootRefusal::VARIANTS
@@ -233,25 +291,31 @@ mod tests {
                 .collect(),
             "Capability" => CapabilityError::VARIANTS.to_vec(),
             "Digest" => vec!["digest_mismatch"],
-            // Context delegates to its source; Other recovers a label
-            // from another arm's table or none at all.
-            "Context" | "Other" => Vec::new(),
+            // Context delegates to its source; the arms outside the
+            // refusal vocabulary recover a label from another arm's table
+            // or none at all.
+            "Context" | "Config" | "Pool" | "Backend" | "AddOn" | "Extension" | "Engine" => {
+                Vec::new()
+            }
             arm => panic!("arm {arm} has no label table; add it here and extend PINNED_LABELS"),
         }
     }
 
-    /// Every label `error_kind` can emit, derived arm by arm over
-    /// `Refusal::VARIANTS` so a new arm cannot escape the pin.
     fn derived_labels() -> Vec<&'static str> {
-        Refusal::VARIANTS
+        RuntimeError::VARIANTS
             .iter()
             .flat_map(|arm| arm_labels(arm))
             .collect()
     }
 
-    /// One representative per arm and the label it must map to, keyed
-    /// like [`arm_labels`]; a new arm panics until it appears here too.
-    fn representative(arm: &str) -> (Refusal, Option<&'static str>) {
+    fn unknown_wasi() -> CapabilityError {
+        CapabilityError::UnknownWasi {
+            wit_import: "wasi:sockets/tcp@0.2.0".to_owned(),
+        }
+    }
+
+    /// Keyed like [`arm_labels`], and panics on an arm absent here.
+    fn representative(arm: &str) -> (RuntimeError, Option<&'static str>) {
         let manifest_missing = || BootRefusal::ManifestMissing {
             component: PathBuf::from("orphan.wasm"),
         };
@@ -262,13 +326,7 @@ mod tests {
                 Some("section_claimed"),
             ),
             "Launch" => (LaunchRefusal::NothingToRun.into(), Some("nothing_to_run")),
-            "Capability" => (
-                CapabilityError::UnknownWasi {
-                    wit_import: "wasi:sockets/tcp@0.2.0".to_owned(),
-                }
-                .into(),
-                Some("unknown_wasi"),
-            ),
+            "Capability" => (unknown_wasi().into(), Some("unknown_wasi")),
             "Digest" => (
                 DigestMismatch {
                     path: PathBuf::from("pinned.wasm"),
@@ -279,17 +337,39 @@ mod tests {
                 .into(),
                 Some("digest_mismatch"),
             ),
+            "Config" => (
+                EngineConfigError::ZeroField {
+                    field: "limits.max_fuel_per_dispatch".to_owned(),
+                }
+                .into(),
+                None,
+            ),
+            "Pool" => (PoolError::Timeout.into(), None),
+            "Backend" => (
+                BuildError::Logs(Box::from("log pipeline gone")).into(),
+                None,
+            ),
+            "AddOn" => (
+                RuntimeError::AddOn(Box::from("recorder already installed")),
+                None,
+            ),
+            "Extension" => (
+                ExtensionError::link("acme", "linker rejected the hook").into(),
+                None,
+            ),
+            "Engine" => (
+                EngineRefusal::new(anyhow::anyhow!("engine gone")).into(),
+                None,
+            ),
             "Context" => (
-                Refusal::from(manifest_missing()).context("load module orphan.wasm".to_owned()),
+                RuntimeError::from(manifest_missing())
+                    .context("load module orphan.wasm".to_owned()),
                 Some("manifest_missing"),
             ),
-            "Other" => (anyhow::anyhow!("engine gone").into(), None),
             arm => panic!("arm {arm} has no representative; add one"),
         }
     }
 
-    /// The label set is closed: exactly the pinned values, one label per
-    /// refusal class, none shared.
     #[test]
     fn the_error_kind_label_set_is_closed_and_pinned() {
         let derived = derived_labels();
@@ -312,13 +392,11 @@ mod tests {
         );
     }
 
-    /// Every arm's representative maps to its expected label, inside its
-    /// own table and the pinned set; `Other` carries no label.
     #[test]
     fn every_arm_maps_into_the_pinned_set() {
-        for arm in Refusal::VARIANTS {
-            let (refusal, expected) = representative(arm);
-            assert_eq!(refusal.error_kind(), expected, "arm {arm}: {refusal}");
+        for arm in RuntimeError::VARIANTS {
+            let (error, expected) = representative(arm);
+            assert_eq!(error.error_kind(), expected, "arm {arm}: {error}");
             let Some(kind) = expected else {
                 continue;
             };
@@ -336,42 +414,56 @@ mod tests {
         }
     }
 
-    /// The label survives context frames, as the counter sees it.
     #[test]
     fn context_frames_keep_the_root_label() {
-        let refusal = Refusal::from(BootRefusal::ManifestMissing {
+        let error = RuntimeError::from(BootRefusal::ManifestMissing {
             component: PathBuf::from("orphan.wasm"),
         })
         .context("load module orphan.wasm".to_owned());
-        assert_eq!(refusal.error_kind(), Some("manifest_missing"));
+        assert_eq!(error.error_kind(), Some("manifest_missing"));
     }
 
-    /// The point of splitting the flat `manifest` label: each manifest
-    /// refusal counts under its own ParseError class.
     #[test]
     fn a_manifest_refusal_counts_under_its_parse_class() {
-        let refusal = Refusal::from(BootRefusal::Manifest(ParseError::MissingCapabilities));
-        assert_eq!(refusal.error_kind(), Some("missing_capabilities"));
-        let refusal = Refusal::from(BootRefusal::Manifest(ParseError::BlankModuleName));
-        assert_eq!(refusal.error_kind(), Some("blank_module_name"));
+        let error = RuntimeError::from(BootRefusal::Manifest(ParseError::MissingCapabilities));
+        assert_eq!(error.error_kind(), Some("missing_capabilities"));
+        let error = RuntimeError::from(BootRefusal::Manifest(ParseError::BlankModuleName));
+        assert_eq!(error.error_kind(), Some("blank_module_name"));
     }
 
-    /// An extension admit hook returns `anyhow::Error`, so a typed
-    /// refusal it raises lands in `Other`; the label survives the wrap
-    /// as it did when the counter walked the whole chain.
     #[test]
-    fn a_typed_refusal_inside_an_untyped_wrap_keeps_its_label() {
-        let hook_err = anyhow::Error::new(CapabilityError::UnknownWasi {
-            wit_import: "wasi:sockets/tcp@0.2.0".to_owned(),
-        })
-        .context("install refused for module.wasm");
-        assert_eq!(
-            Refusal::from(hook_err).error_kind(),
-            Some("unknown_wasi"),
-            "the extension seam keeps the class it smuggled through anyhow",
+    fn a_boxed_refusal_in_a_build_slot_converts_to_its_own_arm() {
+        let boxed: BoxError = Box::new(RuntimeError::from(PoolError::Timeout));
+        let converted = RuntimeError::from(BuildError::Chain(boxed));
+        assert!(
+            matches!(converted, RuntimeError::Pool(_)),
+            "expected the nested Pool refusal, got {converted:?}",
+        );
+        let foreign = RuntimeError::from(BuildError::Chain(Box::from("connect refused")));
+        assert!(
+            matches!(foreign, RuntimeError::Backend(BuildError::Chain(_))),
+            "a foreign slot failure keeps its Backend wrap, got {foreign:?}",
+        );
+    }
+
+    #[test]
+    fn a_typed_refusal_inside_a_foreign_wrap_keeps_its_label() {
+        let engine_wrapped = EngineRefusal::new(
+            anyhow::Error::new(unknown_wasi()).context("install refused for module.wasm"),
         );
         assert_eq!(
-            Refusal::from(anyhow::anyhow!("engine gone")).error_kind(),
+            RuntimeError::from(engine_wrapped).error_kind(),
+            Some("unknown_wasi"),
+            "the engine seam keeps the class it smuggled through anyhow",
+        );
+        let admit_refused = ExtensionError::admit("module", unknown_wasi());
+        assert_eq!(
+            RuntimeError::from(admit_refused).error_kind(),
+            Some("unknown_wasi"),
+            "the extension seam keeps the class its hook boxed",
+        );
+        assert_eq!(
+            RuntimeError::from(EngineRefusal::new(anyhow::anyhow!("engine gone"))).error_kind(),
             None,
             "an untyped failure is counted under no kind rather than a wrong one",
         );

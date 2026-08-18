@@ -15,7 +15,7 @@
 //! # use nexum_runtime::host::component::ComponentsBuilder;
 //! # use nexum_runtime::test_utils::{MockStateStore, MockTypes, Prebuilt};
 //! # use nexum_runtime::test_utils::rpc::FakeNode;
-//! # async fn demo(config: &EngineConfig) -> anyhow::Result<()> {
+//! # async fn demo(config: &EngineConfig) -> Result<(), nexum_runtime::error::RuntimeError> {
 //! let node = FakeNode::new();
 //! let pool = node.pool(&[alloy_chains::Chain::mainnet()], Duration::from_millis(20));
 //! let store = MockStateStore::new();

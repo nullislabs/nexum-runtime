@@ -7,6 +7,7 @@ use metrics_exporter_prometheus::{BuildError, Matcher, PrometheusBuilder};
 use tracing::info;
 
 use crate::engine_config::MetricsSection;
+use crate::error::BoxError;
 
 /// The foreign cause renders inline, so the operator sees one line.
 #[derive(Debug, thiserror::Error)]
@@ -60,7 +61,7 @@ impl AddOnHandle {
 /// A process-wide facility attached to the launch path.
 pub trait RuntimeAddOn {
     /// Install the facility, returning its live handle.
-    fn install(&self, ctx: &AddOnsContext<'_>) -> anyhow::Result<AddOnHandle>;
+    fn install(&self, ctx: &AddOnsContext<'_>) -> Result<AddOnHandle, BoxError>;
 }
 
 /// An owned, ordered add-on set.
@@ -87,7 +88,7 @@ fn prometheus_builder() -> Result<PrometheusBuilder, BuildError> {
 }
 
 impl RuntimeAddOn for PrometheusAddOn {
-    fn install(&self, ctx: &AddOnsContext<'_>) -> anyhow::Result<AddOnHandle> {
+    fn install(&self, ctx: &AddOnsContext<'_>) -> Result<AddOnHandle, BoxError> {
         if ctx.metrics.enabled {
             let addr: std::net::SocketAddr =
                 ctx.metrics
@@ -155,7 +156,7 @@ mod tests {
             Ok(_) => panic!("invalid bind_addr must not install"),
             Err(err) => err,
         };
-        Refusal::from(err).variant::<PrometheusError>(
+        Refusal::from(crate::error::RuntimeError::AddOn(err)).variant::<PrometheusError>(
             |e| matches!(e, PrometheusError::BindAddr { addr, .. } if addr == "not-a-socket-addr"),
         );
     }

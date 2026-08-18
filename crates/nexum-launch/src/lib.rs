@@ -14,17 +14,18 @@ pub use cli::Cli;
 
 use nexum_runtime::builder::RuntimeBuilder;
 use nexum_runtime::engine_config::{self, EngineConfig};
+use nexum_runtime::error::RuntimeError;
 use nexum_runtime::preset::Runtime;
 use tracing::info;
 use tracing_subscriber::EnvFilter;
 
 /// Parse the process arguments as `name`, then [`launch`] the preset.
-pub async fn run<R: Runtime>(name: &'static str, preset: R) -> anyhow::Result<()> {
+pub async fn run<R: Runtime>(name: &'static str, preset: R) -> Result<(), RuntimeError> {
     launch(name, preset, Cli::parse_as(name)).await
 }
 
 /// Load the config, initialize tracing, and run the preset until shutdown.
-pub async fn launch<R: Runtime>(name: &str, preset: R, cli: Cli) -> anyhow::Result<()> {
+pub async fn launch<R: Runtime>(name: &str, preset: R, cli: Cli) -> Result<(), RuntimeError> {
     let mut engine_cfg = engine_config::load_or_default(cli.engine_config.as_deref())?;
     if let Some(n) = cli.log_backfill_concurrency {
         engine_cfg.engine.log_backfill_concurrency = n;
