@@ -47,12 +47,12 @@ pub const METRICS: &[Metric] = &[
     Metric {
         name: "nexum_runtime_dispatch_dropped_total",
         kind: Kind::Counter,
-        help: "Events dropped before dispatch, by reason.",
+        help: "Triggers dropped before dispatch, by reason.",
     },
     Metric {
-        name: "nexum_runtime_event_latency_seconds",
+        name: "nexum_runtime_dispatch_latency_seconds",
         kind: Kind::Histogram,
-        help: "Wall-clock seconds to dispatch one event.",
+        help: "Wall-clock seconds to dispatch one trigger.",
     },
     Metric {
         name: "nexum_runtime_module_errors_total",
@@ -70,9 +70,9 @@ pub const METRICS: &[Metric] = &[
         help: "Module restarts after a trap.",
     },
     Metric {
-        name: "nexum_runtime_stream_reconnects_total",
+        name: "nexum_runtime_source_reconnects_total",
         kind: Kind::Counter,
-        help: "Stream reconnects by kind and chain; kind \"chain-log\" also carries module.",
+        help: "Source reconnects by source_kind and chain; source_kind \"chain-log\" also carries module.",
     },
 ];
 

@@ -3,7 +3,7 @@
 //! installs a facility from the resolved config and returns a handle the
 //! launcher keeps alive for the run.
 
-use metrics_exporter_prometheus::BuildError;
+use metrics_exporter_prometheus::{BuildError, Matcher, PrometheusBuilder};
 use tracing::info;
 
 use crate::engine_config::MetricsSection;
@@ -71,6 +71,21 @@ pub type AddOns = Vec<Box<dyn RuntimeAddOn>>;
 /// recorder alone so `metrics::counter!` call sites stay live but no port opens.
 pub struct PrometheusAddOn;
 
+/// Bucket bounds for the dispatch latency histogram, spanning the 5 s
+/// alert threshold in `docs/production.md`.
+const DISPATCH_LATENCY_BUCKETS: &[f64] = &[
+    0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0,
+];
+
+// Without explicit buckets the exporter renders a histogram as a quantile
+// summary, and the `_bucket` series the latency alert reads never exists.
+fn prometheus_builder() -> Result<PrometheusBuilder, BuildError> {
+    PrometheusBuilder::new().set_buckets_for_metric(
+        Matcher::Full("nexum_runtime_dispatch_latency_seconds".to_owned()),
+        DISPATCH_LATENCY_BUCKETS,
+    )
+}
+
 impl RuntimeAddOn for PrometheusAddOn {
     fn install(&self, ctx: &AddOnsContext<'_>) -> anyhow::Result<AddOnHandle> {
         if ctx.metrics.enabled {
@@ -82,17 +97,16 @@ impl RuntimeAddOn for PrometheusAddOn {
                         addr: ctx.metrics.bind_addr.clone(),
                         cause,
                     })?;
-            metrics_exporter_prometheus::PrometheusBuilder::new()
-                .with_http_listener(addr)
-                .install()
+            prometheus_builder()
+                .and_then(|builder| builder.with_http_listener(addr).install())
                 .map_err(|cause| PrometheusError::Exporter { addr, cause })?;
             crate::metrics::describe_all();
             info!(addr = %addr, "metrics exporter listening at /metrics");
         } else {
             // Recorder installed globally so metrics call sites stay live;
             // no HTTP port is opened. It accumulates samples in memory, unread.
-            metrics_exporter_prometheus::PrometheusBuilder::new()
-                .install_recorder()
+            prometheus_builder()
+                .and_then(|builder| builder.install_recorder().map(drop))
                 .map_err(|cause| PrometheusError::Recorder { cause })?;
             crate::metrics::describe_all();
         }
@@ -105,6 +119,29 @@ mod tests {
     use super::*;
     use crate::engine_config::MetricsSection;
     use crate::test_utils::Refusal;
+
+    /// The `NexumDispatchLatency` alert reads `_bucket` series by `le`, so
+    /// the latency metric must render as a Prometheus histogram.
+    #[test]
+    fn the_latency_histogram_renders_bucket_series() {
+        const NAME: &str = "nexum_runtime_dispatch_latency_seconds";
+        let recorder = prometheus_builder()
+            .expect("a non-empty bucket list builds")
+            .build_recorder();
+        let handle = recorder.handle();
+        metrics::with_local_recorder(&recorder, || {
+            metrics::histogram!(NAME, "module" => "m", "trigger_kind" => "block").record(0.5);
+        });
+        let rendered = handle.render();
+        assert!(
+            rendered.contains(&format!("# TYPE {NAME} histogram")),
+            "exposition:\n{rendered}",
+        );
+        assert!(
+            rendered.contains(&format!("{NAME}_bucket{{")) && rendered.contains("le=\"5\""),
+            "exposition:\n{rendered}",
+        );
+    }
 
     /// An enabled exporter with an unparseable bind address fails at install.
     #[test]

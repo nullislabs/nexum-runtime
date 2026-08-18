@@ -137,8 +137,8 @@ async fn reconnecting_block_task(
                 } else {
                     info!(chain_id, attempt, "block source reopened");
                     metrics::counter!(
-                        "nexum_runtime_stream_reconnects_total",
-                        "kind" => "block",
+                        "nexum_runtime_source_reconnects_total",
+                        "source_kind" => "block",
                         "chain_id" => chain_id.to_string(),
                     )
                     .increment(1);
@@ -339,8 +339,8 @@ async fn reconnecting_chain_log_task(
                         "event source reopened"
                     );
                     metrics::counter!(
-                        "nexum_runtime_stream_reconnects_total",
-                        "kind" => "chain-log",
+                        "nexum_runtime_source_reconnects_total",
+                        "source_kind" => "chain-log",
                         "chain_id" => chain_id.to_string(),
                         "module" => module.clone(),
                     )
@@ -547,7 +547,7 @@ pub async fn run<T: RuntimeTypes, G>(
                 Some((module, chain, log, cursor_key)) => {
                     NextTrigger::Event(module, chain, Box::new(log), cursor_key)
                 }
-                None => NextTrigger::StreamPanic("event"),
+                None => NextTrigger::StreamPanic("chain-log"),
             },
             next = extension_deliveries.next() => match next {
                 Some(delivery) => NextTrigger::Extension(delivery),
