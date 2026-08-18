@@ -23,36 +23,6 @@ use nexum_primitives::module_id::ModuleId;
 
 pub(super) type HostStore<T> = Store<HostState<T>>;
 
-/// Shared sources let a test drive guest-visible time and the wall clock
-/// extensions receive; `None` keeps the ambient clocks. `RunId.started_at`
-/// is host wall-clock and unaffected.
-#[derive(Clone)]
-pub struct WasiClockOverride {
-    pub(super) wall: Arc<dyn HostWallClock + Send + Sync>,
-    pub(super) monotonic: Arc<dyn HostMonotonicClock + Send + Sync>,
-}
-
-impl WasiClockOverride {
-    /// Pair the two clocks a guest can observe. Both are replaced
-    /// together: a test that moves one and not the other is worse than
-    /// the ambient pair.
-    pub fn new(
-        wall: Arc<dyn HostWallClock + Send + Sync>,
-        monotonic: Arc<dyn HostMonotonicClock + Send + Sync>,
-    ) -> Self {
-        Self { wall, monotonic }
-    }
-
-    /// The effective host wall clock: the override's wall clock when set,
-    /// else the real host clock.
-    pub fn effective_wall(clocks: Option<&Self>) -> Arc<dyn HostWallClock + Send + Sync> {
-        match clocks {
-            Some(clocks) => clocks.wall.clone(),
-            None => Arc::new(wasmtime_wasi::clocks::WallClock::default()),
-        }
-    }
-}
-
 struct SharedWallClock(Arc<dyn HostWallClock + Send + Sync>);
 
 impl HostWallClock for SharedWallClock {
@@ -190,8 +160,8 @@ fn build<T: RuntimeTypes>(
             LogChannel::Stderr,
         ));
     if let Some(clocks) = &shared.clocks {
-        builder.wall_clock(SharedWallClock(clocks.wall.clone()));
-        builder.monotonic_clock(SharedMonotonicClock(clocks.monotonic.clone()));
+        builder.wall_clock(SharedWallClock(clocks.wall()));
+        builder.monotonic_clock(SharedMonotonicClock(clocks.monotonic()));
     }
     let wasi = builder.build();
     let limits = wasmtime::StoreLimitsBuilder::new()
@@ -253,6 +223,7 @@ pub fn build_linker<T: RuntimeTypes<State = HostState<T>>>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::supervisor::WasiClockOverride;
     use crate::test_utils::clock::ManualClock;
 
     /// [`build`] serves the guest `clocks.wall`; the extension seam hands out
@@ -261,6 +232,6 @@ mod tests {
     fn the_effective_wall_clock_is_the_handle_the_guest_store_serves() {
         let clocks = ManualClock::new().as_override();
         let served = WasiClockOverride::effective_wall(Some(&clocks));
-        assert!(Arc::ptr_eq(&clocks.wall, &served));
+        assert!(Arc::ptr_eq(&clocks.wall(), &served));
     }
 }

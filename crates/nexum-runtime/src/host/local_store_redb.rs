@@ -18,7 +18,9 @@ use alloy_primitives::keccak256;
 use redb::{Database, ReadableDatabase, ReadableTable, TableDefinition};
 use thiserror::Error;
 
-use crate::host::component::{StateHandle, StateStore, StoreError, WriteOp};
+use crate::host::component::{
+    MAX_APPLY_OPS, MAX_APPLY_VALUE_BYTES, StateHandle, StateStore, StoreError, WriteOp,
+};
 
 const TABLE: TableDefinition<'static, &[u8], &[u8]> = TableDefinition::new("nexum:local-store");
 #[cfg(test)]
@@ -27,12 +29,6 @@ const PREFIX_LEN: usize = 32;
 /// Fixed per-entry overhead charged with prefix+key+value so the quota bounds
 /// on-disk bytes, not logical payload.
 const ENTRY_OVERHEAD: u64 = 32;
-
-/// Cap on ops per [`ModuleStore::apply`] batch.
-pub const MAX_APPLY_OPS: usize = 1024;
-
-/// Cap on total set-value bytes per [`ModuleStore::apply`] batch.
-pub const MAX_APPLY_VALUE_BYTES: u64 = 4 * 1024 * 1024;
 
 /// Process-wide handle to the local-store redb database; cheap to clone.
 #[derive(Debug, Clone)]

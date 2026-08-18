@@ -3,15 +3,14 @@
 //! lattice. The chain backend is the concrete [`ProviderPool`].
 
 mod builder;
-mod runtime_types;
-mod state;
 
 pub use builder::{
-    BuildError, BuilderContext, ComponentBuilder, ComponentsBuilder, LocalStoreBuilder,
-    LogPipelineBuilder, ProviderPoolBuilder,
+    BuildError, ComponentsBuilder, LocalStoreBuilder, LogPipelineBuilder, ProviderPoolBuilder,
 };
-pub use runtime_types::{Handle, RuntimeTypes};
-pub use state::{StateHandle, StateStore, StoreError, WriteOp};
+pub use nexum_runtime_api::{
+    BuilderContext, ComponentBuilder, Handle, MAX_APPLY_OPS, MAX_APPLY_VALUE_BYTES, RuntimeTypes,
+    StateHandle, StateStore, StoreError, WriteOp,
+};
 
 /// Permitted read surface, re-exported from `nexum-world`.
 pub use nexum_world::ChainMethod;

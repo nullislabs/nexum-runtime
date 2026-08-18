@@ -88,8 +88,6 @@ pub(crate) fn store_fault(
         StoreError::ApplyBytesExceeded { .. } => {
             Fault::InvalidInput(LocalStoreFaultMessage::ApplyBytesOverCap.text().to_owned())
         }
-        // Exhaustive on purpose: a new variant must pick its projection
-        // here before it can reach a guest.
         StoreError::Backend(_) | StoreError::InvalidNamespace(_) => {
             Fault::Internal(LocalStoreFaultMessage::BackendFailure.text().to_owned())
         }

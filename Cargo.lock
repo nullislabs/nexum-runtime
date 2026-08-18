@@ -3334,6 +3334,7 @@ dependencies = [
  "metrics-util",
  "nexum-primitives",
  "nexum-runtime",
+ "nexum-runtime-api",
  "nexum-runtime-config",
  "nexum-runtime-manifest",
  "nexum-tasks",
@@ -3357,6 +3358,19 @@ dependencies = [
  "wasmtime-wasi",
  "wasmtime-wasi-http",
  "wiremock",
+]
+
+[[package]]
+name = "nexum-runtime-api"
+version = "0.1.0"
+dependencies = [
+ "futures",
+ "nexum-runtime-config",
+ "nexum-runtime-manifest",
+ "nexum-tasks",
+ "thiserror 2.0.18",
+ "wasmtime",
+ "wasmtime-wasi",
 ]
 
 [[package]]

@@ -5,6 +5,7 @@ members = [
     "crates/nexum-module-macros",
     "crates/nexum-primitives",
     "crates/nexum-runtime",
+    "crates/nexum-runtime-api",
     "crates/nexum-runtime-config",
     "crates/nexum-runtime-manifest",
     "crates/nexum-sdk",

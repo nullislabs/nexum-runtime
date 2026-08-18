@@ -2,38 +2,11 @@
 //! [`ComponentsBuilder`] assembles the core seams and the log pipeline into a
 //! [`Components`] bundle.
 
-use std::future::Future;
-use std::path::Path;
-
-use nexum_tasks::TaskExecutor;
-
 use crate::error::BoxError;
-use crate::host::component::{Components, RuntimeTypes};
+use crate::host::component::{BuilderContext, ComponentBuilder, Components, RuntimeTypes};
 use crate::host::local_store_redb::LocalStore;
 use crate::host::logs::LogPipeline;
 use crate::host::provider_pool::ProviderPool;
-
-/// Shared inputs every component builder reads.
-pub struct BuilderContext<'a> {
-    /// The loaded engine config.
-    pub config: &'a crate::engine_config::EngineConfig,
-    /// Directory backends root their on-disk state at.
-    pub data_dir: &'a Path,
-    /// Runs blocking open work off the async executor.
-    pub executor: &'a TaskExecutor,
-}
-
-/// Builds one runtime backend from the shared [`BuilderContext`].
-pub trait ComponentBuilder {
-    /// The backend this builder produces.
-    type Output;
-
-    /// Open the backend, consuming the builder.
-    fn build(
-        self,
-        ctx: &BuilderContext<'_>,
-    ) -> impl Future<Output = Result<Self::Output, BoxError>> + Send;
-}
 
 /// Builds the [`ProviderPool`] from `[chains]`.
 pub struct ProviderPoolBuilder;

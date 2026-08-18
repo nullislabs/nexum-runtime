@@ -52,10 +52,17 @@ The two value modules did not move whole: `dispatch_rate` splits, and only `Disp
 
 Layer 2, `nexum-runtime-api`.
 It holds traits and the types those traits name: `Extension`, `ExtensionError`, `RuntimeTypes`, `StateStore` and `WasiClockOverride`.
+The move measured more residents than the seams name.
+The generated `nexum:host` bindings live here, because `ExtensionDelivery` carries the host `Trigger`; `nexum-runtime` re-exports the one generated module, since a second `bindgen!` invocation would mint a distinct set of types.
+The `ComponentBuilder` seam with `BuilderContext` lives here; the concrete builders stay above it.
+The per-batch apply caps and the `BoxError` alias live beside the seams that name them.
+The measured dependency set is `futures`, `nexum-tasks`, `thiserror`, `wasmtime` and `wasmtime-wasi`, plus `nexum-runtime-config` and `nexum-runtime-manifest`; `nexum-primitives` is not needed.
 This layer is the reason the set works.
 It gives an extension author one small crate to depend on instead of the engine.
 The seams in this layer name no implementation type, which is what unpicks the `host` and `supervisor` knot.
 `Extension::link` links against `RuntimeTypes::State`, and the store seam owns its error type, which the redb backend converts into.
+`StoreError` carries no `non_exhaustive`, deliberately.
+The engine projects each variant to a guest-visible fault, and the attribute would have forced a wildcard arm that sends a future variant to an internal fault with nothing failing to compile.
 The seams must hold this shape before any code moves, because a seam that names a concrete type drags that type's crate with it.
 
 Layer 3, the implementation crates.
