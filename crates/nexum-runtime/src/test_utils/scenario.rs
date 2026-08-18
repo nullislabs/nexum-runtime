@@ -17,6 +17,7 @@ use crate::host::extension::{Extension, attach_wall_clock};
 use crate::host::local_store_redb::LocalStore;
 use crate::host::logs::{LogPipeline, LogRecord};
 use crate::host::provider_pool::ProviderPool;
+use crate::host::state::HostState;
 use crate::preset::CoreRuntime;
 use crate::supervisor::{Supervisor, WasiClockOverride, build_linker};
 use crate::test_utils::wasm::test_wasmtime_engine;
@@ -112,7 +113,7 @@ impl BootScenario<CoreRuntime> {
     }
 }
 
-impl<T: RuntimeTypes> BootScenario<T> {
+impl<T: RuntimeTypes<State = HostState<T>>> BootScenario<T> {
     /// A scenario rooted in a fresh tempdir, holding the given backends.
     pub fn over(components: Components<T>) -> Self {
         Self::rooted(tempfile::tempdir().expect("scenario tempdir"), components)
@@ -312,7 +313,7 @@ pub struct Booted<T: RuntimeTypes = CoreRuntime> {
     _dir: TempDir,
 }
 
-impl<T: RuntimeTypes> Booted<T> {
+impl<T: RuntimeTypes<State = HostState<T>>> Booted<T> {
     /// The log pipeline, for reading what a module emitted.
     pub fn logs(&self) -> &LogPipeline {
         &self.logs

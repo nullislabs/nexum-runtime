@@ -14,6 +14,7 @@ use super::load::{LoadedModule, instantiate_module};
 use super::store::{build_linker, fresh_run_store};
 use crate::engine_config::{PoisonPolicy, should_poison};
 use crate::host::component::RuntimeTypes;
+use crate::host::state::HostState;
 use crate::runtime::restart_policy::{backoff_for, jitter_seed};
 use nexum_primitives::digest::ContentDigest;
 use nexum_primitives::module_id::ModuleId;
@@ -159,7 +160,7 @@ pub(super) trait Sweepable<T: RuntimeTypes> {
     async fn revive(&mut self, shared: &Shared<T>) -> Result<()>;
 }
 
-impl<T: RuntimeTypes> Sweepable<T> for LoadedModule<T> {
+impl<T: RuntimeTypes<State = HostState<T>>> Sweepable<T> for LoadedModule<T> {
     fn name(&self) -> &ModuleId {
         &self.name
     }

@@ -16,7 +16,6 @@ use crate::bindings::nexum::host::types::Trigger;
 use crate::engine_config::EngineConfig;
 use crate::error::BoxError;
 use crate::host::component::RuntimeTypes;
-use crate::host::state::HostState;
 use crate::manifest::{ExtensionSections, NamespaceCaps};
 use crate::supervisor::WasiClockOverride;
 
@@ -92,7 +91,7 @@ pub trait Extension<T: RuntimeTypes>: Send + Sync + 'static {
 
     /// Add the extension's imports to a worker linker, after core interfaces
     /// and before instantiation.
-    fn link(&self, linker: &mut Linker<HostState<T>>) -> Result<(), ExtensionError>;
+    fn link(&self, linker: &mut Linker<T::State>) -> Result<(), ExtensionError>;
 
     /// The effective host wall clock, handed once per launch before
     /// [`link`](Self::link): the WASI override's wall clock when set, else real.

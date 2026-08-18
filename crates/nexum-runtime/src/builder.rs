@@ -28,6 +28,7 @@ use crate::host::component::{
 use crate::host::extension::{self, Extension, SourceContext};
 use crate::host::logs::LogPipeline;
 use crate::host::provider_pool::ProviderPool;
+use crate::host::state::HostState;
 use crate::preset::Runtime;
 use crate::runtime::event_loop;
 pub use crate::supervisor::WasiClockOverride;
@@ -195,7 +196,7 @@ pub struct AssembledRuntime<T: RuntimeTypes> {
     pub clocks: Option<WasiClockOverride>,
 }
 
-impl<T: RuntimeTypes> AssembledRuntime<T> {
+impl<T: RuntimeTypes<State = HostState<T>>> AssembledRuntime<T> {
     /// Run the imperative launch sequence and return the running handle.
     pub async fn launch(self, ctx: LaunchContext<'_>) -> Result<RuntimeHandle, RuntimeError> {
         let AssembledRuntime {
@@ -428,7 +429,7 @@ async fn open_and_launch<T, C, S, L>(
     components: ComponentsBuilder<C, S, L>,
 ) -> Result<RuntimeHandle, RuntimeError>
 where
-    T: RuntimeTypes,
+    T: RuntimeTypes<State = HostState<T>>,
     C: ComponentBuilder<Output = ProviderPool>,
     S: ComponentBuilder<Output = T::Store>,
     L: ComponentBuilder<Output = LogPipeline>,
@@ -607,7 +608,7 @@ pub struct PresetComponentsBuilder<'a, T: RuntimeTypes, C, S, L> {
 
 impl<T, C, S, L> PresetComponentsBuilder<'_, T, C, S, L>
 where
-    T: RuntimeTypes,
+    T: RuntimeTypes<State = HostState<T>>,
     C: ComponentBuilder<Output = ProviderPool>,
     S: ComponentBuilder<Output = T::Store>,
     L: ComponentBuilder<Output = LogPipeline>,
@@ -709,7 +710,7 @@ impl<T: RuntimeTypes, C, S, L> ReadyBuilder<'_, T, C, S, L> {
 
 impl<T, C, S, L> ReadyBuilder<'_, T, C, S, L>
 where
-    T: RuntimeTypes,
+    T: RuntimeTypes<State = HostState<T>>,
     C: ComponentBuilder<Output = ProviderPool>,
     S: ComponentBuilder<Output = T::Store>,
     L: ComponentBuilder<Output = LogPipeline>,

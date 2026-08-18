@@ -18,6 +18,8 @@ use alloy_primitives::keccak256;
 use redb::{Database, ReadableDatabase, ReadableTable, TableDefinition};
 use thiserror::Error;
 
+use crate::host::component::{StateHandle, StateStore, StoreError, WriteOp};
+
 const TABLE: TableDefinition<'static, &[u8], &[u8]> = TableDefinition::new("nexum:local-store");
 #[cfg(test)]
 const PREFIX_LEN: usize = 32;
@@ -31,23 +33,6 @@ pub const MAX_APPLY_OPS: usize = 1024;
 
 /// Cap on total set-value bytes per [`ModuleStore::apply`] batch.
 pub const MAX_APPLY_VALUE_BYTES: u64 = 4 * 1024 * 1024;
-
-/// One write in a [`ModuleStore::apply`] batch.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum WriteOp {
-    /// Insert or overwrite `key` with `value`.
-    Set {
-        /// Module-visible key.
-        key: String,
-        /// Value bytes.
-        value: Vec<u8>,
-    },
-    /// Delete `key`; a missing key is a no-op.
-    Delete {
-        /// Module-visible key.
-        key: String,
-    },
-}
 
 /// Process-wide handle to the local-store redb database; cheap to clone.
 #[derive(Debug, Clone)]
@@ -455,6 +440,73 @@ pub enum StorageError {
         /// Per-batch value-byte cap.
         cap: u64,
     },
+}
+
+fn store_error(err: StorageError) -> StoreError {
+    match err {
+        StorageError::InvalidNamespace(reason) => StoreError::InvalidNamespace(reason),
+        StorageError::QuotaExceeded { needed, quota } => {
+            StoreError::QuotaExceeded { needed, quota }
+        }
+        StorageError::QuotaUnsatisfiable { needed, quota } => {
+            StoreError::QuotaUnsatisfiable { needed, quota }
+        }
+        StorageError::ApplyOpsExceeded { ops, cap } => StoreError::ApplyOpsExceeded { ops, cap },
+        StorageError::ApplyBytesExceeded { bytes, cap } => {
+            StoreError::ApplyBytesExceeded { bytes, cap }
+        }
+        err @ (StorageError::Open(_)
+        | StorageError::Txn(_)
+        | StorageError::Table(_)
+        | StorageError::Storage(_)
+        | StorageError::Commit(_)) => StoreError::Backend(Box::new(err)),
+    }
+}
+
+impl StateStore for LocalStore {
+    type Handle = ModuleStore;
+
+    fn module(&self, namespace: &str) -> Result<ModuleStore, StoreError> {
+        LocalStore::module(self, namespace).map_err(store_error)
+    }
+}
+
+impl StateHandle for ModuleStore {
+    fn with_quota(self, quota_bytes: u64) -> Self {
+        ModuleStore::with_quota(self, quota_bytes)
+    }
+
+    fn get(&self, key: &str) -> Result<Option<Vec<u8>>, StoreError> {
+        ModuleStore::get(self, key).map_err(store_error)
+    }
+
+    fn set(&self, key: &str, value: &[u8]) -> Result<(), StoreError> {
+        ModuleStore::set(self, key, value).map_err(store_error)
+    }
+
+    fn delete(&self, key: &str) -> Result<(), StoreError> {
+        ModuleStore::delete(self, key).map_err(store_error)
+    }
+
+    fn list_keys(&self, prefix: &str) -> Result<Vec<String>, StoreError> {
+        ModuleStore::list_keys(self, prefix).map_err(store_error)
+    }
+
+    fn contains(&self, key: &str) -> Result<bool, StoreError> {
+        ModuleStore::contains(self, key).map_err(store_error)
+    }
+
+    fn len(&self, key: &str) -> Result<Option<u64>, StoreError> {
+        ModuleStore::len(self, key).map_err(store_error)
+    }
+
+    fn count(&self, prefix: &str) -> Result<u64, StoreError> {
+        ModuleStore::count(self, prefix).map_err(store_error)
+    }
+
+    fn apply(&self, ops: &[WriteOp]) -> Result<(), StoreError> {
+        ModuleStore::apply(self, ops).map_err(store_error)
+    }
 }
 
 #[cfg(test)]

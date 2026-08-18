@@ -13,7 +13,7 @@ Its members:
 
 - `namespace()`: the namespace it owns.
 - `capabilities() -> NamespaceCaps`: the `{ prefix, ifaces }` merged into enforcement, so a component importing its interfaces still validates.
-- `link(&mut Linker<HostState<T>>)`: adds its WIT imports to each worker linker, after the core interfaces and before instantiation.
+- `link(&mut Linker<T::State>)`: adds its WIT imports to each worker linker, after the core interfaces and before instantiation.
   It takes only `&mut Linker` and never the wasmtime `Store`, which is not `Sync`, so the seam stays compatible with a future per-extension call router that serializes access to a `Store`.
 - `attach_clock(Arc<dyn HostWallClock>)`: receives the effective host wall clock once per launch, before `link`.
   The clock is the WASI override's wall clock when a test sets one, else the real host clock, so extension time and guest time share one source.
@@ -34,7 +34,8 @@ The supervisor caches the list, so the restart path rebuilds an identical linker
 Two wired extensions claiming one namespace is a boot refusal, `ExtensionNamespaceClaimed`.
 
 An extension lives in its own crate.
-It depends on the runtime for the seam types (`HostState`, `Extension`, the `nexum:host/types` bindgen), and the composition-root binary depends on it.
+It depends on the runtime for the seam types (`Extension`, `RuntimeTypes`, the `nexum:host/types` bindgen), and the composition-root binary depends on it.
+The engine assembly supplies the concrete `HostState` as its `RuntimeTypes::State`.
 The runtime carries no dependency on any extension crate, so a domain cone stays out of the bare engine.
 `crates/nexum-cli` composes the core lattice and registers no extension.
 

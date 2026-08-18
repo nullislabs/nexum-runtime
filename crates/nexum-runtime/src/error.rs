@@ -6,7 +6,7 @@ use thiserror::Error;
 
 pub use crate::builder::LaunchRefusal;
 pub use crate::engine_config::{EngineConfigError, EnvVarError, RpcEndpointError};
-pub use crate::host::component::BuildError;
+pub use crate::host::component::{BuildError, StoreError};
 pub use crate::host::extension::ExtensionError;
 pub use crate::host::local_store_redb::StorageError;
 pub use crate::host::provider_pool::PoolError;
