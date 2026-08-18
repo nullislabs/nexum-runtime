@@ -11,8 +11,7 @@ pub(crate) mod prepass;
 mod sources;
 mod store;
 
-pub use load::LoadRefusal;
-pub use prepass::{BootRefusal, ConfiguredChains};
+pub use prepass::ConfiguredChains;
 pub use sources::{EventSource, SourcePlan, Viability};
 pub use store::{WasiClockOverride, build_linker};
 

@@ -4,7 +4,7 @@
 #![cfg_attr(not(test), warn(unused_crate_dependencies))]
 #![forbid(unsafe_code)]
 
-use nexum_runtime::preset::CoreRuntime;
+use nexum_runtime::CoreRuntime;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {

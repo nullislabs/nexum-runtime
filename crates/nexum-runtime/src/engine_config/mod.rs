@@ -16,7 +16,7 @@ pub use error::{EngineConfigError, EnvVarError};
 pub use limits::{
     ChainLimitsSection, DispatchLimitsSection, HttpLimitsSection, LogLimitsSection,
     LogRetentionLimits, ModuleLimits, OutboundHttpLimits, PoisonLimitsSection,
-    ResolvedModuleLimits,
+    ResolvedModuleLimits, ShutdownLimitsSection,
 };
 pub use load::load_or_default;
 pub use policy::{ComponentPolicy, EffectivePolicy, PolicyCeilings, PolicySection, TotalPolicy};

@@ -15,11 +15,15 @@
 // the runtime code only names them through the `alloy_provider`
 // re-exports. Silence `unused_crate_dependencies` with `as _`.
 use alloy_rpc_client as _;
-use alloy_transport as _;
 use alloy_transport_ws as _;
 
-/// Markers reserved for semver evolution of [`preset::Runtime`] and
-/// [`host::component::RuntimeTypes`]: implement alongside the trait.
+pub use {
+    alloy_chains, alloy_primitives, alloy_provider, alloy_rpc_types_eth, alloy_transport, futures,
+    nexum_tasks, nexum_world, toml, wasmtime, wasmtime_wasi, wasmtime_wasi_http,
+};
+
+/// Markers reserved for semver evolution of [`Runtime`] and
+/// [`component::RuntimeTypes`]: implement alongside the trait.
 #[doc(hidden)]
 pub mod sealed {
     pub trait SealedRuntimeTypes {}
@@ -28,19 +32,90 @@ pub mod sealed {
 
 pub mod addons;
 pub mod bindings;
-pub mod builder;
-pub mod digest;
-pub mod engine_config;
+mod builder;
+mod digest;
+mod engine_config;
 pub mod error;
-pub mod host;
-pub mod host_pattern;
-pub mod interface_id;
+mod host;
+mod host_pattern;
+mod interface_id;
 pub mod manifest;
-pub mod metrics;
-pub mod module_id;
-pub mod preset;
-pub mod runtime;
+#[path = "metrics.rs"]
+mod metric_names;
+mod module_id;
+mod preset;
+mod runtime;
 pub mod supervisor;
 
 #[cfg(feature = "test-utils")]
 pub mod test_utils;
+
+/// Engine-side configuration (`engine.toml`) and its resolved forms.
+pub mod config {
+    pub use crate::digest::{ContentDigest, DigestPin};
+    pub use crate::engine_config::{
+        ChainConfig, ChainLimitsSection, ComponentPolicy, DispatchLimitsSection, EffectivePolicy,
+        EngineConfig, EngineSection, HttpLimitsSection, LogLimitsSection, LogRetentionLimits,
+        MetricsSection, ModuleEntry, ModuleLimits, OutboundHttpLimits, PoisonLimitsSection,
+        PolicyCeilings, PolicySection, ResolvedModuleLimits, RpcEndpoint, RpcTransport,
+        ShutdownLimitsSection, TotalPolicy, load_or_default,
+    };
+    pub use crate::host_pattern::HostPattern;
+    pub use crate::runtime::dispatch_rate::DispatchRatePolicy;
+    pub use crate::runtime::poison_policy::PoisonPolicy;
+    pub use ipnet::IpNet;
+    pub use url::Url;
+}
+
+/// Backend component seams and the builders that open them.
+pub mod component {
+    pub use crate::host::component::{
+        BuildError, BuilderContext, ChainMethod, ComponentBuilder, Components, ComponentsBuilder,
+        Handle, LocalStoreBuilder, LogPipelineBuilder, ProviderPoolBuilder, RuntimeTypes,
+        StateHandle, StateStore,
+    };
+    pub use crate::host::local_store_redb::{
+        LocalStore, MAX_APPLY_OPS, MAX_APPLY_VALUE_BYTES, ModuleStore, StorageError, WriteOp,
+    };
+    pub use crate::host::provider_pool::{
+        BlockStream, CanonicalLogBatch, CanonicalLogStream, PoolError, ProviderPool,
+    };
+    pub use redb::{
+        CommitError, DatabaseError, StorageError as RedbStorageError, TableError, TransactionError,
+    };
+}
+
+/// The seam an extension author implements against.
+pub mod extension {
+    pub use crate::host::extension::{
+        Extension, ExtensionDelivery, ExtensionError, ExtensionSource, HostWallClock, SourceContext,
+    };
+    pub use crate::host::fault::{fault_label, fault_message};
+    pub use crate::host::http::HttpGate;
+    pub use crate::host::state::HostState;
+}
+
+/// The module-log pipeline and its read surface.
+pub mod logs {
+    pub use crate::host::logs::{
+        InMemoryRunLogStore, LogChannel, LogPage, LogPipeline, LogRecord, LogRouter, RunId,
+        RunLogStore, RunMeta, StdioStream,
+    };
+    pub use tokio::sync::Notify;
+    pub use tracing_core::Level;
+}
+
+/// The dispatch loop, for an embedder driving a [`supervisor::Supervisor`] directly.
+pub mod event_loop {
+    pub use crate::runtime::event_loop::{
+        TaggedBlockStream, TaggedChainLog, TaggedChainLogStream, open_block_streams,
+        open_chain_log_streams, run, wait_for_os_signal,
+    };
+}
+
+pub use builder::{
+    AssembledRuntime, LaunchContext, PresetBuilder, PresetComponentsBuilder, ReadyBuilder,
+    RuntimeBuilder, RuntimeHandle, TypedBuilder,
+};
+pub use module_id::ModuleId;
+pub use preset::{CoreRuntime, Runtime};

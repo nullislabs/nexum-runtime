@@ -52,9 +52,12 @@ pub enum ParseError {
         /// The attribute name.
         attribute: &'static str,
     },
+    /// A `[component].digest` that does not parse as a digest pin.
     #[error("manifest: [component].digest {value:?} is not a valid digest: {source}")]
     InvalidComponentDigest {
+        /// The digest as written.
         value: String,
+        /// Why it failed to parse.
         #[source]
         source: crate::digest::DigestParseError,
     },
@@ -72,6 +75,7 @@ pub enum ParseError {
         index: usize,
         /// The declared core kind.
         kind: String,
+        /// Why the shape check failed.
         #[source]
         source: toml::de::Error,
     },
@@ -80,6 +84,7 @@ pub enum ParseError {
     InvalidEventAddress {
         /// The address as written.
         value: String,
+        /// Why the hex decode failed.
         #[source]
         source: alloy_primitives::hex::FromHexError,
     },
@@ -88,6 +93,7 @@ pub enum ParseError {
     InvalidEventTopic {
         /// The topic as written.
         value: String,
+        /// Why the hex decode failed.
         #[source]
         source: alloy_primitives::hex::FromHexError,
     },

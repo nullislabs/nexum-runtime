@@ -35,8 +35,11 @@ use crate::engine_config::{
 use crate::error::RuntimeError;
 use crate::host::logs::LogChannel;
 use crate::host::provider_pool::ProviderPool;
-use crate::manifest::{self, CapabilityError, CapabilityRegistry, ParseError, ResourceSection};
+use crate::manifest::error::CapabilityError;
+use crate::manifest::{self, CapabilityRegistry, ParseError, ResourceSection};
 use crate::preset::CoreRuntime;
+use crate::supervisor::load::LoadRefusal;
+use crate::supervisor::prepass::BootRefusal;
 use crate::test_utils::{
     BootScenario, Entry, ManifestInput, Refusal, TestManifest, example_wasm_or_skip,
     mock_components, module_wasm_or_skip, test_wasmtime_engine,
