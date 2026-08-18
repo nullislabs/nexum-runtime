@@ -8,12 +8,8 @@
 #![cfg_attr(not(test), warn(unused_crate_dependencies))]
 #![forbid(unsafe_code)]
 
-// alloy split its API across multiple crates; we depend on the
-// transports directly so cargo resolves the right feature set, but
-// the runtime code only names them through the `alloy_provider`
-// re-exports. Silence `unused_crate_dependencies` with `as _`.
+// Named only by the `test-utils` mock transports.
 use alloy_rpc_client as _;
-use alloy_transport_ws as _;
 
 pub use {
     alloy_chains, alloy_primitives, alloy_provider, alloy_rpc_types_eth, alloy_transport, futures,

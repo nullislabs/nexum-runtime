@@ -1,64 +1,12 @@
-//! Per-component builders. Each core backend is a [`ComponentBuilder`];
-//! [`ComponentsBuilder`] assembles the core seams and the log pipeline into a
-//! [`Components`] bundle.
+//! [`ComponentsBuilder`] assembles the per-backend [`ComponentBuilder`]s and
+//! the log pipeline into a [`Components`] bundle.
+
+use nexum_runtime_logs::LogPipelineBuilder;
 
 use crate::error::BoxError;
 use crate::host::component::{BuilderContext, ComponentBuilder, Components, RuntimeTypes};
-use crate::host::local_store_redb::LocalStore;
 use crate::host::logs::LogPipeline;
 use crate::host::provider_pool::ProviderPool;
-
-/// Builds the [`ProviderPool`] from `[chains]`.
-pub struct ProviderPoolBuilder;
-
-impl ComponentBuilder for ProviderPoolBuilder {
-    type Output = ProviderPool;
-
-    async fn build(self, ctx: &BuilderContext<'_>) -> Result<ProviderPool, BoxError> {
-        ProviderPool::from_config(ctx.config)
-            .await
-            .map_err(Into::into)
-    }
-}
-
-/// Builds the [`LocalStore`] at `data_dir/local-store.redb`, creating the
-/// data directory if it does not exist.
-pub struct LocalStoreBuilder;
-
-impl ComponentBuilder for LocalStoreBuilder {
-    type Output = LocalStore;
-
-    async fn build(self, ctx: &BuilderContext<'_>) -> Result<LocalStore, BoxError> {
-        // create_dir_all and LocalStore::open (which fsyncs on create) are
-        // blocking syscalls; keep them off the async executor.
-        let data_dir = ctx.data_dir.to_path_buf();
-        ctx.executor
-            .spawn_blocking(move || {
-                std::fs::create_dir_all(&data_dir).map_err(|e| {
-                    BoxError::from(format!("create data directory {}: {e}", data_dir.display()))
-                })?;
-                let path = data_dir.join("local-store.redb");
-                LocalStore::open(&path).map_err(|e| {
-                    BoxError::from(format!("open local-store at {}: {e}", path.display()))
-                })
-            })
-            .join()
-            .await
-            .ok_or_else(|| BoxError::from("local-store open task ended abnormally"))?
-    }
-}
-
-/// Builds the default [`LogPipeline`]: the byte-bounded in-memory backend
-/// sized from `[limits.logs]`.
-pub struct LogPipelineBuilder;
-
-impl ComponentBuilder for LogPipelineBuilder {
-    type Output = LogPipeline;
-
-    async fn build(self, ctx: &BuilderContext<'_>) -> Result<LogPipeline, BoxError> {
-        Ok(LogPipeline::in_memory(ctx.config.limits.logs))
-    }
-}
 
 /// Names the component slot whose build failed.
 #[derive(Debug, thiserror::Error)]
@@ -128,6 +76,7 @@ impl<C, S, L> ComponentsBuilder<C, S, L> {
 mod tests {
     use super::*;
     use crate::engine_config::EngineConfig;
+    use crate::host::component::{LocalStoreBuilder, ProviderPoolBuilder};
     use crate::preset::CoreRuntime;
 
     /// Opens the core backends end-to-end against a fresh data directory.

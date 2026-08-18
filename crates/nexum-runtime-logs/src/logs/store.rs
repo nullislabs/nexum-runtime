@@ -7,8 +7,8 @@ use std::sync::Mutex;
 use std::time::SystemTime;
 
 use super::{LogRecord, RunId};
-use crate::engine_config::LogRetentionLimits;
 use nexum_primitives::module_id::ModuleId;
+use nexum_runtime_config::LogRetentionLimits;
 
 /// A page of a run's retained records plus the cursor to resume from.
 #[derive(Debug, Clone, Default)]
@@ -216,7 +216,7 @@ mod tests {
     use tracing_core::Level;
 
     use super::*;
-    use crate::host::logs::{LogChannel, RECORD_OVERHEAD};
+    use crate::logs::{LogChannel, RECORD_OVERHEAD};
 
     fn limits(bytes_per_run: usize, runs_retained: usize) -> LogRetentionLimits {
         LogRetentionLimits {

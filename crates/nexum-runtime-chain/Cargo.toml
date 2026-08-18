@@ -1,0 +1,37 @@
+[package]
+name = "nexum-runtime-chain"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "The JSON-RPC chain backend for the Nexum runtime: one provider per configured chain."
+
+[lints]
+workspace = true
+
+[features]
+# Test-only constructors on `ProviderPool`.
+test-utils = []
+
+[dependencies]
+alloy-chains.workspace = true
+alloy-primitives.workspace = true
+alloy-provider = { workspace = true, features = ["ws", "ipc", "pubsub", "reqwest"] }
+alloy-rpc-client.workspace = true
+alloy-rpc-types-eth.workspace = true
+alloy-transport.workspace = true
+futures.workspace = true
+nexum-runtime-api = { path = "../nexum-runtime-api" }
+nexum-runtime-config = { path = "../nexum-runtime-config" }
+nexum-world = { path = "../nexum-world" }
+# Carries the per-chain request timeout.
+reqwest.workspace = true
+serde_json = { workspace = true, features = ["std"] }
+thiserror.workspace = true
+tokio = { workspace = true, features = ["time"] }
+tracing.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+wiremock.workspace = true

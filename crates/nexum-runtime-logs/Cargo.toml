@@ -1,0 +1,24 @@
+[package]
+name = "nexum-runtime-logs"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "The module-log pipeline for the Nexum runtime: capture, routing, and retention."
+
+[lints]
+workspace = true
+
+[dependencies]
+nexum-primitives = { path = "../nexum-primitives" }
+nexum-runtime-api = { path = "../nexum-runtime-api" }
+nexum-runtime-config = { path = "../nexum-runtime-config" }
+strum.workspace = true
+tokio = { workspace = true, features = ["sync"] }
+tracing.workspace = true
+tracing-core.workspace = true
+wasmtime-wasi.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["io-util", "macros", "rt-multi-thread"] }

@@ -7,7 +7,7 @@ use alloy_chains::Chain;
 use crate::bindings::nexum;
 use crate::bindings::nexum::host::chain::ChainError;
 use crate::host::component::{ChainMethod, RuntimeTypes};
-use crate::host::error::{method_denied, response_over_cap};
+use crate::host::error::{method_denied, pool_fault, response_over_cap};
 use crate::host::provider_pool::PoolError;
 use crate::host::state::HostState;
 
@@ -97,7 +97,7 @@ impl<T: RuntimeTypes> nexum::host::chain::Host for HostState<T> {
                 );
             }
         }
-        let result = result.map_err(ChainError::from).and_then(|body| {
+        let result = result.map_err(pool_fault).and_then(|body| {
             check_response_cap(&body, self.chain_response_max_bytes, chain_id, name)?;
             Ok(body)
         });

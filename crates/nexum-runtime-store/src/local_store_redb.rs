@@ -18,7 +18,7 @@ use alloy_primitives::keccak256;
 use redb::{Database, ReadableDatabase, ReadableTable, TableDefinition};
 use thiserror::Error;
 
-use crate::host::component::{
+use nexum_runtime_api::{
     MAX_APPLY_OPS, MAX_APPLY_VALUE_BYTES, StateHandle, StateStore, StoreError, WriteOp,
 };
 

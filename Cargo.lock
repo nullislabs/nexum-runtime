@@ -3320,14 +3320,9 @@ dependencies = [
  "alloy-rpc-client",
  "alloy-rpc-types-eth",
  "alloy-transport",
- "alloy-transport-ws",
  "anyhow",
- "bytes",
  "derive_more",
  "futures",
- "http",
- "http-body",
- "http-body-util",
  "ipnet",
  "metrics",
  "metrics-exporter-prometheus",
@@ -3335,8 +3330,12 @@ dependencies = [
  "nexum-primitives",
  "nexum-runtime",
  "nexum-runtime-api",
+ "nexum-runtime-chain",
  "nexum-runtime-config",
+ "nexum-runtime-http",
+ "nexum-runtime-logs",
  "nexum-runtime-manifest",
+ "nexum-runtime-store",
  "nexum-tasks",
  "nexum-world",
  "redb",
@@ -3374,6 +3373,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "nexum-runtime-chain"
+version = "0.1.0"
+dependencies = [
+ "alloy-chains",
+ "alloy-primitives",
+ "alloy-provider",
+ "alloy-rpc-client",
+ "alloy-rpc-types-eth",
+ "alloy-transport",
+ "futures",
+ "nexum-runtime-api",
+ "nexum-runtime-config",
+ "nexum-world",
+ "reqwest",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "wiremock",
+]
+
+[[package]]
 name = "nexum-runtime-config"
 version = "0.1.0"
 dependencies = [
@@ -3389,6 +3410,38 @@ dependencies = [
 ]
 
 [[package]]
+name = "nexum-runtime-http"
+version = "0.1.0"
+dependencies = [
+ "bytes",
+ "http",
+ "http-body",
+ "http-body-util",
+ "ipnet",
+ "nexum-primitives",
+ "nexum-runtime-config",
+ "nexum-tasks",
+ "tokio",
+ "tracing",
+ "wasmtime-wasi",
+ "wasmtime-wasi-http",
+]
+
+[[package]]
+name = "nexum-runtime-logs"
+version = "0.1.0"
+dependencies = [
+ "nexum-primitives",
+ "nexum-runtime-api",
+ "nexum-runtime-config",
+ "strum",
+ "tokio",
+ "tracing",
+ "tracing-core",
+ "wasmtime-wasi",
+]
+
+[[package]]
 name = "nexum-runtime-manifest"
 version = "0.1.0"
 dependencies = [
@@ -3401,6 +3454,19 @@ dependencies = [
  "thiserror 2.0.18",
  "toml 1.1.2+spec-1.1.0",
  "tracing",
+]
+
+[[package]]
+name = "nexum-runtime-store"
+version = "0.1.0"
+dependencies = [
+ "alloy-primitives",
+ "nexum-runtime-api",
+ "nexum-tasks",
+ "redb",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
 ]
 
 [[package]]

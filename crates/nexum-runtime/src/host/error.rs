@@ -106,24 +106,22 @@ pub(crate) fn response_over_cap() -> ChainError {
     ))
 }
 
-/// Project a [`PoolError`] into `chain-error`: a structured JSON-RPC
-/// `ErrorResp` becomes [`ChainError::Rpc`] with its code and revert bytes,
-/// everything else a shared [`Fault`].
-impl From<PoolError> for ChainError {
-    fn from(err: PoolError) -> Self {
-        match err {
-            PoolError::UnknownChain(_) => ChainError::Fault(Fault::Unsupported(
-                ChainFaultMessage::ChainNotConfigured.text().to_owned(),
-            )),
-            // The configured per-request timeout elapsed. The dedicated
-            // timeout fault lets a guest tell a slow node apart from a
-            // revert or an unreachable endpoint.
-            PoolError::Timeout => ChainError::Fault(Fault::Timeout),
-            PoolError::Rpc(source) => classify_rpc(&source),
-            // Boot-time only: `from_config` refuses before any guest runs,
-            // so the request path never sees this arm.
-            PoolError::Connect { source, .. } => classify_rpc(&source),
-        }
+/// The only route from a [`PoolError`] to `chain-error`: a structured
+/// JSON-RPC `ErrorResp` becomes [`ChainError::Rpc`] with its code and revert
+/// bytes, everything else a shared [`Fault`].
+pub(crate) fn pool_fault(err: PoolError) -> ChainError {
+    match err {
+        PoolError::UnknownChain(_) => ChainError::Fault(Fault::Unsupported(
+            ChainFaultMessage::ChainNotConfigured.text().to_owned(),
+        )),
+        // The configured per-request timeout elapsed. The dedicated
+        // timeout fault lets a guest tell a slow node apart from a
+        // revert or an unreachable endpoint.
+        PoolError::Timeout => ChainError::Fault(Fault::Timeout),
+        PoolError::Rpc(source) => classify_rpc(&source),
+        // Boot-time only: `from_config` refuses before any guest runs,
+        // so the request path never sees this arm.
+        PoolError::Connect { source, .. } => classify_rpc(&source),
     }
 }
 
@@ -432,7 +430,7 @@ mod tests {
 
     #[test]
     fn unknown_chain_is_unsupported_fault() {
-        let chain_err = ChainError::from(PoolError::UnknownChain(Chain::from_id(424242)));
+        let chain_err = pool_fault(PoolError::UnknownChain(Chain::from_id(424242)));
         let ChainError::Fault(Fault::Unsupported(msg)) = chain_err else {
             panic!("expected Unsupported fault, got {chain_err:?}");
         };
@@ -443,7 +441,7 @@ mod tests {
     fn timeout_maps_to_timeout_fault() {
         // The tokio-elapsed leg surfaces as the dedicated `timeout` fault,
         // distinct from a revert (`Rpc`) or an unreachable node.
-        let chain_err = ChainError::from(PoolError::Timeout);
+        let chain_err = pool_fault(PoolError::Timeout);
         assert!(matches!(chain_err, ChainError::Fault(Fault::Timeout)));
     }
 
@@ -469,7 +467,7 @@ mod tests {
             .expect_err("the request must time out");
         assert!(err.is_timeout(), "precondition: a reqwest timeout error");
 
-        let chain_err = ChainError::from(PoolError::Rpc(TransportErrorKind::custom(err)));
+        let chain_err = pool_fault(PoolError::Rpc(TransportErrorKind::custom(err)));
         assert!(matches!(chain_err, ChainError::Fault(Fault::Timeout)));
     }
 
@@ -477,14 +475,13 @@ mod tests {
     fn message_only_timeout_maps_to_timeout_fault() {
         // The retained last-resort sniff: no typed timeout anywhere in the
         // chain, only the message marks it.
-        let chain_err =
-            ChainError::from(PoolError::Rpc(transport_err("request timed out after 30s")));
+        let chain_err = pool_fault(PoolError::Rpc(transport_err("request timed out after 30s")));
         assert!(matches!(chain_err, ChainError::Fault(Fault::Timeout)));
     }
 
     #[test]
     fn transport_failure_maps_to_unavailable_fault() {
-        let chain_err = ChainError::from(PoolError::Rpc(transport_err("websocket disconnected")));
+        let chain_err = pool_fault(PoolError::Rpc(transport_err("websocket disconnected")));
         assert!(matches!(
             chain_err,
             ChainError::Fault(Fault::Unavailable(_))
@@ -493,7 +490,7 @@ mod tests {
 
     #[test]
     fn backend_gone_maps_to_unavailable_fault() {
-        let chain_err = ChainError::from(PoolError::Rpc(TransportErrorKind::backend_gone()));
+        let chain_err = pool_fault(PoolError::Rpc(TransportErrorKind::backend_gone()));
         assert!(matches!(
             chain_err,
             ChainError::Fault(Fault::Unavailable(_))
@@ -507,7 +504,7 @@ mod tests {
             .send()
             .await
             .expect_err("port 1 refuses the connection");
-        let chain_err = ChainError::from(PoolError::Rpc(TransportErrorKind::custom(err)));
+        let chain_err = pool_fault(PoolError::Rpc(TransportErrorKind::custom(err)));
         let ChainError::Fault(Fault::Unavailable(msg)) = chain_err else {
             panic!("expected Unavailable fault, got {chain_err:?}");
         };
@@ -533,7 +530,7 @@ mod tests {
             TransportErrorKind::pubsub_unavailable(),
         ];
         for source in adversarial {
-            let chain_err = ChainError::from(PoolError::Rpc(source));
+            let chain_err = pool_fault(PoolError::Rpc(source));
             let ChainError::Fault(Fault::Unavailable(msg)) = chain_err else {
                 panic!("expected Unavailable fault, got {chain_err:?}");
             };
@@ -549,7 +546,7 @@ mod tests {
             r#"{{"code":-32005,"message":"daily limit reached for {CREDENTIALED_URL}"}}"#
         ))
         .expect("payload parses");
-        let chain_err = ChainError::from(PoolError::Rpc(AlloyRpcError::ErrorResp(payload)));
+        let chain_err = pool_fault(PoolError::Rpc(AlloyRpcError::ErrorResp(payload)));
         let ChainError::Rpc(rpc) = chain_err else {
             panic!("expected ChainError::Rpc, got {chain_err:?}");
         };
@@ -560,7 +557,7 @@ mod tests {
     #[test]
     fn timeout_sniff_still_classifies_url_bearing_text() {
         let msg = format!("request to {CREDENTIALED_URL} timed out");
-        let chain_err = ChainError::from(PoolError::Rpc(transport_err(&msg)));
+        let chain_err = pool_fault(PoolError::Rpc(transport_err(&msg)));
         assert!(matches!(chain_err, ChainError::Fault(Fault::Timeout)));
     }
 
@@ -572,7 +569,7 @@ mod tests {
             r#"{"code":-32000,"message":"execution reverted","data":"0x08c379a0deadbeef"}"#,
         )
         .expect("payload parses");
-        let chain_err = ChainError::from(PoolError::Rpc(AlloyRpcError::ErrorResp(payload)));
+        let chain_err = pool_fault(PoolError::Rpc(AlloyRpcError::ErrorResp(payload)));
         let ChainError::Rpc(rpc) = chain_err else {
             panic!("expected ChainError::Rpc, got {chain_err:?}");
         };
@@ -593,7 +590,7 @@ mod tests {
                 r#"{{"code":-32000,"message":"boom","data":{data}}}"#
             ))
             .expect("payload parses");
-            let chain_err = ChainError::from(PoolError::Rpc(AlloyRpcError::ErrorResp(payload)));
+            let chain_err = pool_fault(PoolError::Rpc(AlloyRpcError::ErrorResp(payload)));
             let ChainError::Rpc(rpc) = chain_err else {
                 panic!("expected ChainError::Rpc, got {chain_err:?}");
             };
@@ -608,7 +605,7 @@ mod tests {
         let payload: ErrorPayload =
             serde_json::from_str(&format!(r#"{{"code":{},"message":"weird"}}"#, i64::MAX))
                 .expect("payload parses");
-        let chain_err = ChainError::from(PoolError::Rpc(AlloyRpcError::ErrorResp(payload)));
+        let chain_err = pool_fault(PoolError::Rpc(AlloyRpcError::ErrorResp(payload)));
         let ChainError::Rpc(rpc) = chain_err else {
             panic!("expected ChainError::Rpc, got {chain_err:?}");
         };
@@ -619,7 +616,7 @@ mod tests {
     fn ser_error_maps_to_invalid_input_fault() {
         let source = serde_json::from_str::<serde_json::Value>("not json")
             .expect_err("`not json` is not valid JSON");
-        let chain_err = ChainError::from(PoolError::Rpc(AlloyRpcError::SerError(source)));
+        let chain_err = pool_fault(PoolError::Rpc(AlloyRpcError::SerError(source)));
         let ChainError::Fault(Fault::InvalidInput(msg)) = chain_err else {
             panic!("expected InvalidInput fault, got {chain_err:?}");
         };
@@ -714,7 +711,13 @@ mod tests {
     /// (`host/fault.rs`); a `const` payload cannot hold runtime data.
     #[test]
     fn guest_faults_are_constructed_only_in_the_funnel_and_only_from_the_vocabulary() {
-        let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let roots = [
+            manifest.join("src"),
+            manifest.join("../nexum-runtime-chain/src"),
+            manifest.join("../nexum-runtime-store/src"),
+            manifest.join("../nexum-runtime-logs/src"),
+        ];
         let funnel = std::path::Path::new("host").join("error.rs");
         let projections = std::path::Path::new("host").join("fault.rs");
         let stubs = [
@@ -727,7 +730,7 @@ mod tests {
         ];
         let mut scanned = 0_usize;
         let mut sites = 0_usize;
-        for path in rust_sources(&src) {
+        for path in roots.iter().flat_map(|root| rust_sources(root)) {
             let text = std::fs::read_to_string(&path).expect("source file reads");
             let code = squash(shipped_region(&text));
             scanned += 1;
@@ -743,6 +746,14 @@ mod tests {
                     !code.contains("From<StoreError>"),
                     "the store projection must stay a logging function, not a From impl",
                 );
+                assert!(
+                    code.contains("PoolError"),
+                    "the funnel no longer names the pool error, so this guard scans nothing",
+                );
+                assert!(
+                    !code.contains("From<PoolError>"),
+                    "the pool projection must stay a free function, not a From impl",
+                );
                 continue;
             }
             for token in [
@@ -752,6 +763,7 @@ mod tests {
                 "Self::Fault(",
                 "Self::Rpc(",
                 "From<StoreError>",
+                "From<PoolError>",
                 "Self::Unsupported(",
                 "Self::Unavailable(",
                 "Self::Denied(",
@@ -796,8 +808,8 @@ mod tests {
             }
         }
         assert!(
-            scanned > 50,
-            "the walk must cover the crate, saw {scanned} files"
+            scanned > 60,
+            "the walk must cover the engine and the capability crates, saw {scanned} files"
         );
         assert!(
             sites >= 10,
