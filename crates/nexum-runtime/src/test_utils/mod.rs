@@ -1,20 +1,19 @@
 //! Engine-side mock backends for an in-process runtime on fakes.
 //!
-//! The chain leg is the real [`ProviderPool`](crate::host::provider_pool::ProviderPool)
-//! over in-process mock transports ([`rpc::MockRpc`] scripted,
-//! [`rpc::FakeNode`] routed). [`MockStateStore`] is the diskless store seam;
+//! The chain leg is the real [`ProviderPool`](crate::component::ProviderPool)
+//! over in-process mock transports ([`MockRpc`] scripted,
+//! [`FakeNode`] routed). [`MockStateStore`] is the diskless store seam;
 //! [`Prebuilt`] wraps a pre-built instance as a
-//! [`ComponentBuilder`](crate::host::component::ComponentBuilder);
+//! [`ComponentBuilder`](crate::component::ComponentBuilder);
 //! [`MockTypes`] is the lattice tying them together. Compose through the
 //! public builder path:
 //!
 //! ```no_run
 //! # use std::time::Duration;
-//! # use nexum_runtime::builder::RuntimeBuilder;
-//! # use nexum_runtime::engine_config::EngineConfig;
-//! # use nexum_runtime::host::component::ComponentsBuilder;
-//! # use nexum_runtime::test_utils::{MockStateStore, MockTypes, Prebuilt};
-//! # use nexum_runtime::test_utils::rpc::FakeNode;
+//! # use nexum_runtime::RuntimeBuilder;
+//! # use nexum_runtime::component::ComponentsBuilder;
+//! # use nexum_runtime::config::EngineConfig;
+//! # use nexum_runtime::test_utils::{FakeNode, MockStateStore, MockTypes, Prebuilt};
 //! # async fn demo(config: &EngineConfig) -> Result<(), nexum_runtime::error::RuntimeError> {
 //! let node = FakeNode::new();
 //! let pool = node.pool(&[alloy_chains::Chain::mainnet()], Duration::from_millis(20));
@@ -34,22 +33,36 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 mod builders;
-pub mod clock;
-pub mod harness;
-pub mod manifest;
-pub mod rpc;
-pub mod scenario;
+pub(crate) mod clock;
+mod harness;
+mod manifest;
+pub(crate) mod metrics_capture;
+pub(crate) mod rpc;
+mod scenario;
 mod store;
 mod types;
-pub mod wasm;
+pub(crate) mod wasm;
 
+pub use serde::Serialize;
+pub use serde_json::Value as JsonValue;
+pub use {alloy_json_rpc, metrics_util, tower};
+
+pub use alloy_transport::mock::MockResponse;
 pub use builders::Prebuilt;
+pub use clock::ManualClock;
 pub use harness::{TestRuntime, TestRuntimeBuilder};
 pub use manifest::{ManifestInput, TestManifest, manifest};
+pub use metrics_capture::{Sample, capture_metrics, samples_named};
+pub use rpc::{
+    CapturedRpc, FakeNode, MockRpc, linked_block, mocked_pool, rpc_err, rpc_head, rpc_ok, test_hash,
+};
 pub use scenario::{BootScenario, Booted, Entry, Refusal};
 pub use store::{MockStateHandle, MockStateStore};
 pub use types::MockTypes;
-pub use wasm::{example_wasm_or_skip, module_wasm, module_wasm_or_skip, test_wasmtime_engine};
+pub use wasm::{
+    ALLOW_MISSING_WASM, example_wasm_or_skip, module_wasm, module_wasm_or_skip, target_dir,
+    test_wasmtime_engine, workspace_root,
+};
 
 use std::collections::HashMap;
 use std::time::Duration;
@@ -59,7 +72,6 @@ use alloy_chains::Chain;
 use crate::engine_config::{ChainConfig, ResolvedModuleLimits};
 use crate::host::component::Components;
 use crate::host::logs::LogPipeline;
-use rpc::FakeNode;
 
 pub(crate) const HARNESS_POLL_INTERVAL: Duration = Duration::from_millis(20);
 
@@ -229,5 +241,3 @@ mod tests {
         assert!(store.module("").is_err(), "empty namespace rejected");
     }
 }
-
-pub mod metrics_capture;

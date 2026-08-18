@@ -4,11 +4,10 @@
 //! Build the example module first (`just build-module`), then run
 //! `cargo run -p nexum-runtime --example embed` from the repo root.
 //!
-//! [`Runtime`]: nexum_runtime::preset::Runtime
+//! [`Runtime`]: nexum_runtime::Runtime
 
-use nexum_runtime::builder::RuntimeBuilder;
-use nexum_runtime::engine_config::{EngineConfig, ModuleEntry};
-use nexum_runtime::preset::CoreRuntime;
+use nexum_runtime::config::{EngineConfig, ModuleEntry};
+use nexum_runtime::{CoreRuntime, RuntimeBuilder};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {

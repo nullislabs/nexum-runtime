@@ -29,7 +29,7 @@ Two files, two schemas, two loaders.
 `engine.toml` is operator-owned and trusted.
 It sits beside the engine binary, or `--engine-config` names it.
 It defines `[engine]`, `[limits]`, `[chains.<id>]`, `[extensions]`, `[[modules]]` and `[[adapters]]`.
-`engine_config::EngineConfig::load` reads it.
+`config::load_or_default` reads it.
 
 `module.toml` is author-owned and untrusted.
 It ships in the module bundle beside the `.wasm` component.

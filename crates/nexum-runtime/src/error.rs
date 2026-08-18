@@ -4,14 +4,20 @@
 
 use thiserror::Error;
 
-use crate::builder::LaunchRefusal;
-use crate::digest::DigestMismatch;
-use crate::engine_config::EngineConfigError;
-use crate::host::component::BuildError;
-use crate::host::extension::ExtensionError;
-use crate::host::provider_pool::PoolError;
-use crate::manifest::CapabilityError;
-use crate::supervisor::{BootRefusal, LoadRefusal};
+pub use crate::builder::LaunchRefusal;
+pub use crate::digest::{DigestMismatch, DigestParseError};
+pub use crate::engine_config::{EngineConfigError, EnvVarError, RpcEndpointError};
+pub use crate::host::component::BuildError;
+pub use crate::host::extension::ExtensionError;
+pub use crate::host::local_store_redb::StorageError;
+pub use crate::host::provider_pool::PoolError;
+pub use crate::interface_id::{InvalidInterfaceId, InvalidInterfaceTrack};
+pub use crate::manifest::error::{CapabilityError, CapabilityViolation, ParseError};
+pub use crate::module_id::InvalidModuleName;
+pub use crate::supervisor::load::LoadRefusal;
+pub use crate::supervisor::prepass::BootRefusal;
+pub use semver::Error as SemverError;
+pub use url::ParseError as UrlParseError;
 
 /// The error an implementor-facing seam takes, so implementing one needs
 /// no `anyhow` dependency.
