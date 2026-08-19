@@ -8,6 +8,7 @@
 
 use std::borrow::Cow;
 use std::collections::HashMap;
+use std::future::IntoFuture;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
@@ -16,7 +17,7 @@ use alloy_chains::Chain;
 use alloy_primitives::B256;
 use alloy_provider::{CanonicalEvent, DynProvider, Provider, ProviderBuilder, WsConnect};
 use alloy_rpc_client::ClientBuilder;
-use alloy_rpc_types_eth::{Filter, Header, Log};
+use alloy_rpc_types_eth::{Block, Filter, Header, Log};
 use alloy_transport::layers::RetryBackoffLayer;
 use alloy_transport::{RpcError, TransportError, TransportErrorKind};
 use futures::stream::Stream;
@@ -54,6 +55,19 @@ struct ChainEndpoint {
     supports_pubsub: bool,
 }
 
+impl ChainEndpoint {
+    /// Bounds `call` by the per-chain request timeout, which covers a source
+    /// open too: both wait on one node round trip.
+    async fn deadline<T>(
+        &self,
+        call: impl IntoFuture<Output = Result<T, TransportError>>,
+    ) -> Result<T, PoolError> {
+        Ok(tokio::time::timeout(self.timeout, call.into_future())
+            .await
+            .map_err(|_| PoolError::Timeout)??)
+    }
+}
+
 /// Keyed by chain; a missing entry is [`PoolError::UnknownChain`].
 #[derive(Debug, Clone)]
 pub struct ProviderPool {
@@ -83,7 +97,8 @@ impl ProviderPool {
             let timeout = Duration::from_secs(chain_cfg.request_timeout_secs);
             let supports_pubsub = endpoint.supports_pubsub();
             let provider = if supports_pubsub {
-                // WS has no client-level timeout; only `request` bounds its calls.
+                // WS has no client-level timeout; the pool deadline is the
+                // only bound.
                 let client = ClientBuilder::default()
                     .layer(retry_layer())
                     .ws(WsConnect::new(endpoint.url().as_str()))
@@ -174,12 +189,12 @@ impl ProviderPool {
             .get(&chain)
             .ok_or(PoolError::UnknownChain(chain))?;
         if ep.supports_pubsub {
-            let sub = ep.provider.subscribe_blocks().await?;
+            let sub = ep.deadline(ep.provider.subscribe_blocks()).await?;
             let stream = sub.into_stream().map(Ok::<_, TransportError>);
             return Ok(Box::pin(stream));
         }
         // Same-height replacements are not re-emitted.
-        let head = ep.provider.get_block_number().await?;
+        let head = ep.deadline(ep.provider.get_block_number()).await?;
         let stream = ep
             .provider
             .watch_blocks_from(head)
@@ -197,6 +212,30 @@ impl ProviderPool {
             .get(&chain)
             .map(|ep| &ep.provider)
             .ok_or(PoolError::UnknownChain(chain))
+    }
+
+    /// Head height on `chain`.
+    pub async fn head_number(&self, chain: Chain) -> Result<u64, PoolError> {
+        let ep = self
+            .providers
+            .get(&chain)
+            .ok_or(PoolError::UnknownChain(chain))?;
+        ep.deadline(ep.provider.get_block_number()).await
+    }
+
+    /// The block at `number` on `chain`; `None` when the node does not know
+    /// the height.
+    pub async fn block_by_number(
+        &self,
+        chain: Chain,
+        number: u64,
+    ) -> Result<Option<Block>, PoolError> {
+        let ep = self
+            .providers
+            .get(&chain)
+            .ok_or(PoolError::UnknownChain(chain))?;
+        ep.deadline(ep.provider.get_block_by_number(number.into()))
+            .await
     }
 
     /// Canonical (reorg-aware) log stream on `chain` from `start_block`. Each
@@ -252,12 +291,9 @@ impl ProviderPool {
         // variant alloy's retry layer treats as terminal.
         let params: Box<RawValue> = RawValue::from_string(params_json)
             .map_err(|source| PoolError::Rpc(RpcError::SerError(source)))?;
-        let result: Box<RawValue> = tokio::time::timeout(
-            ep.timeout,
-            ep.provider.raw_request(Cow::Borrowed(name), params),
-        )
-        .await
-        .map_err(|_| PoolError::Timeout)??;
+        let result: Box<RawValue> = ep
+            .deadline(ep.provider.raw_request(Cow::Borrowed(name), params))
+            .await?;
         // Unbox the raw result into the returned String without
         // copying the body; the WIT boundary copy is the only one left.
         Ok(String::from(Box::<str>::from(result)))
@@ -570,6 +606,77 @@ mod tests {
         assert!(
             pool.open_block_source(Chain::from_id(1)).await.is_ok(),
             "http config should open the block poll path without erroring",
+        );
+    }
+
+    /// Unlike `from_config`, the client here sets no timeout of its own, so
+    /// the pool deadline is the only bound the test can trip.
+    async fn hung_node_pool() -> (wiremock::MockServer, ProviderPool) {
+        use nexum_runtime_config::RpcEndpoint;
+        use wiremock::{Mock, MockServer, ResponseTemplate, matchers::any};
+
+        let server = MockServer::start().await;
+        Mock::given(any())
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_delay(Duration::from_secs(60))
+                    .set_body_string(r#"{"jsonrpc":"2.0","id":0,"result":"0x10"}"#),
+            )
+            .mount(&server)
+            .await;
+
+        let endpoint = RpcEndpoint::try_from(server.uri().as_str()).expect("test rpc url parses");
+        let client = ClientBuilder::default().http(endpoint.url().clone());
+        let provider = ProviderBuilder::new().connect_client(client).erased();
+        let mut providers = HashMap::new();
+        providers.insert(
+            Chain::from_id(1),
+            ChainEndpoint {
+                provider,
+                timeout: Duration::from_secs(1),
+                supports_pubsub: false,
+            },
+        );
+        let pool = ProviderPool {
+            providers: Arc::new(providers),
+            log_backfill_concurrency: 1,
+            poll_interval_override: None,
+        };
+        (server, pool)
+    }
+
+    #[tokio::test]
+    async fn open_block_source_times_out_when_the_head_fetch_hangs() {
+        let (_server, pool) = hung_node_pool().await;
+        let started = std::time::Instant::now();
+        assert!(
+            matches!(
+                pool.open_block_source(Chain::from_id(1)).await,
+                Err(PoolError::Timeout)
+            ),
+            "the hung head fetch must fail by deadline",
+        );
+        assert!(
+            started.elapsed() < Duration::from_secs(30),
+            "the open must fail at the configured deadline, not the 60 s hang",
+        );
+    }
+
+    #[tokio::test]
+    async fn block_by_number_times_out_when_the_probe_hangs() {
+        let (_server, pool) = hung_node_pool().await;
+        let started = std::time::Instant::now();
+        let err = pool
+            .block_by_number(Chain::from_id(1), 1)
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, PoolError::Timeout),
+            "the hung probe must fail by deadline, got: {err:?}",
+        );
+        assert!(
+            started.elapsed() < Duration::from_secs(30),
+            "the probe must fail at the configured deadline, not the 60 s hang",
         );
     }
 }

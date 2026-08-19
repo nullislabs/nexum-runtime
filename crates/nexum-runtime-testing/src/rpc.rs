@@ -210,6 +210,7 @@ struct FakeNodeState {
     canned: HashMap<&'static str, String>,
     captured: Vec<CapturedRpc>,
     delay: Option<Duration>,
+    method_delay: Option<(&'static str, Duration)>,
     fail_head_fetches: u32,
 }
 
@@ -304,6 +305,11 @@ impl FakeNode {
         self.state().delay = Some(delay);
     }
 
+    /// Park the next `method` request for `delay` before serving it. One-shot.
+    pub fn delay_next_method(&self, method: ChainMethod, delay: Duration) {
+        self.state().method_delay = Some((method.as_str(), delay));
+    }
+
     /// Fail the next `n` head fetches with a transport error.
     pub fn fail_head_fetches(&self, n: u32) {
         self.state().fail_head_fetches = n;
@@ -325,7 +331,12 @@ impl FakeNode {
                 method: req.method().to_owned(),
                 params,
             });
-            state.delay.take()
+            match state.method_delay {
+                Some((method, _)) if method == req.method() => {
+                    state.method_delay.take().map(|(_, delay)| delay)
+                }
+                _ => state.delay.take(),
+            }
         };
         if let Some(delay) = delay {
             tokio::time::sleep(delay).await;

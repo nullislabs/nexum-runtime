@@ -12,8 +12,8 @@ pub struct ChainConfig {
     /// JSON-RPC endpoint, validated at load. `ws(s)://` engages pubsub
     /// (needed for `eth_subscribe`); `http(s)://` is request/response only.
     pub rpc_url: RpcEndpoint,
-    /// Per-request timeout in seconds; HTTP bounds every call, WS only
-    /// `chain::request`. Default 30, zero refused at load: it would leave
+    /// Per-request timeout in seconds, on both transports, and the bound on
+    /// each source open. Default 30, zero refused at load: it would leave
     /// every request unbounded.
     pub request_timeout_secs: u64,
 }

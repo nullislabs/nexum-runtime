@@ -16,7 +16,6 @@ use std::time::{Duration, Instant};
 
 use alloy_chains::Chain;
 use alloy_primitives::B256;
-use alloy_provider::Provider as _;
 use alloy_transport::TransportError;
 use futures::StreamExt;
 use futures::stream::{BoxStream, select_all};
@@ -29,7 +28,7 @@ use crate::supervisor::{EventSource, Supervisor};
 use nexum_primitives::module_id::ModuleId;
 use nexum_runtime_api::RuntimeTypes;
 use nexum_runtime_api::{ExtensionDelivery, ExtensionSource};
-use nexum_runtime_chain::ProviderPool;
+use nexum_runtime_chain::{PoolError, ProviderPool};
 use nexum_runtime_wasm::HostState;
 use nexum_tasks::{TaskExecutor, TaskExit, TaskSet};
 
@@ -192,7 +191,8 @@ async fn reconnecting_block_task(
                 warn!(chain_id, "block source ended (WebSocket dropped?)");
             }
             Err(err) => {
-                warn!(chain_id, error = %err, "block source open failed");
+                let timed_out = matches!(err, PoolError::Timeout);
+                warn!(chain_id, error = %err, timed_out, "block source open failed");
             }
         }
         backoff_pause(&mut attempt, seed, |attempt, backoff_ms| {
@@ -261,31 +261,16 @@ async fn reconnecting_chain_log_task(
     let mut boot_resume: Option<u64> = initial_cursor;
     let mut head_seen: Option<u64> = None;
     loop {
-        let provider = match pool.provider(chain) {
-            Ok(provider) => provider,
-            Err(err) => {
-                backoff_pause(&mut attempt, seed, |attempt, backoff_ms| {
-                    warn!(
-                        module = %module,
-                        chain_id,
-                        error = %err,
-                        attempt,
-                        backoff_ms,
-                        "event source provider lookup failed - retrying after backoff",
-                    );
-                })
-                .await;
-                continue;
-            }
-        };
-        let head = match provider.get_block_number().await {
+        let head = match pool.head_number(chain).await {
             Ok(head) => head,
             Err(err) => {
+                let timed_out = matches!(err, PoolError::Timeout);
                 backoff_pause(&mut attempt, seed, |attempt, backoff_ms| {
                     warn!(
                         module = %module,
                         chain_id,
                         error = %err,
+                        timed_out,
                         attempt,
                         backoff_ms,
                         "event source head fetch failed - retrying after backoff",
@@ -299,15 +284,17 @@ async fn reconnecting_chain_log_task(
         // An unconfirmed tail hash is a failed open, never a retraction.
         let mut invalidated_tail: Option<u64> = None;
         if let Some(t) = &tail {
-            match provider.get_block_by_number(t.number.into()).await {
+            match pool.block_by_number(chain, t.number).await {
                 Ok(Some(block)) if block.header.hash == t.hash => {}
                 Ok(Some(_)) => invalidated_tail = Some(t.number),
-                Ok(None) | Err(_) => {
+                probe => {
+                    let timed_out = matches!(probe, Err(PoolError::Timeout));
                     backoff_pause(&mut attempt, seed, |attempt, backoff_ms| {
                         warn!(
                             module = %module,
                             chain_id,
                             tail_block = t.number,
+                            timed_out,
                             attempt,
                             backoff_ms,
                             "event source tail hash unconfirmed - retrying after backoff",
@@ -1085,6 +1072,106 @@ mod tests {
         assert!(!log.removed, "a confirmed tail resumes without retracting");
         assert_eq!(log.block_number, Some(91));
         assert_eq!(wait_for_ranged_fetches(&rpc, 2).await, vec![90, 91]);
+        tasks.shutdown().await;
+    }
+
+    /// The connection stays up, so only a deadline can drive the retry.
+    #[tokio::test(start_paused = true)]
+    async fn hung_head_fetch_fails_by_deadline_and_the_task_retries() {
+        use crate::test_utils::FakeNode;
+
+        // FakeNode parks `eth_blockNumber` until a head exists.
+        let node = FakeNode::new();
+        let pool = node.pool(&[alloy_chains::Chain::mainnet()], POLL);
+        let manager = TaskManager::new();
+        let executor = manager.executor();
+        let mut tasks = TaskSet::new();
+        let mut stream = spawn_chain_log_task(&pool, &executor, &mut tasks, None);
+
+        // A second head fetch can only follow a deadline on the first.
+        tokio::time::timeout(Duration::from_secs(600), async {
+            loop {
+                let head_fetches = node
+                    .recorded_requests()
+                    .iter()
+                    .filter(|req| req.method == "eth_blockNumber")
+                    .count();
+                if head_fetches >= 2 {
+                    return;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("the deadlined head fetch must be retried");
+
+        node.push_chain_log(log_at(1));
+        let log = recv(&mut stream).await;
+        assert_eq!(log.block_number, Some(1));
+        tasks.shutdown().await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn parked_tail_probe_fails_by_deadline_and_the_task_retries() {
+        use crate::test_utils::FakeNode;
+
+        let node = FakeNode::new();
+        node.push_chain_log(log_at(1));
+        let pool = node.pool(&[alloy_chains::Chain::mainnet()], POLL);
+        let manager = TaskManager::new();
+        let executor = manager.executor();
+        let mut tasks = TaskSet::new();
+        let mut stream = spawn_chain_log_task(&pool, &executor, &mut tasks, None);
+
+        // Reach a delivered tail.
+        let log = recv(&mut stream).await;
+        assert_eq!(log.block_number, Some(1));
+        let probe_count = |node: &FakeNode| {
+            node.recorded_requests()
+                .iter()
+                .filter(|req| req.method == "eth_getBlockByNumber")
+                .count()
+        };
+        let probes_before = probe_count(&node);
+
+        // `fail_head_fetches` ends the stream, so the loop re-probes the
+        // tail; no await separates the two calls, so the one-shot delay can
+        // only land on that probe.
+        node.delay_next_method(
+            nexum_world::ChainMethod::EthGetBlockByNumber,
+            Duration::from_secs(3600),
+        );
+        node.fail_head_fetches(1);
+
+        // A second probe can only follow a deadline on the first.
+        tokio::time::timeout(Duration::from_secs(600), async {
+            while probe_count(&node) < probes_before + 2 {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("the deadlined tail probe must be retried");
+
+        let requests = node.recorded_requests();
+        let last_probe = requests
+            .iter()
+            .rposition(|req| req.method == "eth_getBlockByNumber")
+            .expect("the retried probe is recorded");
+        let parked_probe = requests[..last_probe]
+            .iter()
+            .rposition(|req| req.method == "eth_getBlockByNumber")
+            .expect("the deadlined probe is recorded");
+        assert!(
+            !requests[parked_probe..last_probe]
+                .iter()
+                .any(|req| req.method == "eth_getLogs"),
+            "an unconfirmed tail never re-opens the poller",
+        );
+
+        node.push_chain_log(log_at(2));
+        let log = recv(&mut stream).await;
+        assert!(!log.removed, "a confirmed tail resumes without retracting");
+        assert_eq!(log.block_number, Some(2));
         tasks.shutdown().await;
     }
 
