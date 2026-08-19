@@ -182,7 +182,7 @@ With `enabled = false` the recorder is still installed, so call sites stay live,
 | `nexum_runtime_module_errors_total` | counter | `module`, `error_kind` | Module faults and traps. `error_kind = "trap"` is a wasmtime trap; other values are fault labels. |
 | `nexum_runtime_module_restarts_total` | counter | `module` | Module restart attempts. |
 | `nexum_runtime_module_poisoned` | gauge | `module` | `1` once a module crosses `[limits.poison]` (default 5 failures in 600 s). Stays `1` until the process restarts. |
-| `nexum_runtime_chain_request_total` | counter | `chain_id`, `method`, `outcome` | Every `chain::request`. A method outside the read surface is counted as `method="<denied>"` with `outcome="err"`. The `outcome="err"` rate is the RPC-degraded signal. |
+| `nexum_runtime_chain_request_total` | counter | `chain_id`, `method`, `outcome` | Every `chain::request`. A method outside the read surface is counted as `method="<denied>"` with `outcome="err"`. A request for a chain outside `[chains]` is counted as `chain_id="unconfigured"`, which bounds the series set to the configured chains plus one and shows that a module is requesting chains the operator has not configured. The `outcome="err"` rate is the RPC-degraded signal. |
 | `nexum_runtime_chain_response_capped_total` | counter | `chain_id`, `method` | Responses rejected for exceeding `[limits.chain] response_body_max_bytes` (default 1 MiB). |
 | `nexum_runtime_source_reconnects_total` | counter | `source_kind`, `chain_id`, `module` | Source reconnects. `source_kind="block"` is per chain; `source_kind="chain-log"` also carries `module`. |
 
@@ -255,6 +255,7 @@ groups:
 ```
 
 `page` wakes on-call for a poisoned component or a down engine; `ticket` routes during business hours.
+A `NexumRpcErrorRate` alert on `chain_id="unconfigured"` points at a module that requests a chain outside `[chains]`, not at a node: every request under that label is an error by construction.
 
 ## 8. RPC selection
 
