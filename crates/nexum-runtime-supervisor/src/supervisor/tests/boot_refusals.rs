@@ -22,11 +22,7 @@ fn a_boot_refusal_increments_the_counter_under_its_parse_class() {
             .enable_all()
             .build()
             .expect("current-thread runtime")
-            .block_on(
-                BootScenario::new()
-                    .module(manifest.to_owned())
-                    .expect_refusal(),
-            )
+            .block_on(scenario().module(manifest.to_owned()).expect_refusal())
     });
     refusal.variant::<BootRefusal>(|e| {
         matches!(e, BootRefusal::Manifest(ParseError::MissingCapabilities))
@@ -51,7 +47,7 @@ async fn boot_refuses_an_undeclared_extension_trigger_kind() {
     let Some(wasm) = example_wasm_or_skip() else {
         return;
     };
-    BootScenario::new()
+    scenario()
         .wasm(wasm)
         .module(
             TestManifest::new("example")
@@ -69,7 +65,7 @@ async fn boot_refuses_an_undeclared_extension_trigger_kind() {
 /// migration hint.
 #[tokio::test]
 async fn boot_refuses_a_component_without_a_manifest() {
-    let scenario = BootScenario::new();
+    let scenario = scenario();
     let orphan = scenario.dir().join("orphan.wasm");
     scenario
         .module(Entry::new(ManifestInput::Beside).wasm(orphan))
@@ -86,7 +82,7 @@ async fn boot_refuses_a_component_without_a_manifest() {
 
 #[tokio::test]
 async fn boot_refuses_a_nonexistent_explicit_manifest_path() {
-    let scenario = BootScenario::new();
+    let scenario = scenario();
     let missing = scenario.dir().join("modle.toml");
     scenario
         .module(missing)
@@ -106,7 +102,7 @@ async fn boot_refuses_a_capsless_manifest_before_any_other_gate() {
     let module = "[component]\nname = \"example\"\n\n\
                   [venue]\nbody_version = 2\n\n\
                   [[trigger]]\non = \"acme-status\"\n";
-    BootScenario::new()
+    scenario()
         .module(module.to_owned())
         .expect_refusal()
         .await
@@ -125,7 +121,7 @@ async fn boot_refuses_a_capsless_manifest_before_any_other_gate() {
 #[tokio::test]
 async fn boot_refuses_a_blank_manifest_name() {
     for blank in ["  ", "\t", "\n"] {
-        BootScenario::new()
+        scenario()
             .module(TestManifest::new(blank).cap("logging"))
             .expect_refusal()
             .await
@@ -145,7 +141,7 @@ async fn boot_denies_an_undeclared_chain_import_for_balance_tracker() {
     let Some(wasm) = module_wasm_or_skip("balance-tracker") else {
         return;
     };
-    BootScenario::new()
+    scenario()
         .wasm(wasm)
         .module(
             TestManifest::new("balance-tracker")
@@ -165,7 +161,7 @@ async fn boot_denies_an_undeclared_chain_import_for_balance_tracker() {
 /// the refusal precedes any component read.
 #[tokio::test]
 async fn boot_refuses_a_capability_the_policy_excludes() {
-    BootScenario::new()
+    scenario()
         .policy(PolicySection {
             capabilities: Some(vec!["chain".to_owned()]),
             ..PolicySection::default()
@@ -185,7 +181,7 @@ async fn boot_refuses_a_capability_the_policy_excludes() {
 /// permitted set that excludes `chain` refuses a chain trigger too.
 #[tokio::test]
 async fn boot_refuses_a_chain_trigger_the_policy_excludes() {
-    BootScenario::new()
+    scenario()
         .policy(PolicySection {
             capabilities: Some(vec!["logging".to_owned()]),
             ..PolicySection::default()
@@ -207,7 +203,7 @@ async fn a_component_policy_row_overrides_the_global_capability_set() {
     let Some(wasm) = example_wasm_or_skip() else {
         return;
     };
-    BootScenario::new()
+    scenario()
         .wasm(wasm)
         .policy(PolicySection {
             capabilities: Some(vec!["chain".to_owned()]),
@@ -231,7 +227,7 @@ async fn a_component_policy_row_overrides_the_global_capability_set() {
 /// reservations cross `[policy.total]`; the refusal names the second.
 #[tokio::test]
 async fn boot_refuses_an_overcommitted_component_set() {
-    BootScenario::new()
+    scenario()
         .policy(PolicySection {
             total: TotalPolicy {
                 // One default 64 MiB reservation fits, two do not.

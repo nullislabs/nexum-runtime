@@ -40,7 +40,7 @@ async fn init_failure_marks_module_dead_excluding_dispatch_and_triggers() {
     };
     // Both a block and a filtered event trigger, so both filter
     // paths are exercised.
-    let mut booted = BootScenario::new()
+    let mut booted = scenario()
         .wasm(wasm)
         .module(price_alert("not-a-number").event_trigger_filtered(
             SEPOLIA,
@@ -87,7 +87,7 @@ async fn alive_module_source_survives_alongside_dead_module() {
     let Some(example_wasm) = example_wasm_or_skip() else {
         return;
     };
-    let booted = BootScenario::new()
+    let booted = scenario()
         .module(Entry::new(price_alert("not-a-number")).wasm(price_alert_wasm))
         .module(
             Entry::new(TestManifest::new("example").cap("logging").block_trigger(1))
@@ -119,7 +119,7 @@ async fn alive_module_source_survives_alongside_dead_module() {
 /// Declares two trigger kinds and opens no source for either.
 struct Ticker;
 
-impl Extension<CoreRuntime> for Ticker {
+impl Extension<LocalTypes> for Ticker {
     fn namespace(&self) -> &'static str {
         "ticker"
     }
@@ -131,7 +131,7 @@ impl Extension<CoreRuntime> for Ticker {
     }
     fn link(
         &self,
-        _linker: &mut Linker<HostState<CoreRuntime>>,
+        _linker: &mut Linker<HostState<LocalTypes>>,
     ) -> Result<(), nexum_runtime_api::ExtensionError> {
         Ok(())
     }
@@ -150,8 +150,8 @@ async fn dead_module_extension_kind_is_excluded_from_the_plan() {
     let Some(example_wasm) = example_wasm_or_skip() else {
         return;
     };
-    let booted = BootScenario::new()
-        .extensions([Arc::new(Ticker) as Arc<dyn Extension<CoreRuntime>>])
+    let booted = scenario()
+        .extensions([Arc::new(Ticker) as Arc<dyn Extension<LocalTypes>>])
         .module(
             Entry::new(price_alert("not-a-number").extension_trigger("alarms", &[]))
                 .wasm(price_alert_wasm),
@@ -196,8 +196,8 @@ async fn a_declared_extension_kind_alone_is_not_viable() {
     let Some(example_wasm) = example_wasm_or_skip() else {
         return;
     };
-    let booted = BootScenario::new()
-        .extensions([Arc::new(Ticker) as Arc<dyn Extension<CoreRuntime>>])
+    let booted = scenario()
+        .extensions([Arc::new(Ticker) as Arc<dyn Extension<LocalTypes>>])
         .module(
             Entry::new(
                 TestManifest::new("example")
@@ -231,7 +231,7 @@ async fn the_same_init_fault_kills_at_boot_and_only_defers_on_restart() {
         return;
     };
 
-    let booted = BootScenario::new()
+    let booted = scenario()
         .wasm(wasm.clone())
         .module(price_alert("not-a-number"))
         .boot()
@@ -246,7 +246,7 @@ async fn the_same_init_fault_kills_at_boot_and_only_defers_on_restart() {
         "a boot init fault schedules no restart, ever",
     );
 
-    let mut booted = BootScenario::new()
+    let mut booted = scenario()
         .wasm(wasm)
         .module(price_alert("2500.50"))
         .boot()
@@ -292,7 +292,7 @@ async fn bomb_traps_and_marks_module_dead(module: &str) {
     let Some(wasm) = module_wasm_or_skip(module) else {
         return;
     };
-    let mut booted = BootScenario::new()
+    let mut booted = scenario()
         .wasm(wasm)
         .module(workspace_manifest(&format!(
             "modules/fixtures/{module}/component.toml"
@@ -340,7 +340,7 @@ async fn resource_limit_dead_bomb_does_not_starve_healthy_module() {
     let Some(example_wasm) = example_wasm_or_skip() else {
         return;
     };
-    let mut booted = BootScenario::new()
+    let mut booted = scenario()
         .module(
             Entry::new(workspace_manifest(
                 "modules/fixtures/fuel-bomb/component.toml",
@@ -381,7 +381,7 @@ async fn restart_flaky_module_recovers_after_backoff() {
     let Some(wasm) = module_wasm_or_skip("flaky-bomb") else {
         return;
     };
-    let mut booted = BootScenario::new()
+    let mut booted = scenario()
         .wasm(wasm)
         .module(
             TestManifest::new("flaky-bomb")
@@ -434,7 +434,7 @@ async fn poison_pill_quarantines_module_after_threshold() {
     let Some(wasm) = module_wasm_or_skip("fuel-bomb") else {
         return;
     };
-    let mut booted = BootScenario::new()
+    let mut booted = scenario()
         .limits(limits_with(|limits| {
             limits.poison = crate::engine_config::PoisonLimitsSection {
                 max_failures: Some(3),

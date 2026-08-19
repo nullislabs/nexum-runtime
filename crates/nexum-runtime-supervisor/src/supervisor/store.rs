@@ -200,6 +200,21 @@ fn build<T: RuntimeTypes>(
     Ok(store)
 }
 
+/// The wasmtime config every engine, launch and test alike, is built from.
+pub fn wasmtime_config() -> wasmtime::Config {
+    let mut config = wasmtime::Config::new();
+    config.wasm_component_model(true);
+    config.consume_fuel(true);
+    config
+}
+
+/// Build the shared engine every module instantiates against.
+pub fn engine() -> Result<wasmtime::Engine, crate::error::RuntimeError> {
+    wasmtime::Engine::new(&wasmtime_config())
+        .map_err(crate::error::EngineRefusal::new)
+        .map_err(Into::into)
+}
+
 /// The same `extensions` slice must drive this and capability enforcement:
 /// an import instantiates only if that extension's hook is linked.
 pub fn build_linker<T: RuntimeTypes<State = HostState<T>>>(

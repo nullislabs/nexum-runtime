@@ -80,29 +80,36 @@ The measured embedding takes the api, chain, http and logs crates and not the st
 `ProviderPool::from_config` returns `Result<Self, PoolError>` rather than the composed `RuntimeError`, which can only live above every capability crate.
 
 Layer 4, `nexum-runtime-supervisor`.
-It holds the supervisor and the event loop, which is about 5,000 lines.
+It holds the supervisor, the event loop, the restart and dispatch policies, and the composed `RuntimeError` with `LaunchRefusal`.
 
 Layer 5, `nexum-runtime`.
 It is the facade.
-It holds the builder, the preset, the add-ons and the composed `RuntimeError`, and it re-exports the curated public surface.
+It holds the builder, the preset, the add-ons and the `TestRuntime` harness, and it re-exports the curated public surface, including the error module, under the unchanged paths.
 
 Beside the stack, `nexum-runtime-metrics` holds the metric registry.
 `nexum-runtime-testing` holds the seam-level half of the test helpers, which measured about 1,650 lines: the mock RPC transports, the in-memory store, the manual clock, the mock lattice, the manifest builder, the wasm locators, and metric capture.
-`TestRuntime` and `BootScenario` name the builder, the supervisor, and the launch path, so they stay behind the facade's `test-utils` feature, about 1,850 lines, and the facade re-exports the testing crate under the unchanged `test_utils` paths.
+`TestRuntime` names the builder and the launch path, so it stays behind the facade's `test-utils` feature, and the facade re-exports the testing crate under the unchanged `test_utils` paths.
+`BootScenario` names only the supervisor boot path, so it lives behind the supervisor crate's `test-utils` feature, which keeps eight of the nine supervisor test areas beside the code they exercise; the facade re-exports it under the unchanged path.
+`BootScenario` and `Booted` lost their `CoreRuntime` default type parameters on the move, because `CoreRuntime` stays in the facade and an inherent impl on a foreign type is not allowed outside its defining crate.
+Its `new` and `Default` constructors are generic over any lattice whose store is the redb `LocalStore`, and the facade adds the `core_scenario` free function for the `CoreRuntime` case.
 A separate crate keeps `tower`, `alloy-json-rpc` and `metrics-util` off the runtime's dependency graph, and it prevents a downstream from enabling mocks in a production build.
 `tempfile` stays optional on the facade behind `test-utils`, because the harness and the scenario temp-file inline manifests before boot.
 
 The work is phased, and each phase is one pull request.
 The bottom layers land first, because every later phase depends on them.
 
-## The composed error moves to the facade
+## The composed error moves to the supervisor crate, not the facade
 
-`RuntimeError` composes `BootRefusal`, `LoadRefusal`, `LaunchRefusal`, `CapabilityError`, `EngineConfigError`, `PoolError`, `BuildError` and `ExtensionError`.
-It can only live above all of them, so it moves to the facade crate.
+An earlier revision of this record placed `RuntimeError` in the facade.
+The supervisor's boot path returns `RuntimeError`, so `RuntimeError` can live no higher than the crate that boots modules.
+`RuntimeError` composes `BootRefusal`, `LoadRefusal`, `LaunchRefusal`, `CapabilityError`, `EngineConfigError`, `PoolError`, `BuildError` and `ExtensionError`, so it lives above all of them, in `nexum-runtime-supervisor`.
+`LaunchRefusal` moved down with it: its variants are outcomes of booting modules and running the event loop, and `RuntimeError` composes it.
+`EngineRefusal::new` stays crate-private, and the engine construction moved down to the supervisor crate instead, because a public constructor would put `anyhow::Error` back into a public signature.
+The facade re-exports the error module whole, so an embedder still matches on `nexum_runtime::error::RuntimeError`.
 
 This does not undo the typed boundary that ADR-adjacent work put in place.
 Each crate keeps the typed error it owns.
-The facade keeps the composed value an embedder matches on.
+The supervisor crate keeps the composed value an embedder matches on.
 
 ## The engine and daemon seam
 
@@ -139,8 +146,9 @@ Rejected because it draws one boundary and leaves the `host` and `supervisor` kn
 
 ## Consequences
 
-- #145 publishes twelve crates in lockstep rather than one, and each carries the inherited SPDX identifier and MSRV.
+- The decomposition is complete, and the engine stack under `crates/` is: `nexum-primitives` and `nexum-world` at layer 0; `nexum-runtime-manifest` and `nexum-runtime-config` at layer 1; `nexum-runtime-api` at layer 2; `nexum-runtime-chain`, `nexum-runtime-http`, `nexum-runtime-logs`, `nexum-runtime-store` and `nexum-runtime-wasm` at layer 3; `nexum-runtime-supervisor` at layer 4; `nexum-runtime` at layer 5; `nexum-runtime-metrics` and `nexum-runtime-testing` beside the stack.
+- #145 publishes these crates in lockstep rather than one, and each carries the inherited SPDX identifier and MSRV.
 - #260 designs the facade for the top of this stack rather than for one crate, so the two issues are sequenced and not parallel.
 - The three reversed edges are corrected as part of the phase that moves the crate they block.
-- `test-utils` stays a feature on `nexum-runtime` for the harness and the scenario, and it enables `nexum-runtime-testing` for everything seam-level; a downstream test crate that needs no facade harness depends on `nexum-runtime-testing` directly.
+- `test-utils` stays a feature on `nexum-runtime` for the harness, and it enables the supervisor crate's `test-utils` for the scenario and `nexum-runtime-testing` for everything seam-level; a downstream test crate that needs no facade harness depends on `nexum-runtime-testing` directly.
 - The workspace gains a crate-level dependency rule that a later reader can check mechanically: no crate depends on a crate in its own layer, except that layer 1 crates may depend on layer 0.

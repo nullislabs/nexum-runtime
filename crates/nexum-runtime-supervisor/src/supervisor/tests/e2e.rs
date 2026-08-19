@@ -7,7 +7,7 @@ async fn e2e_supervisor_boots_example_module() {
     let Some(wasm) = example_wasm_or_skip() else {
         return;
     };
-    let booted = BootScenario::new()
+    let booted = scenario()
         .wasm(wasm)
         .module(workspace_manifest("modules/example/component.toml"))
         .boot()
@@ -57,7 +57,7 @@ async fn e2e_block_trigger_dispatched() {
     let Some(wasm) = example_wasm_or_skip() else {
         return;
     };
-    let mut booted = BootScenario::new()
+    let mut booted = scenario()
         .wasm(wasm)
         .module(TestManifest::new("example").cap("logging").block_trigger(1))
         .boot()
@@ -112,7 +112,7 @@ async fn production_module_dispatches(module: &str, manifest: &str) {
     let Some(wasm) = module_wasm_or_skip(module) else {
         return;
     };
-    let mut booted = BootScenario::new()
+    let mut booted = scenario()
         .wasm(wasm)
         .module(workspace_manifest(manifest))
         .boot()
@@ -155,7 +155,7 @@ async fn e2e_http_probe_allowlisted_fetch_and_denied_path() {
         .mount(&server)
         .await;
 
-    let mut booted = BootScenario::new()
+    let mut booted = scenario()
         .wasm(wasm)
         // The mock server binds loopback, which the address rules refuse by
         // default. Only the operator can admit it.
@@ -196,7 +196,7 @@ async fn e2e_policy_http_allow_narrows_the_author_list_through_boot() {
         .mount(&server)
         .await;
 
-    let mut booted = BootScenario::new()
+    let mut booted = scenario()
         .wasm(wasm)
         .permit_destinations([std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST)])
         .policy(PolicySection {
@@ -246,7 +246,7 @@ async fn boot_carries_policy_egress_into_the_store_spec() {
     };
     let deny: ipnet::IpNet = "203.0.113.0/24".parse().expect("test CIDR");
     let allow = nexum_primitives::host_pattern::HostPattern::from("api.cow.fi");
-    let booted = BootScenario::new()
+    let booted = scenario()
         .wasm(wasm)
         .policy(PolicySection {
             http_deny: vec![deny],
@@ -270,58 +270,6 @@ async fn boot_carries_policy_egress_into_the_store_spec() {
     assert_eq!(spec.http_operator_allow, Some(vec![allow]));
 }
 
-/// The module logs at init and on the block; stdout/stderr line splitting
-/// is covered at the unit level on the StdioStream writer.
-#[tokio::test]
-async fn host_interface_records_are_retrievable_after_a_run() {
-    let Some(wasm) = example_wasm_or_skip() else {
-        return;
-    };
-
-    let mut rt = crate::test_utils::TestRuntime::builder(wasm)
-        .manifest_inline(
-            TestManifest::new("example")
-                .cap("logging")
-                .block_trigger(1)
-                .to_toml(),
-        )
-        .launch()
-        .await
-        .expect("launch example over the harness");
-
-    let mut header: alloy_rpc_types_eth::Header = alloy_rpc_types_eth::Header::default();
-    header.inner.number = 19_000_000;
-    rt.push_block(header);
-
-    // The polled log read doubles as the dispatch barrier: the on_trigger line
-    // only lands once the event loop has dispatched the injected block.
-    rt.wait_for_log("example", "block 19000000")
-        .await
-        .expect("the on_trigger log line lands after dispatch");
-
-    let runs = rt.logs().list_runs("example");
-    assert_eq!(runs.len(), 1, "one run recorded for the example module");
-    let run = runs[0].run.clone();
-    assert_eq!(run.seq, 0, "the first run is sequence 0");
-    let page = rt.logs().read(&run, 0);
-    assert!(!page.records.is_empty(), "run left retrievable records");
-    assert!(
-        page.records
-            .iter()
-            .all(|r| r.channel == LogChannel::HostInterface),
-        "the example module logs only through the host interface",
-    );
-    assert!(
-        page.records
-            .iter()
-            .any(|r| r.message.contains("block 19000000")),
-        "the on_trigger log line is retained",
-    );
-
-    rt.shutdown();
-    rt.wait().await.expect("clean shutdown");
-}
-
 /// A trapping run leaves a supervisor-synthesized Panic record carrying
 /// the trap's root cause.
 #[tokio::test]
@@ -329,7 +277,7 @@ async fn dying_run_leaves_a_panic_record() {
     let Some(wasm) = module_wasm_or_skip("fuel-bomb") else {
         return;
     };
-    let mut booted = BootScenario::new()
+    let mut booted = scenario()
         .wasm(wasm)
         .module(workspace_manifest(
             "modules/fixtures/fuel-bomb/component.toml",
@@ -362,7 +310,7 @@ async fn facade_panic_leaves_stderr_host_interface_and_panic_records() {
     let Some(wasm) = module_wasm_or_skip("panic-bomb") else {
         return;
     };
-    let mut booted = BootScenario::new()
+    let mut booted = scenario()
         .wasm(wasm)
         .module(workspace_manifest(
             "modules/fixtures/panic-bomb/component.toml",

@@ -15,67 +15,21 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use nexum_tasks::{DrainOutcome, TaskExit, TaskHandle, TaskManager, TaskSet};
-use strum::{IntoStaticStr, VariantNames};
 use tracing::{error, info, warn};
-use wasmtime::Engine;
 
 use crate::addons::{AddOnHandle, AddOns, AddOnsContext};
 use crate::engine_config::{EngineConfig, ModuleEntry, PolicySection};
-use crate::error::{EngineRefusal, RuntimeError};
+use crate::error::{LaunchRefusal, RuntimeError};
 use nexum_runtime_api::{BuilderContext, ComponentBuilder, Extension, RuntimeTypes, SourceContext};
 use nexum_runtime_chain::ProviderPool;
 use nexum_runtime_logs::LogPipeline;
+use nexum_runtime_supervisor::event_loop;
+use nexum_runtime_supervisor::supervisor::count_boot_refusal;
 use nexum_runtime_wasm::{Components, ComponentsBuilder, HostState, attach_wall_clock};
 
 use crate::preset::Runtime;
-use crate::runtime::event_loop;
 pub use crate::supervisor::WasiClockOverride;
 use crate::supervisor::{self, Supervisor, Viability};
-
-/// Launch refusals around the supervisor boot; the wording is operator-pinned.
-// `IntoStaticStr`: the snake_case variant name is the `error_kind` label;
-// `VariantNames` lets the label-set test enumerate without a value.
-#[derive(Debug, thiserror::Error, IntoStaticStr, VariantNames)]
-#[strum(serialize_all = "snake_case")]
-pub enum LaunchRefusal {
-    /// The event-loop task ended before the launcher observed a shutdown,
-    /// so nothing is left to dispatch to.
-    #[error("event loop task terminated abnormally")]
-    EventLoopGone,
-    /// No module source at all: neither an override nor a config entry.
-    #[error(
-        "no modules to run - set a module source or declare [[modules]] entries in engine.toml"
-    )]
-    NothingToRun,
-    /// Every module died in `init`, and they came from a command-line
-    /// override, so the fix is the binary the operator passed.
-    #[error(
-        "all {modules} module(s) failed initialization - check the logs above for \
-         per-module errors and fix the wasm binary passed as an override"
-    )]
-    AllDeadOverride {
-        /// How many were tried.
-        modules: usize,
-    },
-    /// Every module died in `init`, and they came from `engine.toml`, so
-    /// the fix is a config entry.
-    #[error(
-        "all {modules} module(s) failed initialization - check the logs above for \
-         per-module errors and fix or remove the failing module from engine.toml"
-    )]
-    AllDeadConfigured {
-        /// How many were tried.
-        modules: usize,
-    },
-    /// Some modules survived `init`, but no surviving one declares a
-    /// trigger, so the engine would run and never be woken.
-    #[error(
-        "every declared [[trigger]] belongs to an init-failed module - \
-         the engine would idle with nothing to run; fix or remove the \
-         failing module(s)"
-    )]
-    DeadHoldTriggers,
-}
 
 /// Ambient inputs the launcher reads.
 pub struct LaunchContext<'a> {
@@ -164,16 +118,8 @@ fn finish_wait(joined: Option<TaskExit>) -> Result<(), RuntimeError> {
 /// [`LaunchRefusal::EventLoopGone`] has no label, so it counts nothing.
 fn refuse_launch(refusal: LaunchRefusal) -> RuntimeError {
     let refusal = RuntimeError::from(refusal);
-    supervisor::count_boot_refusal(&refusal);
+    count_boot_refusal(&refusal);
     refusal
-}
-
-/// The wasmtime config every engine, launch and test alike, is built from.
-pub(crate) fn wasmtime_config() -> wasmtime::Config {
-    let mut config = wasmtime::Config::new();
-    config.wasm_component_model(true);
-    config.consume_fuel(true);
-    config
 }
 
 /// A fully-assembled runtime: concrete backends, extensions, add-ons, and the
@@ -223,7 +169,7 @@ impl<T: RuntimeTypes<State = HostState<T>>> AssembledRuntime<T> {
             .map_err(RuntimeError::AddOn)?;
 
         // wasmtime engine + linker - one of each, shared across modules.
-        let engine = Engine::new(&wasmtime_config()).map_err(EngineRefusal::new)?;
+        let engine = nexum_runtime_supervisor::supervisor::engine()?;
 
         // Extensions receive the effective wall clock before linking, so
         // their host-side time and guest WASI time share one source.
@@ -738,9 +684,9 @@ mod tests {
     use super::*;
     use crate::addons::{AddOns, RuntimeAddOn};
     use crate::engine_config::EngineConfig;
+    use crate::error::BootRefusal;
     use crate::manifest::NamespaceCaps;
     use crate::preset::{CoreRuntime, Runtime as RuntimePreset};
-    use crate::supervisor::prepass::BootRefusal;
     use crate::test_utils::ManualClock;
     use crate::test_utils::workspace_root;
     use crate::test_utils::{

@@ -2,9 +2,9 @@
 //!
 //! The `error_kind` label set is closed, and the test below pins it.
 
+use strum::{IntoStaticStr, VariantNames};
 use thiserror::Error;
 
-pub use crate::builder::LaunchRefusal;
 pub use crate::engine_config::{EngineConfigError, EnvVarError, RpcEndpointError};
 pub use crate::manifest::error::{CapabilityError, CapabilityViolation, ParseError};
 pub use crate::supervisor::load::LoadRefusal;
@@ -21,6 +21,51 @@ pub use nexum_runtime_wasm::BuildError;
 pub use semver::Error as SemverError;
 pub use url::ParseError as UrlParseError;
 
+/// Launch refusals around the supervisor boot; the wording is operator-pinned.
+// `IntoStaticStr`: the snake_case variant name is the `error_kind` label;
+// `VariantNames` lets the label-set test enumerate without a value.
+#[derive(Debug, Error, IntoStaticStr, VariantNames)]
+#[strum(serialize_all = "snake_case")]
+pub enum LaunchRefusal {
+    /// The event-loop task ended before the launcher observed a shutdown,
+    /// so nothing is left to dispatch to.
+    #[error("event loop task terminated abnormally")]
+    EventLoopGone,
+    /// No module source at all: neither an override nor a config entry.
+    #[error(
+        "no modules to run - set a module source or declare [[modules]] entries in engine.toml"
+    )]
+    NothingToRun,
+    /// Every module died in `init`, and they came from a command-line
+    /// override, so the fix is the binary the operator passed.
+    #[error(
+        "all {modules} module(s) failed initialization - check the logs above for \
+         per-module errors and fix the wasm binary passed as an override"
+    )]
+    AllDeadOverride {
+        /// How many were tried.
+        modules: usize,
+    },
+    /// Every module died in `init`, and they came from `engine.toml`, so
+    /// the fix is a config entry.
+    #[error(
+        "all {modules} module(s) failed initialization - check the logs above for \
+         per-module errors and fix or remove the failing module from engine.toml"
+    )]
+    AllDeadConfigured {
+        /// How many were tried.
+        modules: usize,
+    },
+    /// Some modules survived `init`, but no surviving one declares a
+    /// trigger, so the engine would run and never be woken.
+    #[error(
+        "every declared [[trigger]] belongs to an init-failed module - \
+         the engine would idle with nothing to run; fix or remove the \
+         failing module(s)"
+    )]
+    DeadHoldTriggers,
+}
+
 /// A wasmtime seam failure: engine, linker, compile, store, instantiate,
 /// a host call trapping under `init`, and the local-store namespace open.
 ///
@@ -29,6 +74,7 @@ pub use url::ParseError as UrlParseError;
 pub struct EngineRefusal(anyhow::Error);
 
 impl EngineRefusal {
+    /// Wrap a failure from the wasmtime seam.
     pub(crate) fn new(inner: impl Into<anyhow::Error>) -> Self {
         Self(inner.into())
     }

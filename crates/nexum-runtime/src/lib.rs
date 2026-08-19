@@ -26,21 +26,25 @@ pub use nexum_runtime_api::bindings;
 
 pub mod addons;
 mod builder;
-pub mod error;
 mod preset;
-mod runtime;
-pub mod supervisor;
+
+pub use nexum_runtime_supervisor::error;
+
+/// Multi-module supervisor: loads `engine.toml` entries, one wasmtime `Store`
+/// each, and routes triggers.
+pub mod supervisor {
+    pub use nexum_runtime_supervisor::supervisor::{
+        BootEnv, ConfiguredChains, EventSource, SourcePlan, Supervisor, Viability,
+        WasiClockOverride, build_linker,
+    };
+}
 
 pub(crate) use nexum_runtime_config as engine_config;
 
 /// `component.toml` parser and capability enforcement.
 pub mod manifest {
     pub use nexum_primitives::interface_id::{InterfaceId, InterfaceTrack};
-    pub(crate) use nexum_runtime_manifest::error;
     pub use nexum_runtime_manifest::{CapabilityRegistry, ExtensionSections, NamespaceCaps};
-    pub(crate) use nexum_runtime_manifest::{
-        LoadedManifest, ParseError, ResourceSection, Trigger, enforce_capabilities, load,
-    };
 }
 
 #[cfg(feature = "test-utils")]
@@ -102,7 +106,7 @@ pub mod logs {
 
 /// The dispatch loop, for an embedder driving a [`supervisor::Supervisor`] directly.
 pub mod event_loop {
-    pub use crate::runtime::event_loop::{
+    pub use nexum_runtime_supervisor::event_loop::{
         TaggedBlockStream, TaggedChainLog, TaggedChainLogStream, open_block_streams,
         open_chain_log_streams, run, wait_for_os_signal,
     };

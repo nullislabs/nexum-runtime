@@ -34,37 +34,39 @@ use crate::engine_config::{
 use crate::error::RuntimeError;
 use crate::manifest::error::CapabilityError;
 use crate::manifest::{self, CapabilityRegistry, ParseError, ResourceSection};
-use crate::preset::CoreRuntime;
 use crate::supervisor::load::LoadRefusal;
 use crate::supervisor::prepass::BootRefusal;
 use crate::test_utils::{
-    BootScenario, Entry, ManifestInput, Refusal, TestManifest, example_wasm_or_skip, limits_with,
-    mock_components, module_wasm_or_skip, test_wasmtime_engine,
+    BootScenario, Entry, LocalTypes, ManifestInput, Refusal, TestManifest, example_wasm_or_skip,
+    limits_with, mock_components, module_wasm_or_skip, test_wasmtime_engine,
 };
 use nexum_primitives::digest::{ContentDigest, DigestMismatch};
 use nexum_runtime_chain::ProviderPool;
 use nexum_runtime_logs::LogChannel;
 
-type DefaultSupervisor = Supervisor<CoreRuntime>;
+type DefaultSupervisor = Supervisor<LocalTypes>;
 
 const SEPOLIA: u64 = 11_155_111;
+
+fn scenario() -> BootScenario<LocalTypes> {
+    BootScenario::new()
+}
 
 /// Path to a manifest checked into the workspace tree.
 fn workspace_manifest(relative: &str) -> PathBuf {
     crate::test_utils::workspace_root().join(relative)
 }
 
-fn core_extensions() -> Vec<Arc<dyn nexum_runtime_api::Extension<CoreRuntime>>> {
+fn core_extensions() -> Vec<Arc<dyn nexum_runtime_api::Extension<LocalTypes>>> {
     Vec::new()
 }
 
-fn make_linker(engine: &wasmtime::Engine) -> Linker<HostState<CoreRuntime>> {
-    crate::supervisor::build_linker::<CoreRuntime>(engine, &core_extensions())
-        .expect("build_linker")
+fn make_linker(engine: &wasmtime::Engine) -> Linker<HostState<LocalTypes>> {
+    crate::supervisor::build_linker::<LocalTypes>(engine, &core_extensions()).expect("build_linker")
 }
 
 /// An empty chain pool and the given store.
-fn test_components(store: nexum_runtime_store::LocalStore) -> Components<CoreRuntime> {
+fn test_components(store: nexum_runtime_store::LocalStore) -> Components<LocalTypes> {
     Components {
         chain: ProviderPool::empty(),
         store,

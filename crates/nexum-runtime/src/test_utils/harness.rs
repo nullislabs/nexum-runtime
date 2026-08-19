@@ -20,7 +20,7 @@ use std::time::Duration;
 use alloy_chains::Chain;
 use alloy_rpc_types_eth::{Header, Log};
 
-use super::scenario::{BootScenario, Booted, Entry};
+use super::{BootScenario, Booted, Entry};
 use super::{
     FakeNode, HARNESS_POLL_INTERVAL, ManifestInput, ManualClock, MockStateStore, MockTypes,
     Prebuilt,
@@ -273,6 +273,7 @@ mod tests {
     use crate::manifest::NamespaceCaps;
     use crate::test_utils::{TestManifest, example_wasm_or_skip, manifest, module_wasm_or_skip};
     use nexum_runtime_api::Extension;
+    use nexum_runtime_logs::LogChannel;
 
     fn example_block_manifest() -> String {
         manifest("example")
@@ -867,6 +868,58 @@ mod tests {
         assert_eq!(
             record.message, "env vars 0 args 0 stdin 0",
             "the guest observed the host environment, arguments, or stdin",
+        );
+
+        rt.shutdown();
+        rt.wait().await.expect("clean shutdown");
+    }
+
+    /// The module logs at init and on the block; stdout/stderr line splitting
+    /// is covered at the unit level on the StdioStream writer.
+    #[tokio::test]
+    async fn host_interface_records_are_retrievable_after_a_run() {
+        let Some(wasm) = example_wasm_or_skip() else {
+            return;
+        };
+
+        let mut rt = crate::test_utils::TestRuntime::builder(wasm)
+            .manifest_inline(
+                TestManifest::new("example")
+                    .cap("logging")
+                    .block_trigger(1)
+                    .to_toml(),
+            )
+            .launch()
+            .await
+            .expect("launch example over the harness");
+
+        let mut header: alloy_rpc_types_eth::Header = alloy_rpc_types_eth::Header::default();
+        header.inner.number = 19_000_000;
+        rt.push_block(header);
+
+        // The polled log read doubles as the dispatch barrier: the on_trigger line
+        // only lands once the event loop has dispatched the injected block.
+        rt.wait_for_log("example", "block 19000000")
+            .await
+            .expect("the on_trigger log line lands after dispatch");
+
+        let runs = rt.logs().list_runs("example");
+        assert_eq!(runs.len(), 1, "one run recorded for the example module");
+        let run = runs[0].run.clone();
+        assert_eq!(run.seq, 0, "the first run is sequence 0");
+        let page = rt.logs().read(&run, 0);
+        assert!(!page.records.is_empty(), "run left retrievable records");
+        assert!(
+            page.records
+                .iter()
+                .all(|r| r.channel == LogChannel::HostInterface),
+            "the example module logs only through the host interface",
+        );
+        assert!(
+            page.records
+                .iter()
+                .any(|r| r.message.contains("block 19000000")),
+            "the on_trigger log line is retained",
         );
 
         rt.shutdown();

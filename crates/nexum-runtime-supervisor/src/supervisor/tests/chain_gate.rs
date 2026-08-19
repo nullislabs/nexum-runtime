@@ -27,7 +27,7 @@ async fn boot_refuses_a_trigger_on_an_unconfigured_chain() {
             .cap("logging")
             .event_trigger(424_242),
     ] {
-        BootScenario::new()
+        scenario()
             .module(manifest)
             .expect_refusal()
             .await
@@ -103,7 +103,7 @@ async fn boot_refuses_an_invalid_event_filter() {
             is_topic as fn(&BootRefusal) -> bool,
         ),
     ] {
-        BootScenario::new()
+        scenario()
             .module(manifest)
             .expect_refusal()
             .await
@@ -125,7 +125,7 @@ async fn a_validated_event_filter_survives_to_the_collected_stream() {
     };
     let address = "0xC92E8bdf79f0507f65a392b0ab4667716BFE0110";
     let topic = "0x237e158222e3e6968b72b9db0d8043aacf074ad9f650f0d1606b4d82ee432c00";
-    let booted = BootScenario::new()
+    let booted = scenario()
         .wasm(wasm)
         .module(
             TestManifest::new("example")
@@ -156,7 +156,7 @@ async fn a_validated_event_filter_survives_to_the_collected_stream() {
 
 #[tokio::test]
 async fn boot_admits_a_block_trigger_on_a_configured_chain_past_the_chain_gate() {
-    BootScenario::new()
+    scenario()
         .module(TestManifest::new("example").cap("logging").block_trigger(1))
         .expect_refusal()
         .await
@@ -168,7 +168,7 @@ async fn boot_admits_a_block_trigger_on_a_configured_chain_past_the_chain_gate()
 
 #[tokio::test]
 async fn an_unconfigured_chain_refuses_boot_before_an_earlier_module_loads() {
-    let scenario = BootScenario::new();
+    let scenario = scenario();
     let second = scenario.dir().join("second.wasm");
     scenario
         .module(TestManifest::new("first").cap("logging"))
@@ -196,7 +196,7 @@ async fn an_unconfigured_chain_refuses_boot_before_an_earlier_module_loads() {
 
 #[tokio::test]
 async fn boot_refusal_names_the_missing_engine_toml_on_the_defaulted_path() {
-    BootScenario::new()
+    scenario()
         .defaulted_chains()
         .module(
             TestManifest::new("example")

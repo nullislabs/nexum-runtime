@@ -33,9 +33,11 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 mod harness;
-mod scenario;
 
 pub use harness::{TestRuntime, TestRuntimeBuilder};
+pub use nexum_runtime_supervisor::test_utils::{
+    BootScenario, Booted, Entry, Refusal, test_wasmtime_engine,
+};
 pub use nexum_runtime_testing::{
     ALLOW_MISSING_WASM, CapturedRpc, FakeNode, JsonValue, ManifestInput, ManualClock, MockResponse,
     MockRpc, MockStateHandle, MockStateStore, MockTypes, Prebuilt, Sample, Serialize, TestManifest,
@@ -44,13 +46,12 @@ pub use nexum_runtime_testing::{
     rpc_head, rpc_ok, samples_named, target_dir, test_chain_configs, test_hash, tower,
     workspace_root,
 };
-pub use scenario::{BootScenario, Booted, Entry, Refusal};
 
 pub(crate) use nexum_runtime_testing::{HARNESS_POLL_INTERVAL, in_memory_logs};
 
-/// Test engine built from the production launch config.
-pub fn test_wasmtime_engine() -> wasmtime::Engine {
-    wasmtime::Engine::new(&crate::builder::wasmtime_config()).expect("wasmtime engine")
+/// A [`BootScenario`] over [`CoreRuntime`](crate::CoreRuntime).
+pub fn core_scenario() -> BootScenario<crate::CoreRuntime> {
+    BootScenario::new()
 }
 
 #[cfg(test)]
@@ -67,8 +68,9 @@ mod tests {
     use super::*;
     use alloy_chains::Chain;
 
-    use crate::builder::{LaunchRefusal, RuntimeBuilder};
+    use crate::builder::RuntimeBuilder;
     use crate::engine_config::EngineConfig;
+    use crate::error::LaunchRefusal;
     use nexum_runtime_wasm::ComponentsBuilder;
     use nexum_world::ChainMethod;
 
@@ -104,16 +106,5 @@ mod tests {
             .expect("canned response");
         assert_eq!(body, "\"0x10\"");
         assert_eq!(node.recorded_requests().len(), 1);
-    }
-
-    #[test]
-    fn engine_has_the_component_model_and_fuel_enabled() {
-        let engine = test_wasmtime_engine();
-        wasmtime::component::Component::new(&engine, "(component)")
-            .expect("a trivial component compiles, so the component model is on");
-        let mut store = wasmtime::Store::new(&engine, ());
-        store
-            .set_fuel(1)
-            .expect("fuel accounting is on, so setting fuel succeeds");
     }
 }

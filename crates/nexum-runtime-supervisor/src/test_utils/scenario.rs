@@ -18,7 +18,6 @@ use nexum_runtime_store::LocalStore;
 use nexum_runtime_wasm::{Components, HostState, attach_wall_clock};
 
 use super::test_wasmtime_engine;
-use crate::preset::CoreRuntime;
 use crate::supervisor::{Supervisor, WasiClockOverride, build_linker};
 use nexum_primitives::digest::ContentDigest;
 
@@ -82,7 +81,7 @@ impl From<PathBuf> for Entry {
 }
 
 /// Every terminal boots through the real [`Supervisor::boot`] admission path.
-pub struct BootScenario<T: RuntimeTypes = CoreRuntime> {
+pub struct BootScenario<T: RuntimeTypes> {
     dir: TempDir,
     components: Components<T>,
     extensions: Vec<Arc<dyn Extension<T>>>,
@@ -96,7 +95,7 @@ pub struct BootScenario<T: RuntimeTypes = CoreRuntime> {
     defaulted: bool,
 }
 
-impl BootScenario<CoreRuntime> {
+impl<T: RuntimeTypes<State = HostState<T>, Store = LocalStore>> BootScenario<T> {
     /// A fresh redb store under the scenario directory and an empty provider pool.
     pub fn new() -> Self {
         let dir = tempfile::tempdir().expect("scenario tempdir");
@@ -298,14 +297,14 @@ struct Launch<T: RuntimeTypes> {
     clocks: Option<WasiClockOverride>,
 }
 
-impl Default for BootScenario<CoreRuntime> {
+impl<T: RuntimeTypes<State = HostState<T>, Store = LocalStore>> Default for BootScenario<T> {
     fn default() -> Self {
         Self::new()
     }
 }
 
 /// Booted supervisor; the held tempdir keeps its manifests and store alive.
-pub struct Booted<T: RuntimeTypes = CoreRuntime> {
+pub struct Booted<T: RuntimeTypes> {
     /// The live supervisor, for dispatching and for counts.
     pub supervisor: Supervisor<T>,
     logs: LogPipeline,
@@ -423,13 +422,18 @@ mod tests {
     use crate::manifest::{NamespaceCaps, ParseError};
     use crate::supervisor::load::LoadRefusal;
     use crate::supervisor::prepass::BootRefusal;
+    use crate::test_utils::LocalTypes;
     use crate::test_utils::{example_wasm_or_skip, module_wasm_or_skip};
     use nexum_runtime_api::HostWallClock;
+
+    fn scenario() -> BootScenario<LocalTypes> {
+        BootScenario::new()
+    }
 
     /// Claims the `[acme]` manifest section and nothing else.
     struct AcmeExtension;
 
-    impl Extension<CoreRuntime> for AcmeExtension {
+    impl Extension<LocalTypes> for AcmeExtension {
         fn namespace(&self) -> &'static str {
             "acme"
         }
@@ -443,7 +447,7 @@ mod tests {
 
         fn link(
             &self,
-            _linker: &mut wasmtime::component::Linker<nexum_runtime_wasm::HostState<CoreRuntime>>,
+            _linker: &mut wasmtime::component::Linker<nexum_runtime_wasm::HostState<LocalTypes>>,
         ) -> Result<(), nexum_runtime_api::ExtensionError> {
             Ok(())
         }
@@ -456,7 +460,7 @@ mod tests {
     /// Records the wall clock the boot path hands the extension seam.
     struct ClockCaptureExtension(Arc<std::sync::OnceLock<Arc<dyn HostWallClock + Send + Sync>>>);
 
-    impl Extension<CoreRuntime> for ClockCaptureExtension {
+    impl Extension<LocalTypes> for ClockCaptureExtension {
         fn namespace(&self) -> &'static str {
             "clockcap"
         }
@@ -470,7 +474,7 @@ mod tests {
 
         fn link(
             &self,
-            _linker: &mut wasmtime::component::Linker<nexum_runtime_wasm::HostState<CoreRuntime>>,
+            _linker: &mut wasmtime::component::Linker<nexum_runtime_wasm::HostState<LocalTypes>>,
         ) -> Result<(), nexum_runtime_api::ExtensionError> {
             Ok(())
         }
@@ -490,7 +494,7 @@ mod tests {
         let Some(wasm) = example_wasm_or_skip() else {
             return;
         };
-        let mut booted = BootScenario::new()
+        let mut booted = scenario()
             .wasm(&wasm)
             .module(TestManifest::new("example").cap("logging").block_trigger(1))
             .boot()
@@ -511,7 +515,7 @@ mod tests {
         let Some(reader) = module_wasm_or_skip("clock-reader") else {
             return;
         };
-        let mut booted = BootScenario::new()
+        let mut booted = scenario()
             .wasm(&example)
             .module(TestManifest::new("example").cap("logging").block_trigger(1))
             .module(
@@ -556,9 +560,8 @@ mod tests {
         let clock = ManualClock::new();
         clock.set(UNIX_EPOCH + Duration::from_secs(PINNED_SECS));
         let seen = Arc::new(OnceLock::new());
-        let capture: Arc<dyn Extension<CoreRuntime>> =
-            Arc::new(ClockCaptureExtension(seen.clone()));
-        let mut booted = BootScenario::new()
+        let capture: Arc<dyn Extension<LocalTypes>> = Arc::new(ClockCaptureExtension(seen.clone()));
+        let mut booted = scenario()
             .wasm(&wasm)
             .module(
                 TestManifest::new("clock-reader")
@@ -591,7 +594,7 @@ mod tests {
 
     #[tokio::test]
     async fn an_unknown_module_capability_refuses_before_any_compile() {
-        BootScenario::new()
+        scenario()
             .module(TestManifest::new("bad").cap("telepathy"))
             .expect_refusal()
             .await
@@ -604,7 +607,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_component_without_any_manifest_refuses_on_discovery() {
-        let scenario = BootScenario::new();
+        let scenario = scenario();
         let orphan = scenario.dir().join("orphan.wasm");
         scenario
             .module(Entry::new(ManifestInput::Beside).wasm(orphan))
@@ -619,7 +622,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_nonexistent_explicit_manifest_path_refuses() {
-        let scenario = BootScenario::new();
+        let scenario = scenario();
         let missing = scenario.dir().join("modle.toml");
         scenario
             .module(missing)
@@ -634,7 +637,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_wired_extension_claims_the_section_an_unwired_one_refuses() {
-        BootScenario::new()
+        scenario()
             .module(acme_section_manifest())
             .expect_refusal()
             .await
@@ -644,8 +647,8 @@ mod tests {
             })
             .lacks("read component");
 
-        BootScenario::new()
-            .extensions([Arc::new(AcmeExtension) as Arc<dyn Extension<CoreRuntime>>])
+        scenario()
+            .extensions([Arc::new(AcmeExtension) as Arc<dyn Extension<LocalTypes>>])
             .module(acme_section_manifest())
             .expect_refusal()
             .await
@@ -658,12 +661,12 @@ mod tests {
     #[tokio::test]
     #[should_panic(expected = "refusal was expected")]
     async fn expect_refusal_panics_when_boot_succeeds() {
-        BootScenario::new().expect_refusal().await;
+        scenario().expect_refusal().await;
     }
 
     #[tokio::test]
     async fn the_scenario_store_lives_under_the_scenario_directory() {
-        let scenario = BootScenario::new();
+        let scenario = scenario();
         let redb = scenario.dir().join("scenario.redb");
         let booted = scenario.boot().await.expect("an empty scenario boots");
         assert_eq!(booted.supervisor.module_count(), 0);
@@ -672,7 +675,7 @@ mod tests {
 
     #[test]
     fn entries_carry_their_component_manifest_and_operator_limits() {
-        let scenario = BootScenario::new()
+        let scenario = scenario()
             .wasm("guest.wasm")
             .limits(crate::test_utils::limits_with(|limits| {
                 limits.poison = crate::engine_config::PoisonLimitsSection {
@@ -714,10 +717,7 @@ mod tests {
 
     #[test]
     fn digest_and_defaulted_flags_reach_the_engine_config() {
-        let (config, _launch) = BootScenario::new()
-            .require_digest()
-            .defaulted_chains()
-            .split();
+        let (config, _launch) = scenario().require_digest().defaulted_chains().split();
         assert!(config.engine.require_component_digest);
         assert!(config.defaulted);
         assert!(config.chains.is_empty());
@@ -762,12 +762,12 @@ mod tests {
     #[test]
     fn variant_finds_a_runtime_error_arm_at_the_top() {
         Refusal(RuntimeError::from(
-            crate::builder::LaunchRefusal::NothingToRun,
+            crate::error::LaunchRefusal::NothingToRun,
         ))
         .variant::<RuntimeError>(|e| {
             matches!(
                 e,
-                RuntimeError::Launch(crate::builder::LaunchRefusal::NothingToRun)
+                RuntimeError::Launch(crate::error::LaunchRefusal::NothingToRun)
             )
         });
     }
