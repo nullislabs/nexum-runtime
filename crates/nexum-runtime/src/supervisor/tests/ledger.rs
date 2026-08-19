@@ -20,7 +20,7 @@ fn extension_sections_must_be_claimed() {
         fn link(
             &self,
             _linker: &mut Linker<HostState<CoreRuntime>>,
-        ) -> Result<(), crate::host::extension::ExtensionError> {
+        ) -> Result<(), nexum_runtime_api::ExtensionError> {
             Ok(())
         }
         fn manifest_sections(&self) -> &'static [&'static str] {
@@ -65,7 +65,7 @@ fn extension_claims_must_be_unique() {
         fn link(
             &self,
             _linker: &mut Linker<HostState<CoreRuntime>>,
-        ) -> Result<(), crate::host::extension::ExtensionError> {
+        ) -> Result<(), nexum_runtime_api::ExtensionError> {
             Ok(())
         }
         fn emits_trigger_kinds(&self) -> &'static [&'static str] {

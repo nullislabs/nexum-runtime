@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-use crate::host::component::{
+use nexum_runtime_api::{
     MAX_APPLY_OPS, MAX_APPLY_VALUE_BYTES, StateHandle, StateStore, StoreError, WriteOp,
 };
 

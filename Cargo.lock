@@ -3336,10 +3336,10 @@ dependencies = [
  "nexum-runtime-logs",
  "nexum-runtime-manifest",
  "nexum-runtime-store",
+ "nexum-runtime-wasm",
  "nexum-tasks",
  "nexum-world",
  "redb",
- "reqwest",
  "semver 1.0.28",
  "serde",
  "serde_json",
@@ -3467,6 +3467,34 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
+]
+
+[[package]]
+name = "nexum-runtime-wasm"
+version = "0.1.0"
+dependencies = [
+ "alloy-chains",
+ "alloy-json-rpc",
+ "alloy-primitives",
+ "alloy-transport",
+ "metrics",
+ "nexum-runtime-api",
+ "nexum-runtime-chain",
+ "nexum-runtime-http",
+ "nexum-runtime-logs",
+ "nexum-world",
+ "reqwest",
+ "serde_json",
+ "strum",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "tracing-core",
+ "tracing-subscriber",
+ "wasmtime",
+ "wasmtime-wasi",
+ "wasmtime-wasi-http",
+ "wiremock",
 ]
 
 [[package]]

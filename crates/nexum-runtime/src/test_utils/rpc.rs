@@ -15,8 +15,8 @@ use alloy_transport::mock::{Asserter, MockResponse, MockTransport};
 use alloy_transport::{TransportError, TransportErrorKind, TransportFut};
 use serde_json::value::RawValue;
 
-use crate::host::component::ChainMethod;
-use crate::host::provider_pool::ProviderPool;
+use nexum_runtime_chain::ProviderPool;
+use nexum_world::ChainMethod;
 
 /// One request as the mock transport saw it, so a test can assert on
 /// what the runtime asked for rather than only on what it did with the

@@ -3,10 +3,11 @@
 
 use tracing_core::Level;
 
-use crate::bindings::nexum;
-use crate::host::component::RuntimeTypes;
-use crate::host::logs::{LogChannel, LogRecord};
-use crate::host::state::HostState;
+use nexum_runtime_api::RuntimeTypes;
+use nexum_runtime_api::bindings::nexum;
+use nexum_runtime_logs::{LogChannel, LogRecord};
+
+use crate::state::HostState;
 
 impl<T: RuntimeTypes> nexum::host::logging::Host for HostState<T> {
     async fn log(&mut self, level: nexum::host::logging::Level, message: String) {

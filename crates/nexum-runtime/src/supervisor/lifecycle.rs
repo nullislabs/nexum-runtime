@@ -13,11 +13,11 @@ use super::Shared;
 use super::load::{LoadedModule, instantiate_module};
 use super::store::{build_linker, fresh_run_store};
 use crate::engine_config::{PoisonPolicy, should_poison};
-use crate::host::component::RuntimeTypes;
-use crate::host::state::HostState;
 use crate::runtime::restart_policy::{backoff_for, jitter_seed};
 use nexum_primitives::digest::ContentDigest;
 use nexum_primitives::module_id::ModuleId;
+use nexum_runtime_api::RuntimeTypes;
+use nexum_runtime_wasm::HostState;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum LifecycleState {
@@ -190,8 +190,8 @@ impl<T: RuntimeTypes<State = HostState<T>>> Sweepable<T> for LoadedModule<T> {
         if let Err(e) = init {
             return Err(anyhow!(
                 "init returned fault on restart: {} ({})",
-                crate::host::fault::fault_message(&e),
-                crate::host::fault::fault_label(&e),
+                nexum_runtime_wasm::fault_message(&e),
+                nexum_runtime_wasm::fault_label(&e),
             ));
         }
         self.live.bindings = bindings;

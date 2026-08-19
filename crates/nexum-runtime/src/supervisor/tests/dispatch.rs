@@ -206,10 +206,7 @@ async fn dispatch_deadline_cuts_off_a_blocked_host_call_and_recovers() {
     // The park is consumed when the first request begins, so the request
     // dropped at the deadline leaves the next one prompt.
     let node = crate::test_utils::rpc::FakeNode::new();
-    node.on_method(
-        crate::host::component::ChainMethod::EthBlockNumber,
-        "\"0x1\"",
-    );
+    node.on_method(nexum_world::ChainMethod::EthBlockNumber, "\"0x1\"");
     node.delay_next_request(Duration::from_secs(3600));
 
     // 1 s is the resolver floor; long enough to prove the call was cut off

@@ -4,9 +4,9 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use super::load::LoadRefusal;
-use crate::host::component::RuntimeTypes;
-use crate::host::extension::Extension;
 use crate::manifest::{self, CapabilityRegistry};
+use nexum_runtime_api::Extension;
+use nexum_runtime_api::RuntimeTypes;
 
 pub(super) fn extension_trigger_kinds<T: RuntimeTypes>(
     extensions: &[Arc<dyn Extension<T>>],

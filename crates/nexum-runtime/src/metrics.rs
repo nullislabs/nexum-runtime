@@ -1,10 +1,10 @@
 //! The metric names the runtime emits, described once.
 //!
 //! [`METRICS`] is the single source: [`describe_all`] emits the HELP and
-//! TYPE text from it, and a test scans the crate for `nexum_runtime_`
-//! literals and refuses any that the table does not carry. A metric name
-//! is an operator contract, so adding or renaming one is a deliberate diff
-//! here rather than an incidental string somewhere.
+//! TYPE text from it, and a test scans the emitting crates for
+//! `nexum_runtime_` literals and refuses any that the table does not
+//! carry. A metric name is an operator contract, so adding or renaming one
+//! is a deliberate diff here rather than an incidental string somewhere.
 
 /// How a metric is recorded, which decides the `describe_` call.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -108,14 +108,22 @@ mod tests {
         );
     }
 
-    /// Scans this crate's sources for emitted names, the same shape as the
-    /// single-compile-path guard in the digest tests. A name reaching an
-    /// operator without passing through the table is the failure mode.
+    /// Scans every crate that emits under the `nexum_runtime_` prefix, the
+    /// same shape as the single-compile-path guard in the digest tests. A
+    /// name reaching an operator without passing through the table is the
+    /// failure mode.
     #[test]
     fn every_emitted_name_is_in_the_table_and_every_entry_is_emitted() {
-        let src_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
         let mut found: BTreeSet<String> = BTreeSet::new();
-        let mut stack = vec![src_root];
+        let mut stack = vec![
+            manifest.join("src"),
+            manifest.join("../nexum-runtime-wasm/src"),
+            manifest.join("../nexum-runtime-chain/src"),
+            manifest.join("../nexum-runtime-store/src"),
+            manifest.join("../nexum-runtime-logs/src"),
+            manifest.join("../nexum-runtime-http/src"),
+        ];
         while let Some(dir) = stack.pop() {
             for entry in std::fs::read_dir(&dir).expect("read the crate source tree") {
                 let path = entry.expect("dir entry").path();

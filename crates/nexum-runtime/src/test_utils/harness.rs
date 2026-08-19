@@ -3,7 +3,7 @@
 //!
 //! [`TestRuntime`] wraps the public builder path over [`MockTypes`] with a
 //! manually-driven [`ManualClock`]; the chain leg is the real
-//! [`ProviderPool`](crate::host::provider_pool::ProviderPool) over a routed
+//! [`ProviderPool`](nexum_runtime_chain::ProviderPool) over a routed
 //! [`FakeNode`] transport. Program the mocks and read effects through
 //! [`chain`](TestRuntime::chain), [`clock`](TestRuntime::clock),
 //! [`store`](TestRuntime::store) and [`logs`](TestRuntime::logs). Events
@@ -28,9 +28,9 @@ use super::{HARNESS_POLL_INTERVAL, MockStateStore, MockTypes, Prebuilt};
 use crate::builder::{RuntimeBuilder, RuntimeHandle};
 use crate::engine_config::{EngineConfig, ModuleLimits};
 use crate::error::{BoxError, RuntimeError};
-use crate::host::component::{Components, ComponentsBuilder};
-use crate::host::extension::Extension;
-use crate::host::logs::{LogPipeline, LogRecord};
+use nexum_runtime_api::Extension;
+use nexum_runtime_logs::{LogPipeline, LogRecord};
+use nexum_runtime_wasm::{Components, ComponentsBuilder};
 
 /// Builder for a [`TestRuntime`]; the launched handle shares the same mock
 /// backends. A manifest is mandatory.
@@ -270,9 +270,9 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use super::*;
-    use crate::host::extension::Extension;
     use crate::manifest::NamespaceCaps;
     use crate::test_utils::{TestManifest, example_wasm_or_skip, manifest, module_wasm_or_skip};
+    use nexum_runtime_api::Extension;
 
     fn example_block_manifest() -> String {
         manifest("example")
@@ -335,7 +335,7 @@ mod tests {
             .expect("the on_trigger log line lands after dispatch");
         assert_eq!(
             record.channel,
-            crate::host::logs::LogChannel::HostInterface,
+            nexum_runtime_logs::LogChannel::HostInterface,
             "the example module logs through the host interface",
         );
 
@@ -415,8 +415,8 @@ mod tests {
             }
             fn link(
                 &self,
-                _linker: &mut wasmtime::component::Linker<crate::host::state::HostState<MockTypes>>,
-            ) -> Result<(), crate::host::extension::ExtensionError> {
+                _linker: &mut wasmtime::component::Linker<nexum_runtime_wasm::HostState<MockTypes>>,
+            ) -> Result<(), nexum_runtime_api::ExtensionError> {
                 self.0.fetch_add(1, Ordering::SeqCst);
                 Ok(())
             }
@@ -492,7 +492,7 @@ mod tests {
     /// programmed answer is above threshold, so the module logs the alert.
     #[tokio::test]
     async fn harness_serves_chain_requests_to_the_module() {
-        use crate::host::component::ChainMethod;
+        use nexum_world::ChainMethod;
 
         let Some(wasm) = module_wasm_or_skip("price-alert") else {
             return;
@@ -676,7 +676,7 @@ mod tests {
     #[tokio::test]
     async fn harness_enforces_chain_response_cap_on_the_request_path() {
         use crate::engine_config::ChainLimitsSection;
-        use crate::host::component::ChainMethod;
+        use nexum_world::ChainMethod;
 
         let Some(wasm) = module_wasm_or_skip("price-alert") else {
             return;
@@ -804,7 +804,7 @@ mod tests {
         // seconds, parsed back to guard against a substring false positive.
         assert_eq!(
             record.channel,
-            crate::host::logs::LogChannel::HostInterface,
+            nexum_runtime_logs::LogChannel::HostInterface,
             "the fixture logs through the host interface",
         );
         let logged: u64 = record
@@ -908,7 +908,7 @@ mod tests {
     /// consumes the builder.
     #[tokio::test]
     async fn boot_supervisor_serves_chain_requests_from_the_builder_mocks() {
-        use crate::host::component::ChainMethod;
+        use nexum_world::ChainMethod;
 
         let Some(wasm) = module_wasm_or_skip("price-alert") else {
             return;

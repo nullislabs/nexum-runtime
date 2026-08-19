@@ -1,6 +1,6 @@
 //! Host-side projections of a [`Fault`] into log and metric fields.
 
-use crate::bindings::nexum::host::types::Fault;
+use nexum_runtime_api::bindings::nexum::host::types::Fault;
 
 /// Metric and log `kind`.
 pub fn fault_label(fault: &Fault) -> &'static str {

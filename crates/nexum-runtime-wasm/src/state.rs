@@ -1,5 +1,5 @@
 //! Per-module host state, held in the wasmtime `Store` and the receiver for
-//! every `Host` impl in `super::impls`.
+//! every `Host` impl in this crate.
 
 use std::sync::Arc;
 
@@ -7,10 +7,10 @@ use wasmtime::component::ResourceTable;
 use wasmtime_wasi::{WasiCtx, WasiCtxView, WasiView};
 use wasmtime_wasi_http::WasiHttpCtx;
 
-use super::component::{Handle, RuntimeTypes};
-use super::http::HttpGate;
-use super::logs::{LogRouter, RunId};
-use super::provider_pool::ProviderPool;
+use nexum_runtime_api::{Handle, RuntimeTypes};
+use nexum_runtime_chain::ProviderPool;
+use nexum_runtime_http::HttpGate;
+use nexum_runtime_logs::{LogRouter, RunId};
 
 /// Per-module host state, generic over the [`RuntimeTypes`] lattice.
 pub struct HostState<T: RuntimeTypes> {

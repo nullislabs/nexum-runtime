@@ -32,8 +32,6 @@ use crate::engine_config::{
     ComponentPolicy, PolicyCeilings, PolicySection, ResolvedModuleLimits, TotalPolicy,
 };
 use crate::error::RuntimeError;
-use crate::host::logs::LogChannel;
-use crate::host::provider_pool::ProviderPool;
 use crate::manifest::error::CapabilityError;
 use crate::manifest::{self, CapabilityRegistry, ParseError, ResourceSection};
 use crate::preset::CoreRuntime;
@@ -44,6 +42,8 @@ use crate::test_utils::{
     mock_components, module_wasm_or_skip, test_wasmtime_engine,
 };
 use nexum_primitives::digest::{ContentDigest, DigestMismatch};
+use nexum_runtime_chain::ProviderPool;
+use nexum_runtime_logs::LogChannel;
 
 type DefaultSupervisor = Supervisor<CoreRuntime>;
 
@@ -54,7 +54,7 @@ fn workspace_manifest(relative: &str) -> PathBuf {
     crate::test_utils::wasm::workspace_root().join(relative)
 }
 
-fn core_extensions() -> Vec<Arc<dyn crate::host::extension::Extension<CoreRuntime>>> {
+fn core_extensions() -> Vec<Arc<dyn nexum_runtime_api::Extension<CoreRuntime>>> {
     Vec::new()
 }
 
@@ -64,7 +64,7 @@ fn make_linker(engine: &wasmtime::Engine) -> Linker<HostState<CoreRuntime>> {
 }
 
 /// An empty chain pool and the given store.
-fn test_components(store: crate::host::local_store_redb::LocalStore) -> Components<CoreRuntime> {
+fn test_components(store: nexum_runtime_store::LocalStore) -> Components<CoreRuntime> {
     Components {
         chain: ProviderPool::empty(),
         store,
@@ -79,10 +79,10 @@ fn test_chains() -> ConfiguredChains {
 }
 
 /// The caller-held `TempDir` cleans up the store on drop.
-fn temp_local_store() -> (tempfile::TempDir, crate::host::local_store_redb::LocalStore) {
+fn temp_local_store() -> (tempfile::TempDir, nexum_runtime_store::LocalStore) {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("ls.redb");
-    let store = crate::host::local_store_redb::LocalStore::open(path).expect("local store");
+    let store = nexum_runtime_store::LocalStore::open(path).expect("local store");
     (dir, store)
 }
 

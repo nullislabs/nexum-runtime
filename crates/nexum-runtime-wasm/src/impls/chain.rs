@@ -4,12 +4,14 @@ use std::time::Instant;
 
 use alloy_chains::Chain;
 
-use crate::bindings::nexum;
-use crate::bindings::nexum::host::chain::ChainError;
-use crate::host::component::{ChainMethod, RuntimeTypes};
-use crate::host::error::{method_denied, pool_fault, response_over_cap};
-use crate::host::provider_pool::PoolError;
-use crate::host::state::HostState;
+use nexum_runtime_api::RuntimeTypes;
+use nexum_runtime_api::bindings::nexum;
+use nexum_runtime_api::bindings::nexum::host::chain::ChainError;
+use nexum_runtime_chain::PoolError;
+use nexum_world::ChainMethod;
+
+use crate::error::{method_denied, pool_fault, response_over_cap};
+use crate::state::HostState;
 
 /// Resolve a guest method string into the permitted read surface; an unknown
 /// or mutating method is a `Denied` fault.
@@ -118,7 +120,7 @@ impl<T: RuntimeTypes> nexum::host::chain::Host for HostState<T> {
 mod tests {
     use super::*;
 
-    use crate::bindings::nexum::host::types::Fault;
+    use nexum_runtime_api::bindings::nexum::host::types::Fault;
 
     #[test]
     fn permitted_methods_resolve() {

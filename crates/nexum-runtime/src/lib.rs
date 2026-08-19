@@ -30,7 +30,6 @@ pub use nexum_runtime_api::bindings;
 pub mod addons;
 mod builder;
 pub mod error;
-mod host;
 #[path = "metrics.rs"]
 mod metric_names;
 mod preset;
@@ -70,15 +69,18 @@ pub mod config {
 
 /// Backend component seams and the builders that open them.
 pub mod component {
-    pub use crate::host::component::{
-        BuildError, BuilderContext, ChainMethod, ComponentBuilder, Components, ComponentsBuilder,
-        Handle, LocalStoreBuilder, LogPipelineBuilder, MAX_APPLY_OPS, MAX_APPLY_VALUE_BYTES,
-        ProviderPoolBuilder, RuntimeTypes, StateHandle, StateStore, StoreError, WriteOp,
+    pub use nexum_runtime_api::{
+        BuilderContext, ComponentBuilder, Handle, MAX_APPLY_OPS, MAX_APPLY_VALUE_BYTES,
+        RuntimeTypes, StateHandle, StateStore, StoreError, WriteOp,
     };
-    pub use crate::host::local_store_redb::{LocalStore, ModuleStore, StorageError};
-    pub use crate::host::provider_pool::{
+    pub use nexum_runtime_chain::{
         BlockStream, CanonicalLogBatch, CanonicalLogStream, PoolError, ProviderPool,
+        ProviderPoolBuilder,
     };
+    pub use nexum_runtime_logs::LogPipelineBuilder;
+    pub use nexum_runtime_store::{LocalStore, LocalStoreBuilder, ModuleStore, StorageError};
+    pub use nexum_runtime_wasm::{BuildError, Components, ComponentsBuilder};
+    pub use nexum_world::ChainMethod;
     pub use redb::{
         CommitError, DatabaseError, StorageError as RedbStorageError, TableError, TransactionError,
     };
@@ -86,17 +88,16 @@ pub mod component {
 
 /// The seam an extension author implements against.
 pub mod extension {
-    pub use crate::host::extension::{
+    pub use nexum_runtime_api::{
         Extension, ExtensionDelivery, ExtensionError, ExtensionSource, HostWallClock, SourceContext,
     };
-    pub use crate::host::fault::{fault_label, fault_message};
-    pub use crate::host::http::HttpGate;
-    pub use crate::host::state::HostState;
+    pub use nexum_runtime_http::HttpGate;
+    pub use nexum_runtime_wasm::{HostState, fault_label, fault_message};
 }
 
 /// The module-log pipeline and its read surface.
 pub mod logs {
-    pub use crate::host::logs::{
+    pub use nexum_runtime_logs::{
         InMemoryRunLogStore, LogChannel, LogPage, LogPipeline, LogRecord, LogRouter, RunId,
         RunLogStore, RunMeta, StdioStream,
     };

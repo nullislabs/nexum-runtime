@@ -132,7 +132,7 @@ impl Extension<CoreRuntime> for Ticker {
     fn link(
         &self,
         _linker: &mut Linker<HostState<CoreRuntime>>,
-    ) -> Result<(), crate::host::extension::ExtensionError> {
+    ) -> Result<(), nexum_runtime_api::ExtensionError> {
         Ok(())
     }
     fn emits_trigger_kinds(&self) -> &'static [&'static str] {

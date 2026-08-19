@@ -7,7 +7,7 @@ use alloy_chains::Chain;
 use alloy_primitives::{Address, B256, keccak256};
 use tracing::warn;
 
-use crate::host::component::{StateHandle, StateStore};
+use nexum_runtime_api::{StateHandle, StateStore};
 
 /// In-memory cursor mirror, `module -> cursor key -> block`; additions only
 /// move forward, retractions pull back to the retracted height.
