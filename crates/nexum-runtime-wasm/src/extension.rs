@@ -6,6 +6,7 @@ use nexum_runtime_api::{Extension, RuntimeTypes, WasiClockOverride};
 
 /// Hand every extension the effective wall clock. Every launch path calls
 /// this before it builds the linker.
+#[doc(hidden)]
 pub fn attach_wall_clock<T: RuntimeTypes>(
     extensions: &[Arc<dyn Extension<T>>],
     clocks: Option<&WasiClockOverride>,
