@@ -13,7 +13,6 @@ workspace = true
 [dependencies]
 alloy-chains.workspace = true
 alloy-primitives.workspace = true
-alloy-provider = { workspace = true, features = ["ws", "ipc", "pubsub", "reqwest"] }
 alloy-rpc-types-eth.workspace = true
 alloy-transport.workspace = true
 anyhow.workspace = true
