@@ -3314,10 +3314,8 @@ name = "nexum-runtime"
 version = "0.1.0"
 dependencies = [
  "alloy-chains",
- "alloy-json-rpc",
  "alloy-primitives",
  "alloy-provider",
- "alloy-rpc-client",
  "alloy-rpc-types-eth",
  "alloy-transport",
  "anyhow",
@@ -3326,7 +3324,6 @@ dependencies = [
  "ipnet",
  "metrics",
  "metrics-exporter-prometheus",
- "metrics-util",
  "nexum-primitives",
  "nexum-runtime",
  "nexum-runtime-api",
@@ -3335,20 +3332,20 @@ dependencies = [
  "nexum-runtime-http",
  "nexum-runtime-logs",
  "nexum-runtime-manifest",
+ "nexum-runtime-metrics",
  "nexum-runtime-store",
+ "nexum-runtime-testing",
  "nexum-runtime-wasm",
  "nexum-tasks",
  "nexum-world",
  "redb",
  "semver 1.0.28",
- "serde",
  "serde_json",
  "strum",
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
  "toml 1.1.2+spec-1.1.0",
- "tower",
  "tracing",
  "tracing-core",
  "tracing-subscriber",
@@ -3457,6 +3454,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "nexum-runtime-metrics"
+version = "0.1.0"
+dependencies = [
+ "metrics",
+]
+
+[[package]]
 name = "nexum-runtime-store"
 version = "0.1.0"
 dependencies = [
@@ -3467,6 +3471,38 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
+]
+
+[[package]]
+name = "nexum-runtime-testing"
+version = "0.1.0"
+dependencies = [
+ "alloy-chains",
+ "alloy-json-rpc",
+ "alloy-primitives",
+ "alloy-provider",
+ "alloy-rpc-client",
+ "alloy-rpc-types-eth",
+ "alloy-transport",
+ "derive_more",
+ "futures",
+ "metrics",
+ "metrics-util",
+ "nexum-primitives",
+ "nexum-runtime-api",
+ "nexum-runtime-chain",
+ "nexum-runtime-config",
+ "nexum-runtime-logs",
+ "nexum-runtime-manifest",
+ "nexum-runtime-wasm",
+ "nexum-world",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "toml 1.1.2+spec-1.1.0",
+ "tower",
+ "wasmtime-wasi",
 ]
 
 [[package]]

@@ -8,9 +8,6 @@
 #![cfg_attr(not(test), warn(unused_crate_dependencies))]
 #![forbid(unsafe_code)]
 
-// Named only by the `test-utils` mock transports.
-use alloy_rpc_client as _;
-
 pub use {
     alloy_chains, alloy_primitives, alloy_provider, alloy_rpc_types_eth, alloy_transport, futures,
     nexum_tasks, nexum_world, toml, wasmtime, wasmtime_wasi, wasmtime_wasi_http,
@@ -30,8 +27,6 @@ pub use nexum_runtime_api::bindings;
 pub mod addons;
 mod builder;
 pub mod error;
-#[path = "metrics.rs"]
-mod metric_names;
 mod preset;
 mod runtime;
 pub mod supervisor;

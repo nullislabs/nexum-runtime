@@ -1,7 +1,6 @@
 //! Pass-through [`ComponentBuilder`] wrapping a pre-built backend.
 
-use crate::error::BoxError;
-use nexum_runtime_api::{BuilderContext, ComponentBuilder};
+use nexum_runtime_api::{BoxError, BuilderContext, ComponentBuilder};
 
 /// A [`ComponentBuilder`] that yields a pre-built backend, ignoring the build
 /// context. Wrap any mock instance to compose it through the public builder.

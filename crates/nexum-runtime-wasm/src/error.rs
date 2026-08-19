@@ -718,6 +718,7 @@ mod tests {
             manifest.join("../nexum-runtime-store/src"),
             manifest.join("../nexum-runtime-logs/src"),
             manifest.join("../nexum-runtime-http/src"),
+            manifest.join("../nexum-runtime-testing/src"),
         ];
         let funnel = manifest.join("src").join("error.rs");
         let projections = manifest.join("src").join("fault.rs");

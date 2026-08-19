@@ -224,7 +224,7 @@ pub fn build_linker<T: RuntimeTypes<State = HostState<T>>>(
 mod tests {
     use super::*;
     use crate::supervisor::WasiClockOverride;
-    use crate::test_utils::clock::ManualClock;
+    use crate::test_utils::ManualClock;
 
     /// [`build`] serves the guest `clocks.wall`; the extension seam hands out
     /// that same handle, not a second clock over the same source.

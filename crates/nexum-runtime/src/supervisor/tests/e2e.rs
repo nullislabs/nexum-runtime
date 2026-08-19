@@ -83,7 +83,7 @@ async fn e2e_block_trigger_dispatched() {
 async fn e2e_manual_clock_override_boots_and_dispatches() {
     use std::time::{Duration, UNIX_EPOCH};
 
-    use crate::test_utils::clock::ManualClock;
+    use crate::test_utils::ManualClock;
 
     let Some(wasm) = example_wasm_or_skip() else {
         return;

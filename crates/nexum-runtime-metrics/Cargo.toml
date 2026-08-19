@@ -1,0 +1,14 @@
+[package]
+name = "nexum-runtime-metrics"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "The metric registry for the Nexum runtime: every emitted name, its kind, and its HELP text."
+
+[lints]
+workspace = true
+
+[dependencies]
+metrics.workspace = true

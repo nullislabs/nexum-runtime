@@ -9,8 +9,8 @@ use tracing::info;
 use crate::engine_config::MetricsSection;
 use crate::error::BoxError;
 
-pub use crate::metric_names::{Kind, METRICS, Metric, describe_all};
 pub use metrics_exporter_prometheus::BuildError as PrometheusBuildError;
+pub use nexum_runtime_metrics::{Kind, METRICS, Metric, describe_all};
 
 /// The foreign cause renders inline, so the operator sees one line.
 #[derive(Debug, thiserror::Error)]
@@ -104,7 +104,7 @@ impl RuntimeAddOn for PrometheusAddOn {
             prometheus_builder()
                 .and_then(|builder| builder.with_http_listener(addr).install())
                 .map_err(|cause| PrometheusError::Exporter { addr, cause })?;
-            crate::metric_names::describe_all();
+            nexum_runtime_metrics::describe_all();
             info!(addr = %addr, "metrics exporter listening at /metrics");
         } else {
             // Recorder installed globally so metrics call sites stay live;
@@ -112,7 +112,7 @@ impl RuntimeAddOn for PrometheusAddOn {
             prometheus_builder()
                 .and_then(|builder| builder.install_recorder().map(drop))
                 .map_err(|cause| PrometheusError::Recorder { cause })?;
-            crate::metric_names::describe_all();
+            nexum_runtime_metrics::describe_all();
         }
         Ok(AddOnHandle::named("prometheus"))
     }

@@ -213,16 +213,16 @@ fn trigger(on: &str, chain_id: u64) -> toml::Table {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::manifest::{CapabilityRegistry, Trigger, load};
+    use nexum_runtime_manifest::{CapabilityRegistry, LoadedManifest, Trigger, load};
 
     /// Load through the real write-then-parse path with the core registry.
-    fn load_core(manifest: &TestManifest) -> crate::manifest::LoadedManifest {
+    fn load_core(manifest: &TestManifest) -> LoadedManifest {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = manifest.write_to(dir.path());
         load(&path, &CapabilityRegistry::core()).expect("emitted manifest loads")
     }
 
-    fn load_path(path: &Path) -> crate::manifest::LoadedManifest {
+    fn load_path(path: &Path) -> LoadedManifest {
         load(path, &CapabilityRegistry::core()).expect("emitted manifest loads")
     }
 

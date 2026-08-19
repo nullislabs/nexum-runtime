@@ -1,4 +1,4 @@
-//! Pre-built guest wasm locators and the test wasmtime engine.
+//! Pre-built guest wasm locators.
 
 use std::path::{Path, PathBuf};
 
@@ -81,11 +81,6 @@ fn locate(wasm: PathBuf, allow_missing: bool) -> Option<PathBuf> {
     None
 }
 
-/// Test engine built from the production launch config.
-pub fn test_wasmtime_engine() -> wasmtime::Engine {
-    wasmtime::Engine::new(&crate::builder::wasmtime_config()).expect("wasmtime engine")
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -122,16 +117,5 @@ mod tests {
     fn missing_wasm_skips_only_behind_the_opt_out() {
         let dir = tempfile::tempdir().expect("tempdir");
         assert_eq!(locate(dir.path().join("absent.wasm"), true), None);
-    }
-
-    #[test]
-    fn engine_has_the_component_model_and_fuel_enabled() {
-        let engine = test_wasmtime_engine();
-        wasmtime::component::Component::new(&engine, "(component)")
-            .expect("a trivial component compiles, so the component model is on");
-        let mut store = wasmtime::Store::new(&engine, ());
-        store
-            .set_fuel(1)
-            .expect("fuel accounting is on, so setting fuel succeeds");
     }
 }

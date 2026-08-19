@@ -1,0 +1,42 @@
+[package]
+name = "nexum-runtime-testing"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Seam-level test doubles for the Nexum runtime: mock RPC transports, the in-memory store, the manual clock, and scoped metric capture."
+
+[lints]
+workspace = true
+
+[dependencies]
+alloy-chains.workspace = true
+alloy-json-rpc.workspace = true
+alloy-primitives.workspace = true
+alloy-provider.workspace = true
+alloy-rpc-client.workspace = true
+alloy-rpc-types-eth.workspace = true
+alloy-transport.workspace = true
+derive_more.workspace = true
+metrics.workspace = true
+metrics-util.workspace = true
+nexum-runtime-api = { path = "../nexum-runtime-api" }
+nexum-runtime-chain = { path = "../nexum-runtime-chain", features = ["test-utils"] }
+nexum-runtime-config = { path = "../nexum-runtime-config" }
+nexum-runtime-logs = { path = "../nexum-runtime-logs" }
+nexum-runtime-wasm = { path = "../nexum-runtime-wasm" }
+nexum-world = { path = "../nexum-world" }
+serde.workspace = true
+serde_json = { workspace = true, features = ["std"] }
+tokio = { workspace = true, features = ["sync", "time"] }
+toml.workspace = true
+tower.workspace = true
+wasmtime-wasi.workspace = true
+
+[dev-dependencies]
+futures.workspace = true
+nexum-primitives = { path = "../nexum-primitives" }
+nexum-runtime-manifest = { path = "../nexum-runtime-manifest" }
+tempfile.workspace = true
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

@@ -87,8 +87,10 @@ It is the facade.
 It holds the builder, the preset, the add-ons and the composed `RuntimeError`, and it re-exports the curated public surface.
 
 Beside the stack, `nexum-runtime-metrics` holds the metric registry.
-`nexum-runtime-testing` holds the test helpers that are a `test-utils` feature today, which is about 3,450 lines.
-A separate crate keeps `tempfile`, `tower`, `alloy-json-rpc` and `metrics-util` off the runtime's dependency graph, and it prevents a downstream from enabling mocks in a production build.
+`nexum-runtime-testing` holds the seam-level half of the test helpers, which measured about 1,650 lines: the mock RPC transports, the in-memory store, the manual clock, the mock lattice, the manifest builder, the wasm locators, and metric capture.
+`TestRuntime` and `BootScenario` name the builder, the supervisor, and the launch path, so they stay behind the facade's `test-utils` feature, about 1,850 lines, and the facade re-exports the testing crate under the unchanged `test_utils` paths.
+A separate crate keeps `tower`, `alloy-json-rpc` and `metrics-util` off the runtime's dependency graph, and it prevents a downstream from enabling mocks in a production build.
+`tempfile` stays optional on the facade behind `test-utils`, because the harness and the scenario temp-file inline manifests before boot.
 
 The work is phased, and each phase is one pull request.
 The bottom layers land first, because every later phase depends on them.
@@ -140,5 +142,5 @@ Rejected because it draws one boundary and leaves the `host` and `supervisor` kn
 - #145 publishes twelve crates in lockstep rather than one, and each carries the inherited SPDX identifier and MSRV.
 - #260 designs the facade for the top of this stack rather than for one crate, so the two issues are sequenced and not parallel.
 - The three reversed edges are corrected as part of the phase that moves the crate they block.
-- `test-utils` stops being a feature on `nexum-runtime`, and a downstream test crate depends on `nexum-runtime-testing` instead.
+- `test-utils` stays a feature on `nexum-runtime` for the harness and the scenario, and it enables `nexum-runtime-testing` for everything seam-level; a downstream test crate that needs no facade harness depends on `nexum-runtime-testing` directly.
 - The workspace gains a crate-level dependency rule that a later reader can check mechanically: no crate depends on a crate in its own layer, except that layer 1 crates may depend on layer 0.

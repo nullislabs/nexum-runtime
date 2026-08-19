@@ -51,7 +51,7 @@ const SEPOLIA: u64 = 11_155_111;
 
 /// Path to a manifest checked into the workspace tree.
 fn workspace_manifest(relative: &str) -> PathBuf {
-    crate::test_utils::wasm::workspace_root().join(relative)
+    crate::test_utils::workspace_root().join(relative)
 }
 
 fn core_extensions() -> Vec<Arc<dyn nexum_runtime_api::Extension<CoreRuntime>>> {
