@@ -29,9 +29,7 @@ macro_rules! bind_host_via_wit_bindgen {
     // Blanket-world form: every core interface is in scope, emit the
     // full adapter.
     () => {
-        $crate::bind_host_via_wit_bindgen!(
-            caps: [chain, identity, local_store, remote_store, logging]
-        );
+        $crate::bind_host_via_wit_bindgen!(caps: [chain, local_store, logging]);
     };
     // Capability-selected form: the base pieces (which need only the
     // always-present `nexum:host/types`) plus one block per listed
@@ -143,40 +141,6 @@ macro_rules! __bind_host_cap_via_wit_bindgen {
             }
         }
     };
-    (identity) => {
-        impl $crate::host::IdentityHost for WitBindgenHost {
-            fn accounts(
-                &self,
-            ) -> ::core::result::Result<
-                ::std::vec::Vec<$crate::prelude::Address>,
-                $crate::host::Fault,
-            > {
-                nexum::host::identity::accounts()
-                    .map_err($crate::host::Fault::from)?
-                    .iter()
-                    .map(|account| $crate::host::account_from_wire(account))
-                    .collect()
-            }
-            fn sign(
-                &self,
-                account: $crate::prelude::Address,
-                message: &[u8],
-            ) -> ::core::result::Result<$crate::prelude::Signature, $crate::host::Fault> {
-                let raw = nexum::host::identity::sign(account.as_slice(), message)
-                    .map_err($crate::host::Fault::from)?;
-                $crate::host::signature_from_wire(&raw)
-            }
-            fn sign_typed_data(
-                &self,
-                account: $crate::prelude::Address,
-                typed_data: &str,
-            ) -> ::core::result::Result<$crate::prelude::Signature, $crate::host::Fault> {
-                let raw = nexum::host::identity::sign_typed_data(account.as_slice(), typed_data)
-                    .map_err($crate::host::Fault::from)?;
-                $crate::host::signature_from_wire(&raw)
-            }
-        }
-    };
     (local_store) => {
         impl $crate::host::LocalStoreHost for WitBindgenHost {
             fn get(
@@ -242,45 +206,6 @@ macro_rules! __bind_host_cap_via_wit_bindgen {
             }
             fn count(&self, prefix: &str) -> ::core::result::Result<u64, $crate::host::Fault> {
                 nexum::host::local_store::count(prefix).map_err($crate::host::Fault::from)
-            }
-        }
-    };
-    (remote_store) => {
-        impl $crate::host::RemoteStoreHost for WitBindgenHost {
-            fn upload(
-                &self,
-                data: &[u8],
-            ) -> ::core::result::Result<$crate::prelude::B256, $crate::host::Fault> {
-                let raw =
-                    nexum::host::remote_store::upload(data).map_err($crate::host::Fault::from)?;
-                $crate::host::reference_from_wire(&raw)
-            }
-            fn download(
-                &self,
-                reference: $crate::prelude::B256,
-            ) -> ::core::result::Result<::std::vec::Vec<u8>, $crate::host::Fault> {
-                nexum::host::remote_store::download(reference.as_slice())
-                    .map_err($crate::host::Fault::from)
-            }
-            fn read_feed(
-                &self,
-                owner: $crate::prelude::Address,
-                topic: $crate::prelude::B256,
-            ) -> ::core::result::Result<
-                ::core::option::Option<::std::vec::Vec<u8>>,
-                $crate::host::Fault,
-            > {
-                nexum::host::remote_store::read_feed(owner.as_slice(), topic.as_slice())
-                    .map_err($crate::host::Fault::from)
-            }
-            fn write_feed(
-                &self,
-                topic: $crate::prelude::B256,
-                data: &[u8],
-            ) -> ::core::result::Result<$crate::prelude::B256, $crate::host::Fault> {
-                let raw = nexum::host::remote_store::write_feed(topic.as_slice(), data)
-                    .map_err($crate::host::Fault::from)?;
-                $crate::host::reference_from_wire(&raw)
             }
         }
     };

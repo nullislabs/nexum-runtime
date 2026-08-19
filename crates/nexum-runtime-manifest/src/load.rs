@@ -404,8 +404,7 @@ not-a-real-cap = {}
         assert_eq!(
             err.to_string(),
             "manifest: unknown dependency \"not-a-real-cap\" in [dependencies] (known: chain, \
-             identity, local-store, remote-store, logging, http, wasi-sockets, \
-             wasi-filesystem)"
+             local-store, logging, http, wasi-sockets, wasi-filesystem)"
         );
     }
 

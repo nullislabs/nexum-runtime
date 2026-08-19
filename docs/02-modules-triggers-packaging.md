@@ -83,7 +83,7 @@ Key design points:
   The host flattens each TOML scalar to its text form on the way through, and renders an array or a table as its TOML representation.
   A typed `config-value` variant is a later change.
 
-The declarable core capability names are `chain`, `identity`, `local-store`, `remote-store`, `logging`, and `http`, plus the gated WASI names `wasi-sockets` and `wasi-filesystem`.
+The declarable core capability names are `chain`, `local-store`, `logging`, and `http`, plus the gated WASI names `wasi-sockets` and `wasi-filesystem`.
 `wasi:io`, `wasi:clocks`, `wasi:random`, and `wasi:cli` are ambient and are never declared.
 Any other `wasi:` import is refused fail-closed.
 An extension registers further names under its own namespace: see [the linker extension seam](design/linker-extension-seam.md).
@@ -116,7 +116,6 @@ The engine resolves no content address and fetches nothing: `[[modules]] path` i
 
 A content-addressed layer above the engine (a local content store fronting Swarm, IPFS, OCI, or plain HTTPS, keyed on the same sha256 the manifest already pins) fits without a manifest change, because the pin is already the trust anchor rather than the transport.
 None of it is implemented here.
-The `nexum:host/remote-store` interface exists in the WIT, but every method currently returns `unsupported`.
 
 ## Component lifecycle
 
@@ -291,9 +290,7 @@ world trigger-module {
     use types.{config, trigger, fault};
 
     import chain;
-    import identity;
     import local-store;
-    import remote-store;
     import logging;
 
     export init: func(config: config) -> result<_, fault>;

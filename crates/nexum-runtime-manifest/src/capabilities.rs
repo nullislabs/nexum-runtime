@@ -344,14 +344,14 @@ mod tests {
     #[test]
     fn enforce_rejects_undeclared_import() {
         let loaded = manifest_with_caps(&["chain"]);
-        // module imports remote-store but didn't declare it
-        let imports = ["nexum:host/chain@0.1.0", "nexum:host/remote-store@0.1.0"];
+        // module imports local-store but didn't declare it
+        let imports = ["nexum:host/chain@0.1.0", "nexum:host/local-store@0.1.0"];
         let r = registry_with_ext();
         let err = enforce_capabilities(&loaded, imports.into_iter(), &r).unwrap_err();
         let CapabilityError::Undeclared(v) = err else {
             panic!("expected undeclared: {err:?}")
         };
-        assert_eq!(v.capability, "remote-store");
+        assert_eq!(v.capability, "local-store");
     }
 
     #[test]

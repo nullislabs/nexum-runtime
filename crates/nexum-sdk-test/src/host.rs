@@ -1,26 +1,17 @@
 use nexum_sdk::Level;
-use nexum_sdk::host::{
-    ChainError, ChainHost, Fault, IdentityHost, LocalStoreHost, LoggingHost, RemoteStoreHost,
-};
-use nexum_sdk::prelude::{Address, B256, Signature};
+use nexum_sdk::host::{ChainError, ChainHost, Fault, LocalStoreHost, LoggingHost};
 
 use crate::chain::MockChain;
-use crate::identity::MockIdentity;
 use crate::local_store::MockLocalStore;
 use crate::logging::MockLogging;
-use crate::remote_store::MockRemoteStore;
 
 /// Composed in-memory host; each field is the per-seam mock.
 #[derive(Default)]
 pub struct MockHost {
     /// `nexum:host/chain` mock.
     pub chain: MockChain,
-    /// `nexum:host/identity` mock.
-    pub identity: MockIdentity,
     /// `nexum:host/local-store` mock.
     pub store: MockLocalStore,
-    /// `nexum:host/remote-store` mock.
-    pub remote_store: MockRemoteStore,
     /// `nexum:host/logging` mock.
     pub logging: MockLogging,
 }
@@ -63,33 +54,6 @@ impl LocalStoreHost for MockHost {
     }
 }
 
-impl IdentityHost for MockHost {
-    fn accounts(&self) -> Result<Vec<Address>, Fault> {
-        self.identity.accounts()
-    }
-    fn sign(&self, account: Address, message: &[u8]) -> Result<Signature, Fault> {
-        self.identity.sign(account, message)
-    }
-    fn sign_typed_data(&self, account: Address, typed_data: &str) -> Result<Signature, Fault> {
-        self.identity.sign_typed_data(account, typed_data)
-    }
-}
-
-impl RemoteStoreHost for MockHost {
-    fn upload(&self, data: &[u8]) -> Result<B256, Fault> {
-        self.remote_store.upload(data)
-    }
-    fn download(&self, reference: B256) -> Result<Vec<u8>, Fault> {
-        self.remote_store.download(reference)
-    }
-    fn read_feed(&self, owner: Address, topic: B256) -> Result<Option<Vec<u8>>, Fault> {
-        self.remote_store.read_feed(owner, topic)
-    }
-    fn write_feed(&self, topic: B256, data: &[u8]) -> Result<B256, Fault> {
-        self.remote_store.write_feed(topic, data)
-    }
-}
-
 impl LoggingHost for MockHost {
     fn log(&self, level: Level, message: &str) {
         self.logging.log(level, message);
@@ -111,14 +75,10 @@ mod tests {
         host.set("key", b"val").unwrap();
         assert_eq!(host.get("key").unwrap().as_deref(), Some(&b"val"[..]));
         assert_eq!(host.request(1, "eth_blockNumber", "[]").unwrap(), "\"0x1\"");
-        assert!(host.accounts().unwrap().is_empty());
-        let reference = host.upload(b"blob").unwrap();
-        assert_eq!(host.download(reference).unwrap(), b"blob");
         host.log(Level::INFO, "happy path");
 
         assert_eq!(host.chain.call_count(), 1);
         assert_eq!(host.logging.lines().len(), 1);
         assert_eq!(host.store.len(), 1);
-        assert_eq!(host.remote_store.blob_count(), 1);
     }
 }
