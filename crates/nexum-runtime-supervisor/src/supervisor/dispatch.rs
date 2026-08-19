@@ -10,7 +10,7 @@ use tracing::{debug, error, warn};
 use tracing_core::Level;
 
 use super::Supervisor;
-use super::cursors::{commit_chain_log_cursor, persist_progress_marker};
+use super::cursors::commit_chain_log_cursor;
 use super::lifecycle::{revive_one, sweep};
 use crate::bindings::nexum;
 use crate::manifest::Trigger;
@@ -76,12 +76,6 @@ impl<T: RuntimeTypes<State = HostState<T>>> Supervisor<T> {
                     .await,
                 DispatchOutcome::Ok,
             ) {
-                persist_progress_marker(
-                    &self.shared.components.store,
-                    self.modules[idx].name.as_str(),
-                    chain,
-                    block_number,
-                );
                 dispatched += 1;
             }
         }

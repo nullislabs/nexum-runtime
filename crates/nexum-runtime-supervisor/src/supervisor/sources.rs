@@ -121,7 +121,7 @@ pub enum Viability {
 
 /// One chain-log source to open, resolved from a module's event trigger.
 pub struct EventSource {
-    /// Also the module's store namespace.
+    /// Module whose trigger opened this source.
     pub module: ModuleId,
     /// Chain the filter runs against; it must have an `engine.toml` entry.
     pub chain: Chain,
