@@ -2,14 +2,6 @@
 
 use super::*;
 
-/// Data-compat guard: the persisted progress marker keys on the numeric
-/// chain id, so a named chain still yields `last_dispatched_block:11155111`.
-#[test]
-fn progress_marker_key_uses_numeric_chain_id() {
-    let chain = Chain::from_id(11_155_111);
-    assert_eq!(progress_key(chain), "last_dispatched_block:11155111");
-}
-
 #[test]
 fn alloy_filter_with_address_and_topic() {
     let addr = "0xC92E8bdf79f0507f65a392b0ab4667716BFE0110";
@@ -284,4 +276,35 @@ fn commit_chain_log_cursor_persists_the_monotonic_max() {
         Some(95),
         "a retraction rewinds the persisted cursor to the retracted height",
     );
+}
+
+#[test]
+fn the_persisted_cursor_is_invisible_to_the_module_namespace() {
+    let (_dir, store) = temp_local_store();
+    let mut cursors = ChainLogCursors::default();
+    commit_chain_log_cursor(&store, &mut cursors, "mod", "key", 100, false);
+    assert_eq!(read_chain_log_cursor(&store, "mod", "key"), Some(100));
+
+    let module_handle = store.module("mod").unwrap();
+    assert_eq!(module_handle.get("key").unwrap(), None);
+    assert_eq!(module_handle.list_keys("").unwrap(), Vec::<String>::new());
+}
+
+#[test]
+fn host_cursor_bytes_never_charge_the_author_quota() {
+    let (_dir, store) = temp_local_store();
+    let module_handle = store.module("mod").unwrap().with_quota(300);
+    module_handle
+        .set("a", &[0u8; 100])
+        .expect("the author's first write fits the quota");
+
+    let mut cursors = ChainLogCursors::default();
+    for block in [100, 101, 102] {
+        commit_chain_log_cursor(&store, &mut cursors, "mod", "key", block, false);
+    }
+    assert_eq!(read_chain_log_cursor(&store, "mod", "key"), Some(102));
+
+    module_handle
+        .set("b", &[0u8; 3])
+        .expect("the cursor commits leave the author's quota headroom intact");
 }

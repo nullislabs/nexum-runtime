@@ -1,5 +1,4 @@
-//! Durable dispatch progress: progress markers and chain-log resume cursors;
-//! writes are best-effort and happen only after a successful dispatch.
+//! Chain-log resume cursors, persisted best-effort after a successful dispatch.
 
 use std::collections::BTreeMap;
 
@@ -45,6 +44,12 @@ impl ChainLogCursors {
     }
 }
 
+/// Host-owned store namespace for `module`'s cursor. A module name cannot
+/// contain `/`, so no author-supplied name can produce this namespace.
+pub(super) fn host_namespace(module: &str) -> String {
+    format!("host/{module}")
+}
+
 /// Persisted cursor for `(module, key)`; `None` when absent or unreadable.
 /// Decodes the little-endian pair of [`commit_chain_log_cursor`]'s encode.
 pub(super) fn read_chain_log_cursor<S: StateStore>(
@@ -52,7 +57,7 @@ pub(super) fn read_chain_log_cursor<S: StateStore>(
     module: &str,
     key: &str,
 ) -> Option<u64> {
-    let handle = store.module(module).ok()?;
+    let handle = store.module(&host_namespace(module)).ok()?;
     let bytes = handle.get(key).ok()??;
     let arr: [u8; 8] = bytes.try_into().ok()?;
     Some(u64::from_le_bytes(arr))
@@ -72,7 +77,7 @@ pub(super) fn commit_chain_log_cursor<S: StateStore>(
     }) else {
         return;
     };
-    match store.module(module) {
+    match store.module(&host_namespace(module)) {
         Ok(ms) => {
             if let Err(e) = ms.set(key, &cursor.to_le_bytes()) {
                 warn!(
@@ -85,45 +90,8 @@ pub(super) fn commit_chain_log_cursor<S: StateStore>(
         Err(e) => warn!(
             module = %module,
             error = %e,
-            "failed to open module store for event source cursor",
+            "failed to open host store for event source cursor",
         ),
-    }
-}
-
-/// Persisted per-chain progress key; must stay numeric for data compat.
-pub(super) fn progress_key(chain: Chain) -> String {
-    format!("last_dispatched_block:{}", chain.id())
-}
-
-/// Written only after a successful block dispatch; a failed write warns and
-/// dispatch continues.
-pub(super) fn persist_progress_marker<S: StateStore>(
-    store: &S,
-    module: &str,
-    chain: Chain,
-    block_number: u64,
-) {
-    let chain_id = chain.id();
-    let key = progress_key(chain);
-    match store.module(module) {
-        Ok(ms) => {
-            if let Err(e) = ms.set(&key, &block_number.to_le_bytes()) {
-                warn!(
-                    module = %module,
-                    chain_id,
-                    error = %e,
-                    "failed to persist last_dispatched_block marker",
-                );
-            }
-        }
-        Err(e) => {
-            warn!(
-                module = %module,
-                chain_id,
-                error = %e,
-                "failed to open module store for progress marker",
-            );
-        }
     }
 }
 

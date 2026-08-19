@@ -140,17 +140,18 @@ If a restored file does not open, roll forward from the previous snapshot, or st
 
 ## 4. Cursors the runtime writes
 
-The runtime writes two kinds of key inside each component's own namespace, both after a successful dispatch and both best-effort:
+The runtime writes one kind of key, best-effort after a successful dispatch, under a host-owned `host/<name>` namespace beside each component's own:
 
-- `last_dispatched_block:<chain_id>`, a u64 little-endian progress marker for block dispatch.
 - `chainlog_cursor:<hex>`, the resume cursor for a `resume = true` event trigger.
   The engine reads it once at boot, re-opens at that block, and backfills the gap on reconnect, capped by `max_lookback`.
   A reorg retraction pulls the cursor back.
 
-Every other key in a component's namespace is the component's own.
+Every key in a component's own namespace is the component's own, and `max_state_bytes` measures that namespace alone.
+A component cannot reach a `host/` namespace, because a component name cannot contain `/`.
 
-A forced exit (a drain past `[limits.shutdown] drain_secs`) terminates the process before the in-flight dispatch commits its cursor, and both keys stay at the last committed dispatch.
+A forced exit (a drain past `[limits.shutdown] drain_secs`) terminates the process before the in-flight dispatch commits its cursor, and the cursor stays at the last committed dispatch.
 A `resume = true` trigger then replays the in-flight log at the next start; a block is not replayed.
+See [ADR-0024](adr/0024-blocks-are-clocks-and-host-keys-leave-the-module-namespace.md) for why blocks are not replayed and no host gap primitive exists.
 
 ## 5. Logs
 
@@ -304,4 +305,5 @@ A logging-level change also needs a restart.
 - [ADR-0003](adr/0003-local-store-namespacing.md): local-store namespacing.
 - [ADR-0014](adr/0014-local-store-durability-model.md): the local-store durability model.
 - [ADR-0016](adr/0016-component-vocabulary.md): the `[component]` and `[dependencies]` vocabulary.
+- [ADR-0024](adr/0024-blocks-are-clocks-and-host-keys-leave-the-module-namespace.md): logs replay, blocks do not, and host keys live outside a component's namespace.
 - [Component lifecycle, trigger system, and packaging](02-modules-triggers-packaging.md).
