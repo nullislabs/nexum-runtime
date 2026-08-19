@@ -174,6 +174,13 @@ async fn reconnecting_block_task(
                         );
                     }
                     last_event = Some(now);
+                    if let Ok(header) = &item {
+                        metrics::gauge!(
+                            "nexum_runtime_chain_head_height",
+                            "chain_id" => chain_id.to_string(),
+                        )
+                        .set(header.number as f64);
+                    }
                     let tagged = item
                         .map(|header| (chain, header))
                         .map_err(|err| (chain, err));
@@ -216,6 +223,18 @@ struct DeliveredTail {
     logs: Vec<alloy_rpc_types_eth::Log>,
 }
 
+/// Backfill batches sit behind the open-time head, so only a new maximum counts.
+fn observe_chain_head(head_seen: &mut Option<u64>, chain_id: u64, height: u64) {
+    if head_seen.is_none_or(|seen| height > seen) {
+        *head_seen = Some(height);
+        metrics::gauge!(
+            "nexum_runtime_chain_head_height",
+            "chain_id" => chain_id.to_string(),
+        )
+        .set(height as f64);
+    }
+}
+
 /// Poller-backed loop for one (module, chain) event source; a
 /// re-open resumes past the scanned range and retracts a reorged tail.
 async fn reconnecting_chain_log_task(
@@ -240,6 +259,7 @@ async fn reconnecting_chain_log_task(
     let mut tail: Option<DeliveredTail> = None;
     // Cleared only once an open succeeds.
     let mut boot_resume: Option<u64> = initial_cursor;
+    let mut head_seen: Option<u64> = None;
     loop {
         let provider = match pool.provider(chain) {
             Ok(provider) => provider,
@@ -275,6 +295,7 @@ async fn reconnecting_chain_log_task(
                 continue;
             }
         };
+        observe_chain_head(&mut head_seen, chain_id, head);
         // An unconfirmed tail hash is a failed open, never a retraction.
         let mut invalidated_tail: Option<u64> = None;
         if let Some(t) = &tail {
@@ -384,6 +405,7 @@ async fn reconnecting_chain_log_task(
                     match item {
                         // Each log arrives with `removed` already stamped.
                         Ok(batch) => {
+                            observe_chain_head(&mut head_seen, chain_id, batch.number);
                             for log in &batch.logs {
                                 let tagged =
                                     (module.clone(), chain, log.clone(), cursor_key.clone());
@@ -1181,6 +1203,134 @@ mod tests {
         .expect("the reopened source delivers");
         assert_eq!(header.number, 5);
         tasks.shutdown().await;
+    }
+
+    /// A header on the block source records the head under its `chain_id` label.
+    #[test]
+    fn a_block_header_sets_the_chain_head_gauge() {
+        use crate::test_utils::metrics_util::debugging::DebugValue;
+        use crate::test_utils::{capture_metrics, samples_named};
+
+        let (number, samples) = capture_metrics(|| {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .start_paused(true)
+                .build()
+                .expect("current-thread runtime")
+                .block_on(async {
+                    let rpc = MockRpc::new();
+                    rpc.push_script(vec![rpc_head(5), rpc_head(5), rpc_ok(&linked_block(5))]);
+                    let pool = pool_for(&rpc);
+                    let manager = TaskManager::new();
+                    let executor = manager.executor();
+                    let mut tasks = TaskSet::new();
+                    let mut stream = open_block_streams(
+                        &pool,
+                        &[alloy_chains::Chain::mainnet()],
+                        &executor,
+                        &mut tasks,
+                    )
+                    .pop()
+                    .expect("one stream");
+                    let header = loop {
+                        match stream.next().await.expect("stream alive") {
+                            Ok((_, header)) => break header,
+                            Err(_) => continue,
+                        }
+                    };
+                    tasks.shutdown().await;
+                    header.number
+                })
+        });
+        assert_eq!(number, 5);
+        let hits = samples_named(&samples, "nexum_runtime_chain_head_height");
+        assert_eq!(hits.len(), 1, "one series: {samples:?}");
+        assert!(hits[0].has_label("chain_id", "1"), "{:?}", hits[0].labels);
+        assert!(
+            matches!(hits[0].value, DebugValue::Gauge(v) if v.0 == 5.0),
+            "{:?}",
+            hits[0].value,
+        );
+    }
+
+    #[test]
+    fn a_backfill_does_not_lower_the_chain_head_gauge() {
+        use crate::test_utils::metrics_util::debugging::DebugValue;
+        use crate::test_utils::{capture_metrics, samples_named};
+
+        let ((), samples) = capture_metrics(|| {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .start_paused(true)
+                .build()
+                .expect("current-thread runtime")
+                .block_on(async {
+                    let rpc = MockRpc::new();
+                    rpc.push_script(attempt(
+                        3,
+                        None,
+                        vec![cycle(3, &[(1, vec![log_at(1)]), (2, vec![log_at(2)])])],
+                    ));
+                    let pool = pool_for(&rpc);
+                    let manager = TaskManager::new();
+                    let executor = manager.executor();
+                    let mut tasks = TaskSet::new();
+                    let mut stream = spawn_chain_log_task(&pool, &executor, &mut tasks, Some(1));
+                    assert_eq!(recv(&mut stream).await.block_number, Some(1));
+                    assert_eq!(recv(&mut stream).await.block_number, Some(2));
+                    tasks.shutdown().await;
+                })
+        });
+        let hits = samples_named(&samples, "nexum_runtime_chain_head_height");
+        assert_eq!(hits.len(), 1, "one series: {samples:?}");
+        assert!(hits[0].has_label("chain_id", "1"), "{:?}", hits[0].labels);
+        assert!(
+            matches!(hits[0].value, DebugValue::Gauge(v) if v.0 == 3.0),
+            "batches 1 and 2 leave the open-time head 3 in place: {:?}",
+            hits[0].value,
+        );
+    }
+
+    /// On a chain with no block source, the outer head probe reruns only on a reopen.
+    #[test]
+    fn pumped_batches_advance_the_chain_head_gauge_past_the_open_time_head() {
+        use crate::test_utils::metrics_util::debugging::DebugValue;
+        use crate::test_utils::{capture_metrics, samples_named};
+
+        let ((), samples) = capture_metrics(|| {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .start_paused(true)
+                .build()
+                .expect("current-thread runtime")
+                .block_on(async {
+                    let rpc = MockRpc::new();
+                    rpc.push_script(attempt(
+                        3,
+                        None,
+                        vec![
+                            cycle(3, &[(3, vec![log_at(3)])]),
+                            cycle(4, &[(4, vec![log_at(4)])]),
+                        ],
+                    ));
+                    let pool = pool_for(&rpc);
+                    let manager = TaskManager::new();
+                    let executor = manager.executor();
+                    let mut tasks = TaskSet::new();
+                    let mut stream = spawn_chain_log_task(&pool, &executor, &mut tasks, None);
+                    assert_eq!(recv(&mut stream).await.block_number, Some(3));
+                    assert_eq!(recv(&mut stream).await.block_number, Some(4));
+                    tasks.shutdown().await;
+                })
+        });
+        let hits = samples_named(&samples, "nexum_runtime_chain_head_height");
+        assert_eq!(hits.len(), 1, "one series: {samples:?}");
+        assert!(hits[0].has_label("chain_id", "1"), "{:?}", hits[0].labels);
+        assert!(
+            matches!(hits[0].value, DebugValue::Gauge(v) if v.0 == 4.0),
+            "the batch at 4 advances the gauge without a reopen: {:?}",
+            hits[0].value,
+        );
     }
 
     /// No prior event yields `None`.

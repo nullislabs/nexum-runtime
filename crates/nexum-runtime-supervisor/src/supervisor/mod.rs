@@ -19,6 +19,7 @@ pub use store::{build_linker, engine};
 #[cfg(feature = "test-utils")]
 pub(crate) use store::wasmtime_config;
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use nexum_tasks::Shutdown;
@@ -47,6 +48,8 @@ pub struct Supervisor<T: RuntimeTypes> {
     policy: PoisonPolicy,
     /// In-memory mirror of the persisted chain-log cursors.
     chain_log_cursors: ChainLogCursors,
+    /// Per-chain frontier behind the last-delivered gauge.
+    delivered_frontier: BTreeMap<u64, u64>,
     /// Once fired, the dispatch fan-out halts between guest calls, so the
     /// shutdown drain covers at most one in-flight call.
     stop: Option<Shutdown>,
@@ -151,6 +154,7 @@ impl<T: RuntimeTypes> Supervisor<T> {
                 modules: vec![loaded],
                 policy: env.limits.poison,
                 chain_log_cursors: ChainLogCursors::default(),
+                delivered_frontier: BTreeMap::new(),
                 stop: None,
             })
         }
@@ -252,6 +256,7 @@ fn assemble<T: RuntimeTypes>(
         modules,
         policy,
         chain_log_cursors: ChainLogCursors::default(),
+        delivered_frontier: BTreeMap::new(),
         stop: None,
     }
 }

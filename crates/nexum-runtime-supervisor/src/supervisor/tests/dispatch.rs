@@ -255,6 +255,93 @@ async fn dispatch_deadline_cuts_off_a_blocked_host_call_and_recovers() {
     );
 }
 
+/// A block a module accepted records the height under its `chain_id` label.
+#[test]
+fn a_delivered_block_sets_the_last_delivered_gauge() {
+    use crate::test_utils::metrics_util::debugging::DebugValue;
+    use crate::test_utils::{capture_metrics, samples_named};
+
+    let Some(wasm) = example_wasm_or_skip() else {
+        return;
+    };
+    let (dispatched, samples) = capture_metrics(|| {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("current-thread runtime")
+            .block_on(async {
+                let mut booted = scenario()
+                    .wasm(wasm)
+                    .module(
+                        TestManifest::new("module-a")
+                            .cap("logging")
+                            .block_trigger(1),
+                    )
+                    .boot()
+                    .await
+                    .expect("boot");
+                booted.dispatch_block_on(1).await
+            })
+    });
+    assert_eq!(dispatched, 1);
+    let hits = samples_named(&samples, "nexum_runtime_chain_last_delivered_height");
+    assert_eq!(hits.len(), 1, "one series: {samples:?}");
+    assert!(hits[0].has_label("chain_id", "1"), "{:?}", hits[0].labels);
+    assert!(
+        matches!(hits[0].value, DebugValue::Gauge(v) if v.0 == 19_000_000.0),
+        "{:?}",
+        hits[0].value,
+    );
+}
+
+/// A backfilling module or a retracted log delivers below the frontier.
+#[test]
+fn an_older_delivery_does_not_lower_the_last_delivered_gauge() {
+    use crate::test_utils::metrics_util::debugging::DebugValue;
+    use crate::test_utils::{capture_metrics, samples_named};
+
+    let Some(wasm) = example_wasm_or_skip() else {
+        return;
+    };
+    let (dispatched, samples) = capture_metrics(|| {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("current-thread runtime")
+            .block_on(async {
+                let mut booted = scenario()
+                    .wasm(wasm)
+                    .module(
+                        TestManifest::new("module-a")
+                            .cap("logging")
+                            .block_trigger(1),
+                    )
+                    .boot()
+                    .await
+                    .expect("boot");
+                let newer = booted.dispatch_block_on(1).await;
+                let older = booted
+                    .supervisor
+                    .dispatch_block(nexum::host::types::Block {
+                        chain_id: 1,
+                        number: 18_000_000,
+                        hash: vec![0xcd; 32],
+                        timestamp: 1_700_000_000_000,
+                    })
+                    .await;
+                newer + older
+            })
+    });
+    assert_eq!(dispatched, 2, "both blocks reached the module");
+    let hits = samples_named(&samples, "nexum_runtime_chain_last_delivered_height");
+    assert_eq!(hits.len(), 1, "one series: {samples:?}");
+    assert!(
+        matches!(hits[0].value, DebugValue::Gauge(v) if v.0 == 19_000_000.0),
+        "the older block leaves the frontier alone: {:?}",
+        hits[0].value,
+    );
+}
+
 /// A module on chain A receives nothing when a chain-B block arrives, and
 /// vice versa.
 #[tokio::test]
