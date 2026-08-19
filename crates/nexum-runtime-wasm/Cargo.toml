@@ -33,6 +33,9 @@ wasmtime-wasi-http.workspace = true
 
 [dev-dependencies]
 alloy-json-rpc.workspace = true
+metrics-util.workspace = true
+nexum-runtime-chain = { path = "../nexum-runtime-chain", features = ["test-utils"] }
+nexum-runtime-config = { path = "../nexum-runtime-config" }
 serde_json = { workspace = true, features = ["std"] }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 tracing-subscriber.workspace = true

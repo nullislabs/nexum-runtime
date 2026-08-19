@@ -7,7 +7,7 @@ use alloy_chains::Chain;
 use nexum_runtime_api::RuntimeTypes;
 use nexum_runtime_api::bindings::nexum;
 use nexum_runtime_api::bindings::nexum::host::chain::ChainError;
-use nexum_runtime_chain::PoolError;
+use nexum_runtime_chain::{PoolError, ProviderPool};
 use nexum_world::ChainMethod;
 
 use crate::error::{method_denied, pool_fault, response_over_cap};
@@ -17,6 +17,23 @@ use crate::state::HostState;
 /// or mutating method is a `Denied` fault.
 fn resolve_method(method: &str) -> Result<ChainMethod, ChainError> {
     ChainMethod::try_from(method).map_err(|_| method_denied())
+}
+
+/// The guest picks the chain, so one outside the pool counts under a
+/// sentinel rather than minting a series.
+fn count_request(pool: &ProviderPool, chain: Chain, method: &'static str, outcome: &'static str) {
+    let chain_id = if pool.provider(chain).is_ok() {
+        chain.id().to_string()
+    } else {
+        "unconfigured".to_owned()
+    };
+    metrics::counter!(
+        "nexum_runtime_chain_request_total",
+        "chain_id" => chain_id,
+        "method" => method,
+        "outcome" => outcome,
+    )
+    .increment(1);
 }
 
 /// Error if `body` exceeds `cap` bytes, checked before the copy into the
@@ -63,13 +80,7 @@ impl<T: RuntimeTypes> nexum::host::chain::Host for HostState<T> {
                     %method,
                     "chain::request rejected: method is not in the permitted read surface"
                 );
-                metrics::counter!(
-                    "nexum_runtime_chain_request_total",
-                    "chain_id" => chain_id.to_string(),
-                    "method" => "<denied>",
-                    "outcome" => "err",
-                )
-                .increment(1);
+                count_request(&self.chain, chain, "<denied>", "err");
                 return Err(err);
             }
         };
@@ -105,13 +116,7 @@ impl<T: RuntimeTypes> nexum::host::chain::Host for HostState<T> {
         });
         tracing::trace!(elapsed_ms = ?start.elapsed(), "chain::request done");
         let outcome = if result.is_ok() { "ok" } else { "err" };
-        metrics::counter!(
-            "nexum_runtime_chain_request_total",
-            "chain_id" => chain_id.to_string(),
-            "method" => name,
-            "outcome" => outcome,
-        )
-        .increment(1);
+        count_request(&self.chain, chain, name, outcome);
         result
     }
 }
@@ -173,6 +178,74 @@ mod tests {
         assert!(
             matches!(err, ChainError::Fault(Fault::InvalidInput(_))),
             "expected InvalidInput fault, got {err:?}"
+        );
+    }
+
+    fn request_labels(f: impl FnOnce()) -> Vec<Vec<(String, String)>> {
+        let recorder = metrics_util::debugging::DebuggingRecorder::new();
+        let snapshotter = recorder.snapshotter();
+        metrics::with_local_recorder(&recorder, f);
+        snapshotter
+            .snapshot()
+            .into_vec()
+            .into_iter()
+            .filter(|(key, ..)| key.key().name() == "nexum_runtime_chain_request_total")
+            .map(|(key, ..)| {
+                key.key()
+                    .labels()
+                    .map(|l| (l.key().to_owned(), l.value().to_owned()))
+                    .collect()
+            })
+            .collect()
+    }
+
+    fn assert_labels(labels: &[Vec<(String, String)>], expected: &[(&str, &str)]) {
+        assert_eq!(labels.len(), 1, "one sample expected: {labels:?}");
+        for (key, value) in expected {
+            assert!(
+                labels[0].iter().any(|(k, v)| k == key && v == value),
+                "expected {key}={value} in {:?}",
+                labels[0],
+            );
+        }
+    }
+
+    /// The endpoint is never contacted.
+    async fn pool_with_chain_one() -> nexum_runtime_chain::ProviderPool {
+        use nexum_runtime_config::{ChainConfig, EngineConfig, RpcEndpoint};
+        let mut cfg = EngineConfig::default();
+        cfg.chains.insert(
+            Chain::from_id(1),
+            ChainConfig {
+                rpc_url: RpcEndpoint::try_from("http://127.0.0.1:1").expect("test rpc url parses"),
+                request_timeout_secs: 1,
+            },
+        );
+        ProviderPool::from_config(&cfg).await.expect("pool opens")
+    }
+
+    #[test]
+    fn unconfigured_chain_counts_under_the_sentinel() {
+        let pool = ProviderPool::empty();
+        let labels =
+            request_labels(|| count_request(&pool, Chain::from_id(999), "eth_call", "err"));
+        assert_labels(
+            &labels,
+            &[
+                ("chain_id", "unconfigured"),
+                ("method", "eth_call"),
+                ("outcome", "err"),
+            ],
+        );
+    }
+
+    #[tokio::test]
+    async fn configured_chain_keeps_its_id() {
+        let pool = pool_with_chain_one().await;
+        let labels = request_labels(|| count_request(&pool, Chain::from_id(1), "eth_call", "ok"));
+        assert_labels(
+            &labels,
+            &[("chain_id", "1"), ("method", "eth_call"), ("outcome", "ok")],
         );
     }
 }

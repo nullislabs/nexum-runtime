@@ -233,3 +233,86 @@ fn unconfigured_chain_message_says_none_when_engine_toml_declares_no_chains() {
     assert!(msg.contains("configured chains: none"), "{msg}");
     assert!(!msg.contains("no engine.toml was found"), "{msg}");
 }
+
+#[test]
+fn a_guest_request_for_an_unconfigured_chain_counts_under_the_sentinel() {
+    use crate::test_utils::{capture_metrics, samples_named};
+
+    let Some(wasm) = module_wasm_or_skip("slow-host") else {
+        return;
+    };
+    // `scenario()` boots over an empty pool while `test_chain_configs()`
+    // still declares chain 1.
+    let (dispatched, samples) = capture_metrics(|| {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("current-thread runtime")
+            .block_on(async {
+                let mut booted = scenario()
+                    .wasm(wasm)
+                    .module(workspace_manifest(
+                        "modules/fixtures/slow-host/component.toml",
+                    ))
+                    .boot()
+                    .await
+                    .expect("slow-host boots over the empty pool");
+                booted.dispatch_block_on(1).await
+            })
+    });
+    assert_eq!(dispatched, 1, "the fixture swallows the request error");
+    let hits = samples_named(&samples, "nexum_runtime_chain_request_total");
+    assert_eq!(hits.len(), 1, "one series: {samples:?}");
+    assert!(
+        hits[0].has_label("chain_id", "unconfigured"),
+        "{:?}",
+        hits[0].labels,
+    );
+    assert!(
+        hits[0].has_label("method", "eth_blockNumber"),
+        "{:?}",
+        hits[0].labels,
+    );
+    assert!(hits[0].has_label("outcome", "err"), "{:?}", hits[0].labels);
+}
+
+#[test]
+fn a_guest_request_for_a_configured_chain_keeps_its_chain_id() {
+    use crate::test_utils::{
+        FakeNode, MockStateStore, capture_metrics, mock_components_from, samples_named,
+    };
+
+    let Some(wasm) = module_wasm_or_skip("slow-host") else {
+        return;
+    };
+    let node = FakeNode::new();
+    node.on_method(nexum_world::ChainMethod::EthBlockNumber, "\"0x1\"");
+    let (dispatched, samples) = capture_metrics(|| {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("current-thread runtime")
+            .block_on(async {
+                let mut booted =
+                    BootScenario::over(mock_components_from(&node, MockStateStore::new()))
+                        .wasm(wasm)
+                        .module(workspace_manifest(
+                            "modules/fixtures/slow-host/component.toml",
+                        ))
+                        .boot()
+                        .await
+                        .expect("slow-host boots over the mocked pool");
+                booted.dispatch_block_on(1).await
+            })
+    });
+    assert_eq!(dispatched, 1);
+    let hits = samples_named(&samples, "nexum_runtime_chain_request_total");
+    assert_eq!(hits.len(), 1, "one series: {samples:?}");
+    assert!(hits[0].has_label("chain_id", "1"), "{:?}", hits[0].labels);
+    assert!(
+        hits[0].has_label("method", "eth_blockNumber"),
+        "{:?}",
+        hits[0].labels,
+    );
+    assert!(hits[0].has_label("outcome", "ok"), "{:?}", hits[0].labels);
+}
