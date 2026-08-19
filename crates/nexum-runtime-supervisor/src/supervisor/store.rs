@@ -201,7 +201,7 @@ fn build<T: RuntimeTypes>(
 }
 
 /// The wasmtime config every engine, launch and test alike, is built from.
-pub fn wasmtime_config() -> wasmtime::Config {
+pub(crate) fn wasmtime_config() -> wasmtime::Config {
     let mut config = wasmtime::Config::new();
     config.wasm_component_model(true);
     config.consume_fuel(true);
