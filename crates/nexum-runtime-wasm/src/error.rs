@@ -705,9 +705,8 @@ mod tests {
 
     /// Closes the set over construction sites, not just texts: the pinned
     /// lists alone cannot see a payload built somewhere else. Outside the
-    /// funnel a string-carrying fault is banned outright, pinned to a
-    /// compile-time literal (the capability stubs), or a pure destructure
-    /// (`fault.rs`); a `const` payload cannot hold runtime data.
+    /// funnel a string-carrying fault is banned outright, save the pure
+    /// destructures in `fault.rs`.
     #[test]
     fn guest_faults_are_constructed_only_in_the_funnel_and_only_from_the_vocabulary() {
         let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
@@ -722,10 +721,6 @@ mod tests {
         ];
         let funnel = manifest.join("src").join("error.rs");
         let projections = manifest.join("src").join("fault.rs");
-        let stubs = [
-            manifest.join("src").join("impls").join("identity.rs"),
-            manifest.join("src").join("impls").join("remote_store.rs"),
-        ];
         let mut scanned = 0_usize;
         let mut sites = 0_usize;
         for path in roots.iter().flat_map(|root| rust_sources(root)) {
@@ -784,17 +779,6 @@ mod tests {
                         );
                     }
                 }
-            } else if stubs.contains(&path) {
-                for prefix in FAULT_PREFIXES {
-                    for rest in occurrences(&code, prefix) {
-                        assert!(
-                            prefix == "Fault::Unsupported("
-                                && (rest.starts_with('"') || rest.starts_with("DEFERRED")),
-                            "{} may only carry a literal unsupported text, at `{prefix}`",
-                            path.display(),
-                        );
-                    }
-                }
             } else {
                 for prefix in FAULT_PREFIXES {
                     assert!(
@@ -805,9 +789,9 @@ mod tests {
                 }
             }
         }
-        // Above 76 minus the smallest root, so losing any one root fails.
+        // Above 74 minus the smallest root, so losing any one root fails.
         assert!(
-            scanned >= 75,
+            scanned >= 73,
             "the walk must cover the embedding, the engine, the api crate, and the capability crates, saw {scanned} files"
         );
         assert!(

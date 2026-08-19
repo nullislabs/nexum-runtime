@@ -2,7 +2,7 @@
 
 ## What
 
-The core host binds the `nexum:host/trigger-module` world: the `nexum:host` interfaces (chain, identity, local-store, remote-store, logging) plus the allowlisted `wasi:http` outgoing surface.
+The core host binds the `nexum:host/trigger-module` world: the `nexum:host` interfaces (chain, local-store, logging) plus the allowlisted `wasi:http` outgoing surface.
 A domain capability is not a core seam.
 It plugs into the host through an extension assembled at the composition root, so the core runtime compiles and runs with no domain backend at all and no extension registered.
 

@@ -25,12 +25,8 @@ use strum::{Display, EnumString, IntoStaticStr, VariantNames};
 pub enum Cap {
     /// `nexum:host/chain`.
     Chain,
-    /// `nexum:host/identity`.
-    Identity,
     /// `nexum:host/local-store`.
     LocalStore,
-    /// `nexum:host/remote-store`.
-    RemoteStore,
     /// `nexum:host/logging`.
     Logging,
     /// Gates `wasi:http/*`; no world import.
@@ -238,22 +234,10 @@ pub const CORE: &[Capability] = &[
         adapter: Some("chain"),
     },
     Capability {
-        name: Cap::Identity,
-        import: Some("nexum:host/identity@0.1.0"),
-        packages: &[],
-        adapter: Some("identity"),
-    },
-    Capability {
         name: Cap::LocalStore,
         import: Some("nexum:host/local-store@0.1.0"),
         packages: &[],
         adapter: Some("local_store"),
-    },
-    Capability {
-        name: Cap::RemoteStore,
-        import: Some("nexum:host/remote-store@0.1.0"),
-        packages: &[],
-        adapter: Some("remote_store"),
     },
     Capability {
         name: Cap::Logging,
@@ -813,9 +797,7 @@ mod tests {
             CORE_IFACES,
             [
                 Cap::Chain.as_str(),
-                Cap::Identity.as_str(),
                 Cap::LocalStore.as_str(),
-                Cap::RemoteStore.as_str(),
                 Cap::Logging.as_str(),
             ],
         );
@@ -909,16 +891,7 @@ mod tests {
     fn full_declaration_emits_every_adapter_in_core_order() {
         let declared: Vec<String> = CORE.iter().map(|c| c.name.as_str().to_owned()).collect();
         let world = synthesize(&declared, &[]).unwrap();
-        assert_eq!(
-            world.adapters,
-            vec![
-                "chain",
-                "identity",
-                "local_store",
-                "remote_store",
-                "logging",
-            ],
-        );
+        assert_eq!(world.adapters, vec!["chain", "local_store", "logging"]);
     }
 
     #[test]
@@ -948,19 +921,7 @@ mod tests {
         assert_eq!(
             err.to_string(),
             "unknown dependency `telepathy` in component.toml [dependencies]; expected one of: \
-             chain, identity, local-store, remote-store, logging, http, acme"
-        );
-    }
-
-    #[test]
-    fn messaging_is_no_longer_a_capability() {
-        // The seam is out of v1. A component still declaring it is refused
-        // as unknown rather than granted a stub that cannot work.
-        let err = synthesize(&["messaging".to_string()], &ext()).unwrap_err();
-        assert!(
-            err.to_string()
-                .starts_with("unknown dependency `messaging`"),
-            "{err}"
+             chain, local-store, logging, http, acme"
         );
     }
 

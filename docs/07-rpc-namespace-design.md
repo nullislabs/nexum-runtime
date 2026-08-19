@@ -45,25 +45,6 @@ The Component Model already sandboxes I/O, so a chain-capable component can only
 
 A response body larger than `[limits.chain] response_body_max_bytes` is rejected with an `invalid-input` fault, and the host counts the rejection in `nexum_runtime_chain_response_capped_total`.
 
-## Signing
-
-`chain.request` neither signs nor delegates signing, because signing methods fall outside the read surface.
-Signing is the separate `nexum:host/identity` interface:
-
-```wit
-interface identity {
-    use types.{fault};
-    accounts: func() -> result<list<list<u8>>, fault>;
-    sign: func(account: list<u8>, message: list<u8>) -> result<list<u8>, fault>;
-    sign-typed-data: func(account: list<u8>, typed-data: string) -> result<list<u8>, fault>;
-}
-```
-
-`accounts` returns the 20-byte addresses the host will sign for, and an empty list means no signing capability.
-`sign` applies `personal_sign` semantics, which prepends the EIP-191 prefix, and returns a 65-byte signature.
-`sign-typed-data` signs an EIP-712 JSON payload.
-The `IdentityHost` trait in `nexum-sdk` mirrors the interface one for one.
-
 ## Guest SDK: the alloy provider seam
 
 `nexum_sdk::chain` fronts `chain.request` with an alloy `Provider`, so component code calls typed provider methods instead of hand-building JSON-RPC:
@@ -100,7 +81,7 @@ The runtime ships no such interface and no venue.
 
 ## Testing
 
-`nexum_sdk_test::MockHost` implements the host traits (`ChainHost`, `IdentityHost`, `LocalStoreHost`, `RemoteStoreHost`, and `LoggingHost`).
+`nexum_sdk_test::MockHost` implements the host traits (`ChainHost`, `LocalStoreHost`, and `LoggingHost`).
 A logic function binds only the seams it uses, for example `H: ChainHost + LocalStoreHost`, and never the composed `Host` trait: see `docs/adr/0015-host-trait-surface.md`.
 It then tests as plain native Rust, with no `wasm32-wasip2` target and no wasmtime instance.
 Provider-level tests wrap a stub `ChainHost` in `HostTransport` and drive it with `block_on`.

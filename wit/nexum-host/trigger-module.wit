@@ -5,11 +5,9 @@ package nexum:host@0.1.0;
 world trigger-module {
     use types.{config, trigger, fault};
 
-    // Six core primitives (always provided by a conforming host).
+    // Core primitives (always provided by a conforming host).
     import chain;
-    import identity;
     import local-store;
-    import remote-store;
     import logging;
 
     // Time, randomness, and outbound HTTP are WASI concerns, not

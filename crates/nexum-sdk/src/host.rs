@@ -1,8 +1,7 @@
 //! Host traits, the seam between module logic and the wit-bindgen
 //! shims a module generates per-cdylib. Each trait mirrors one nexum
-//! host interface ([`ChainHost`], [`IdentityHost`], [`LocalStoreHost`],
-//! [`RemoteStoreHost`], [`LoggingHost`]); [`Host`]
-//! bundles all six.
+//! host interface ([`ChainHost`], [`LocalStoreHost`], [`LoggingHost`]);
+//! [`Host`] bundles them all.
 //!
 //! Module logic written against these traits runs host-free against
 //! the `nexum-sdk-test` mocks. The traits are world-neutral over this
@@ -10,7 +9,7 @@
 //! `wit_bindgen::generate!` emits, so modules wire a one-line converter
 //! between the two.
 
-use alloy_primitives::{Address, B256, Bytes, Signature};
+use alloy_primitives::Bytes;
 use strum::IntoStaticStr;
 use tracing_core::Level;
 
@@ -107,10 +106,7 @@ pub mod sealed {
     pub trait SealedHostFault {}
 }
 
-impl<T> sealed::SealedHost for T where
-    T: ChainHost + IdentityHost + LocalStoreHost + RemoteStoreHost + LoggingHost
-{
-}
+impl<T> sealed::SealedHost for T where T: ChainHost + LocalStoreHost + LoggingHost {}
 
 impl sealed::SealedHostFault for Fault {}
 impl sealed::SealedHostFault for ChainError {}
@@ -268,80 +264,16 @@ pub trait LoggingHost {
     fn log(&self, level: Level, message: &str);
 }
 
-/// `nexum:host/identity` - host-held accounts and signing.
-pub trait IdentityHost {
-    /// Accounts the host is willing to sign for. Empty means no
-    /// signing capability.
-    fn accounts(&self) -> Result<Vec<Address>, Fault>;
-    /// Sign `message` with `personal_sign` semantics (the host
-    /// prepends the `"\x19Ethereum Signed Message:\n"` prefix).
-    fn sign(&self, account: Address, message: &[u8]) -> Result<Signature, Fault>;
-    /// Sign a JSON-encoded EIP-712 payload.
-    fn sign_typed_data(&self, account: Address, typed_data: &str) -> Result<Signature, Fault>;
-}
-
-/// `nexum:host/remote-store` - content-addressed blobs and mutable
-/// feeds on the decentralized store.
-pub trait RemoteStoreHost {
-    /// Upload raw data; returns its 32-byte content reference.
-    fn upload(&self, data: &[u8]) -> Result<B256, Fault>;
-    /// Download the data behind a content reference.
-    fn download(&self, reference: B256) -> Result<Vec<u8>, Fault>;
-    /// Latest value of the `(owner, topic)` mutable feed, when set.
-    fn read_feed(&self, owner: Address, topic: B256) -> Result<Option<Vec<u8>>, Fault>;
-    /// Update the host-owned feed at `topic` (the host signs with its
-    /// configured identity); returns the new chunk's reference.
-    fn write_feed(&self, topic: B256, data: &[u8]) -> Result<B256, Fault>;
-}
-
-/// Lift a host-returned account into an [`Address`]; any length but 20
-/// folds to [`Fault::Internal`].
-pub fn account_from_wire(raw: &[u8]) -> Result<Address, Fault> {
-    Address::try_from(raw).map_err(|_| {
-        Fault::Internal(format!(
-            "identity returned a {}-byte account, expected 20",
-            raw.len()
-        ))
-    })
-}
-
-/// Lift a host-returned 65-byte `r || s || v` signature into a
-/// [`Signature`]; a malformed buffer folds to [`Fault::Internal`].
-pub fn signature_from_wire(raw: &[u8]) -> Result<Signature, Fault> {
-    Signature::from_raw(raw)
-        .map_err(|e| Fault::Internal(format!("identity returned a malformed signature: {e}")))
-}
-
-/// Lift a host-returned content reference into a [`B256`]; any length
-/// but 32 folds to [`Fault::Internal`].
-pub fn reference_from_wire(raw: &[u8]) -> Result<B256, Fault> {
-    B256::try_from(raw).map_err(|_| {
-        Fault::Internal(format!(
-            "remote-store returned a {}-byte reference, expected 32",
-            raw.len()
-        ))
-    })
-}
-
-/// Supertrait bundling all six core host interfaces. Module functions
+/// Supertrait bundling the core host interfaces. Module functions
 /// take `<H: Host>` (or bound exactly the interfaces they exercise) and
 /// run against `nexum_sdk_test::MockHost` in tests. Blanket-implemented
-/// for any type carrying all six; sealed, so that impl is the only one.
-pub trait Host:
-    sealed::SealedHost + ChainHost + IdentityHost + LocalStoreHost + RemoteStoreHost + LoggingHost
-{
-}
-impl<T> Host for T where T: ChainHost + IdentityHost + LocalStoreHost + RemoteStoreHost + LoggingHost
-{}
+/// for any type carrying them all; sealed, so that impl is the only one.
+pub trait Host: sealed::SealedHost + ChainHost + LocalStoreHost + LoggingHost {}
+impl<T> Host for T where T: ChainHost + LocalStoreHost + LoggingHost {}
 
 #[cfg(test)]
 mod tests {
-    use alloy_primitives::{Address, B256, U256};
-
-    use super::{
-        ChainError, Fault, HostFault, RateLimit, RpcError, account_from_wire, reference_from_wire,
-        signature_from_wire,
-    };
+    use super::{ChainError, Fault, HostFault, RateLimit, RpcError};
 
     #[test]
     fn local_store_metadata_defaults_derive_from_required_methods() {
@@ -426,32 +358,6 @@ mod tests {
             recorder.0.into_inner(),
             ["set a", "delete b", "set c"].map(str::to_owned)
         );
-    }
-
-    #[test]
-    fn wire_lifts_accept_exact_lengths() {
-        let account = account_from_wire(&[0x11; 20]).unwrap();
-        assert_eq!(account, Address::from([0x11; 20]));
-
-        let reference = reference_from_wire(&[0x22; 32]).unwrap();
-        assert_eq!(reference, B256::from([0x22; 32]));
-
-        let raw = alloy_primitives::Signature::new(U256::from(1), U256::from(2), true).as_bytes();
-        let signature = signature_from_wire(&raw).unwrap();
-        assert_eq!(signature.r(), U256::from(1));
-        assert_eq!(signature.s(), U256::from(2));
-        assert!(signature.v());
-    }
-
-    #[test]
-    fn wire_lifts_fold_malformed_buffers_to_internal() {
-        for fault in [
-            account_from_wire(&[0u8; 19]).unwrap_err(),
-            signature_from_wire(&[0u8; 64]).unwrap_err(),
-            reference_from_wire(&[0u8; 31]).unwrap_err(),
-        ] {
-            assert!(matches!(fault, Fault::Internal(_)), "got {fault:?}");
-        }
     }
 
     #[test]
