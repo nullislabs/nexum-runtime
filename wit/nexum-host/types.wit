@@ -65,21 +65,14 @@ interface types {
     type config = list<tuple<string, string>>;
 
     /// The cross-domain failure vocabulary richer interfaces embed as a
-    /// case. A payload-bearing case carries a short host-composed detail;
-    /// `rate-limited` carries structured backoff guidance instead.
+    /// case. A payload-bearing case carries a short host-composed detail.
     variant fault {
         unsupported(string),
         unavailable(string),
         denied(string),
-        rate-limited(rate-limit),
+        rate-limited,
         timeout,
         invalid-input(string),
         internal(string),
-    }
-
-    /// Backoff guidance for a `fault.rate-limited`. `retry-after-ms` is
-    /// the host's suggested wait before retrying, when known.
-    record rate-limit {
-        retry-after-ms: option<u64>,
     }
 }

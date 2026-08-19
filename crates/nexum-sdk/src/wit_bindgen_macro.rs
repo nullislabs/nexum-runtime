@@ -47,11 +47,7 @@ macro_rules! bind_host_via_wit_bindgen {
                     nexum::host::types::Fault::Unsupported(s) => Self::Unsupported(s),
                     nexum::host::types::Fault::Unavailable(s) => Self::Unavailable(s),
                     nexum::host::types::Fault::Denied(s) => Self::Denied(s),
-                    nexum::host::types::Fault::RateLimited(rl) => {
-                        Self::RateLimited($crate::host::RateLimit {
-                            retry_after_ms: rl.retry_after_ms,
-                        })
-                    }
+                    nexum::host::types::Fault::RateLimited => Self::RateLimited,
                     nexum::host::types::Fault::Timeout => Self::Timeout,
                     nexum::host::types::Fault::InvalidInput(s) => Self::InvalidInput(s),
                     nexum::host::types::Fault::Internal(s) => Self::Internal(s),
@@ -69,11 +65,7 @@ macro_rules! bind_host_via_wit_bindgen {
                     $crate::host::FaultParts::Unsupported(s) => Self::Unsupported(s),
                     $crate::host::FaultParts::Unavailable(s) => Self::Unavailable(s),
                     $crate::host::FaultParts::Denied(s) => Self::Denied(s),
-                    $crate::host::FaultParts::RateLimited(rl) => {
-                        Self::RateLimited(nexum::host::types::RateLimit {
-                            retry_after_ms: rl.retry_after_ms,
-                        })
-                    }
+                    $crate::host::FaultParts::RateLimited => Self::RateLimited,
                     $crate::host::FaultParts::Timeout => Self::Timeout,
                     $crate::host::FaultParts::InvalidInput(s) => Self::InvalidInput(s),
                     $crate::host::FaultParts::Internal(s) => Self::Internal(s),
