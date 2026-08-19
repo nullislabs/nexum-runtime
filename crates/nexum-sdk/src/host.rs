@@ -30,10 +30,9 @@ pub enum Fault {
     /// Capability declined the request (auth, allowlist, …).
     #[error("denied: {0}")]
     Denied(String),
-    /// Rate-limited by an upstream service; may carry backoff guidance
-    /// when the host knows the retry window.
-    #[error("rate limited{}", .0.retry_after_ms.map_or_else(String::new, |ms| format!(", retry after {ms} ms")))]
-    RateLimited(RateLimit),
+    /// Rate-limited by an upstream service.
+    #[error("rate limited")]
+    RateLimited,
     /// Operation took too long.
     #[error("timeout")]
     Timeout,
@@ -43,14 +42,6 @@ pub enum Fault {
     /// Catch-all for host-side bugs.
     #[error("internal: {0}")]
     Internal(String),
-}
-
-/// Backoff guidance carried by [`Fault::RateLimited`], mirrored from
-/// `nexum:host/types.rate-limit`.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Hash)]
-pub struct RateLimit {
-    /// Host's suggested wait before retrying, in milliseconds, when known.
-    pub retry_after_ms: Option<u64>,
 }
 
 /// Closed mirror of [`Fault`], the shape the bind macro lowers to the
@@ -73,7 +64,7 @@ pub enum FaultParts {
     /// [`Fault::Denied`].
     Denied(String),
     /// [`Fault::RateLimited`].
-    RateLimited(RateLimit),
+    RateLimited,
     /// [`Fault::Timeout`].
     Timeout,
     /// [`Fault::InvalidInput`].
@@ -90,7 +81,7 @@ impl From<Fault> for FaultParts {
             Fault::Unsupported(s) => Self::Unsupported(s),
             Fault::Unavailable(s) => Self::Unavailable(s),
             Fault::Denied(s) => Self::Denied(s),
-            Fault::RateLimited(rl) => Self::RateLimited(rl),
+            Fault::RateLimited => Self::RateLimited,
             Fault::Timeout => Self::Timeout,
             Fault::InvalidInput(s) => Self::InvalidInput(s),
             Fault::Internal(s) => Self::Internal(s),
@@ -273,7 +264,7 @@ impl<T> Host for T where T: ChainHost + LocalStoreHost + LoggingHost {}
 
 #[cfg(test)]
 mod tests {
-    use super::{ChainError, Fault, HostFault, RateLimit, RpcError};
+    use super::{ChainError, Fault, HostFault, RpcError};
 
     #[test]
     fn local_store_metadata_defaults_derive_from_required_methods() {
@@ -367,10 +358,7 @@ mod tests {
             (Fault::Unsupported(String::new()), Label::Unsupported.into()),
             (Fault::Unavailable(String::new()), Label::Unavailable.into()),
             (Fault::Denied(String::new()), Label::Denied.into()),
-            (
-                Fault::RateLimited(RateLimit::default()),
-                Label::RateLimited.into(),
-            ),
+            (Fault::RateLimited, Label::RateLimited.into()),
             (Fault::Timeout, Label::Timeout.into()),
             (
                 Fault::InvalidInput(String::new()),
@@ -382,18 +370,6 @@ mod tests {
             assert_eq!(fault.label(), label);
             assert_eq!(fault.fault(), Some(&fault));
         }
-    }
-
-    #[test]
-    fn rate_limit_display_carries_the_retry_hint() {
-        let hinted = Fault::RateLimited(RateLimit {
-            retry_after_ms: Some(250),
-        });
-        assert_eq!(hinted.to_string(), "rate limited, retry after 250 ms");
-        assert_eq!(
-            Fault::RateLimited(RateLimit::default()).to_string(),
-            "rate limited"
-        );
     }
 
     #[test]

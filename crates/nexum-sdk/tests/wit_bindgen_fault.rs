@@ -13,15 +13,10 @@ mod nexum {
                 Unsupported(String),
                 Unavailable(String),
                 Denied(String),
-                RateLimited(RateLimit),
+                RateLimited,
                 Timeout,
                 InvalidInput(String),
                 Internal(String),
-            }
-
-            #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-            pub struct RateLimit {
-                pub retry_after_ms: Option<u64>,
             }
 
             pub struct Log {
@@ -44,7 +39,7 @@ mod nexum {
 nexum_sdk::bind_host_via_wit_bindgen!(caps: []);
 
 use nexum::host::types as wire;
-use nexum_sdk::host::{Fault, RateLimit};
+use nexum_sdk::host::Fault;
 
 /// Every current fault, paired with its same-named wire case.
 fn pairs() -> Vec<(Fault, wire::Fault)> {
@@ -58,14 +53,7 @@ fn pairs() -> Vec<(Fault, wire::Fault)> {
             wire::Fault::Unavailable("a".into()),
         ),
         (Fault::Denied("d".into()), wire::Fault::Denied("d".into())),
-        (
-            Fault::RateLimited(RateLimit {
-                retry_after_ms: Some(250),
-            }),
-            wire::Fault::RateLimited(wire::RateLimit {
-                retry_after_ms: Some(250),
-            }),
-        ),
+        (Fault::RateLimited, wire::Fault::RateLimited),
         (Fault::Timeout, wire::Fault::Timeout),
         (
             Fault::InvalidInput("i".into()),

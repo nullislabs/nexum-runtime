@@ -5,7 +5,7 @@ use alloy_primitives::Bytes;
 use alloy_transport::TransportError;
 use nexum_runtime_api::StoreError;
 use nexum_runtime_api::bindings::nexum::host::chain::{ChainError, RpcError};
-use nexum_runtime_api::bindings::nexum::host::types::{Fault, RateLimit};
+use nexum_runtime_api::bindings::nexum::host::types::Fault;
 use nexum_runtime_chain::PoolError;
 
 /// Fieldless on purpose: no runtime string can enter the set, so nothing
@@ -156,7 +156,8 @@ fn classify_rpc(source: &TransportError) -> ChainError {
 }
 
 /// Classify a transport RPC failure: 429 to `rate-limited`, 503 or a dropped
-/// backend to `unavailable`, a timeout to `timeout`, else `unavailable`.
+/// backend to `unavailable`, a timeout status or a typed timeout in the source
+/// chain to `timeout`, else `unavailable`.
 fn transport_fault(source: &TransportError) -> Fault {
     use alloy_transport::TransportErrorKind;
     let unavailable =
@@ -164,12 +165,13 @@ fn transport_fault(source: &TransportError) -> Fault {
     if let Some(kind) = source.as_transport_err() {
         match kind {
             TransportErrorKind::HttpError(http) if http.status == 429 => {
-                return Fault::RateLimited(RateLimit {
-                    retry_after_ms: None,
-                });
+                return Fault::RateLimited;
             }
             TransportErrorKind::HttpError(http) if http.status == 503 => {
                 return unavailable();
+            }
+            TransportErrorKind::HttpError(http) if matches!(http.status, 408 | 504) => {
+                return Fault::Timeout;
             }
             TransportErrorKind::BackendGone | TransportErrorKind::PubsubUnavailable => {
                 return unavailable();
@@ -177,16 +179,9 @@ fn transport_fault(source: &TransportError) -> Fault {
             _ => {}
         }
     }
-    // Typed probe first: a client-level timeout hides in the source chain
-    // (reqwest's `Display` omits its source), so the string sniff below
-    // cannot see it.
+    // A reqwest client timeout is invisible at the top level: its `Display`
+    // omits the source.
     if timeout_in_source_chain(source) {
-        return Fault::Timeout;
-    }
-    // Last resort for transports that only surface a timeout in the message.
-    // The text is only sniffed, never forwarded.
-    let lower = source.to_string().to_ascii_lowercase();
-    if lower.contains("timed out") || lower.contains("timeout") {
         Fault::Timeout
     } else {
         unavailable()
@@ -252,7 +247,7 @@ mod tests {
                 | Fault::InvalidInput(m)
                 | Fault::Internal(m),
             ) => Some(m),
-            ChainError::Fault(Fault::RateLimited(_) | Fault::Timeout) => None,
+            ChainError::Fault(Fault::RateLimited | Fault::Timeout) => None,
             ChainError::Rpc(rpc) => Some(&rpc.message),
         }
     }
@@ -471,11 +466,20 @@ mod tests {
     }
 
     #[test]
-    fn message_only_timeout_maps_to_timeout_fault() {
-        // The retained last-resort sniff: no typed timeout anywhere in the
-        // chain, only the message marks it.
-        let chain_err = pool_fault(PoolError::Rpc(transport_err("request timed out after 30s")));
-        assert!(matches!(chain_err, ChainError::Fault(Fault::Timeout)));
+    fn http_timeout_statuses_map_to_timeout_fault() {
+        // The body embeds the credentialed URL because `Fault::Timeout` is
+        // fieldless, so the match doubles as the leak check.
+        for status in [408, 504] {
+            let source = TransportErrorKind::http_error(
+                status,
+                format!("<html><title>Gateway Timeout at {CREDENTIALED_URL}</title></html>"),
+            );
+            let chain_err = pool_fault(PoolError::Rpc(source));
+            assert!(
+                matches!(chain_err, ChainError::Fault(Fault::Timeout)),
+                "status {status} classified as {chain_err:?}",
+            );
+        }
     }
 
     #[test]
@@ -525,6 +529,7 @@ mod tests {
             transport_err(
                 "error sending request for url (https://k7fQz2m9Xd.eth.rpc.example.com/)",
             ),
+            transport_err(&format!("request to {CREDENTIALED_URL} timed out")),
             TransportErrorKind::backend_gone(),
             TransportErrorKind::pubsub_unavailable(),
         ];
@@ -551,13 +556,6 @@ mod tests {
         };
         assert_eq!(rpc.message, ChainFaultMessage::UpstreamErrorResponse.text());
         assert_eq!(rpc.code, -32005);
-    }
-
-    #[test]
-    fn timeout_sniff_still_classifies_url_bearing_text() {
-        let msg = format!("request to {CREDENTIALED_URL} timed out");
-        let chain_err = pool_fault(PoolError::Rpc(transport_err(&msg)));
-        assert!(matches!(chain_err, ChainError::Fault(Fault::Timeout)));
     }
 
     #[test]
