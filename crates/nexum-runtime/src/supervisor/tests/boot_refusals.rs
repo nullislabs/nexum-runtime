@@ -11,9 +11,9 @@ use super::*;
 /// split ParseError class, with the `error_kind` label key intact.
 #[test]
 fn a_boot_refusal_increments_the_counter_under_its_parse_class() {
-    use metrics_util::debugging::DebugValue;
+    use crate::test_utils::metrics_util::debugging::DebugValue;
 
-    use crate::test_utils::metrics_capture::{capture_metrics, samples_named};
+    use crate::test_utils::{capture_metrics, samples_named};
 
     // Raw TOML: the textual absence of [dependencies] is the fixture.
     let manifest = "[component]\nname = \"example\"\n";

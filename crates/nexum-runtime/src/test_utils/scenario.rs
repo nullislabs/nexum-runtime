@@ -8,8 +8,7 @@ use alloy_chains::Chain;
 use derive_more::From;
 use tempfile::TempDir;
 
-use super::manifest::{ManifestInput, TestManifest};
-use super::{in_memory_logs, test_chain_configs};
+use super::{ManifestInput, TestManifest, in_memory_logs, test_chain_configs};
 use crate::engine_config::{ChainConfig, EngineConfig, ModuleEntry, ModuleLimits, PolicySection};
 use crate::error::RuntimeError;
 use nexum_runtime_api::{Extension, RuntimeTypes};
@@ -18,9 +17,9 @@ use nexum_runtime_logs::{LogPipeline, LogRecord};
 use nexum_runtime_store::LocalStore;
 use nexum_runtime_wasm::{Components, HostState, attach_wall_clock};
 
+use super::test_wasmtime_engine;
 use crate::preset::CoreRuntime;
 use crate::supervisor::{Supervisor, WasiClockOverride, build_linker};
-use crate::test_utils::wasm::test_wasmtime_engine;
 use nexum_primitives::digest::ContentDigest;
 
 /// One `[[modules]]` entry.
@@ -546,7 +545,7 @@ mod tests {
         use std::sync::OnceLock;
         use std::time::{Duration, UNIX_EPOCH};
 
-        use crate::test_utils::clock::ManualClock;
+        use crate::test_utils::ManualClock;
 
         let Some(wasm) = module_wasm_or_skip("clock-reader") else {
             return;

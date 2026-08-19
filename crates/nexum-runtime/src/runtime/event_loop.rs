@@ -665,10 +665,10 @@ mod tests {
     use alloy_transport::mock::MockResponse;
     use nexum_tasks::TaskManager;
 
-    use crate::test_utils::rpc::{
+    use crate::test_utils::{BootScenario, Booted, MockTypes, mock_components};
+    use crate::test_utils::{
         MockRpc, linked_block, mocked_pool, rpc_err, rpc_head, rpc_ok, test_hash,
     };
-    use crate::test_utils::{BootScenario, Booted, MockTypes, mock_components};
 
     /// Virtual poll cadence; `start_paused` advances through it instantly.
     const POLL: Duration = Duration::from_millis(50);
@@ -1331,7 +1331,7 @@ mod tests {
         use alloy_rpc_types_eth::Filter;
 
         use crate::runtime::event_loop::{open_block_streams, open_chain_log_streams, run};
-        use crate::test_utils::rpc::FakeNode;
+        use crate::test_utils::FakeNode;
         use nexum_runtime_chain::ProviderPool;
         use nexum_tasks::{TaskManager, TaskSet};
 
@@ -1396,7 +1396,7 @@ mod tests {
         use alloy_chains::Chain;
 
         use crate::runtime::event_loop::{open_block_streams, run};
-        use crate::test_utils::rpc::FakeNode;
+        use crate::test_utils::FakeNode;
         use nexum_tasks::{TaskManager, TaskSet};
 
         let mut booted = boot_mock_supervisor().await;

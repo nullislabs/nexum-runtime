@@ -51,12 +51,12 @@ nexum-runtime-config = { path = "../nexum-runtime-config" }
 nexum-runtime-http = { path = "../nexum-runtime-http" }
 nexum-runtime-logs = { path = "../nexum-runtime-logs" }
 nexum-runtime-manifest = { path = "../nexum-runtime-manifest" }
+nexum-runtime-metrics = { path = "../nexum-runtime-metrics" }
 nexum-runtime-store = { path = "../nexum-runtime-store" }
 nexum-runtime-wasm = { path = "../nexum-runtime-wasm" }
 
 toml.workspace = true
 ipnet.workspace = true
-serde_json = { workspace = true, features = ["std"] }
 
 # Observability. `tracing` replaces the prior `eprintln!` debug log
 # so the engine can drop into a structured log pipeline in production.
@@ -73,7 +73,6 @@ metrics-exporter-prometheus.workspace = true
 
 # Re-exported at the crate root; the event loop drives `Provider`.
 alloy-provider = { workspace = true, features = ["ws", "ipc", "pubsub", "reqwest"] }
-alloy-rpc-client.workspace = true
 alloy-rpc-types-eth.workspace = true
 alloy-transport.workspace = true
 alloy-primitives.workspace = true
@@ -88,29 +87,21 @@ redb.workspace = true
 # Misc.
 url.workspace = true
 
-# Enabled by `test-utils`: the `TestRuntime` harness temp-files inline
-# manifests before boot, and the in-process mock RPC transports implement
-# the tower service seam over alloy's JSON-RPC packet types.
+# Enabled by `test-utils`: the `TestRuntime` harness and `BootScenario`
+# temp-file inline manifests before boot.
 derive_more = { workspace = true, optional = true }
-serde = { workspace = true, optional = true }
+nexum-runtime-testing = { path = "../nexum-runtime-testing", optional = true }
 tempfile = { workspace = true, optional = true }
-tower = { workspace = true, optional = true }
-alloy-json-rpc = { workspace = true, optional = true }
-metrics-util = { workspace = true, optional = true }
 
 [features]
-# Test-only helpers under `test_utils`: the in-process mock RPC transports
-# (scripted and routed) behind the real `ProviderPool`, the `MockStateStore`
-# and `MockTypes` lattice, the manually-driven `ManualClock`, and the
-# `TestRuntime` harness. Off by default; a downstream test crate opts in.
+# Test-only helpers under `test_utils`: the seam-level doubles re-exported
+# from `nexum-runtime-testing`, the `TestRuntime` harness, and the
+# `BootScenario` boot path. Off by default; a downstream test crate opts in.
 # The self dev-dependency below turns it on for this crate's own tests.
 test-utils = [
     "dep:derive_more",
-    "dep:serde",
+    "dep:nexum-runtime-testing",
     "dep:tempfile",
-    "dep:tower",
-    "dep:alloy-json-rpc",
-    "dep:metrics-util",
     "nexum-runtime-chain/test-utils",
 ]
 
@@ -121,6 +112,7 @@ test-utils = [
 nexum-runtime = { path = ".", features = ["test-utils"] }
 # `start_paused` reconnect tests advance the backoff clock virtually.
 tokio = { workspace = true, features = ["rt-multi-thread", "test-util"] }
+serde_json = { workspace = true, features = ["std"] }
 tempfile.workspace = true
 wiremock.workspace = true
 tracing-subscriber.workspace = true

@@ -741,8 +741,8 @@ mod tests {
     use crate::manifest::NamespaceCaps;
     use crate::preset::{CoreRuntime, Runtime as RuntimePreset};
     use crate::supervisor::prepass::BootRefusal;
-    use crate::test_utils::clock::ManualClock;
-    use crate::test_utils::wasm::workspace_root;
+    use crate::test_utils::ManualClock;
+    use crate::test_utils::workspace_root;
     use crate::test_utils::{
         Prebuilt, Refusal, TestManifest, example_wasm_or_skip, module_wasm_or_skip,
     };
@@ -797,9 +797,8 @@ mod tests {
     /// launch classes; the wait-time event-loop failure counts nothing.
     #[test]
     fn launch_refusals_count_under_the_boot_refusal_counter() {
-        use metrics_util::debugging::DebugValue;
-
-        use crate::test_utils::metrics_capture::{capture_metrics, samples_named};
+        use crate::test_utils::metrics_util::debugging::DebugValue;
+        use crate::test_utils::{capture_metrics, samples_named};
 
         let (err, samples) = capture_metrics(|| refuse_launch(LaunchRefusal::NothingToRun));
         let hits = samples_named(&samples, "nexum_runtime_boot_refusals_total");

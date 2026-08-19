@@ -6,6 +6,8 @@
 //! carry. A metric name is an operator contract, so adding or renaming one
 //! is a deliberate diff here rather than an incidental string somewhere.
 
+#![forbid(unsafe_code)]
+
 /// How a metric is recorded, which decides the `describe_` call.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Kind {
@@ -27,7 +29,7 @@ pub struct Metric {
     pub help: &'static str,
 }
 
-/// Every metric this crate emits.
+/// Every metric the runtime emits.
 pub const METRICS: &[Metric] = &[
     Metric {
         name: "nexum_runtime_boot_refusals_total",
@@ -116,13 +118,15 @@ mod tests {
     fn every_emitted_name_is_in_the_table_and_every_entry_is_emitted() {
         let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
         let mut found: BTreeSet<String> = BTreeSet::new();
+        let mut scanned = 0usize;
         let mut stack = vec![
-            manifest.join("src"),
+            manifest.join("../nexum-runtime/src"),
             manifest.join("../nexum-runtime-wasm/src"),
             manifest.join("../nexum-runtime-chain/src"),
             manifest.join("../nexum-runtime-store/src"),
             manifest.join("../nexum-runtime-logs/src"),
             manifest.join("../nexum-runtime-http/src"),
+            manifest.join("../nexum-runtime-testing/src"),
         ];
         while let Some(dir) = stack.pop() {
             for entry in std::fs::read_dir(&dir).expect("read the crate source tree") {
@@ -134,10 +138,7 @@ mod tests {
                 if path.extension().is_none_or(|e| e != "rs") {
                     continue;
                 }
-                // The table itself is the declaration, not an emission.
-                if path.file_name().is_some_and(|f| f == "metrics.rs") {
-                    continue;
-                }
+                scanned += 1;
                 let src = std::fs::read_to_string(&path).expect("read a source file");
                 for (idx, _) in src.match_indices("\"nexum_runtime_") {
                     let rest = &src[idx + 1..];
@@ -147,6 +148,12 @@ mod tests {
                 }
             }
         }
+        assert!(
+            scanned >= 60,
+            "the walk reached only {scanned} files; a shrunken walk loses the \
+             operator contract silently, so re-derive the roots before lowering \
+             this floor",
+        );
 
         let table = table_names();
         let missing: Vec<&String> = found

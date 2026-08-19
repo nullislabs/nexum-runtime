@@ -185,7 +185,7 @@ With `enabled = false` the recorder is still installed, so call sites stay live,
 | `nexum_runtime_chain_response_capped_total` | counter | `chain_id`, `method` | Responses rejected for exceeding `[limits.chain] response_body_max_bytes` (default 1 MiB). |
 | `nexum_runtime_source_reconnects_total` | counter | `source_kind`, `chain_id`, `module` | Source reconnects. `source_kind="block"` is per chain; `source_kind="chain-log"` also carries `module`. |
 
-`crates/nexum-runtime/src/metrics.rs` is the single source of the name set, and a test refuses any emitted name the table does not carry.
+`crates/nexum-runtime-metrics/src/lib.rs` is the single source of the name set, and a test refuses any emitted name the table does not carry.
 
 Prometheus scrape:
 

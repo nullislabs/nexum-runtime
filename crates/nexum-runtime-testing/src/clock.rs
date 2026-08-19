@@ -5,7 +5,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use wasmtime_wasi::{HostMonotonicClock, HostWallClock};
 
-use crate::supervisor::WasiClockOverride;
+use nexum_runtime_api::WasiClockOverride;
 
 /// A shared, manually-advanced clock source. Cloning yields another handle
 /// onto the same instant: install one clone as a store's

@@ -20,11 +20,11 @@ use std::time::Duration;
 use alloy_chains::Chain;
 use alloy_rpc_types_eth::{Header, Log};
 
-use super::clock::ManualClock;
-use super::manifest::ManifestInput;
-use super::rpc::FakeNode;
 use super::scenario::{BootScenario, Booted, Entry};
-use super::{HARNESS_POLL_INTERVAL, MockStateStore, MockTypes, Prebuilt};
+use super::{
+    FakeNode, HARNESS_POLL_INTERVAL, ManifestInput, ManualClock, MockStateStore, MockTypes,
+    Prebuilt,
+};
 use crate::builder::{RuntimeBuilder, RuntimeHandle};
 use crate::engine_config::{EngineConfig, ModuleLimits};
 use crate::error::{BoxError, RuntimeError};
