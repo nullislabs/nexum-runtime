@@ -13,6 +13,7 @@ members = [
     "crates/nexum-runtime-manifest",
     "crates/nexum-runtime-metrics",
     "crates/nexum-runtime-store",
+    "crates/nexum-runtime-supervisor",
     "crates/nexum-runtime-testing",
     "crates/nexum-runtime-wasm",
     "crates/nexum-sdk",

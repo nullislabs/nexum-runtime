@@ -232,7 +232,7 @@ async fn e2e_boot_single_accepts_a_matching_pinned_digest() {
 
 #[tokio::test]
 async fn boot_refuses_a_mismatched_operator_pin_before_compile() {
-    let scenario = BootScenario::new();
+    let scenario = scenario();
     let wasm = scenario.dir().join("module.wasm");
     std::fs::write(&wasm, b"drifted artifact bytes").expect("write artifact");
     scenario
@@ -256,7 +256,7 @@ async fn boot_refuses_a_mismatched_operator_pin_before_compile() {
 /// the artifact refuses; the operator's expectation is reported first.
 #[tokio::test]
 async fn disagreeing_operator_and_author_pins_refuse() {
-    let scenario = BootScenario::new();
+    let scenario = scenario();
     let wasm = scenario.dir().join("torn.wasm");
     std::fs::write(&wasm, b"torn pin bytes").expect("write artifact");
     let actual = ContentDigest::of_bytes(b"torn pin bytes");
@@ -282,7 +282,7 @@ async fn e2e_boot_accepts_a_matching_operator_pin() {
         return;
     };
     let digest = ContentDigest::of_bytes(&std::fs::read(&wasm).expect("read example wasm"));
-    let booted = BootScenario::new()
+    let booted = scenario()
         .module(
             Entry::new(TestManifest::new("example").cap("logging"))
                 .wasm(wasm)
@@ -296,7 +296,7 @@ async fn e2e_boot_accepts_a_matching_operator_pin() {
 
 #[tokio::test]
 async fn boot_requires_a_module_digest_when_the_engine_flag_is_set() {
-    let scenario = BootScenario::new().require_digest();
+    let scenario = scenario().require_digest();
     let wasm = scenario.dir().join("module.wasm");
     std::fs::write(&wasm, b"unpinned artifact bytes").expect("write artifact");
     scenario
@@ -309,7 +309,7 @@ async fn boot_requires_a_module_digest_when_the_engine_flag_is_set() {
 
 #[tokio::test]
 async fn boot_requires_a_manifest_pin_despite_a_matching_operator_pin() {
-    let scenario = BootScenario::new().require_digest();
+    let scenario = scenario().require_digest();
     let wasm = scenario.dir().join("module.wasm");
     std::fs::write(&wasm, b"operator pinned bytes").expect("write artifact");
     let matching = ContentDigest::of_bytes(b"operator pinned bytes");

@@ -21,13 +21,7 @@ wasmtime-wasi.workspace = true
 wasmtime-wasi-http.workspace = true
 
 # Async + error plumbing.
-anyhow.workspace = true
 thiserror.workspace = true
-# `strum::IntoStaticStr`: the snake_case variant name is the
-# boot-refusal `error_kind` label.
-strum.workspace = true
-# Full-semver interface ids and their compatibility tracks.
-semver.workspace = true
 # No `rt`: spawning belongs to `nexum-tasks`. Omitting it enforces nothing,
 # since `nexum-tasks` unifies `rt` back in; the `clippy.toml` ban does.
 tokio = { workspace = true, features = [
@@ -53,6 +47,7 @@ nexum-runtime-logs = { path = "../nexum-runtime-logs" }
 nexum-runtime-manifest = { path = "../nexum-runtime-manifest" }
 nexum-runtime-metrics = { path = "../nexum-runtime-metrics" }
 nexum-runtime-store = { path = "../nexum-runtime-store" }
+nexum-runtime-supervisor = { path = "../nexum-runtime-supervisor" }
 nexum-runtime-wasm = { path = "../nexum-runtime-wasm" }
 
 toml.workspace = true
@@ -65,10 +60,8 @@ tracing.workspace = true
 # the two WIT edges are the only place a generated severity enum appears.
 tracing-core.workspace = true
 
-# Prometheus exporter. `metrics` is the facade every
-# recording site (dispatch, host backends) calls; the exporter
-# crate installs the recorder + binds the `/metrics` HTTP listener.
-metrics.workspace = true
+# Prometheus exporter add-on: installs the recorder + binds the
+# `/metrics` HTTP listener.
 metrics-exporter-prometheus.workspace = true
 
 # Re-exported at the crate root; the event loop drives `Provider`.
@@ -87,9 +80,8 @@ redb.workspace = true
 # Misc.
 url.workspace = true
 
-# Enabled by `test-utils`: the `TestRuntime` harness and `BootScenario`
-# temp-file inline manifests before boot.
-derive_more = { workspace = true, optional = true }
+# Enabled by `test-utils`: the `TestRuntime` harness temp-files inline
+# manifests before boot.
 nexum-runtime-testing = { path = "../nexum-runtime-testing", optional = true }
 tempfile = { workspace = true, optional = true }
 
@@ -99,10 +91,10 @@ tempfile = { workspace = true, optional = true }
 # `BootScenario` boot path. Off by default; a downstream test crate opts in.
 # The self dev-dependency below turns it on for this crate's own tests.
 test-utils = [
-    "dep:derive_more",
     "dep:nexum-runtime-testing",
     "dep:tempfile",
     "nexum-runtime-chain/test-utils",
+    "nexum-runtime-supervisor/test-utils",
 ]
 
 [dev-dependencies]
@@ -112,7 +104,7 @@ test-utils = [
 nexum-runtime = { path = ".", features = ["test-utils"] }
 # `start_paused` reconnect tests advance the backoff clock virtually.
 tokio = { workspace = true, features = ["rt-multi-thread", "test-util"] }
-serde_json = { workspace = true, features = ["std"] }
+anyhow.workspace = true
+metrics.workspace = true
 tempfile.workspace = true
-wiremock.workspace = true
 tracing-subscriber.workspace = true

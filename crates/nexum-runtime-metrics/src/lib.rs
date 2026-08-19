@@ -121,6 +121,7 @@ mod tests {
         let mut scanned = 0usize;
         let mut stack = vec![
             manifest.join("../nexum-runtime/src"),
+            manifest.join("../nexum-runtime-supervisor/src"),
             manifest.join("../nexum-runtime-wasm/src"),
             manifest.join("../nexum-runtime-chain/src"),
             manifest.join("../nexum-runtime-store/src"),
@@ -149,7 +150,7 @@ mod tests {
             }
         }
         assert!(
-            scanned >= 60,
+            scanned >= 68,
             "the walk reached only {scanned} files; a shrunken walk loses the \
              operator contract silently, so re-derive the roots before lowering \
              this floor",

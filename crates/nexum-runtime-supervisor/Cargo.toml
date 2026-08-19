@@ -1,0 +1,69 @@
+[package]
+name = "nexum-runtime-supervisor"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "The multi-module supervisor for the Nexum runtime: the boot path, the restart and dispatch policies, the event loop, and the composed runtime error."
+
+[lints]
+workspace = true
+
+[dependencies]
+alloy-chains.workspace = true
+alloy-primitives.workspace = true
+alloy-provider = { workspace = true, features = ["ws", "ipc", "pubsub", "reqwest"] }
+alloy-rpc-types-eth.workspace = true
+alloy-transport.workspace = true
+anyhow.workspace = true
+futures.workspace = true
+ipnet.workspace = true
+metrics.workspace = true
+nexum-primitives = { path = "../nexum-primitives", features = ["metrics"] }
+nexum-runtime-api = { path = "../nexum-runtime-api" }
+nexum-runtime-chain = { path = "../nexum-runtime-chain" }
+nexum-runtime-config = { path = "../nexum-runtime-config" }
+nexum-runtime-http = { path = "../nexum-runtime-http" }
+nexum-runtime-logs = { path = "../nexum-runtime-logs" }
+nexum-runtime-manifest = { path = "../nexum-runtime-manifest" }
+nexum-runtime-store = { path = "../nexum-runtime-store" }
+nexum-runtime-wasm = { path = "../nexum-runtime-wasm" }
+nexum-tasks = { path = "../nexum-tasks" }
+semver.workspace = true
+strum.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["macros", "signal", "sync", "time"] }
+tracing.workspace = true
+tracing-core.workspace = true
+url.workspace = true
+wasmtime.workspace = true
+wasmtime-wasi.workspace = true
+wasmtime-wasi-http.workspace = true
+
+# Enabled by `test-utils`: `BootScenario` temp-files inline manifests
+# before boot.
+derive_more = { workspace = true, optional = true }
+nexum-runtime-testing = { path = "../nexum-runtime-testing", optional = true }
+tempfile = { workspace = true, optional = true }
+
+[features]
+# The `BootScenario` boot path and its seam-level doubles, under
+# `test_utils`. Off by default; a downstream test crate opts in. The self
+# dev-dependency below turns it on for this crate's own tests.
+test-utils = [
+    "dep:derive_more",
+    "dep:nexum-runtime-testing",
+    "dep:tempfile",
+    "nexum-runtime-chain/test-utils",
+]
+
+[dev-dependencies]
+# Self dev-dependency enabling `test-utils` for this crate's own test targets.
+nexum-runtime-supervisor = { path = ".", features = ["test-utils"] }
+nexum-world = { path = "../nexum-world" }
+serde_json = { workspace = true, features = ["std"] }
+toml.workspace = true
+# `start_paused` reconnect tests advance the backoff clock virtually.
+tokio = { workspace = true, features = ["rt-multi-thread", "test-util"] }
+wiremock.workspace = true

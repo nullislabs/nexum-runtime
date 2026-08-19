@@ -3319,7 +3319,6 @@ dependencies = [
  "alloy-rpc-types-eth",
  "alloy-transport",
  "anyhow",
- "derive_more",
  "futures",
  "ipnet",
  "metrics",
@@ -3334,14 +3333,12 @@ dependencies = [
  "nexum-runtime-manifest",
  "nexum-runtime-metrics",
  "nexum-runtime-store",
+ "nexum-runtime-supervisor",
  "nexum-runtime-testing",
  "nexum-runtime-wasm",
  "nexum-tasks",
  "nexum-world",
  "redb",
- "semver 1.0.28",
- "serde_json",
- "strum",
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
@@ -3353,7 +3350,6 @@ dependencies = [
  "wasmtime",
  "wasmtime-wasi",
  "wasmtime-wasi-http",
- "wiremock",
 ]
 
 [[package]]
@@ -3471,6 +3467,49 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
+]
+
+[[package]]
+name = "nexum-runtime-supervisor"
+version = "0.1.0"
+dependencies = [
+ "alloy-chains",
+ "alloy-primitives",
+ "alloy-provider",
+ "alloy-rpc-types-eth",
+ "alloy-transport",
+ "anyhow",
+ "derive_more",
+ "futures",
+ "ipnet",
+ "metrics",
+ "nexum-primitives",
+ "nexum-runtime-api",
+ "nexum-runtime-chain",
+ "nexum-runtime-config",
+ "nexum-runtime-http",
+ "nexum-runtime-logs",
+ "nexum-runtime-manifest",
+ "nexum-runtime-store",
+ "nexum-runtime-supervisor",
+ "nexum-runtime-testing",
+ "nexum-runtime-wasm",
+ "nexum-tasks",
+ "nexum-world",
+ "semver 1.0.28",
+ "serde_json",
+ "strum",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "toml 1.1.2+spec-1.1.0",
+ "tracing",
+ "tracing-core",
+ "url",
+ "wasmtime",
+ "wasmtime-wasi",
+ "wasmtime-wasi-http",
+ "wiremock",
 ]
 
 [[package]]

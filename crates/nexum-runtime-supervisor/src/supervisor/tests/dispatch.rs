@@ -262,7 +262,7 @@ async fn multi_chain_dispatch_isolates_modules_by_chain() {
     let Some(wasm) = example_wasm_or_skip() else {
         return;
     };
-    let mut booted = BootScenario::new()
+    let mut booted = scenario()
         .wasm(wasm)
         .module(
             TestManifest::new("module-a")
@@ -302,7 +302,7 @@ async fn a_fired_stop_halts_the_block_fan_out() {
     let Some(wasm) = example_wasm_or_skip() else {
         return;
     };
-    let mut booted = BootScenario::new()
+    let mut booted = scenario()
         .wasm(wasm)
         .module(
             TestManifest::new("module-a")
@@ -341,7 +341,7 @@ async fn dispatch_rate_limit_throttles_a_flood_without_starving_others() {
     let Some(wasm) = example_wasm_or_skip() else {
         return;
     };
-    let mut booted = BootScenario::new()
+    let mut booted = scenario()
         .wasm(wasm)
         .limits(limits_with(|limits| {
             limits.dispatch = DispatchLimitsSection {
@@ -400,7 +400,7 @@ async fn multi_chain_poisoned_module_does_not_affect_other_chains() {
         return;
     };
     // Tight `[limits.poison]`: 2 failures in 60 s quarantines.
-    let mut booted = BootScenario::new()
+    let mut booted = scenario()
         .limits(limits_with(|limits| {
             limits.poison = crate::engine_config::PoisonLimitsSection {
                 max_failures: Some(2),

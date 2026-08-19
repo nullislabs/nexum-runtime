@@ -14,7 +14,7 @@ mod store;
 pub use nexum_runtime_api::WasiClockOverride;
 pub use prepass::ConfiguredChains;
 pub use sources::{EventSource, SourcePlan, Viability};
-pub use store::build_linker;
+pub use store::{build_linker, engine, wasmtime_config};
 
 use std::sync::Arc;
 
@@ -192,7 +192,7 @@ impl<T: RuntimeTypes> Supervisor<T> {
 /// Counts a refusal under its [`RuntimeError::error_kind`] label; a refusal
 /// without a label goes uncounted. The launcher's refusal sites in
 /// `builder` call it too, so a launch refusal counts like a boot one.
-pub(crate) fn count_boot_refusal(refusal: &RuntimeError) {
+pub fn count_boot_refusal(refusal: &RuntimeError) {
     let Some(kind) = refusal.error_kind() else {
         return;
     };

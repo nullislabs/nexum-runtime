@@ -718,6 +718,7 @@ mod tests {
             manifest.join("../nexum-runtime-store/src"),
             manifest.join("../nexum-runtime-logs/src"),
             manifest.join("../nexum-runtime-http/src"),
+            manifest.join("../nexum-runtime-supervisor/src"),
             manifest.join("../nexum-runtime-testing/src"),
         ];
         let funnel = manifest.join("src").join("error.rs");
@@ -790,10 +791,10 @@ mod tests {
                 }
             }
         }
-        // Above 74 minus the smallest root, so losing any one root fails.
+        // Above 76 minus the smallest root, so losing any one root fails.
         assert!(
-            scanned >= 73,
-            "the walk must cover the embedding, the engine, the api crate, and the capability crates, saw {scanned} files"
+            scanned >= 75,
+            "the walk must cover the embedding, the facade, the supervisor, the api crate, and the capability crates, saw {scanned} files"
         );
         assert!(
             sites >= 10,

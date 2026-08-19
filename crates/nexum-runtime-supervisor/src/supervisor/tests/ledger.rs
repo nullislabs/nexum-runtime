@@ -7,7 +7,7 @@ use super::*;
 #[test]
 fn extension_sections_must_be_claimed() {
     struct Claiming;
-    impl Extension<CoreRuntime> for Claiming {
+    impl Extension<LocalTypes> for Claiming {
         fn namespace(&self) -> &'static str {
             "acme"
         }
@@ -19,7 +19,7 @@ fn extension_sections_must_be_claimed() {
         }
         fn link(
             &self,
-            _linker: &mut Linker<HostState<CoreRuntime>>,
+            _linker: &mut Linker<HostState<LocalTypes>>,
         ) -> Result<(), nexum_runtime_api::ExtensionError> {
             Ok(())
         }
@@ -27,7 +27,7 @@ fn extension_sections_must_be_claimed() {
             &["venue"]
         }
     }
-    let extensions: Vec<Arc<dyn Extension<CoreRuntime>>> = vec![Arc::new(Claiming)];
+    let extensions: Vec<Arc<dyn Extension<LocalTypes>>> = vec![Arc::new(Claiming)];
 
     let mut sections = manifest::ExtensionSections::new();
     sections.insert("venue".into(), toml::Value::Boolean(true));
@@ -52,7 +52,7 @@ fn extension_claims_must_be_unique() {
         kinds: &'static [&'static str],
         sections: &'static [&'static str],
     }
-    impl Extension<CoreRuntime> for Claiming {
+    impl Extension<LocalTypes> for Claiming {
         fn namespace(&self) -> &'static str {
             self.namespace
         }
@@ -64,7 +64,7 @@ fn extension_claims_must_be_unique() {
         }
         fn link(
             &self,
-            _linker: &mut Linker<HostState<CoreRuntime>>,
+            _linker: &mut Linker<HostState<LocalTypes>>,
         ) -> Result<(), nexum_runtime_api::ExtensionError> {
             Ok(())
         }
@@ -79,7 +79,7 @@ fn extension_claims_must_be_unique() {
         namespace: &'static str,
         kinds: &'static [&'static str],
         sections: &'static [&'static str],
-    ) -> Arc<dyn Extension<CoreRuntime>> {
+    ) -> Arc<dyn Extension<LocalTypes>> {
         Arc::new(Claiming {
             namespace,
             kinds,
@@ -153,7 +153,7 @@ fn claim_namespace_is_byte_exact() {
 /// claimants.
 #[tokio::test]
 async fn boot_rejects_a_duplicate_module_name() {
-    let scenario = BootScenario::new();
+    let scenario = scenario();
     let (first, second) = (
         scenario.dir().join("missing-a.wasm"),
         scenario.dir().join("missing-b.wasm"),

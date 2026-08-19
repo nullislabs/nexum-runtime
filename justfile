@@ -28,11 +28,11 @@ run: build-module build-engine
 
 # Run host engine unit tests.
 test:
-    cargo nextest run -p nexum-runtime -p nexum-primitives -p nexum-runtime-api -p nexum-runtime-chain -p nexum-runtime-config -p nexum-runtime-http -p nexum-runtime-logs -p nexum-runtime-manifest -p nexum-runtime-metrics -p nexum-runtime-store -p nexum-runtime-testing -p nexum-runtime-wasm --all-features
+    cargo nextest run -p nexum-runtime -p nexum-primitives -p nexum-runtime-api -p nexum-runtime-chain -p nexum-runtime-config -p nexum-runtime-http -p nexum-runtime-logs -p nexum-runtime-manifest -p nexum-runtime-metrics -p nexum-runtime-store -p nexum-runtime-supervisor -p nexum-runtime-testing -p nexum-runtime-wasm --all-features
 
 # Build module + engine, then run E2E integration tests.
 test-e2e: build-module build-engine
-    cargo nextest run -p nexum-runtime supervisor::tests::e2e supervisor::tests::digest::e2e_
+    cargo nextest run -p nexum-runtime-supervisor -p nexum-runtime supervisor::tests::e2e supervisor::tests::digest::e2e_ harness::tests::host_interface_records
 
 # Format the workspace.
 fmt:
