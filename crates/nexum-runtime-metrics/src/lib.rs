@@ -37,6 +37,16 @@ pub const METRICS: &[Metric] = &[
         help: "Boot refusals by error kind.",
     },
     Metric {
+        name: "nexum_runtime_chain_head_height",
+        kind: Kind::Gauge,
+        help: "Chain head height the runtime last observed, by chain.",
+    },
+    Metric {
+        name: "nexum_runtime_chain_last_delivered_height",
+        kind: Kind::Gauge,
+        help: "Highest block height delivered to a module, by chain.",
+    },
+    Metric {
         name: "nexum_runtime_chain_request_total",
         kind: Kind::Counter,
         help: "Chain JSON-RPC requests by chain and outcome.",

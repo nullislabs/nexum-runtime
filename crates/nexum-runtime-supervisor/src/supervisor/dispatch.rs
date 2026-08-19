@@ -79,7 +79,27 @@ impl<T: RuntimeTypes<State = HostState<T>>> Supervisor<T> {
                 dispatched += 1;
             }
         }
+        if dispatched > 0 {
+            self.record_delivered_height(chain_id, block_number);
+        }
         dispatched
+    }
+
+    /// Blocks, events and retracted logs share one series per chain, so only
+    /// an advance counts.
+    fn record_delivered_height(&mut self, chain_id: u64, block: u64) {
+        if self
+            .delivered_frontier
+            .get(&chain_id)
+            .is_none_or(|&frontier| block > frontier)
+        {
+            self.delivered_frontier.insert(chain_id, block);
+            metrics::gauge!(
+                "nexum_runtime_chain_last_delivered_height",
+                "chain_id" => chain_id.to_string(),
+            )
+            .set(block as f64);
+        }
     }
 
     /// Returns `true` only when the module accepted the log; the resume
@@ -141,6 +161,9 @@ impl<T: RuntimeTypes<State = HostState<T>>> Supervisor<T> {
             .await,
             DispatchOutcome::Ok,
         );
+        if ok && let Some(block) = block_number {
+            self.record_delivered_height(chain.id(), block);
+        }
         if ok && let (Some(key), Some(block)) = (cursor_key, block_number) {
             commit_chain_log_cursor(
                 &self.shared.components.store,
