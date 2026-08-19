@@ -1,10 +1,11 @@
 //! `nexum:host/remote-store`: unimplemented stub; every call returns the
 //! unsupported fault.
 
-use crate::bindings::nexum;
-use crate::bindings::nexum::host::types::Fault;
-use crate::host::component::RuntimeTypes;
-use crate::host::state::HostState;
+use nexum_runtime_api::RuntimeTypes;
+use nexum_runtime_api::bindings::nexum;
+use nexum_runtime_api::bindings::nexum::host::types::Fault;
+
+use crate::state::HostState;
 
 const DEFERRED: &str = "Swarm backend deferred to 0.3";
 

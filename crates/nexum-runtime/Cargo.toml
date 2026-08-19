@@ -15,7 +15,7 @@ path = "src/lib.rs"
 [dependencies]
 # WASM Component Model runtime. wasi:http is serviced by
 # wasmtime-wasi-http's hyper + rustls backend behind the per-module
-# allowlist gate in `host::http`.
+# allowlist gate in `nexum-runtime-http`.
 wasmtime.workspace = true
 wasmtime-wasi.workspace = true
 wasmtime-wasi-http.workspace = true
@@ -23,8 +23,8 @@ wasmtime-wasi-http.workspace = true
 # Async + error plumbing.
 anyhow.workspace = true
 thiserror.workspace = true
-# `strum::IntoStaticStr`: the snake_case variant name is the tracing
-# `channel` field (`LogChannel`) and the boot-refusal `error_kind` label.
+# `strum::IntoStaticStr`: the snake_case variant name is the
+# boot-refusal `error_kind` label.
 strum.workspace = true
 # Full-semver interface ids and their compatibility tracks.
 semver.workspace = true
@@ -52,6 +52,7 @@ nexum-runtime-http = { path = "../nexum-runtime-http" }
 nexum-runtime-logs = { path = "../nexum-runtime-logs" }
 nexum-runtime-manifest = { path = "../nexum-runtime-manifest" }
 nexum-runtime-store = { path = "../nexum-runtime-store" }
+nexum-runtime-wasm = { path = "../nexum-runtime-wasm" }
 
 toml.workspace = true
 ipnet.workspace = true
@@ -70,10 +71,7 @@ tracing-core.workspace = true
 metrics.workspace = true
 metrics-exporter-prometheus.workspace = true
 
-# `chain` backend. Each configured chain owns a `DynProvider` built
-# from a `WsConnect`/`Http` transport so the host's `request` impl can
-# hand a raw `(method, params)` pair to alloy's JSON-RPC layer without
-# reimplementing the codec.
+# Re-exported at the crate root; the event loop drives `Provider`.
 alloy-provider = { workspace = true, features = ["ws", "ipc", "pubsub", "reqwest"] }
 alloy-rpc-client.workspace = true
 alloy-rpc-types-eth.workspace = true
@@ -82,12 +80,9 @@ alloy-primitives.workspace = true
 # Typed EIP-155 chain ids for engine config keys, the provider/orderbook
 # pools, and the chain seam.
 alloy-chains.workspace = true
-# HTTP transport client carrying the per-chain request timeout.
-reqwest.workspace = true
 futures.workspace = true
 
-# `local-store` backend. Per-module namespacing is enforced
-# host-side via a `[len:u8][module_name][raw_key]` prefix.
+# The `component` facade module re-exports redb's error types.
 redb.workspace = true
 
 # Misc.

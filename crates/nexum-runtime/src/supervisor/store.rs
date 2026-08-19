@@ -12,14 +12,14 @@ use super::Shared;
 use crate::bindings::TriggerModule;
 use crate::engine_config::{OutboundHttpLimits, PolicyCeilings};
 use crate::error::{EngineRefusal, RuntimeError};
-use crate::host::component::{RuntimeTypes, StateHandle, StateStore};
-use crate::host::extension::Extension;
-use crate::host::http::HttpGate;
-use crate::host::logs::{LogChannel, RunId, StdioStream};
-use crate::host::state::HostState;
 use crate::manifest::ResourceSection;
 use nexum_primitives::host_pattern::HostPattern;
 use nexum_primitives::module_id::ModuleId;
+use nexum_runtime_api::Extension;
+use nexum_runtime_api::{RuntimeTypes, StateHandle, StateStore};
+use nexum_runtime_http::HttpGate;
+use nexum_runtime_logs::{LogChannel, RunId, StdioStream};
+use nexum_runtime_wasm::HostState;
 
 pub(super) type HostStore<T> = Store<HostState<T>>;
 

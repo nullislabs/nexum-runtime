@@ -22,13 +22,11 @@ use wasmtime::Engine;
 use crate::addons::{AddOnHandle, AddOns, AddOnsContext};
 use crate::engine_config::{EngineConfig, ModuleEntry, PolicySection};
 use crate::error::{EngineRefusal, RuntimeError};
-use crate::host::component::{
-    BuilderContext, ComponentBuilder, Components, ComponentsBuilder, RuntimeTypes,
-};
-use crate::host::extension::{self, Extension, SourceContext};
-use crate::host::logs::LogPipeline;
-use crate::host::provider_pool::ProviderPool;
-use crate::host::state::HostState;
+use nexum_runtime_api::{BuilderContext, ComponentBuilder, Extension, RuntimeTypes, SourceContext};
+use nexum_runtime_chain::ProviderPool;
+use nexum_runtime_logs::LogPipeline;
+use nexum_runtime_wasm::{Components, ComponentsBuilder, HostState, attach_wall_clock};
+
 use crate::preset::Runtime;
 use crate::runtime::event_loop;
 pub use crate::supervisor::WasiClockOverride;
@@ -229,7 +227,7 @@ impl<T: RuntimeTypes<State = HostState<T>>> AssembledRuntime<T> {
 
         // Extensions receive the effective wall clock before linking, so
         // their host-side time and guest WASI time share one source.
-        extension::attach_wall_clock(&extensions, clocks.as_ref());
+        attach_wall_clock(&extensions, clocks.as_ref());
         let linker = supervisor::build_linker::<T>(&engine, &extensions)?;
 
         // Boot supervisor - a module-source override wins over
@@ -740,9 +738,6 @@ mod tests {
     use super::*;
     use crate::addons::{AddOns, RuntimeAddOn};
     use crate::engine_config::EngineConfig;
-    use crate::host::component::{LocalStoreBuilder, LogPipelineBuilder, ProviderPoolBuilder};
-    use crate::host::extension::{ExtensionError, HostWallClock};
-    use crate::host::state::HostState;
     use crate::manifest::NamespaceCaps;
     use crate::preset::{CoreRuntime, Runtime as RuntimePreset};
     use crate::supervisor::prepass::BootRefusal;
@@ -751,6 +746,11 @@ mod tests {
     use crate::test_utils::{
         Prebuilt, Refusal, TestManifest, example_wasm_or_skip, module_wasm_or_skip,
     };
+    use nexum_runtime_api::{ExtensionError, HostWallClock};
+    use nexum_runtime_chain::ProviderPoolBuilder;
+    use nexum_runtime_logs::LogPipelineBuilder;
+    use nexum_runtime_store::LocalStoreBuilder;
+    use nexum_runtime_wasm::HostState;
     use wasmtime::component::Linker;
 
     /// The preset shortcut reaches the supervisor boot, which bails on the

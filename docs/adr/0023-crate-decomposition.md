@@ -72,8 +72,10 @@ Layer 3, the capability crates.
 `nexum-runtime-logs` holds the module-log pipeline.
 Each is a true sibling: it never depends on another of the four.
 The store, chain and logs crates depend on `nexum-runtime-api`; the http gate needs no seam edge once the `WasiHttpView` impl stays with `HostState`.
-`nexum-runtime-wasm` sits above them and holds the wasmtime embedding: `HostState`, the WIT `Host` impls, and the component wiring.
+`nexum-runtime-wasm` sits above them and holds the wasmtime embedding: `HostState`, the WIT `Host` impls, the component wiring, and the guest-fault funnel with its projections.
 The `WasiHttpView` impl for `HostState` is orphan-pinned to the crate that owns `HostState`, so it stays with the embedding and not with the gate.
+The measured embedding takes the api, chain, http and logs crates and not the store crate, because the store is reached only through the lattice's associated type.
+`BuildError` loses `non_exhaustive` on the move, for the reason recorded for `StoreError` above: the facade routes on every variant, and a new slot must be a compile error there.
 `impl From<PoolError> for ChainError` becomes an orphan once `PoolError` leaves the engine crate, so the projection is the free function `pool_fault` in the fault funnel, beside `store_fault`.
 `ProviderPool::from_config` returns `Result<Self, PoolError>` rather than the composed `RuntimeError`, which can only live above every capability crate.
 

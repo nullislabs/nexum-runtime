@@ -12,12 +12,12 @@ use super::manifest::{ManifestInput, TestManifest};
 use super::{in_memory_logs, test_chain_configs};
 use crate::engine_config::{ChainConfig, EngineConfig, ModuleEntry, ModuleLimits, PolicySection};
 use crate::error::RuntimeError;
-use crate::host::component::{Components, RuntimeTypes};
-use crate::host::extension::{Extension, attach_wall_clock};
-use crate::host::local_store_redb::LocalStore;
-use crate::host::logs::{LogPipeline, LogRecord};
-use crate::host::provider_pool::ProviderPool;
-use crate::host::state::HostState;
+use nexum_runtime_api::{Extension, RuntimeTypes};
+use nexum_runtime_chain::ProviderPool;
+use nexum_runtime_logs::{LogPipeline, LogRecord};
+use nexum_runtime_store::LocalStore;
+use nexum_runtime_wasm::{Components, HostState, attach_wall_clock};
+
 use crate::preset::CoreRuntime;
 use crate::supervisor::{Supervisor, WasiClockOverride, build_linker};
 use crate::test_utils::wasm::test_wasmtime_engine;
@@ -421,11 +421,11 @@ impl Refusal {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::host::extension::HostWallClock;
     use crate::manifest::{NamespaceCaps, ParseError};
     use crate::supervisor::load::LoadRefusal;
     use crate::supervisor::prepass::BootRefusal;
     use crate::test_utils::{example_wasm_or_skip, module_wasm_or_skip};
+    use nexum_runtime_api::HostWallClock;
 
     /// Claims the `[acme]` manifest section and nothing else.
     struct AcmeExtension;
@@ -444,8 +444,8 @@ mod tests {
 
         fn link(
             &self,
-            _linker: &mut wasmtime::component::Linker<crate::host::state::HostState<CoreRuntime>>,
-        ) -> Result<(), crate::host::extension::ExtensionError> {
+            _linker: &mut wasmtime::component::Linker<nexum_runtime_wasm::HostState<CoreRuntime>>,
+        ) -> Result<(), nexum_runtime_api::ExtensionError> {
             Ok(())
         }
 
@@ -471,8 +471,8 @@ mod tests {
 
         fn link(
             &self,
-            _linker: &mut wasmtime::component::Linker<crate::host::state::HostState<CoreRuntime>>,
-        ) -> Result<(), crate::host::extension::ExtensionError> {
+            _linker: &mut wasmtime::component::Linker<nexum_runtime_wasm::HostState<CoreRuntime>>,
+        ) -> Result<(), nexum_runtime_api::ExtensionError> {
             Ok(())
         }
 

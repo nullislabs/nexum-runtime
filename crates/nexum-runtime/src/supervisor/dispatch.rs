@@ -13,12 +13,12 @@ use super::Supervisor;
 use super::cursors::{commit_chain_log_cursor, persist_progress_marker};
 use super::lifecycle::{revive_one, sweep};
 use crate::bindings::nexum;
-use crate::host::component::RuntimeTypes;
-use crate::host::extension::ExtensionDelivery;
-use crate::host::logs::{LogChannel, LogRecord};
-use crate::host::state::HostState;
 use crate::manifest::Trigger;
 use nexum_primitives::module_id::ModuleId;
+use nexum_runtime_api::ExtensionDelivery;
+use nexum_runtime_api::RuntimeTypes;
+use nexum_runtime_logs::{LogChannel, LogRecord};
+use nexum_runtime_wasm::HostState;
 
 impl<T: RuntimeTypes<State = HostState<T>>> Supervisor<T> {
     /// The restart sweep runs first; returns the number of modules invoked.
@@ -290,7 +290,7 @@ impl<T: RuntimeTypes<State = HostState<T>>> Supervisor<T> {
                 DispatchOutcome::Ok
             }
             Ok(Err(fault)) => {
-                let kind = crate::host::fault::fault_label(&fault);
+                let kind = nexum_runtime_wasm::fault_label(&fault);
                 warn!(
                     module = %module.name,
                     chain_id,
@@ -298,7 +298,7 @@ impl<T: RuntimeTypes<State = HostState<T>>> Supervisor<T> {
                     block_number,
                     latency_ms,
                     kind,
-                    message = %crate::host::fault::fault_message(&fault),
+                    message = %nexum_runtime_wasm::fault_message(&fault),
                     "on-trigger returned fault",
                 );
                 metrics::counter!(

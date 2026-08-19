@@ -2,10 +2,9 @@
 
 use wasmtime_wasi_http::p2::{WasiHttpCtxView, WasiHttpView};
 
-use super::component::RuntimeTypes;
-use super::state::HostState;
+use nexum_runtime_api::RuntimeTypes;
 
-pub use nexum_runtime_http::HttpGate;
+use crate::state::HostState;
 
 impl<T: RuntimeTypes> WasiHttpView for HostState<T> {
     fn http(&mut self) -> WasiHttpCtxView<'_> {

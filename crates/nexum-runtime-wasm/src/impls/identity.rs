@@ -2,10 +2,11 @@
 //! empty roster so guests can probe-then-skip; signing returns
 //! `unsupported`.
 
-use crate::bindings::nexum;
-use crate::bindings::nexum::host::types::Fault;
-use crate::host::component::RuntimeTypes;
-use crate::host::state::HostState;
+use nexum_runtime_api::RuntimeTypes;
+use nexum_runtime_api::bindings::nexum;
+use nexum_runtime_api::bindings::nexum::host::types::Fault;
+
+use crate::state::HostState;
 
 impl<T: RuntimeTypes> nexum::host::identity::Host for HostState<T> {
     async fn accounts(&mut self) -> Result<Vec<Vec<u8>>, Fault> {

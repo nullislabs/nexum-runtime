@@ -22,13 +22,13 @@ use crate::bindings::nexum::host::types::Fault;
 use crate::bindings::{Config, TriggerModule};
 use crate::engine_config::ModuleEntry;
 use crate::error::{EngineRefusal, RefusalContext as _, RuntimeError};
-use crate::host::component::RuntimeTypes;
-use crate::host::logs::RunId;
-use crate::host::state::HostState;
 use crate::manifest::{self, CapabilityRegistry, LoadedManifest, Trigger};
 use crate::runtime::dispatch_rate::TokenBucket;
 use nexum_primitives::digest::ContentDigest;
 use nexum_primitives::module_id::ModuleId;
+use nexum_runtime_api::RuntimeTypes;
+use nexum_runtime_logs::RunId;
+use nexum_runtime_wasm::HostState;
 
 /// Admission refusals ahead of instantiation; the wording is operator-pinned.
 // `IntoStaticStr`: the snake_case variant name is the `error_kind` label;
@@ -352,8 +352,8 @@ pub(super) async fn module<T: RuntimeTypes>(
         Err(e) => {
             warn!(
                 module = %module_namespace,
-                kind = crate::host::fault::fault_label(&e),
-                message = %crate::host::fault::fault_message(&e),
+                kind = nexum_runtime_wasm::fault_label(&e),
+                message = %nexum_runtime_wasm::fault_message(&e),
                 "init failed - module loaded but marked dead; dispatcher will skip it",
             );
             false

@@ -70,8 +70,8 @@ use std::time::Duration;
 use alloy_chains::Chain;
 
 use crate::engine_config::{ChainConfig, ResolvedModuleLimits};
-use crate::host::component::Components;
-use crate::host::logs::LogPipeline;
+use nexum_runtime_logs::LogPipeline;
+use nexum_runtime_wasm::Components;
 
 pub(crate) const HARNESS_POLL_INTERVAL: Duration = Duration::from_millis(20);
 
@@ -134,8 +134,10 @@ mod tests {
 
     use crate::builder::{LaunchRefusal, RuntimeBuilder};
     use crate::engine_config::EngineConfig;
-    use crate::host::component::{ChainMethod, ComponentsBuilder, StateHandle, StateStore};
     use crate::test_utils::Refusal;
+    use nexum_runtime_api::{StateHandle, StateStore};
+    use nexum_runtime_wasm::ComponentsBuilder;
+    use nexum_world::ChainMethod;
 
     /// A custom component set launches through the public builder on fakes;
     /// it bails at boot only because the default config declares no modules,
@@ -173,7 +175,7 @@ mod tests {
 
     #[tokio::test]
     async fn pool_rejects_an_unconfigured_chain_before_the_node() {
-        use crate::host::provider_pool::PoolError;
+        use nexum_runtime_chain::PoolError;
 
         let node = FakeNode::new();
         let pool = node.pool(&[Chain::from_id(1)], HARNESS_POLL_INTERVAL);

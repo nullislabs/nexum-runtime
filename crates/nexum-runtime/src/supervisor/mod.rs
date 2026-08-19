@@ -27,12 +27,13 @@ use crate::engine_config::{
     EngineConfig, ModuleEntry, PoisonPolicy, PolicySection, ResolvedModuleLimits,
 };
 use crate::error::{RefusalContext as _, RuntimeError};
-use crate::host::component::{Components, RuntimeTypes};
-use crate::host::extension::Extension;
-use crate::host::state::HostState;
 use admission::{capability_registry, enforce_extension_uniqueness};
 use cursors::ChainLogCursors;
 use load::LoadedModule;
+use nexum_runtime_api::Extension;
+use nexum_runtime_api::RuntimeTypes;
+use nexum_runtime_wasm::Components;
+use nexum_runtime_wasm::HostState;
 use prepass::{enforce_trigger_chains, load_required_manifest, manifest_namespace};
 
 /// Owns every loaded module.

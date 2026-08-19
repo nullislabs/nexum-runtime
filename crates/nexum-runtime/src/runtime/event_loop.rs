@@ -24,13 +24,13 @@ use tokio::sync::mpsc;
 use tracing::{info, warn};
 
 use crate::bindings::nexum;
-use crate::host::component::RuntimeTypes;
-use crate::host::extension::{ExtensionDelivery, ExtensionSource};
-use crate::host::provider_pool::ProviderPool;
-use crate::host::state::HostState;
 use crate::runtime::restart_policy::{backoff_for, jitter_seed};
 use crate::supervisor::{EventSource, Supervisor};
 use nexum_primitives::module_id::ModuleId;
+use nexum_runtime_api::RuntimeTypes;
+use nexum_runtime_api::{ExtensionDelivery, ExtensionSource};
+use nexum_runtime_chain::ProviderPool;
+use nexum_runtime_wasm::HostState;
 use nexum_tasks::{TaskExecutor, TaskExit, TaskSet};
 
 /// Uninterrupted-event duration before the backoff counter resets to 0.
@@ -1330,9 +1330,9 @@ mod tests {
         use alloy_chains::Chain;
         use alloy_rpc_types_eth::Filter;
 
-        use crate::host::provider_pool::ProviderPool;
         use crate::runtime::event_loop::{open_block_streams, open_chain_log_streams, run};
         use crate::test_utils::rpc::FakeNode;
+        use nexum_runtime_chain::ProviderPool;
         use nexum_tasks::{TaskManager, TaskSet};
 
         let mut booted = boot_mock_supervisor().await;

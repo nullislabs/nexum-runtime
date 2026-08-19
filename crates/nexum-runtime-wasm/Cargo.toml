@@ -1,0 +1,39 @@
+[package]
+name = "nexum-runtime-wasm"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "The wasmtime embedding for the Nexum runtime: the per-module host state, the WIT host impls, and the component wiring."
+
+[lints]
+workspace = true
+
+[dependencies]
+alloy-chains.workspace = true
+# `Bytes` decodes the hex revert body of a JSON-RPC error response.
+alloy-primitives.workspace = true
+alloy-transport.workspace = true
+metrics.workspace = true
+nexum-runtime-api = { path = "../nexum-runtime-api" }
+nexum-runtime-chain = { path = "../nexum-runtime-chain" }
+nexum-runtime-http = { path = "../nexum-runtime-http" }
+nexum-runtime-logs = { path = "../nexum-runtime-logs" }
+nexum-world = { path = "../nexum-world" }
+# The typed timeout probe in the fault funnel downcasts to `reqwest::Error`.
+reqwest.workspace = true
+strum.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+tracing-core.workspace = true
+wasmtime.workspace = true
+wasmtime-wasi.workspace = true
+wasmtime-wasi-http.workspace = true
+
+[dev-dependencies]
+alloy-json-rpc.workspace = true
+serde_json = { workspace = true, features = ["std"] }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+tracing-subscriber.workspace = true
+wiremock.workspace = true

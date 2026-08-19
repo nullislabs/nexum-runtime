@@ -6,10 +6,6 @@ use thiserror::Error;
 
 pub use crate::builder::LaunchRefusal;
 pub use crate::engine_config::{EngineConfigError, EnvVarError, RpcEndpointError};
-pub use crate::host::component::{BuildError, StoreError};
-pub use crate::host::extension::ExtensionError;
-pub use crate::host::local_store_redb::StorageError;
-pub use crate::host::provider_pool::PoolError;
 pub use crate::manifest::error::{CapabilityError, CapabilityViolation, ParseError};
 pub use crate::supervisor::load::LoadRefusal;
 pub use crate::supervisor::prepass::BootRefusal;
@@ -17,6 +13,11 @@ pub use nexum_primitives::digest::{DigestMismatch, DigestParseError};
 pub use nexum_primitives::interface_id::{InvalidInterfaceId, InvalidInterfaceTrack};
 pub use nexum_primitives::module_id::InvalidModuleName;
 pub use nexum_runtime_api::BoxError;
+pub use nexum_runtime_api::ExtensionError;
+pub use nexum_runtime_api::StoreError;
+pub use nexum_runtime_chain::PoolError;
+pub use nexum_runtime_store::StorageError;
+pub use nexum_runtime_wasm::BuildError;
 pub use semver::Error as SemverError;
 pub use url::ParseError as UrlParseError;
 

@@ -3,11 +3,10 @@
 
 use alloy_primitives::Bytes;
 use alloy_transport::TransportError;
-
-use crate::bindings::nexum::host::chain::{ChainError, RpcError};
-use crate::bindings::nexum::host::types::{Fault, RateLimit};
-use crate::host::component::StoreError;
-use crate::host::provider_pool::PoolError;
+use nexum_runtime_api::StoreError;
+use nexum_runtime_api::bindings::nexum::host::chain::{ChainError, RpcError};
+use nexum_runtime_api::bindings::nexum::host::types::{Fault, RateLimit};
+use nexum_runtime_chain::PoolError;
 
 /// Fieldless on purpose: no runtime string can enter the set, so nothing
 /// upstream or operator-derived crosses the boundary.
@@ -708,25 +707,24 @@ mod tests {
     /// lists alone cannot see a payload built somewhere else. Outside the
     /// funnel a string-carrying fault is banned outright, pinned to a
     /// compile-time literal (the capability stubs), or a pure destructure
-    /// (`host/fault.rs`); a `const` payload cannot hold runtime data.
+    /// (`fault.rs`); a `const` payload cannot hold runtime data.
     #[test]
     fn guest_faults_are_constructed_only_in_the_funnel_and_only_from_the_vocabulary() {
         let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
         let roots = [
             manifest.join("src"),
+            manifest.join("../nexum-runtime/src"),
+            manifest.join("../nexum-runtime-api/src"),
             manifest.join("../nexum-runtime-chain/src"),
             manifest.join("../nexum-runtime-store/src"),
             manifest.join("../nexum-runtime-logs/src"),
+            manifest.join("../nexum-runtime-http/src"),
         ];
-        let funnel = std::path::Path::new("host").join("error.rs");
-        let projections = std::path::Path::new("host").join("fault.rs");
+        let funnel = manifest.join("src").join("error.rs");
+        let projections = manifest.join("src").join("fault.rs");
         let stubs = [
-            std::path::Path::new("host")
-                .join("impls")
-                .join("identity.rs"),
-            std::path::Path::new("host")
-                .join("impls")
-                .join("remote_store.rs"),
+            manifest.join("src").join("impls").join("identity.rs"),
+            manifest.join("src").join("impls").join("remote_store.rs"),
         ];
         let mut scanned = 0_usize;
         let mut sites = 0_usize;
@@ -734,7 +732,7 @@ mod tests {
             let text = std::fs::read_to_string(&path).expect("source file reads");
             let code = squash(shipped_region(&text));
             scanned += 1;
-            if path.ends_with(&funnel) {
+            if path == funnel {
                 sites = funnel_constructions(&code);
                 // A `From` impl would let `?` reach the guest while skipping
                 // the operator log in `store_fault`.
@@ -772,11 +770,11 @@ mod tests {
             ] {
                 assert!(
                     !code.contains(token),
-                    "{} builds a guest fault outside host/error.rs: `{token}`",
+                    "{} builds a guest fault outside the funnel: `{token}`",
                     path.display(),
                 );
             }
-            if path.ends_with(&projections) {
+            if path == projections {
                 for prefix in FAULT_PREFIXES {
                     for rest in occurrences(&code, prefix) {
                         assert!(
@@ -786,7 +784,7 @@ mod tests {
                         );
                     }
                 }
-            } else if stubs.iter().any(|s| path.ends_with(s)) {
+            } else if stubs.contains(&path) {
                 for prefix in FAULT_PREFIXES {
                     for rest in occurrences(&code, prefix) {
                         assert!(
@@ -801,19 +799,20 @@ mod tests {
                 for prefix in FAULT_PREFIXES {
                     assert!(
                         occurrences(&code, prefix).is_empty(),
-                        "{} builds a string-carrying fault outside host/error.rs: `{prefix}`",
+                        "{} builds a string-carrying fault outside the funnel: `{prefix}`",
                         path.display(),
                     );
                 }
             }
         }
+        // Above 76 minus the smallest root, so losing any one root fails.
         assert!(
-            scanned > 60,
-            "the walk must cover the engine and the capability crates, saw {scanned} files"
+            scanned >= 75,
+            "the walk must cover the embedding, the engine, the api crate, and the capability crates, saw {scanned} files"
         );
         assert!(
             sites >= 10,
-            "host/error.rs holds the construction sites, saw {sites}"
+            "the funnel holds the construction sites, saw {sites}"
         );
     }
 }

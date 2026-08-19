@@ -1,14 +1,15 @@
 //! `nexum:host/local-store`: the lattice's store handle, namespaced host-side.
 
-use crate::bindings::nexum;
-use crate::bindings::nexum::host::local_store::{KeyValue, WriteOp};
-use crate::bindings::nexum::host::types::Fault;
-use crate::host::component::{self, RuntimeTypes, StateHandle, StoreError};
-use crate::host::state::HostState;
+use nexum_runtime_api::bindings::nexum;
+use nexum_runtime_api::bindings::nexum::host::local_store::{KeyValue, WriteOp};
+use nexum_runtime_api::bindings::nexum::host::types::Fault;
+use nexum_runtime_api::{RuntimeTypes, StateHandle, StoreError};
+
+use crate::state::HostState;
 
 impl<T: RuntimeTypes> HostState<T> {
     fn store_fault(&self, verb: &'static str, err: StoreError) -> Fault {
-        crate::host::error::store_fault(&self.run.module, verb, err)
+        crate::error::store_fault(&self.run.module, verb, err)
     }
 }
 
@@ -52,11 +53,13 @@ impl<T: RuntimeTypes> nexum::host::local_store::Host for HostState<T> {
     }
 
     async fn apply(&mut self, ops: Vec<WriteOp>) -> Result<(), Fault> {
-        let ops: Vec<component::WriteOp> = ops
+        let ops: Vec<nexum_runtime_api::WriteOp> = ops
             .into_iter()
             .map(|op| match op {
-                WriteOp::Set(KeyValue { key, value }) => component::WriteOp::Set { key, value },
-                WriteOp::Delete(key) => component::WriteOp::Delete { key },
+                WriteOp::Set(KeyValue { key, value }) => {
+                    nexum_runtime_api::WriteOp::Set { key, value }
+                }
+                WriteOp::Delete(key) => nexum_runtime_api::WriteOp::Delete { key },
             })
             .collect();
         self.store
