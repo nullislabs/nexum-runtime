@@ -303,6 +303,17 @@ async fn dying_run_leaves_a_panic_record() {
         1,
         "the panic record carries the trap's root cause, not the frame list",
     );
+
+    // fuel-bomb carries no SDK, so its init line crosses the simple `log`
+    // verb: proof that the verb a guest built against the old surface calls
+    // still links, and still records neither a source nor fields.
+    let init = page
+        .records
+        .iter()
+        .find(|r| r.channel == LogChannel::HostInterface && r.message.contains("fuel-bomb init"))
+        .expect("the SDK-free guest's init line was captured");
+    assert_eq!(init.source, nexum_runtime_logs::LogSource::default());
+    assert!(init.fields.is_empty());
 }
 
 #[tokio::test]

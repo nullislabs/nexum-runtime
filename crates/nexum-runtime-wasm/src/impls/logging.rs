@@ -1,5 +1,5 @@
-//! `nexum:host/logging`: builds a [`LogRecord`] from the guest's `log` call
-//! and routes it.
+//! `nexum:host/logging`: builds a [`LogRecord`] from the guest's `log` and
+//! `log-event` calls and routes both through the same router.
 
 use tracing_core::Level;
 
@@ -10,32 +10,49 @@ use nexum_runtime_logs::{LogChannel, LogField, LogRecord, LogSource, LogValue};
 use crate::state::HostState;
 
 impl<T: RuntimeTypes> nexum::host::logging::Host for HostState<T> {
-    async fn log(
+    async fn log(&mut self, level: nexum::host::logging::Level, message: String) {
+        self.log_router.record(LogRecord::now(
+            self.run.clone(),
+            LogChannel::HostInterface,
+            lift_level(level),
+            message,
+        ));
+    }
+
+    async fn log_event(
         &mut self,
         level: nexum::host::logging::Level,
         source: nexum::host::logging::Source,
         message: String,
         fields: Vec<nexum::host::logging::Field>,
     ) {
-        // WIT edge: the generated wire enum crosses into the level
-        // vocabulary here, one of the only two such conversions.
-        use nexum::host::logging::Level as WireLevel;
-        let level = match level {
-            WireLevel::Trace => Level::TRACE,
-            WireLevel::Debug => Level::DEBUG,
-            WireLevel::Info => Level::INFO,
-            WireLevel::Warn => Level::WARN,
-            WireLevel::Error => Level::ERROR,
-        };
         self.log_router.record(
-            LogRecord::now(self.run.clone(), LogChannel::HostInterface, level, message)
-                .with_source(LogSource {
-                    target: source.target,
-                    file: source.file,
-                    line: source.line,
-                })
-                .with_fields(fields.into_iter().map(lift_field).collect()),
+            LogRecord::now(
+                self.run.clone(),
+                LogChannel::HostInterface,
+                lift_level(level),
+                message,
+            )
+            .with_source(LogSource {
+                target: source.target,
+                file: source.file,
+                line: source.line,
+            })
+            .with_fields(fields.into_iter().map(lift_field).collect()),
         );
+    }
+}
+
+/// WIT edge: the generated wire enum crosses into the level vocabulary
+/// here, one of the only two such conversions.
+fn lift_level(level: nexum::host::logging::Level) -> Level {
+    use nexum::host::logging::Level as Wire;
+    match level {
+        Wire::Trace => Level::TRACE,
+        Wire::Debug => Level::DEBUG,
+        Wire::Info => Level::INFO,
+        Wire::Warn => Level::WARN,
+        Wire::Error => Level::ERROR,
     }
 }
 

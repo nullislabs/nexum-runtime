@@ -14,16 +14,6 @@
 
 use nexum::host::{logging, types};
 
-/// Emit one line over the direct `logging` import: no call site, no fields.
-fn log_line(level: logging::Level, message: &str) {
-    let source = logging::Source {
-        target: String::new(),
-        file: None,
-        line: None,
-    };
-    logging::log(level, &source, message, &[]);
-}
-
 struct ExampleModule;
 
 #[nexum_sdk::module]
@@ -34,7 +24,7 @@ impl ExampleModule {
             .find(|(k, _)| k == "name")
             .map(|(_, v)| v.as_str())
             .unwrap_or("unknown");
-        log_line(
+        logging::log(
             logging::Level::Info,
             &format!("example module init (name={name})"),
         );
@@ -42,7 +32,7 @@ impl ExampleModule {
     }
 
     fn on_block(block: types::Block) -> Result<(), Fault> {
-        log_line(
+        logging::log(
             logging::Level::Info,
             &format!(
                 "block {} on chain {} (ts={}ms)",
@@ -53,7 +43,7 @@ impl ExampleModule {
     }
 
     fn on_event(log: types::Log) -> Result<(), Fault> {
-        log_line(
+        logging::log(
             logging::Level::Info,
             &format!(
                 "event with {} topics on chain {}",
@@ -65,7 +55,7 @@ impl ExampleModule {
     }
 
     fn on_schedule(tick: types::ScheduleTick) -> Result<(), Fault> {
-        log_line(
+        logging::log(
             logging::Level::Info,
             &format!("schedule fired at {}ms", tick.fired_at),
         );
@@ -73,7 +63,7 @@ impl ExampleModule {
     }
 
     fn on_extension(trigger: types::ExtensionTrigger) -> Result<(), Fault> {
-        log_line(
+        logging::log(
             logging::Level::Info,
             &format!(
                 "extension trigger kind {} ({} payload bytes)",

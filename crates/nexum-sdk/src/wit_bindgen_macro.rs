@@ -206,10 +206,7 @@ macro_rules! __bind_host_cap_via_wit_bindgen {
 
         impl $crate::host::LoggingHost for WitBindgenHost {
             fn log(&self, level: $crate::Level, message: &str) {
-                // Routed through the sink's defaulted `log`, so the
-                // direct-call seam reports the empty source and no fields
-                // in exactly one place.
-                $crate::tracing::LogSink::log(&HostLogSink, level, message);
+                nexum::host::logging::log(nexum::host::logging::Level::from(level), message);
             }
         }
     };
@@ -278,7 +275,7 @@ macro_rules! bind_host_logging_via_wit_bindgen {
                         },
                     })
                     .collect();
-                nexum::host::logging::log(
+                nexum::host::logging::log_event(
                     ::core::convert::From::from(level),
                     &source,
                     message,

@@ -39,12 +39,13 @@ mod nexum {
                 pub line: Option<u32>,
             }
 
-            /// One call as the wire carried it.
+            /// One `log-event` call as the wire carried it; the facade is
+            /// the only caller of the rich verb.
             pub type Recorded = (Level, Source, String, Vec<Field>);
 
             pub static RECORDED: Mutex<Vec<Recorded>> = Mutex::new(Vec::new());
 
-            pub fn log(level: Level, source: &Source, message: &str, fields: &[Field]) {
+            pub fn log_event(level: Level, source: &Source, message: &str, fields: &[Field]) {
                 RECORDED
                     .lock()
                     .push((level, source.clone(), message.to_owned(), fields.to_vec()));

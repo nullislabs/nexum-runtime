@@ -35,7 +35,11 @@ interface logging {
         line: option<u32>,
     }
 
-    /// Emit a structured log event.
+    /// Emit a structured log message.
     /// The host decides how to handle it (stdout, file, discard).
-    log: func(level: level, source: source, message: string, fields: list<field>);
+    log: func(level: level, message: string);
+
+    /// Emit an event carrying its call site and its recorded fields, which
+    /// the host keeps rather than folding into the message.
+    log-event: func(level: level, source: source, message: string, fields: list<field>);
 }
