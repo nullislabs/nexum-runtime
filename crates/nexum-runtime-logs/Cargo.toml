@@ -14,6 +14,7 @@ workspace = true
 nexum-primitives = { path = "../nexum-primitives" }
 nexum-runtime-api = { path = "../nexum-runtime-api" }
 nexum-runtime-config = { path = "../nexum-runtime-config" }
+derive_more.workspace = true
 parking_lot.workspace = true
 strum.workspace = true
 tokio = { workspace = true, features = ["sync"] }

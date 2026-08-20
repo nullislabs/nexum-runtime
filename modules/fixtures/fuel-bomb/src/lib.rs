@@ -17,13 +17,23 @@ wit_bindgen::generate!({
 
 use nexum::host::{logging, types};
 
+/// Emit one line over the direct `logging` import: no call site, no fields.
+fn log_line(level: logging::Level, message: &str) {
+    let source = logging::Source {
+        target: String::new(),
+        file: None,
+        line: None,
+    };
+    logging::log(level, &source, message, &[]);
+}
+
 struct FuelBomb;
 
 impl Guest for FuelBomb {
     fn init(_config: Vec<(String, String)>) -> Result<(), Fault> {
         // Minimal SDK-free fixture: no tracing subscriber is installed,
         // so log through the raw host binding directly.
-        logging::log(logging::Level::Info, "fuel-bomb init (will exhaust fuel)");
+        log_line(logging::Level::Info, "fuel-bomb init (will exhaust fuel)");
         Ok(())
     }
 

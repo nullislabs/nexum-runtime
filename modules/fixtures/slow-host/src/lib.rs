@@ -21,13 +21,23 @@ wit_bindgen::generate!({
 
 use nexum::host::{chain, logging, types};
 
+/// Emit one line over the direct `logging` import: no call site, no fields.
+fn log_line(level: logging::Level, message: &str) {
+    let source = logging::Source {
+        target: String::new(),
+        file: None,
+        line: None,
+    };
+    logging::log(level, &source, message, &[]);
+}
+
 struct SlowHost;
 
 impl Guest for SlowHost {
     fn init(_config: Vec<(String, String)>) -> Result<(), Fault> {
         // Minimal SDK-free fixture: no tracing subscriber is installed,
         // so log through the raw host binding directly.
-        logging::log(logging::Level::Info, "slow-host init");
+        log_line(logging::Level::Info, "slow-host init");
         Ok(())
     }
 
@@ -37,7 +47,7 @@ impl Guest for SlowHost {
         // with empty params is the cheapest well-formed request in the
         // permitted read surface.
         let _ = chain::request(1, "eth_blockNumber", "[]");
-        logging::log(logging::Level::Info, "slow-host on_trigger returned");
+        log_line(logging::Level::Info, "slow-host on_trigger returned");
         Ok(())
     }
 }

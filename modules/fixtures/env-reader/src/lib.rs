@@ -21,13 +21,23 @@ wit_bindgen::generate!({
 
 use nexum::host::{logging, types};
 
+/// Emit one line over the direct `logging` import: no call site, no fields.
+fn log_line(level: logging::Level, message: &str) {
+    let source = logging::Source {
+        target: String::new(),
+        file: None,
+        line: None,
+    };
+    logging::log(level, &source, message, &[]);
+}
+
 struct EnvReader;
 
 impl Guest for EnvReader {
     fn init(_config: Vec<(String, String)>) -> Result<(), Fault> {
         // Minimal SDK-free fixture: no tracing subscriber is installed,
         // so log through the raw host binding directly.
-        logging::log(logging::Level::Info, "env-reader init");
+        log_line(logging::Level::Info, "env-reader init");
         Ok(())
     }
 
@@ -43,15 +53,15 @@ impl Guest for EnvReader {
             Ok(n) => n.to_string(),
             Err(err) => format!("unreadable ({err})"),
         };
-        logging::log(
+        log_line(
             logging::Level::Info,
             &format!("env vars {} args {} stdin {stdin}", vars.len(), args.len()),
         );
         for key in &vars {
-            logging::log(logging::Level::Info, &format!("env key {key}"));
+            log_line(logging::Level::Info, &format!("env key {key}"));
         }
         for arg in &args {
-            logging::log(logging::Level::Info, &format!("env arg {arg}"));
+            log_line(logging::Level::Info, &format!("env arg {arg}"));
         }
         Ok(())
     }

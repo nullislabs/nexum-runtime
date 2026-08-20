@@ -21,13 +21,23 @@ wit_bindgen::generate!({
 
 use nexum::host::{logging, types};
 
+/// Emit one line over the direct `logging` import: no call site, no fields.
+fn log_line(level: logging::Level, message: &str) {
+    let source = logging::Source {
+        target: String::new(),
+        file: None,
+        line: None,
+    };
+    logging::log(level, &source, message, &[]);
+}
+
 struct ClockReader;
 
 impl Guest for ClockReader {
     fn init(_config: Vec<(String, String)>) -> Result<(), Fault> {
         // Minimal SDK-free fixture: no tracing subscriber is installed,
         // so log through the raw host binding directly.
-        logging::log(logging::Level::Info, "clock-reader init");
+        log_line(logging::Level::Info, "clock-reader init");
         Ok(())
     }
 
@@ -39,7 +49,7 @@ impl Guest for ClockReader {
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_secs())
             .unwrap_or(0);
-        logging::log(logging::Level::Info, &format!("clock wall {secs}"));
+        log_line(logging::Level::Info, &format!("clock wall {secs}"));
         Ok(())
     }
 }

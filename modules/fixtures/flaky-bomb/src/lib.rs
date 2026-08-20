@@ -25,6 +25,16 @@ static FAIL_FIRST_N: OnceLock<u32> = OnceLock::new();
 
 const ATTEMPTS_KEY: &str = "attempts";
 
+/// Emit one line over the direct `logging` import: no call site, no fields.
+fn log_line(level: logging::Level, message: &str) {
+    let source = logging::Source {
+        target: String::new(),
+        file: None,
+        line: None,
+    };
+    logging::log(level, &source, message, &[]);
+}
+
 struct FlakyBomb;
 
 impl Guest for FlakyBomb {
@@ -37,7 +47,7 @@ impl Guest for FlakyBomb {
         FAIL_FIRST_N.set(n).ok();
         // Minimal SDK-free fixture: no tracing subscriber is installed,
         // so log through the raw host binding directly.
-        logging::log(
+        log_line(
             logging::Level::Info,
             &format!("flaky-bomb init: will trap on the first {n} event(s)"),
         );
@@ -60,7 +70,7 @@ impl Guest for FlakyBomb {
 
         let n = FAIL_FIRST_N.get().copied().unwrap_or(1);
         if attempt <= n {
-            logging::log(
+            log_line(
                 logging::Level::Warn,
                 &format!("flaky-bomb attempt {attempt}/{n}: burning fuel to trigger OutOfFuel"),
             );
@@ -76,7 +86,7 @@ impl Guest for FlakyBomb {
                 std::hint::black_box(x);
             }
         }
-        logging::log(
+        log_line(
             logging::Level::Info,
             &format!("flaky-bomb attempt {attempt}: ok, recovered"),
         );

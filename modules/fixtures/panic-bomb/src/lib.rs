@@ -18,12 +18,19 @@ wit_bindgen::generate!({
 });
 
 use nexum::host::{logging, types};
+use nexum_sdk::tracing::{LogField, LogSource, LogValue};
 
 /// Routes facade lines to the bound host logging import.
 struct HostLogSink;
 
 impl nexum_sdk::tracing::LogSink for HostLogSink {
-    fn log(&self, level: nexum_sdk::Level, message: &str) {
+    fn log_event(
+        &self,
+        level: nexum_sdk::Level,
+        source: LogSource<'_>,
+        message: &str,
+        fields: &[LogField],
+    ) {
         use nexum_sdk::Level;
         // `Level` is a set of associated consts, so compare rather than
         // match; the five tiers are total, hence the final `Trace` arm.
@@ -38,7 +45,25 @@ impl nexum_sdk::tracing::LogSink for HostLogSink {
         } else {
             logging::Level::Trace
         };
-        logging::log(level, message);
+        let source = logging::Source {
+            target: source.target.to_owned(),
+            file: source.file.map(str::to_owned),
+            line: source.line,
+        };
+        let fields: Vec<logging::Field> = fields
+            .iter()
+            .map(|field| logging::Field {
+                name: field.name.to_owned(),
+                value: match &field.value {
+                    LogValue::Text(v) => logging::FieldValue::Text(v.clone()),
+                    LogValue::Unsigned(v) => logging::FieldValue::Unsigned(*v),
+                    LogValue::Signed(v) => logging::FieldValue::Signed(*v),
+                    LogValue::Float(v) => logging::FieldValue::Float(*v),
+                    LogValue::Boolean(v) => logging::FieldValue::Boolean(*v),
+                },
+            })
+            .collect();
+        logging::log(level, &source, message, &fields);
     }
 }
 
