@@ -58,10 +58,10 @@ pub mod config {
     pub use nexum_runtime_config::{
         ChainConfig, ChainLimitsSection, ComponentPolicy, DispatchLimitsSection,
         DispatchRatePolicy, EffectivePolicy, EngineConfig, EngineSection, HttpLimitsSection,
-        LogLimitsSection, LogRetentionLimits, MetricsSection, ModuleEntry, ModuleLimits,
-        OutboundHttpLimits, PoisonLimitsSection, PoisonPolicy, PolicyCeilings, PolicySection,
-        ResolvedModuleLimits, RpcEndpoint, RpcTransport, ShutdownLimitsSection, TotalPolicy,
-        load_or_default,
+        LogBoundsPolicy, LogLimitsSection, LogRetentionLimits, MetricsSection, ModuleEntry,
+        ModuleLimits, OutboundHttpLimits, PoisonLimitsSection, PoisonPolicy, PolicyCeilings,
+        PolicySection, ResolvedModuleLimits, RpcEndpoint, RpcTransport, ShutdownLimitsSection,
+        TotalPolicy, load_or_default,
     };
     pub use url::Url;
 }

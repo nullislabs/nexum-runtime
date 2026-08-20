@@ -1,6 +1,8 @@
 //! `nexum:host/logging`: builds a [`LogRecord`] from the guest's `log` and
 //! `log-event` calls and routes both through the same router.
 
+use std::time::Instant;
+
 use tracing_core::Level;
 
 use nexum_runtime_api::RuntimeTypes;
@@ -11,7 +13,7 @@ use crate::state::HostState;
 
 impl<T: RuntimeTypes> nexum::host::logging::Host for HostState<T> {
     async fn log(&mut self, level: nexum::host::logging::Level, message: String) {
-        self.log_router.record(LogRecord::now(
+        self.route(LogRecord::now(
             self.run.clone(),
             LogChannel::HostInterface,
             lift_level(level),
@@ -26,7 +28,7 @@ impl<T: RuntimeTypes> nexum::host::logging::Host for HostState<T> {
         message: String,
         fields: Vec<nexum::host::logging::Field>,
     ) {
-        self.log_router.record(
+        self.route(
             LogRecord::now(
                 self.run.clone(),
                 LogChannel::HostInterface,
@@ -40,6 +42,17 @@ impl<T: RuntimeTypes> nexum::host::logging::Host for HostState<T> {
             })
             .with_fields(fields.into_iter().map(lift_field).collect()),
         );
+    }
+}
+
+impl<T: RuntimeTypes> HostState<T> {
+    /// Bound the record, then route what survives. The bound runs here
+    /// rather than in the router because the router renders before it
+    /// retains, and the render is the cost being bounded.
+    fn route(&mut self, mut record: LogRecord) {
+        if self.log_bounds.admit(&mut record, Instant::now()) {
+            self.log_router.record(record);
+        }
     }
 }
 

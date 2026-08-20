@@ -1,13 +1,14 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::net::IpAddr;
-use std::num::{NonZeroU64, NonZeroUsize};
+use std::num::{NonZeroU32, NonZeroU64, NonZeroUsize};
 
 use ipnet::IpNet;
 use serde::Deserialize;
 
 use nexum_primitives::host_pattern::HostPattern;
 
-use super::error::{EngineConfigError, nonzero_u64, nonzero_usize, zero_field};
+use super::dispatch_rate::{DEFAULT_LOG_RATE, DispatchRatePolicy};
+use super::error::{EngineConfigError, nonzero_u32, nonzero_u64, nonzero_usize, zero_field};
 use super::{nz_u64, nz_usize};
 
 /// Default fuel budget per dispatch (~1e9 WASM instructions).
@@ -19,12 +20,18 @@ const DEFAULT_MEMORY_LIMIT: NonZeroUsize = nz_usize(64 * 1024 * 1024);
 /// Default per-module local-store byte quota (50 MiB).
 const DEFAULT_STATE_BYTES: u64 = 50 * 1024 * 1024;
 
+/// Default cap on one host log record (8 KiB).
+const DEFAULT_LOG_RECORD_BYTES: NonZeroUsize = nz_usize(8 * 1024);
+
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct RawPolicySection {
     max_memory_bytes: Option<usize>,
     max_fuel_per_dispatch: Option<u64>,
     max_state_bytes: Option<u64>,
+    max_log_record_bytes: Option<usize>,
+    max_log_burst: Option<u32>,
+    max_log_records_per_sec: Option<u32>,
     capabilities: Option<Vec<String>>,
     #[serde(default)]
     http_deny: Vec<String>,
@@ -46,6 +53,9 @@ struct RawComponentPolicy {
     max_memory_bytes: Option<usize>,
     max_fuel_per_dispatch: Option<u64>,
     max_state_bytes: Option<u64>,
+    max_log_record_bytes: Option<usize>,
+    max_log_burst: Option<u32>,
+    max_log_records_per_sec: Option<u32>,
     capabilities: Option<Vec<String>>,
     http_allow: Option<Vec<String>>,
 }
@@ -85,6 +95,17 @@ impl PolicySection {
                 max_state_bytes: row
                     .and_then(|r| r.max_state_bytes)
                     .unwrap_or(self.ceilings.max_state_bytes),
+                log_bounds: LogBoundsPolicy {
+                    max_record_bytes: row
+                        .and_then(|r| r.max_log_record_bytes)
+                        .unwrap_or(self.ceilings.log_bounds.max_record_bytes),
+                    rate: DispatchRatePolicy::new(
+                        row.and_then(|r| r.max_log_burst)
+                            .unwrap_or(self.ceilings.log_bounds.rate.capacity),
+                        row.and_then(|r| r.max_log_records_per_sec)
+                            .unwrap_or(self.ceilings.log_bounds.rate.refill_per_sec),
+                    ),
+                },
             },
             capabilities: row
                 .and_then(|r| r.capabilities.as_deref())
@@ -104,6 +125,8 @@ pub struct PolicyCeilings {
     pub max_fuel_per_dispatch: NonZeroU64,
     /// Local-store on-disk byte quota; zero denies every write.
     pub max_state_bytes: u64,
+    /// Admission bounds on the host logging verbs.
+    pub log_bounds: LogBoundsPolicy,
 }
 
 impl Default for PolicyCeilings {
@@ -112,6 +135,28 @@ impl Default for PolicyCeilings {
             max_memory_bytes: DEFAULT_MEMORY_LIMIT,
             max_fuel_per_dispatch: DEFAULT_FUEL_PER_DISPATCH,
             max_state_bytes: DEFAULT_STATE_BYTES,
+            log_bounds: LogBoundsPolicy::default(),
+        }
+    }
+}
+
+/// What one component may push through the host logging verbs. The cap
+/// measures the whole record, so text moved out of the message and into a
+/// field or the target does not evade it.
+#[derive(Debug, Clone, Copy)]
+pub struct LogBoundsPolicy {
+    /// Cap on one record: message, target, file, and every field name and
+    /// rendered value.
+    pub max_record_bytes: NonZeroUsize,
+    /// Token bucket over admitted records.
+    pub rate: DispatchRatePolicy,
+}
+
+impl Default for LogBoundsPolicy {
+    fn default() -> Self {
+        Self {
+            max_record_bytes: DEFAULT_LOG_RECORD_BYTES,
+            rate: DEFAULT_LOG_RATE,
         }
     }
 }
@@ -135,6 +180,12 @@ pub struct ComponentPolicy {
     pub max_fuel_per_dispatch: Option<NonZeroU64>,
     /// Local-store quota override.
     pub max_state_bytes: Option<u64>,
+    /// Host log record byte cap override.
+    pub max_log_record_bytes: Option<NonZeroUsize>,
+    /// Host log burst allowance override.
+    pub max_log_burst: Option<NonZeroU32>,
+    /// Host log sustained rate override.
+    pub max_log_records_per_sec: Option<NonZeroU32>,
     /// Capability allowlist override.
     pub capabilities: Option<Vec<String>>,
     /// Operator host allowlist; the effective host set is the manifest's
@@ -152,6 +203,22 @@ pub struct EffectivePolicy<'a> {
     /// Operator host allowlist; `None` leaves the manifest `hosts` list
     /// as the only name-level gate.
     pub http_allow: Option<&'a [HostPattern]>,
+}
+
+/// A `[policy.component.<id>]` size override; a zero refuses, naming the row.
+fn row_usize(
+    id: &str,
+    f: &str,
+    v: Option<usize>,
+) -> Result<Option<NonZeroUsize>, EngineConfigError> {
+    v.map(|v| NonZeroUsize::new(v).ok_or_else(|| zero_field(&format!("policy.component.{id}.{f}"))))
+        .transpose()
+}
+
+/// As [`row_usize`], for a `u32` row override.
+fn row_u32(id: &str, f: &str, v: Option<u32>) -> Result<Option<NonZeroU32>, EngineConfigError> {
+    v.map(|v| NonZeroU32::new(v).ok_or_else(|| zero_field(&format!("policy.component.{id}.{f}"))))
+        .transpose()
 }
 
 fn parse_http_deny(entry: &str) -> Result<IpNet, EngineConfigError> {
@@ -181,6 +248,25 @@ pub(super) fn resolve_policy(
         // Zero stays legal: a zero quota denies every local-store write,
         // which is an enforceable operator choice.
         max_state_bytes: raw.max_state_bytes.unwrap_or(DEFAULT_STATE_BYTES),
+        log_bounds: LogBoundsPolicy {
+            max_record_bytes: nonzero_usize(
+                "policy.max_log_record_bytes",
+                raw.max_log_record_bytes,
+                DEFAULT_LOG_RECORD_BYTES,
+            )?,
+            rate: DispatchRatePolicy::new(
+                nonzero_u32(
+                    "policy.max_log_burst",
+                    raw.max_log_burst,
+                    DEFAULT_LOG_RATE.capacity,
+                )?,
+                nonzero_u32(
+                    "policy.max_log_records_per_sec",
+                    raw.max_log_records_per_sec,
+                    DEFAULT_LOG_RATE.refill_per_sec,
+                )?,
+            ),
+        },
     };
     let http_deny = raw
         .http_deny
@@ -219,6 +305,13 @@ pub(super) fn resolve_policy(
                 })
                 .transpose()?,
             max_state_bytes: row.max_state_bytes,
+            max_log_record_bytes: row_usize(&id, "max_log_record_bytes", row.max_log_record_bytes)?,
+            max_log_burst: row_u32(&id, "max_log_burst", row.max_log_burst)?,
+            max_log_records_per_sec: row_u32(
+                &id,
+                "max_log_records_per_sec",
+                row.max_log_records_per_sec,
+            )?,
             capabilities: row.capabilities,
             http_allow: row.http_allow.map(|hosts| {
                 hosts
@@ -284,6 +377,33 @@ path = "t.wasm"
         let tracker = cfg.policy.for_component("tracker");
         assert_eq!(tracker.ceilings.max_memory_bytes.get(), 1000);
         assert!(tracker.http_allow.is_none());
+    }
+
+    #[test]
+    fn log_bounds_narrow_per_component_and_fall_back_to_policy() {
+        let cfg: EngineConfig = toml::from_str(
+            r#"
+[policy]
+max_log_record_bytes = 4096
+max_log_burst        = 32
+[policy.component.wallet]
+max_log_record_bytes    = 512
+max_log_records_per_sec = 4
+[[modules]]
+id   = "wallet"
+path = "w.wasm"
+"#,
+        )
+        .expect("log bound rows parse");
+        let wallet = cfg.policy.for_component("wallet").ceilings.log_bounds;
+        assert_eq!(wallet.max_record_bytes.get(), 512);
+        assert_eq!(wallet.rate.refill_per_sec.get(), 4);
+        // An unset row field takes the [policy] value, not the built-in.
+        assert_eq!(wallet.rate.capacity.get(), 32);
+        // A component with no row takes [policy], then the built-in.
+        let bare = cfg.policy.for_component("tracker").ceilings.log_bounds;
+        assert_eq!(bare.max_record_bytes.get(), 4096);
+        assert_eq!(bare.rate.refill_per_sec, DEFAULT_LOG_RATE.refill_per_sec);
     }
 
     #[test]

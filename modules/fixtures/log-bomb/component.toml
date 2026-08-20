@@ -1,0 +1,16 @@
+# log-bomb test fixture. A block trigger on one chain, so the supervisor
+# invokes `on_trigger` once per block and the handler floods the
+# `nexum:host/logging` verb: half the records are far over the per-record
+# byte cap, half carry a long field list, and the count runs far past the
+# burst allowance the test configures.
+
+[component]
+name = "log-bomb"
+version = "0.1.0"
+
+[dependencies]
+logging = {}
+
+[[trigger]]
+on = "block"
+chain_id = 1

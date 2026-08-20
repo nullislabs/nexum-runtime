@@ -10,6 +10,7 @@
 //! (stderr, host logging call, supervisor death), redundancy covering
 //! channels that survive different failure modes.
 
+mod bounds;
 mod stdio;
 mod store;
 
@@ -22,6 +23,7 @@ use tracing_core::Level;
 
 use nexum_primitives::module_id::ModuleId;
 
+pub use bounds::LogBounds;
 pub use stdio::StdioStream;
 pub use store::{InMemoryRunLogStore, LogPage, RunLogStore, RunMeta};
 
@@ -123,6 +125,16 @@ impl LogValue {
             Self::Text(text) => text.len(),
             Self::Unsigned(_) | Self::Signed(_) | Self::Float(_) => 8,
             Self::Boolean(_) => 1,
+        }
+    }
+
+    /// Bytes the tracing render costs. A scalar is charged its widest
+    /// decimal form, so measuring a record allocates nothing.
+    fn rendered_len(&self) -> usize {
+        match self {
+            Self::Text(text) => text.len(),
+            Self::Unsigned(_) | Self::Signed(_) | Self::Float(_) => 24,
+            Self::Boolean(_) => 5,
         }
     }
 }

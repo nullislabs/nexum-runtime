@@ -26,7 +26,7 @@ use super::{
     Prebuilt,
 };
 use crate::builder::{RuntimeBuilder, RuntimeHandle};
-use crate::engine_config::{EngineConfig, ModuleLimits};
+use crate::engine_config::{EngineConfig, ModuleLimits, PolicySection};
 use crate::error::{BoxError, RuntimeError};
 use nexum_runtime_api::Extension;
 use nexum_runtime_logs::{LogPipeline, LogRecord};
@@ -39,6 +39,7 @@ pub struct TestRuntimeBuilder {
     manifest: ManifestInput,
     extensions: Vec<Arc<dyn Extension<MockTypes>>>,
     limits: ModuleLimits,
+    policy: PolicySection,
     chain: FakeNode,
     chains: Vec<Chain>,
     store: MockStateStore,
@@ -53,6 +54,7 @@ impl TestRuntime {
             manifest: ManifestInput::Beside,
             extensions: Vec::new(),
             limits: ModuleLimits::default(),
+            policy: PolicySection::default(),
             chain: FakeNode::new(),
             chains: vec![Chain::from_id(1)],
             store: MockStateStore::new(),
@@ -101,6 +103,14 @@ impl TestRuntimeBuilder {
         self
     }
 
+    /// Replace the `[policy]` the launch resolves; defaults to the
+    /// production defaults.
+    #[must_use]
+    pub fn policy(mut self, policy: PolicySection) -> Self {
+        self.policy = policy;
+        self
+    }
+
     /// The fake chain node; the launched handle shares this instance.
     pub fn chain(&self) -> &FakeNode {
         &self.chain
@@ -127,6 +137,7 @@ impl TestRuntimeBuilder {
         let mut config = EngineConfig::default();
         config.engine.state_dir = tmp.path().to_path_buf();
         config.limits = self.limits.try_into()?;
+        config.policy = self.policy;
         // The chain gate applies even over mock backends.
         config.chains = super::test_chain_configs();
 
@@ -266,10 +277,12 @@ impl TestRuntime {
 
 #[cfg(test)]
 mod tests {
+    use std::num::{NonZeroU32, NonZeroUsize};
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use super::*;
+    use crate::engine_config::{DispatchRatePolicy, LogBoundsPolicy};
     use crate::manifest::NamespaceCaps;
     use crate::test_utils::{TestManifest, example_wasm_or_skip, manifest, module_wasm_or_skip};
     use nexum_runtime_api::Extension;
@@ -868,6 +881,70 @@ mod tests {
         assert_eq!(
             record.message, "env vars 0 args 0 stdin 0",
             "the guest observed the host environment, arguments, or stdin",
+        );
+
+        rt.shutdown();
+        rt.wait().await.expect("clean shutdown");
+    }
+
+    /// The flood arrives inside one dispatch: 32 records over a 256-byte
+    /// cap and a burst of 4. The stderr marker is the dispatch barrier,
+    /// because stdio is a capture point this bound does not gate.
+    #[tokio::test]
+    async fn a_log_flood_is_capped_and_rate_limited_inside_one_dispatch() {
+        let Some(wasm) = module_wasm_or_skip("log-bomb") else {
+            return;
+        };
+        const BURST: u32 = 4;
+        const CAP: usize = 256;
+        let mut policy = PolicySection::default();
+        policy.ceilings.log_bounds = LogBoundsPolicy {
+            max_record_bytes: NonZeroUsize::new(CAP).expect("non-zero cap"),
+            // One per second refills nothing over a flood of milliseconds.
+            rate: DispatchRatePolicy::new(
+                NonZeroU32::new(BURST).expect("non-zero burst"),
+                NonZeroU32::new(1).expect("non-zero rate"),
+            ),
+        };
+
+        let mut rt = TestRuntime::builder(wasm)
+            .manifest_inline(
+                TestManifest::new("log-bomb")
+                    .cap("logging")
+                    .block_trigger(1)
+                    .to_toml(),
+            )
+            .policy(policy)
+            .launch()
+            .await
+            .expect("launch log-bomb over the harness");
+        rt.push_block(header_numbered(19_000_000));
+        rt.wait_for_log("log-bomb", "log-bomb emitted 32")
+            .await
+            .expect("the stderr marker lands once the flood dispatch returns");
+
+        let run = rt.logs().list_runs("log-bomb")[0].run.clone();
+        let records = rt.logs().read(&run, 0).records;
+        let host: Vec<&LogRecord> = records
+            .iter()
+            .filter(|r| r.channel == LogChannel::HostInterface)
+            .collect();
+        assert!(
+            !host.is_empty() && host.len() <= BURST as usize + 1,
+            "the rate limit dropped the flood past the burst, got {} of 32",
+            host.len(),
+        );
+        for r in &host {
+            let bytes = r.message.len()
+                + r.source.target.len()
+                + r.source.file.as_ref().map_or(0, String::len)
+                + r.fields.iter().map(|f| f.name.len() + 64).sum::<usize>();
+            assert!(bytes <= CAP, "an admitted record measured {bytes} bytes");
+            assert!(r.fields.len() < 32, "the overflow fields were kept");
+        }
+        assert!(
+            host.iter().any(|r| r.message.ends_with("...[truncated]")),
+            "the oversized message was kept and marked rather than refused",
         );
 
         rt.shutdown();

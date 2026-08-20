@@ -10,7 +10,7 @@ use wasmtime_wasi::{HostMonotonicClock, HostWallClock, WasiCtxBuilder};
 
 use super::Shared;
 use crate::bindings::TriggerModule;
-use crate::engine_config::{OutboundHttpLimits, PolicyCeilings};
+use crate::engine_config::{LogBoundsPolicy, OutboundHttpLimits, PolicyCeilings};
 use crate::error::{EngineRefusal, RuntimeError};
 use crate::manifest::ResourceSection;
 use nexum_primitives::host_pattern::HostPattern;
@@ -18,7 +18,7 @@ use nexum_primitives::module_id::ModuleId;
 use nexum_runtime_api::Extension;
 use nexum_runtime_api::{RuntimeTypes, StateHandle, StateStore};
 use nexum_runtime_http::HttpGate;
-use nexum_runtime_logs::{LogChannel, RunId, StdioStream};
+use nexum_runtime_logs::{LogBounds, LogChannel, RunId, StdioStream};
 use nexum_runtime_wasm::HostState;
 
 pub(super) type HostStore<T> = Store<HostState<T>>;
@@ -124,6 +124,9 @@ pub(super) struct StoreSpec {
     pub(super) fuel: u64,
     pub(super) chain_response_max_bytes: usize,
     pub(super) state_quota: u64,
+    /// Admission bounds on the host logging verbs; a restart mints a fresh
+    /// bucket, so the bound is per run rather than per module lifetime.
+    pub(super) log_bounds: LogBoundsPolicy,
 }
 
 /// Mints the run identity for `name` at `seq` and builds its store.
@@ -190,6 +193,7 @@ fn build<T: RuntimeTypes>(
             ),
             run,
             log_router: router,
+            log_bounds: LogBounds::new(spec.log_bounds, std::time::Instant::now()),
             chain: shared.components.chain.clone(),
             chain_response_max_bytes: spec.chain_response_max_bytes,
             store: module_store,

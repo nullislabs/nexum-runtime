@@ -28,6 +28,7 @@ members = [
     "modules/fixtures/env-reader",
     "modules/fixtures/flaky-bomb",
     "modules/fixtures/fuel-bomb",
+    "modules/fixtures/log-bomb",
     "modules/fixtures/memory-bomb",
     "modules/fixtures/panic-bomb",
     "modules/fixtures/slow-host",

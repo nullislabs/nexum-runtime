@@ -67,6 +67,21 @@ pub const METRICS: &[Metric] = &[
         help: "Wall-clock seconds to dispatch one trigger.",
     },
     Metric {
+        name: "nexum_runtime_log_fields_dropped_total",
+        kind: Kind::Counter,
+        help: "Structured log fields dropped past the per-record byte cap, by module.",
+    },
+    Metric {
+        name: "nexum_runtime_log_messages_truncated_total",
+        kind: Kind::Counter,
+        help: "Host log records whose message was truncated at the per-record byte cap, by module.",
+    },
+    Metric {
+        name: "nexum_runtime_log_records_dropped_total",
+        kind: Kind::Counter,
+        help: "Host log records dropped whole by the per-module log rate limit, by module.",
+    },
+    Metric {
         name: "nexum_runtime_module_errors_total",
         kind: Kind::Counter,
         help: "Module traps by fault label.",

@@ -39,6 +39,10 @@ pub const DEFAULT_DISPATCH_BURST: NonZeroU32 = nz(256);
 /// Default sustained ceiling, in dispatches per second.
 pub const DEFAULT_DISPATCH_REFILL_PER_SEC: NonZeroU32 = nz(128);
 
+/// Default host log rate: a 256-record burst refilled at 128 records per
+/// second, one bucket per component.
+pub const DEFAULT_LOG_RATE: DispatchRatePolicy = DispatchRatePolicy::new(nz(256), nz(128));
+
 #[cfg(test)]
 mod tests {
     use super::*;
