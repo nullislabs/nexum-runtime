@@ -35,9 +35,11 @@ impl LogBounds {
     }
 
     /// Fit `record` to the cap and spend one token; `false` drops it whole.
-    /// A record yields in order: fields last-recorded first, then the file,
-    /// then a marked prefix of the message, then the target down to
-    /// [`TARGET_ALLOWANCE`].
+    /// A record yields in order: fields last-recorded first, then the call
+    /// site, then a marked prefix of the message, then the target down to
+    /// its fixed allowance. Each stage yields only what the stages before
+    /// it left over the cap, so a part never pays for an overflow another
+    /// part already covered.
     pub fn admit(&mut self, record: &mut LogRecord, now: Instant) -> bool {
         if !self.rate.try_acquire(now) {
             let module = record.run.module.as_str().to_owned();
@@ -56,13 +58,24 @@ impl LogBounds {
             dropped += 1;
         }
         let mut shortened = false;
+        // The call site yields before the message: dropping it frees the
+        // most bytes for the fewest a reader misses.
+        if total > cap
+            && let Some(file) = record.source.file.take()
+        {
+            total -= file.len();
+            record.source.line = None;
+            shortened = true;
+        }
         if total > cap {
-            // The file yields before the message: dropping it frees the
-            // most bytes for the fewest a reader misses.
-            shortened |= record.source.file.take().is_some();
-            shortened |= truncate_to(&mut record.source.target, TARGET_ALLOWANCE.min(cap));
-            let target = record.source.target.len();
-            shortened |= truncate_to(&mut record.message, cap.saturating_sub(target));
+            // The allowance is the target's floor, not its ceiling: the
+            // message is budgeted around what the target already holds up
+            // to the allowance, and the target then yields only the bytes
+            // the truncated message still leaves over the cap.
+            let reserved = record.source.target.len().min(TARGET_ALLOWANCE).min(cap);
+            shortened |= truncate_to(&mut record.message, cap - reserved);
+            let spare = cap - record.message.len();
+            shortened |= truncate_to(&mut record.source.target, spare.min(TARGET_ALLOWANCE));
         }
         if shortened {
             let module = record.run.module.as_str().to_owned();
@@ -193,9 +206,40 @@ mod tests {
             line: Some(7),
         });
         assert!(gate.admit(&mut rec, now));
-        assert!(rec.wire_bytes() <= 512, "the call site is measured too");
         assert_eq!(rec.source.file, None, "the file yields before the rest");
+        assert_eq!(rec.source.line, None, "the line yields with its file");
         assert_eq!(rec.message, "short", "the message still survives whole");
+        assert_eq!(
+            rec.wire_bytes(),
+            "short".len() + TARGET_ALLOWANCE,
+            "the call site is measured too, and only the target is left",
+        );
+    }
+
+    /// The allowance is a floor the target keeps under pressure, not a
+    /// ceiling every overflow imposes. A target several segments deeper
+    /// than the allowance survives whole when dropping the file already
+    /// brought the record under the cap.
+    #[test]
+    fn a_target_past_its_allowance_survives_an_overflow_the_file_alone_covers() {
+        let (mut gate, now) = bounds(1024, 8, 1);
+        let target = "deep::module::path::".repeat(18);
+        assert!(
+            target.len() > TARGET_ALLOWANCE,
+            "the case needs a deep target"
+        );
+        let mut rec = record("short").with_source(LogSource {
+            target: target.clone(),
+            file: Some("f".repeat(4096)),
+            line: Some(7),
+        });
+        assert!(gate.admit(&mut rec, now));
+        assert_eq!(rec.source.file, None, "the file yields first");
+        assert_eq!(
+            rec.source.target, target,
+            "the target yields only what the cap still needs after the file",
+        );
+        assert_eq!(rec.message, "short", "the message survives whole");
     }
 
     #[test]
