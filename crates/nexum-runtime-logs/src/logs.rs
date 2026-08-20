@@ -13,6 +13,7 @@
 mod stdio;
 mod store;
 
+use std::fmt::Write as _;
 use std::sync::Arc;
 use std::time::SystemTime;
 
@@ -62,6 +63,70 @@ pub enum LogChannel {
     Panic,
 }
 
+/// Where an event was emitted from, mirroring `tracing::Metadata`.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct LogSource {
+    /// Guest-reported target, empty for a capture point that has none.
+    pub target: String,
+    /// Source file of the call site.
+    pub file: Option<String>,
+    /// Line within [`LogSource::file`].
+    pub line: Option<u32>,
+}
+
+impl LogSource {
+    /// Bytes charged against the retention budget; the line number rides
+    /// in [`RECORD_OVERHEAD`].
+    fn cost(&self) -> usize {
+        self.target.len() + self.file.as_ref().map_or(0, String::len)
+    }
+}
+
+/// One structured key-value pair recorded with an event.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LogField {
+    /// Field name as the guest declared it.
+    pub name: String,
+    /// Recorded value.
+    pub value: LogValue,
+}
+
+impl LogField {
+    /// Bytes charged against the retention budget; the fixed part is what
+    /// keeps a long list of tiny fields from outrunning the budget by the
+    /// ratio between one byte and the retained [`LogField`].
+    fn cost(&self) -> usize {
+        FIELD_OVERHEAD + self.name.len() + self.value.cost()
+    }
+}
+
+/// A field value in the type the guest recorded it at.
+#[derive(Debug, Clone, PartialEq, derive_more::Display)]
+pub enum LogValue {
+    /// A string, or a `Debug` rendering the guest flattened for the wire.
+    Text(String),
+    /// An unsigned integer.
+    Unsigned(u64),
+    /// A signed integer.
+    Signed(i64),
+    /// A floating-point number.
+    Float(f64),
+    /// A boolean.
+    Boolean(bool),
+}
+
+impl LogValue {
+    /// Bytes charged against the retention budget; a scalar is charged at
+    /// its wire width, not its rendered length.
+    fn cost(&self) -> usize {
+        match self {
+            Self::Text(text) => text.len(),
+            Self::Unsigned(_) | Self::Signed(_) | Self::Float(_) => 8,
+            Self::Boolean(_) => 1,
+        }
+    }
+}
+
 /// One captured log line from any capture point.
 #[derive(Debug, Clone)]
 pub struct LogRecord {
@@ -75,10 +140,14 @@ pub struct LogRecord {
     pub level: Level,
     /// The line text.
     pub message: String,
+    /// Call site the guest reported; default on the stdio and death paths.
+    pub source: LogSource,
+    /// Structured fields recorded with the event, in record order.
+    pub fields: Vec<LogField>,
 }
 
 impl LogRecord {
-    /// Record stamped at the current instant.
+    /// Record stamped at the current instant, with no source and no fields.
     pub fn now(run: RunId, channel: LogChannel, level: Level, message: String) -> Self {
         Self {
             run,
@@ -86,18 +155,46 @@ impl LogRecord {
             channel,
             level,
             message,
+            source: LogSource::default(),
+            fields: Vec::new(),
         }
     }
 
-    /// Byte cost charged against the per-run retention budget.
+    /// Attach the guest-reported call site.
+    #[must_use]
+    pub fn with_source(mut self, source: LogSource) -> Self {
+        self.source = source;
+        self
+    }
+
+    /// Attach the event's structured fields.
+    #[must_use]
+    pub fn with_fields(mut self, fields: Vec<LogField>) -> Self {
+        self.fields = fields;
+        self
+    }
+
+    /// Byte cost charged against the per-run retention budget; every carried
+    /// byte is charged, so text moved out of the message and into a field
+    /// cannot evade the budget.
     fn cost(&self) -> usize {
-        RECORD_OVERHEAD + self.message.len()
+        RECORD_OVERHEAD
+            + self.message.len()
+            + self.source.cost()
+            + self.fields.iter().map(LogField::cost).sum::<usize>()
     }
 }
 
 /// Fixed per-record charge added to message bytes so empty messages still
-/// count against the `[limits.logs]` byte budget.
-const RECORD_OVERHEAD: usize = 128;
+/// count against the `[limits.logs]` byte budget. It covers the retained
+/// [`LogRecord`] itself, which the source and the field list widened by
+/// eighty bytes.
+const RECORD_OVERHEAD: usize = 208;
+
+/// Fixed per-field charge, covering the [`LogField`] the ring holds rather
+/// than the bytes the guest spelled; a guest sending empty-named booleans
+/// would otherwise be charged one byte for forty-eight retained.
+const FIELD_OVERHEAD: usize = 64;
 
 /// Fans every captured record to a host `tracing` event and the
 /// retention store.
@@ -129,23 +226,43 @@ impl LogRouter {
     }
 }
 
-/// Emit one record as a host tracing event at its own level.
+/// Emit one record as a host tracing event at its own level. The guest's
+/// target rides as `source`, because `target` is a reserved argument of the
+/// `tracing` macros. Both ride as `Option`, which `tracing` records as an
+/// absent field rather than a blank one, so the stdio and death paths emit
+/// exactly the line they did before this verb carried structure.
 fn emit_tracing(record: &LogRecord) {
     let module = record.run.module.as_str();
     let run = record.run.seq;
     let channel: &'static str = record.channel.into();
     let message = record.message.as_str();
+    let target = record.source.target.as_str();
+    let source = (!target.is_empty()).then_some(target);
+    let rendered = render_fields(&record.fields);
+    let fields = rendered.as_deref();
     if record.level == Level::TRACE {
-        tracing::trace!(module, run, channel, "{message}");
+        tracing::trace!(module, run, channel, source, fields, "{message}");
     } else if record.level == Level::DEBUG {
-        tracing::debug!(module, run, channel, "{message}");
+        tracing::debug!(module, run, channel, source, fields, "{message}");
     } else if record.level == Level::INFO {
-        tracing::info!(module, run, channel, "{message}");
+        tracing::info!(module, run, channel, source, fields, "{message}");
     } else if record.level == Level::WARN {
-        tracing::warn!(module, run, channel, "{message}");
+        tracing::warn!(module, run, channel, source, fields, "{message}");
     } else {
-        tracing::error!(module, run, channel, "{message}");
+        tracing::error!(module, run, channel, source, fields, "{message}");
     }
+}
+
+/// Render structured fields into one `key=value ...` string, because the
+/// `tracing` macros take only statically named fields. `None` for a
+/// field-less record, so the common path allocates nothing.
+fn render_fields(fields: &[LogField]) -> Option<String> {
+    let (first, rest) = fields.split_first()?;
+    let mut line = format!("{}={}", first.name, first.value);
+    for field in rest {
+        let _ = write!(line, " {}={}", field.name, field.value);
+    }
+    Some(line)
 }
 
 /// Shared log pipeline threaded into every module store; cheap to clone.
@@ -254,6 +371,121 @@ mod tests {
         assert_eq!(runs[0].run.seq, 0);
         let page = pipeline.read(&run, 0);
         assert_eq!(page.records[0].message, "line");
+    }
+
+    fn field(name: &str, value: LogValue) -> LogField {
+        LogField {
+            name: name.to_owned(),
+            value,
+        }
+    }
+
+    #[test]
+    fn cost_charges_the_source_and_every_field() {
+        let bare = LogRecord::now(
+            RunId::new(test_module_id(), 0),
+            LogChannel::HostInterface,
+            Level::INFO,
+            "hi".to_owned(),
+        );
+        let rich = bare
+            .clone()
+            .with_source(LogSource {
+                target: "guest::work".to_owned(),
+                file: Some("src/lib.rs".to_owned()),
+                line: Some(7),
+            })
+            .with_fields(vec![field("n", LogValue::Unsigned(9))]);
+        assert_eq!(bare.cost(), RECORD_OVERHEAD + 2);
+        assert_eq!(
+            rich.cost(),
+            bare.cost() + 11 + 10 + (FIELD_OVERHEAD + 1 + 8),
+            "the retention budget charges the carried source and fields",
+        );
+    }
+
+    #[test]
+    fn cost_charges_a_long_field_list_per_field() {
+        let spam = LogRecord::now(
+            RunId::new(test_module_id(), 0),
+            LogChannel::HostInterface,
+            Level::INFO,
+            String::new(),
+        )
+        .with_fields(vec![field("", LogValue::Boolean(true)); 1000]);
+        assert!(
+            spam.cost() >= 1000 * FIELD_OVERHEAD,
+            "a guest cannot hold the ring open with fields it is charged a byte for",
+        );
+    }
+
+    #[test]
+    fn fields_render_in_record_order_for_the_tracing_event() {
+        let rendered = render_fields(&[
+            field("key", LogValue::Text("value".to_owned())),
+            field("n", LogValue::Signed(-9)),
+            field("ok", LogValue::Boolean(true)),
+        ]);
+        assert_eq!(rendered.as_deref(), Some("key=value n=-9 ok=true"));
+        assert_eq!(
+            render_fields(&[]),
+            None,
+            "a field-less record leaves the tracing field absent, not blank",
+        );
+    }
+
+    #[test]
+    fn a_structureless_record_emits_the_line_it_did_before_the_verb_grew() {
+        #[derive(Clone, Default)]
+        struct Sink(Arc<Mutex<Vec<u8>>>);
+        impl std::io::Write for Sink {
+            fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+                self.0.lock().extend_from_slice(buf);
+                Ok(buf.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for Sink {
+            type Writer = Sink;
+            fn make_writer(&'a self) -> Sink {
+                self.clone()
+            }
+        }
+
+        let sink = Sink::default();
+        let collector = tracing_subscriber::fmt()
+            .with_ansi(false)
+            .with_writer(sink.clone())
+            .finish();
+        let bare = LogRecord::now(
+            RunId::new(test_module_id(), 0),
+            LogChannel::Stdout,
+            Level::INFO,
+            "plain".to_owned(),
+        );
+        let rich = bare
+            .clone()
+            .with_source(LogSource {
+                target: "guest::work".to_owned(),
+                ..LogSource::default()
+            })
+            .with_fields(vec![field("n", LogValue::Unsigned(9))]);
+        tracing::subscriber::with_default(collector, || {
+            emit_tracing(&bare);
+            emit_tracing(&rich);
+        });
+        let out = String::from_utf8(sink.0.lock().clone()).expect("log output is UTF-8");
+        let (first, second) = out.split_once('\n').expect("two events were emitted");
+        assert!(
+            !first.contains("source") && !first.contains("fields"),
+            "the stdio path gained no blank fields: {first}",
+        );
+        assert!(
+            second.contains("source=\"guest::work\"") && second.contains("fields=\"n=9\""),
+            "a structured record renders both: {second}",
+        );
     }
 
     #[test]

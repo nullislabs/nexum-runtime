@@ -3424,6 +3424,7 @@ dependencies = [
 name = "nexum-runtime-logs"
 version = "0.1.0"
 dependencies = [
+ "derive_more",
  "nexum-primitives",
  "nexum-runtime-api",
  "nexum-runtime-config",
@@ -3432,6 +3433,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-core",
+ "tracing-subscriber",
  "wasmtime-wasi",
 ]
 
@@ -3590,6 +3592,7 @@ dependencies = [
  "alloy-sol-types",
  "alloy-transport",
  "borsh",
+ "derive_more",
  "http",
  "nexum-module-macros",
  "nexum-sdk-test",

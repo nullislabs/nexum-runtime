@@ -243,8 +243,44 @@ macro_rules! bind_host_logging_via_wit_bindgen {
         struct HostLogSink;
 
         impl $crate::tracing::LogSink for HostLogSink {
-            fn log(&self, level: $crate::Level, message: &str) {
-                nexum::host::logging::log(::core::convert::From::from(level), message);
+            fn log_event(
+                &self,
+                level: $crate::Level,
+                source: $crate::tracing::LogSource<'_>,
+                message: &str,
+                fields: &[$crate::tracing::LogField],
+            ) {
+                // Aliases rather than `use`, so the caller's `nexum` module
+                // resolves the way the bare paths elsewhere here do.
+                use $crate::tracing::LogValue as Sdk;
+                type Field = nexum::host::logging::Field;
+                type Source = nexum::host::logging::Source;
+                type Wire = nexum::host::logging::FieldValue;
+
+                let source = Source {
+                    target: ::std::borrow::ToOwned::to_owned(source.target),
+                    file: source.file.map(::std::borrow::ToOwned::to_owned),
+                    line: source.line,
+                };
+                let fields: ::std::vec::Vec<Field> = fields
+                    .iter()
+                    .map(|field| Field {
+                        name: ::std::borrow::ToOwned::to_owned(field.name),
+                        value: match &field.value {
+                            Sdk::Text(v) => Wire::Text(::std::clone::Clone::clone(v)),
+                            Sdk::Unsigned(v) => Wire::Unsigned(*v),
+                            Sdk::Signed(v) => Wire::Signed(*v),
+                            Sdk::Float(v) => Wire::Float(*v),
+                            Sdk::Boolean(v) => Wire::Boolean(*v),
+                        },
+                    })
+                    .collect();
+                nexum::host::logging::log_event(
+                    ::core::convert::From::from(level),
+                    &source,
+                    message,
+                    &fields,
+                );
             }
         }
 

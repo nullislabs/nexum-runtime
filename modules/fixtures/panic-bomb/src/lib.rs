@@ -4,7 +4,9 @@
 //! `init` and panics on every `on_trigger`. The hook forwards the panic
 //! to stderr and the host logging call before the trap reaches the
 //! supervisor, so one death leaves Stderr, HostInterface, and Panic
-//! records. Test-only.
+//! records. The init line carries structured fields, so the e2e can pin
+//! the rich verb's field list against a deterministic call site.
+//! Test-only.
 
 #![cfg_attr(not(test), warn(unused_crate_dependencies))]
 #![allow(clippy::too_many_arguments)]
@@ -17,37 +19,18 @@ wit_bindgen::generate!({
     generate_all,
 });
 
-use nexum::host::{logging, types};
+use nexum::host::types;
 
-/// Routes facade lines to the bound host logging import.
-struct HostLogSink;
-
-impl nexum_sdk::tracing::LogSink for HostLogSink {
-    fn log(&self, level: nexum_sdk::Level, message: &str) {
-        use nexum_sdk::Level;
-        // `Level` is a set of associated consts, so compare rather than
-        // match; the five tiers are total, hence the final `Trace` arm.
-        let level = if level == Level::ERROR {
-            logging::Level::Error
-        } else if level == Level::WARN {
-            logging::Level::Warn
-        } else if level == Level::INFO {
-            logging::Level::Info
-        } else if level == Level::DEBUG {
-            logging::Level::Debug
-        } else {
-            logging::Level::Trace
-        };
-        logging::log(level, message);
-    }
-}
+nexum_sdk::bind_host_logging_via_wit_bindgen!();
 
 struct PanicBomb;
 
 impl Guest for PanicBomb {
     fn init(_config: Vec<(String, String)>) -> Result<(), Fault> {
-        nexum_sdk::tracing::init(HostLogSink);
-        tracing::info!("panic-bomb init (will panic)");
+        install_tracing();
+        // Two field types, so the e2e pins the `list<field>` lowering and
+        // the variant discriminant across the real component boundary.
+        tracing::info!(fuse = 1u64, label = "armed", "panic-bomb init (will panic)");
         Ok(())
     }
 

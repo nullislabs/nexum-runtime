@@ -97,8 +97,8 @@ pub mod extension {
 /// The module-log pipeline and its read surface.
 pub mod logs {
     pub use nexum_runtime_logs::{
-        InMemoryRunLogStore, LogChannel, LogPage, LogPipeline, LogRecord, LogRouter, RunId,
-        RunLogStore, RunMeta, StdioStream,
+        InMemoryRunLogStore, LogChannel, LogField, LogPage, LogPipeline, LogRecord, LogRouter,
+        LogSource, LogValue, RunId, RunLogStore, RunMeta, StdioStream,
     };
     pub use tokio::sync::Notify;
     pub use tracing_core::Level;
