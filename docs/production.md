@@ -188,6 +188,9 @@ With `enabled = false` the recorder is still installed, so call sites stay live,
 | `nexum_runtime_chain_request_total` | counter | `chain_id`, `method`, `outcome` | Every `chain::request`. A method outside the read surface is counted as `method="<denied>"` with `outcome="err"`. A request for a chain outside `[chains]` is counted as `chain_id="unconfigured"`, which bounds the series set to the configured chains plus one and shows that a module is requesting chains the operator has not configured. The `outcome="err"` rate is the RPC-degraded signal. |
 | `nexum_runtime_chain_response_capped_total` | counter | `chain_id`, `method` | Responses rejected for exceeding `[limits.chain] response_body_max_bytes` (default 1 MiB). |
 | `nexum_runtime_source_reconnects_total` | counter | `source_kind`, `chain_id`, `module` | Source reconnects. `source_kind="block"` is per chain; `source_kind="chain-log"` also carries `module`. |
+| `nexum_runtime_log_records_dropped_total` | counter | `module` | Host log records dropped whole by the per-component log rate limit (`[policy]`, default `max_log_burst = 256` and `max_log_records_per_sec = 128`). A sustained rate here is a module flooding the log sink. |
+| `nexum_runtime_log_records_truncated_total` | counter | `module` | Host log records shortened to fit `[policy] max_log_record_bytes` (default 8 KiB). The message is kept and marked `...[truncated]`; the call site is cut first. |
+| `nexum_runtime_log_fields_dropped_total` | counter | `module` | Structured log fields dropped past the same per-record cap, last-recorded first, so the earliest context survives. |
 
 `crates/nexum-runtime-metrics/src/lib.rs` is the single source of the name set, and a test refuses any emitted name the table does not carry.
 
@@ -302,6 +305,8 @@ The bulk backfill logs the chunk size, the blocks remaining, and the catch-up ra
 Resource ceilings live in `engine.toml` `[policy]` and apply to every component; a `[policy.component.<id>]` row, keyed on `[[modules]].id`, overrides them for one.
 `[policy.total].max_memory_bytes` bounds the summed reservations, and an overcommitted set refuses at boot naming the entry that crossed it.
 A `[component.resources]` field in a manifest narrows a ceiling for one component and can never widen it.
+`[policy]` also bounds the host logging path: `max_log_record_bytes` caps one record and `max_log_burst` with `max_log_records_per_sec` caps the rate, both per component.
+A module past either bound loses records rather than the host, and the three `nexum_runtime_log_*` counters in section 6 say which bound it crossed.
 A component that consistently traps on fuel exhaustion is a bug, not a tuning miss.
 
 ## 9. Runbook
