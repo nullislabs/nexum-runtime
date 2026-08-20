@@ -27,6 +27,7 @@ nexum-runtime-config = { path = "../nexum-runtime-config" }
 nexum-runtime-logs = { path = "../nexum-runtime-logs" }
 nexum-runtime-wasm = { path = "../nexum-runtime-wasm" }
 nexum-world = { path = "../nexum-world" }
+parking_lot.workspace = true
 serde.workspace = true
 serde_json = { workspace = true, features = ["std"] }
 tokio = { workspace = true, features = ["sync", "time"] }

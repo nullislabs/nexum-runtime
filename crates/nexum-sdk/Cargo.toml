@@ -62,6 +62,7 @@ tracing.workspace = true
 tracing-core.workspace = true
 
 [dev-dependencies]
+parking_lot.workspace = true
 proptest.workspace = true
 # Dev-dependencies are excluded from Cargo's dependency-cycle check, so the
 # nexum-sdk <- nexum-sdk-test dev-dep is a normal, supported arrangement: the

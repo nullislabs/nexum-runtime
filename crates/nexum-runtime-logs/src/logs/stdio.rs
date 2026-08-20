@@ -148,8 +148,7 @@ impl Drop for LineWriter {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Mutex;
-
+    use parking_lot::Mutex;
     use tokio::io::AsyncWriteExt;
 
     use super::*;
@@ -163,7 +162,7 @@ mod tests {
 
     impl RunLogStore for CaptureStore {
         fn append(&self, record: LogRecord) {
-            self.records.lock().unwrap().push(record);
+            self.records.lock().push(record);
         }
         fn list_runs(&self, _module: &str) -> Vec<crate::logs::RunMeta> {
             Vec::new()
@@ -192,7 +191,6 @@ mod tests {
         store
             .records
             .lock()
-            .unwrap()
             .iter()
             .map(|r| r.message.clone())
             .collect()
@@ -262,7 +260,7 @@ mod tests {
     async fn stderr_lines_carry_the_warn_level() {
         let (mut w, store) = setup(LogChannel::Stderr);
         w.write_all(b"oops\n").await.unwrap();
-        let records = store.records.lock().unwrap();
+        let records = store.records.lock();
         assert_eq!(records[0].channel, LogChannel::Stderr);
         assert_eq!(records[0].level, Level::WARN);
     }
