@@ -13,6 +13,7 @@
 mod stdio;
 mod store;
 
+use std::fmt::Write as _;
 use std::sync::Arc;
 use std::time::SystemTime;
 
@@ -185,12 +186,14 @@ impl LogRecord {
 }
 
 /// Fixed per-record charge added to message bytes so empty messages still
-/// count against the `[limits.logs]` byte budget.
-const RECORD_OVERHEAD: usize = 128;
+/// count against the `[limits.logs]` byte budget. It covers the retained
+/// [`LogRecord`] itself, which the source and the field list widened by
+/// eighty bytes.
+const RECORD_OVERHEAD: usize = 208;
 
 /// Fixed per-field charge, covering the [`LogField`] the ring holds rather
 /// than the bytes the guest spelled; a guest sending empty-named booleans
-/// would otherwise be charged one byte for fifty-six retained.
+/// would otherwise be charged one byte for forty-eight retained.
 const FIELD_OVERHEAD: usize = 64;
 
 /// Fans every captured record to a host `tracing` event and the
@@ -254,16 +257,12 @@ fn emit_tracing(record: &LogRecord) {
 /// `tracing` macros take only statically named fields. `None` for a
 /// field-less record, so the common path allocates nothing.
 fn render_fields(fields: &[LogField]) -> Option<String> {
-    if fields.is_empty() {
-        return None;
+    let (first, rest) = fields.split_first()?;
+    let mut line = format!("{}={}", first.name, first.value);
+    for field in rest {
+        let _ = write!(line, " {}={}", field.name, field.value);
     }
-    Some(
-        fields
-            .iter()
-            .map(|field| format!("{}={}", field.name, field.value))
-            .collect::<Vec<_>>()
-            .join(" "),
-    )
+    Some(line)
 }
 
 /// Shared log pipeline threaded into every module store; cheap to clone.

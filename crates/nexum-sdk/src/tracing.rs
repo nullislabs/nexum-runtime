@@ -101,7 +101,7 @@ fn set_panic_hook(sink: Arc<dyn LogSink>) {
             file: location.map(Location::file),
             line: location.map(Location::line),
         };
-        sink.log_event(Level::ERROR, source, &format!("panic: {payload}"), &[]);
+        sink.log_event(Level::ERROR, source, &format_panic(&payload, None), &[]);
     }));
 }
 

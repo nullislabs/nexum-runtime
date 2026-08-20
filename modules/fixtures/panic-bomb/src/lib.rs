@@ -4,7 +4,9 @@
 //! `init` and panics on every `on_trigger`. The hook forwards the panic
 //! to stderr and the host logging call before the trap reaches the
 //! supervisor, so one death leaves Stderr, HostInterface, and Panic
-//! records. Test-only.
+//! records. The init line carries structured fields, so the e2e can pin
+//! the rich verb's field list against a deterministic call site.
+//! Test-only.
 
 #![cfg_attr(not(test), warn(unused_crate_dependencies))]
 #![allow(clippy::too_many_arguments)]
@@ -26,7 +28,9 @@ struct PanicBomb;
 impl Guest for PanicBomb {
     fn init(_config: Vec<(String, String)>) -> Result<(), Fault> {
         install_tracing();
-        tracing::info!("panic-bomb init (will panic)");
+        // Two field types, so the e2e pins the `list<field>` lowering and
+        // the variant discriminant across the real component boundary.
+        tracing::info!(fuse = 1u64, label = "armed", "panic-bomb init (will panic)");
         Ok(())
     }
 

@@ -305,8 +305,8 @@ async fn dying_run_leaves_a_panic_record() {
     );
 
     // fuel-bomb carries no SDK, so its init line crosses the simple `log`
-    // verb: proof that the verb a guest built against the old surface calls
-    // still links, and still records neither a source nor fields.
+    // verb untouched by this issue: it still records neither a source nor
+    // fields, so the rich verb landed beside it rather than over it.
     let init = page
         .records
         .iter()
@@ -352,8 +352,8 @@ async fn facade_panic_leaves_stderr_host_interface_and_panic_records() {
         find(LogChannel::Panic, "terminated").expect("the supervisor synthesized the death record");
     assert_eq!(death.level, Level::ERROR, "death record is error");
 
-    // The only proof the `source` record survives the real component
-    // boundary rather than the SDK's stand-in bindings.
+    // The only proof the `source` record and the field list survive the
+    // real component boundary rather than the SDK's stand-in bindings.
     assert_eq!(host.source.target, "panic", "the hook reports its target");
     assert!(
         host.source
@@ -369,6 +369,20 @@ async fn facade_panic_leaves_stderr_host_interface_and_panic_records() {
     assert_eq!(
         init.source.target, "panic_bomb",
         "a facade event reports the guest's own callsite target",
+    );
+    assert_eq!(
+        init.fields,
+        vec![
+            nexum_runtime_logs::LogField {
+                name: "fuse".to_owned(),
+                value: nexum_runtime_logs::LogValue::Unsigned(1),
+            },
+            nexum_runtime_logs::LogField {
+                name: "label".to_owned(),
+                value: nexum_runtime_logs::LogValue::Text("armed".to_owned()),
+            },
+        ],
+        "the field list crossed in record order, each at its own variant",
     );
     assert!(
         find(LogChannel::Stderr, "detonated")
