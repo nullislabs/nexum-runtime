@@ -29,7 +29,7 @@ pub use policy::{
 };
 
 use std::collections::{HashMap, HashSet};
-use std::num::{NonZeroU64, NonZeroUsize};
+use std::num::{NonZeroU32, NonZeroU64, NonZeroUsize};
 use std::path::PathBuf;
 
 use alloy_chains::Chain;
@@ -50,6 +50,14 @@ const fn nz_usize(n: usize) -> NonZeroUsize {
 /// As [`nz_usize`], for `u64` constants.
 const fn nz_u64(n: u64) -> NonZeroU64 {
     match NonZeroU64::new(n) {
+        Some(v) => v,
+        None => panic!("zero constant"),
+    }
+}
+
+/// As [`nz_usize`], for `u32` constants.
+const fn nz_u32(n: u32) -> NonZeroU32 {
+    match NonZeroU32::new(n) {
         Some(v) => v,
         None => panic!("zero constant"),
     }
