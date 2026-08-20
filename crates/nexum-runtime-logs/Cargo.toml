@@ -24,3 +24,4 @@ wasmtime-wasi.workspace = true
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["io-util", "macros", "rt-multi-thread"] }
+tracing-subscriber.workspace = true

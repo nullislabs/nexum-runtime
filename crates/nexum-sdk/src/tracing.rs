@@ -174,11 +174,18 @@ impl Subscriber for FacadeSubscriber {
             .log_event(level, source, &visitor.message, &visitor.fields);
         #[cfg(feature = "stderr-echo")]
         {
+            // A field-only event would otherwise carry a leading space; a
+            // message keeps its own leading whitespace.
             let mut line = visitor.message.clone();
             for field in &visitor.fields {
                 let _ = write!(line, " {}={}", field.name, field.value);
             }
-            eprintln!("[{level}] {}", line.trim_start());
+            let line = if visitor.message.is_empty() {
+                line.trim_start()
+            } else {
+                line.as_str()
+            };
+            eprintln!("[{level}] {line}");
         }
     }
 
@@ -387,8 +394,12 @@ mod tests {
     #[test]
     fn panic_hook_reports_the_location_structurally() {
         let sink = Arc::new(Captured::default());
+        // The hook is process-global; restore it so the rest of the binary
+        // still panics through the default hook under a plain `cargo test`.
+        let previous = std::panic::take_hook();
         set_panic_hook(Arc::new(Arc::clone(&sink)));
         let _ = std::panic::catch_unwind(|| panic!("boom"));
+        std::panic::set_hook(previous);
         let reported = sink.lines.lock().first().cloned();
         let reported = reported.expect("the hook reported the panic");
         assert_eq!(reported.message, "panic: boom");

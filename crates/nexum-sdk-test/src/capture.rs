@@ -33,10 +33,12 @@ pub enum FieldValue {
     U64(u64),
     /// A `record_i64` value.
     I64(i64),
+    /// A `record_f64` value.
+    F64(f64),
     /// A `record_bool` value.
     Bool(bool),
-    /// A `record_debug` fallback (`?x`, `%x`, `f64`, ...), pre-rendered
-    /// with `{:?}`.
+    /// A `record_debug` fallback (`?x`, `%x`, ...), pre-rendered with
+    /// `{:?}`.
     Debug(String),
 }
 
@@ -200,6 +202,14 @@ impl Visit for FieldVisitor {
             .insert(field.name().to_owned(), FieldValue::I64(value));
     }
 
+    // Present so the capture types a float the way the guest facade does;
+    // without it `tracing` falls back to `record_debug` and a module test
+    // sees a rendered string where the host receives a number.
+    fn record_f64(&mut self, field: &Field, value: f64) {
+        self.fields
+            .insert(field.name().to_owned(), FieldValue::F64(value));
+    }
+
     fn record_bool(&mut self, field: &Field, value: bool) {
         self.fields
             .insert(field.name().to_owned(), FieldValue::Bool(value));
@@ -247,6 +257,7 @@ mod tests {
                 name = "eth",
                 count = 7u64,
                 signed = -3i64,
+                ratio = 0.5f64,
                 ready = true,
                 answer = ?Some(9),
                 "changed",
@@ -257,6 +268,7 @@ mod tests {
         assert_eq!(ev.field("name"), Some(&FieldValue::Str("eth".to_owned())));
         assert_eq!(ev.field("count"), Some(&FieldValue::U64(7)));
         assert_eq!(ev.field("signed"), Some(&FieldValue::I64(-3)));
+        assert_eq!(ev.field("ratio"), Some(&FieldValue::F64(0.5)));
         assert_eq!(ev.field("ready"), Some(&FieldValue::Bool(true)));
         assert_eq!(
             ev.field("answer"),

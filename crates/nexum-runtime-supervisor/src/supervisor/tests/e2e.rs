@@ -340,4 +340,28 @@ async fn facade_panic_leaves_stderr_host_interface_and_panic_records() {
     let death =
         find(LogChannel::Panic, "terminated").expect("the supervisor synthesized the death record");
     assert_eq!(death.level, Level::ERROR, "death record is error");
+
+    // The only proof the `source` record survives the real component
+    // boundary rather than the SDK's stand-in bindings.
+    assert_eq!(host.source.target, "panic", "the hook reports its target");
+    assert!(
+        host.source
+            .file
+            .as_deref()
+            .is_some_and(|f| f.ends_with(".rs")),
+        "the panic call site crossed the wire: {:?}",
+        host.source,
+    );
+    assert!(host.source.line.is_some());
+    let init = find(LogChannel::HostInterface, "panic-bomb init")
+        .expect("the facade forwarded the init line");
+    assert_eq!(
+        init.source.target, "panic_bomb",
+        "a facade event reports the guest's own callsite target",
+    );
+    assert!(
+        find(LogChannel::Stderr, "detonated")
+            .is_some_and(|r| r.source == nexum_runtime_logs::LogSource::default()),
+        "a stdio line has no call site to report",
+    );
 }

@@ -3433,6 +3433,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-core",
+ "tracing-subscriber",
  "wasmtime-wasi",
 ]
 

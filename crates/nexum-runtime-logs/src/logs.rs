@@ -91,9 +91,11 @@ pub struct LogField {
 }
 
 impl LogField {
-    /// Bytes charged against the retention budget.
+    /// Bytes charged against the retention budget; the fixed part is what
+    /// keeps a long list of tiny fields from outrunning the budget by the
+    /// ratio between one byte and the retained [`LogField`].
     fn cost(&self) -> usize {
-        self.name.len() + self.value.cost()
+        FIELD_OVERHEAD + self.name.len() + self.value.cost()
     }
 }
 
@@ -186,6 +188,11 @@ impl LogRecord {
 /// count against the `[limits.logs]` byte budget.
 const RECORD_OVERHEAD: usize = 128;
 
+/// Fixed per-field charge, covering the [`LogField`] the ring holds rather
+/// than the bytes the guest spelled; a guest sending empty-named booleans
+/// would otherwise be charged one byte for fifty-six retained.
+const FIELD_OVERHEAD: usize = 64;
+
 /// Fans every captured record to a host `tracing` event and the
 /// retention store.
 pub struct LogRouter {
@@ -218,15 +225,18 @@ impl LogRouter {
 
 /// Emit one record as a host tracing event at its own level. The guest's
 /// target rides as `source`, because `target` is a reserved argument of the
-/// `tracing` macros.
+/// `tracing` macros. Both ride as `Option`, which `tracing` records as an
+/// absent field rather than a blank one, so the stdio and death paths emit
+/// exactly the line they did before this verb carried structure.
 fn emit_tracing(record: &LogRecord) {
     let module = record.run.module.as_str();
     let run = record.run.seq;
     let channel: &'static str = record.channel.into();
     let message = record.message.as_str();
-    let source = record.source.target.as_str();
+    let target = record.source.target.as_str();
+    let source = (!target.is_empty()).then_some(target);
     let rendered = render_fields(&record.fields);
-    let fields = rendered.as_str();
+    let fields = rendered.as_deref();
     if record.level == Level::TRACE {
         tracing::trace!(module, run, channel, source, fields, "{message}");
     } else if record.level == Level::DEBUG {
@@ -241,13 +251,19 @@ fn emit_tracing(record: &LogRecord) {
 }
 
 /// Render structured fields into one `key=value ...` string, because the
-/// `tracing` macros take only statically named fields.
-fn render_fields(fields: &[LogField]) -> String {
-    fields
-        .iter()
-        .map(|field| format!("{}={}", field.name, field.value))
-        .collect::<Vec<_>>()
-        .join(" ")
+/// `tracing` macros take only statically named fields. `None` for a
+/// field-less record, so the common path allocates nothing.
+fn render_fields(fields: &[LogField]) -> Option<String> {
+    if fields.is_empty() {
+        return None;
+    }
+    Some(
+        fields
+            .iter()
+            .map(|field| format!("{}={}", field.name, field.value))
+            .collect::<Vec<_>>()
+            .join(" "),
+    )
 }
 
 /// Shared log pipeline threaded into every module store; cheap to clone.
@@ -384,8 +400,23 @@ mod tests {
         assert_eq!(bare.cost(), RECORD_OVERHEAD + 2);
         assert_eq!(
             rich.cost(),
-            bare.cost() + 11 + 10 + (1 + 8),
+            bare.cost() + 11 + 10 + (FIELD_OVERHEAD + 1 + 8),
             "the retention budget charges the carried source and fields",
+        );
+    }
+
+    #[test]
+    fn cost_charges_a_long_field_list_per_field() {
+        let spam = LogRecord::now(
+            RunId::new(test_module_id(), 0),
+            LogChannel::HostInterface,
+            Level::INFO,
+            String::new(),
+        )
+        .with_fields(vec![field("", LogValue::Boolean(true)); 1000]);
+        assert!(
+            spam.cost() >= 1000 * FIELD_OVERHEAD,
+            "a guest cannot hold the ring open with fields it is charged a byte for",
         );
     }
 
@@ -396,8 +427,66 @@ mod tests {
             field("n", LogValue::Signed(-9)),
             field("ok", LogValue::Boolean(true)),
         ]);
-        assert_eq!(rendered, "key=value n=-9 ok=true");
-        assert_eq!(render_fields(&[]), "");
+        assert_eq!(rendered.as_deref(), Some("key=value n=-9 ok=true"));
+        assert_eq!(
+            render_fields(&[]),
+            None,
+            "a field-less record leaves the tracing field absent, not blank",
+        );
+    }
+
+    #[test]
+    fn a_structureless_record_emits_the_line_it_did_before_the_verb_grew() {
+        #[derive(Clone, Default)]
+        struct Sink(Arc<Mutex<Vec<u8>>>);
+        impl std::io::Write for Sink {
+            fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+                self.0.lock().extend_from_slice(buf);
+                Ok(buf.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for Sink {
+            type Writer = Sink;
+            fn make_writer(&'a self) -> Sink {
+                self.clone()
+            }
+        }
+
+        let sink = Sink::default();
+        let collector = tracing_subscriber::fmt()
+            .with_ansi(false)
+            .with_writer(sink.clone())
+            .finish();
+        let bare = LogRecord::now(
+            RunId::new(test_module_id(), 0),
+            LogChannel::Stdout,
+            Level::INFO,
+            "plain".to_owned(),
+        );
+        let rich = bare
+            .clone()
+            .with_source(LogSource {
+                target: "guest::work".to_owned(),
+                ..LogSource::default()
+            })
+            .with_fields(vec![field("n", LogValue::Unsigned(9))]);
+        tracing::subscriber::with_default(collector, || {
+            emit_tracing(&bare);
+            emit_tracing(&rich);
+        });
+        let out = String::from_utf8(sink.0.lock().clone()).expect("log output is UTF-8");
+        let (first, second) = out.split_once('\n').expect("two events were emitted");
+        assert!(
+            !first.contains("source") && !first.contains("fields"),
+            "the stdio path gained no blank fields: {first}",
+        );
+        assert!(
+            second.contains("source=\"guest::work\"") && second.contains("fields=\"n=9\""),
+            "a structured record renders both: {second}",
+        );
     }
 
     #[test]
