@@ -4,7 +4,7 @@
 
 use std::time::Instant;
 
-use nexum_runtime_config::LogBoundsPolicy;
+use nexum_runtime_config::{LogBoundsPolicy, TokenBucket};
 
 use super::{LogField, LogRecord};
 
@@ -17,9 +17,7 @@ const TRUNCATION_MARKER: &str = "...[truncated]";
 #[derive(Debug)]
 pub struct LogBounds {
     policy: LogBoundsPolicy,
-    /// Current tokens in `[0, capacity]`; fractional so slow refill is not lost.
-    tokens: f64,
-    last_refill: Instant,
+    rate: TokenBucket,
 }
 
 impl LogBounds {
@@ -27,8 +25,7 @@ impl LogBounds {
     pub fn new(policy: LogBoundsPolicy, now: Instant) -> Self {
         Self {
             policy,
-            tokens: f64::from(policy.rate.capacity.get()),
-            last_refill: now,
+            rate: TokenBucket::new(policy.rate, now),
         }
     }
 
@@ -37,7 +34,7 @@ impl LogBounds {
     /// fields last-recorded first, then the call site, then a marked prefix
     /// of the message.
     pub fn admit(&mut self, record: &mut LogRecord, now: Instant) -> bool {
-        if !self.try_acquire(now) {
+        if !self.rate.try_acquire(now) {
             let module = record.run.module.as_str().to_owned();
             metrics::counter!("nexum_runtime_log_records_dropped_total", "module" => module)
                 .increment(1);
@@ -74,23 +71,6 @@ impl LogBounds {
                 .increment(dropped);
         }
         true
-    }
-
-    /// Refill for elapsed time, then consume one token; `now` is injected.
-    fn try_acquire(&mut self, now: Instant) -> bool {
-        let capacity = f64::from(self.policy.rate.capacity.get());
-        let elapsed = now
-            .saturating_duration_since(self.last_refill)
-            .as_secs_f64();
-        self.tokens = (self.tokens + elapsed * f64::from(self.policy.rate.refill_per_sec.get()))
-            .min(capacity);
-        self.last_refill = now;
-        if self.tokens >= 1.0 {
-            self.tokens -= 1.0;
-            true
-        } else {
-            false
-        }
     }
 }
 

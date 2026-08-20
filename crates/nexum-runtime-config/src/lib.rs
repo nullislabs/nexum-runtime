@@ -14,7 +14,7 @@ mod policy;
 
 pub use chain::{ChainConfig, RpcEndpoint, RpcEndpointError, RpcTransport};
 pub use dispatch_rate::{
-    DEFAULT_DISPATCH_BURST, DEFAULT_DISPATCH_REFILL_PER_SEC, DispatchRatePolicy,
+    DEFAULT_DISPATCH_BURST, DEFAULT_DISPATCH_REFILL_PER_SEC, DispatchRatePolicy, TokenBucket,
 };
 pub use error::{EngineConfigError, EnvVarError};
 pub use limits::{
