@@ -46,6 +46,11 @@ fn retry_layer() -> RetryBackoffLayer {
     RetryBackoffLayer::new(RPC_MAX_RETRIES, RPC_RETRY_BACKOFF_MS, RPC_RETRY_CUPS)
 }
 
+/// Canonical blocks the log poller retains for reorg detection. Matches
+/// alloy's `max_reorg_depth` default, which is private and so cannot be named
+/// here; a reorg deeper than this is a terminal stream error.
+pub const MAX_REORG_DEPTH: u64 = 64;
+
 /// One chain's opened provider plus how to drive it.
 #[derive(Debug, Clone)]
 struct ChainEndpoint {
@@ -254,6 +259,7 @@ impl ProviderPool {
         let stream = ep
             .provider
             .watch_canonical_logs_from(start_block, &filter)
+            .max_reorg_depth(MAX_REORG_DEPTH as usize)
             .rpc_concurrency(self.log_backfill_concurrency)
             .poll_interval(self.poll_interval(chain))
             .into_stream()

@@ -132,7 +132,8 @@ pub struct EventSource {
     /// Read once at boot; `None` unless `resume = true`.
     pub initial_cursor: Option<u64>,
     /// Opt-in cap on backfill depth, in blocks. `None` backfills the whole
-    /// gap; `Some(cap)` bounds the start to `head - cap`.
+    /// gap; `Some(cap)` bounds the start to `head - cap`, undershot by up to
+    /// the revalidation depth while a tail retraction is pending.
     pub max_lookback: Option<u64>,
 }
 

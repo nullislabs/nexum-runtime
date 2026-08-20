@@ -7,5 +7,5 @@ mod provider_pool;
 
 pub use builder::ProviderPoolBuilder;
 pub use provider_pool::{
-    BlockStream, CanonicalLogBatch, CanonicalLogStream, PoolError, ProviderPool,
+    BlockStream, CanonicalLogBatch, CanonicalLogStream, MAX_REORG_DEPTH, PoolError, ProviderPool,
 };
