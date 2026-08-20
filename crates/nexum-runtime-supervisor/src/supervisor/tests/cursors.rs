@@ -279,6 +279,64 @@ fn commit_chain_log_cursor_persists_the_monotonic_max() {
 }
 
 #[test]
+fn frontier_commits_persist_until_the_pair_is_held() {
+    let (_dir, store) = temp_local_store();
+    let mut cursors = ChainLogCursors::default();
+    commit_chain_log_frontier(&store, &mut cursors, "mod", "key", 800);
+    assert_eq!(read_chain_log_cursor(&store, "mod", "key"), Some(800));
+
+    cursors.hold("mod", "key");
+    commit_chain_log_frontier(&store, &mut cursors, "mod", "key", 1_600);
+    assert_eq!(
+        read_chain_log_cursor(&store, "mod", "key"),
+        Some(800),
+        "a held pair keeps the cursor where the failure left it",
+    );
+    commit_chain_log_cursor(&store, &mut cursors, "mod", "key", 1_700, false);
+    assert_eq!(
+        read_chain_log_cursor(&store, "mod", "key"),
+        Some(1_700),
+        "a successful dispatch still commits under a hold",
+    );
+}
+
+#[tokio::test]
+async fn a_failed_event_dispatch_withholds_later_frontier_commits() {
+    let mut booted = BootScenario::over(mock_components())
+        .boot()
+        .await
+        .expect("boot mock supervisor");
+    let module = nexum_primitives::module_id::ModuleId::parse("ghost").expect("valid module name");
+
+    booted
+        .supervisor
+        .commit_chain_log_frontier(&module, "key", 800);
+    let store = booted.supervisor.shared.components.store.clone();
+    assert_eq!(read_chain_log_cursor(&store, "ghost", "key"), Some(800));
+
+    // No module named "ghost" is loaded, so the dispatch fails.
+    let ok = booted
+        .supervisor
+        .dispatch_event(
+            &module,
+            Chain::mainnet(),
+            alloy_rpc_types_eth::Log::default(),
+            Some("key"),
+        )
+        .await;
+    assert!(!ok);
+
+    booted
+        .supervisor
+        .commit_chain_log_frontier(&module, "key", 1_600);
+    assert_eq!(
+        read_chain_log_cursor(&store, "ghost", "key"),
+        Some(800),
+        "the frontier no longer advances past the failed dispatch",
+    );
+}
+
+#[test]
 fn the_persisted_cursor_is_invisible_to_the_module_namespace() {
     let (_dir, store) = temp_local_store();
     let mut cursors = ChainLogCursors::default();

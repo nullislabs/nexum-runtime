@@ -16,6 +16,10 @@ pub struct ChainConfig {
     /// each source open. Default 30, zero refused at load: it would leave
     /// every request unbounded.
     pub request_timeout_secs: u64,
+    /// The endpoint's `eth_getLogs` maximum block range, and the bulk-backfill
+    /// chunk size. Default 1000, zero refused at load. A value above what the
+    /// endpoint serves risks silently skipped logs.
+    pub max_log_range_blocks: u64,
 }
 
 /// Raw `[chains.<id>]` shape; `rpc_url` stays a string until
@@ -26,10 +30,16 @@ pub(super) struct RawChainConfig {
     pub(super) rpc_url: String,
     #[serde(default = "default_chain_request_timeout_secs")]
     pub(super) request_timeout_secs: u64,
+    #[serde(default = "default_max_log_range_blocks")]
+    pub(super) max_log_range_blocks: u64,
 }
 
 fn default_chain_request_timeout_secs() -> u64 {
     30
+}
+
+fn default_max_log_range_blocks() -> u64 {
+    1000
 }
 
 /// The transport a chain RPC endpoint's scheme selects.
@@ -120,6 +130,9 @@ pub(super) fn resolve_chains(
         if cfg.request_timeout_secs == 0 {
             return Err(zero_field(&format!("chains.{key}.request_timeout_secs")));
         }
+        if cfg.max_log_range_blocks == 0 {
+            return Err(zero_field(&format!("chains.{key}.max_log_range_blocks")));
+        }
         let rpc_url = RpcEndpoint::try_from(cfg.rpc_url)
             .map_err(|source| EngineConfigError::InvalidRpcUrl { key, source })?;
         chains.insert(
@@ -127,6 +140,7 @@ pub(super) fn resolve_chains(
             ChainConfig {
                 rpc_url,
                 request_timeout_secs: cfg.request_timeout_secs,
+                max_log_range_blocks: cfg.max_log_range_blocks,
             },
         );
     }

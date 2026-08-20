@@ -219,6 +219,7 @@ mod tests {
             ChainConfig {
                 rpc_url: RpcEndpoint::try_from("http://127.0.0.1:1").expect("test rpc url parses"),
                 request_timeout_secs: 1,
+                max_log_range_blocks: 1000,
             },
         );
         ProviderPool::from_config(&cfg).await.expect("pool opens")

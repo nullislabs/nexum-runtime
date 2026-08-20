@@ -1,6 +1,7 @@
-//! Chain-log resume cursors, persisted best-effort after a successful dispatch.
+//! Chain-log resume cursors, persisted best-effort after a successful
+//! dispatch and at each completed bulk-backfill chunk.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use alloy_chains::Chain;
 use alloy_primitives::{Address, B256, keccak256};
@@ -11,7 +12,11 @@ use nexum_runtime_api::{StateHandle, StateStore};
 /// In-memory cursor mirror, `module -> cursor key -> block`; additions only
 /// move forward, retractions pull back to the retracted height.
 #[derive(Default)]
-pub(super) struct ChainLogCursors(BTreeMap<String, BTreeMap<String, u64>>);
+pub(super) struct ChainLogCursors {
+    cursors: BTreeMap<String, BTreeMap<String, u64>>,
+    /// Pairs whose frontier commits are withheld after a failed dispatch.
+    holds: BTreeSet<(String, String)>,
+}
 
 impl ChainLogCursors {
     /// Cursor value to persist, or `None` when unchanged; `seed` runs only
@@ -24,7 +29,11 @@ impl ChainLogCursors {
         removed: bool,
         seed: impl FnOnce() -> Option<u64>,
     ) -> Option<u64> {
-        let tracked = self.0.get(module).and_then(|keys| keys.get(key)).copied();
+        let tracked = self
+            .cursors
+            .get(module)
+            .and_then(|keys| keys.get(key))
+            .copied();
         let current = match tracked {
             Some(c) => Some(c),
             None => seed(),
@@ -35,12 +44,22 @@ impl ChainLogCursors {
             None => block,
         };
         if tracked != Some(next) {
-            self.0
+            self.cursors
                 .entry(module.to_owned())
                 .or_default()
                 .insert(key.to_owned(), next);
         }
         (current != Some(next)).then_some(next)
+    }
+
+    /// Withhold `(module, key)`'s frontier commits for the rest of the
+    /// process, so a restart replays what a failed dispatch missed.
+    pub(super) fn hold(&mut self, module: &str, key: &str) {
+        self.holds.insert((module.to_owned(), key.to_owned()));
+    }
+
+    fn is_held(&self, module: &str, key: &str) -> bool {
+        self.holds.contains(&(module.to_owned(), key.to_owned()))
     }
 }
 
@@ -93,6 +112,21 @@ pub(super) fn commit_chain_log_cursor<S: StateStore>(
             "failed to open host store for event source cursor",
         ),
     }
+}
+
+/// Persist a completed bulk chunk's frontier as the cursor; a held pair
+/// commits nothing.
+pub(super) fn commit_chain_log_frontier<S: StateStore>(
+    store: &S,
+    cursors: &mut ChainLogCursors,
+    module: &str,
+    key: &str,
+    frontier: u64,
+) {
+    if cursors.is_held(module, key) {
+        return;
+    }
+    commit_chain_log_cursor(store, cursors, module, key, frontier, false);
 }
 
 /// Keyed on `0x`-prefixed lowercase hex, not the alloy `Filter` (whose hash

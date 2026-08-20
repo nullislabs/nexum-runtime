@@ -1,7 +1,9 @@
 //! Open live chain event sources and dispatch their events to the supervisor
 //! until shutdown. Blocks come from `eth_subscribe(newHeads)` (WS); chain-logs
 //! from an `eth_getLogs` block-range poller that re-queries the reconnect gap
-//! and retracts a reorged delivered tail within the revalidation depth.
+//! and retracts a reorged delivered tail within the revalidation depth. A
+//! large gap's finalized portion is bulk-fetched in operator-declared chunks
+//! before the poller opens at the reorg-window boundary.
 //!
 //! `open_block_streams` and `open_chain_log_streams` each spawn one
 //! reconnect-aware task per event source or chain: it opens the stream,
@@ -49,6 +51,13 @@ const LARGE_GAP_LOG_THRESHOLD: u64 = 1_000;
 /// Bound in blocks for an invalidated-tail restart, measured below the higher
 /// of the scan basis and the `max_lookback` floor.
 const REVALIDATE_DEPTH: u64 = nexum_runtime_chain::MAX_REORG_DEPTH;
+
+/// Consecutive failures on one bulk-backfill chunk before the phase is
+/// abandoned to the per-block poller.
+const BULK_ABANDON_ATTEMPTS: u32 = 5;
+
+/// Minimum spacing between bulk-backfill progress log lines.
+const BULK_PROGRESS_LOG_INTERVAL: Duration = Duration::from_secs(10);
 
 /// Open one reconnect-aware block-source task per chain, spawned via
 /// `executor` with handles pushed into `tasks` for graceful shutdown.
@@ -239,6 +248,163 @@ fn observe_chain_head(head_seen: &mut Option<u64>, chain_id: u64, height: u64) {
     }
 }
 
+/// Bulk-phase bounds `(start, handoff)`. Below the handoff every block is
+/// final, so the ranged fetch needs no reorg reconciliation and the per-block
+/// poller opens there to own the reorg window and the live tail.
+fn bulk_backfill_bounds(start_block: u64, head: u64) -> Option<(u64, u64)> {
+    let handoff = head.saturating_sub(nexum_runtime_chain::MAX_REORG_DEPTH);
+    (handoff > start_block).then_some((start_block, handoff))
+}
+
+/// How a bulk phase ended.
+enum BulkOutcome {
+    /// Next unfetched block; equal to the handoff on completion, short of it
+    /// on abandonment.
+    OpenPollerAt(u64),
+    /// The engine is shutting down.
+    ReceiverGone,
+}
+
+/// One event source as the bulk phase borrows it from its chain-log task.
+struct BulkSource<'a> {
+    pool: &'a ProviderPool,
+    module: &'a ModuleId,
+    chain: Chain,
+    filter: &'a alloy_rpc_types_eth::Filter,
+    cursor_key: Option<&'a Arc<str>>,
+    seed: u64,
+    tx: &'a mpsc::Sender<TaggedChainLog>,
+}
+
+impl BulkSource<'_> {
+    /// Fetch `from..handoff` in chunks of the operator-declared range. Each
+    /// chunk's frontier goes down the same channel the poller feeds, so the
+    /// durable cursor commits per chunk and an interruption resumes at the
+    /// last completed chunk.
+    async fn backfill(&self, from: u64, handoff: u64) -> BulkOutcome {
+        let chain_id = self.chain.id();
+        let chunk_blocks = match self.pool.log_range_blocks(self.chain) {
+            Ok(blocks) => blocks.max(1),
+            Err(err) => {
+                warn!(
+                    module = %self.module,
+                    chain_id,
+                    error = %err,
+                    "bulk backfill has no declared log range - falling back to the per-block poller",
+                );
+                return BulkOutcome::OpenPollerAt(from);
+            }
+        };
+        info!(
+            module = %self.module,
+            chain_id,
+            from,
+            handoff,
+            chunk_blocks,
+            blocks = handoff - from,
+            "bulk backfill engaged over the finalized portion of the gap",
+        );
+        let started = Instant::now();
+        let mut last_progress = started;
+        let mut position = from;
+        let mut attempt: u32 = 0;
+        while position < handoff {
+            let to = position.saturating_add(chunk_blocks - 1).min(handoff - 1);
+            match self
+                .pool
+                .logs_in_range(self.chain, self.filter, position, to)
+                .await
+            {
+                Ok(logs) => {
+                    attempt = 0;
+                    for log in logs {
+                        let tagged = (
+                            self.module.clone(),
+                            self.chain,
+                            ChainLogItem::Log(Box::new(log)),
+                            self.cursor_key.cloned(),
+                        );
+                        if self.tx.send(tagged).await.is_err() {
+                            return BulkOutcome::ReceiverGone;
+                        }
+                    }
+                    position = to + 1;
+                    // The frontier follows the chunk's logs down the same
+                    // ordered channel, so it commits only after they
+                    // reached the supervisor.
+                    if let Some(key) = self.cursor_key {
+                        let tagged = (
+                            self.module.clone(),
+                            self.chain,
+                            ChainLogItem::Frontier(position),
+                            Some(key.clone()),
+                        );
+                        if self.tx.send(tagged).await.is_err() {
+                            return BulkOutcome::ReceiverGone;
+                        }
+                    }
+                    let now = Instant::now();
+                    if now.duration_since(last_progress) >= BULK_PROGRESS_LOG_INTERVAL {
+                        last_progress = now;
+                        let fetched = position - from;
+                        let rate =
+                            fetched as f64 / started.elapsed().as_secs_f64().max(f64::EPSILON);
+                        let blocks_per_sec = format!("{rate:.2}");
+                        info!(
+                            module = %self.module,
+                            chain_id,
+                            chunk_blocks,
+                            blocks_remaining = handoff - position,
+                            blocks_per_sec = %blocks_per_sec,
+                            "bulk backfill progressing",
+                        );
+                    }
+                }
+                Err(err) => {
+                    let timed_out = matches!(err, PoolError::Timeout);
+                    if attempt + 1 >= BULK_ABANDON_ATTEMPTS {
+                        warn!(
+                            module = %self.module,
+                            chain_id,
+                            from = position,
+                            to,
+                            error = %err,
+                            timed_out,
+                            blocks_remaining = handoff - position,
+                            "bulk backfill abandoned after persistent chunk failures - \
+                             catching up per block from here",
+                        );
+                        return BulkOutcome::OpenPollerAt(position);
+                    }
+                    backoff_pause(&mut attempt, self.seed, |attempt, backoff_ms| {
+                        warn!(
+                            module = %self.module,
+                            chain_id,
+                            from = position,
+                            to,
+                            error = %err,
+                            timed_out,
+                            attempt,
+                            backoff_ms,
+                            "bulk backfill chunk failed - retrying after backoff",
+                        );
+                    })
+                    .await;
+                }
+            }
+        }
+        info!(
+            module = %self.module,
+            chain_id,
+            handoff,
+            blocks = handoff - from,
+            elapsed_s = started.elapsed().as_secs(),
+            "bulk backfill complete - handing off to the per-block poller",
+        );
+        BulkOutcome::OpenPollerAt(handoff)
+    }
+}
+
 /// Poller-backed loop for one (module, chain) event source; a
 /// re-open resumes past the scanned range and retracts a reorged tail
 /// within the revalidation depth.
@@ -352,6 +518,46 @@ async fn reconnecting_chain_log_task(
                 "event source backfilling a large gap"
             );
         }
+        // A pending retraction stays on the per-block path: the bulk phase
+        // would restate the tail's height before the retraction below is
+        // emitted.
+        if invalidated_tail.is_none() {
+            // Blocks produced during a long pass re-enter the bulk phase
+            // against a re-read head, so the poller inherits only a
+            // sub-threshold residue.
+            let mut bulk_head = head;
+            while let Some((from, handoff)) = bulk_backfill_bounds(start_block, bulk_head) {
+                let source = BulkSource {
+                    pool: &pool,
+                    module: &module,
+                    chain,
+                    filter: &filter,
+                    cursor_key: cursor_key.as_ref(),
+                    seed,
+                    tx: &tx,
+                };
+                match source.backfill(from, handoff).await {
+                    BulkOutcome::OpenPollerAt(next) if next > from => {
+                        boot_resume = None;
+                        resume_from = Some(next);
+                        start_block = next;
+                        if next < handoff {
+                            break;
+                        }
+                    }
+                    BulkOutcome::OpenPollerAt(_) => break,
+                    BulkOutcome::ReceiverGone => return TaskExit::ReceiverGone,
+                }
+                match pool.head_number(chain).await {
+                    Ok(new_head) => {
+                        observe_chain_head(&mut head_seen, chain_id, new_head);
+                        bulk_head = new_head;
+                    }
+                    // The poller's own open path retries the head.
+                    Err(_) => break,
+                }
+            }
+        }
         match pool.open_event_source(chain, filter.clone(), start_block) {
             Ok(mut inner) => {
                 if attempt == 0 {
@@ -401,7 +607,12 @@ async fn reconnecting_chain_log_task(
                     }
                     for mut log in t.logs {
                         log.removed = true;
-                        let tagged = (module.clone(), chain, log, cursor_key.clone());
+                        let tagged = (
+                            module.clone(),
+                            chain,
+                            ChainLogItem::Log(Box::new(log)),
+                            cursor_key.clone(),
+                        );
                         if tx.send(tagged).await.is_err() {
                             return TaskExit::ReceiverGone;
                         }
@@ -425,8 +636,12 @@ async fn reconnecting_chain_log_task(
                         Ok(batch) => {
                             observe_chain_head(&mut head_seen, chain_id, batch.number);
                             for log in &batch.logs {
-                                let tagged =
-                                    (module.clone(), chain, log.clone(), cursor_key.clone());
+                                let tagged = (
+                                    module.clone(),
+                                    chain,
+                                    ChainLogItem::Log(Box::new(log.clone())),
+                                    cursor_key.clone(),
+                                );
                                 if tx.send(tagged).await.is_err() {
                                     return TaskExit::ReceiverGone;
                                 }
@@ -499,8 +714,17 @@ pub type TaggedBlockStream = std::pin::Pin<
             > + Send,
     >,
 >;
-/// `(module, chain, log, cursor_key)`; `cursor_key` is `Some` for `resume`.
-pub type TaggedChainLog = (ModuleId, Chain, alloy_rpc_types_eth::Log, Option<Arc<str>>);
+/// One chain-log channel item.
+pub enum ChainLogItem {
+    /// A log to dispatch, `removed` already stamped.
+    Log(Box<alloy_rpc_types_eth::Log>),
+    /// First block past a completed bulk chunk; commits the resume cursor
+    /// without a dispatch.
+    Frontier(u64),
+}
+
+/// `(module, chain, item, cursor_key)`; `cursor_key` is `Some` for `resume`.
+pub type TaggedChainLog = (ModuleId, Chain, ChainLogItem, Option<Arc<str>>);
 /// Stream of [`TaggedChainLog`], merged across every open event source.
 pub type TaggedChainLogStream =
     std::pin::Pin<Box<dyn futures::Stream<Item = TaggedChainLog> + Send>>;
@@ -563,6 +787,7 @@ pub async fn run<T: RuntimeTypes<State = HostState<T>>, G>(
                 Box<alloy_rpc_types_eth::Log>,
                 Option<Arc<str>>,
             ),
+            CursorFrontier(ModuleId, Arc<str>, u64),
             Extension(ExtensionDelivery),
             // Carries the drain guard `shutdown` yielded.
             Shutdown(G),
@@ -585,9 +810,14 @@ pub async fn run<T: RuntimeTypes<State = HostState<T>>, G>(
                 None => NextTrigger::StreamPanic("block"),
             },
             next = chain_logs.next() => match next {
-                Some((module, chain, log, cursor_key)) => {
-                    NextTrigger::Event(module, chain, Box::new(log), cursor_key)
+                Some((module, chain, ChainLogItem::Log(log), cursor_key)) => {
+                    NextTrigger::Event(module, chain, log, cursor_key)
                 }
+                Some((module, _, ChainLogItem::Frontier(frontier), Some(key))) => {
+                    NextTrigger::CursorFrontier(module, key, frontier)
+                }
+                // A frontier without a cursor key has nothing to commit.
+                Some((_, _, ChainLogItem::Frontier(_), None)) => continue,
                 None => NextTrigger::StreamPanic("chain-log"),
             },
             next = extension_deliveries.next() => match next {
@@ -607,6 +837,9 @@ pub async fn run<T: RuntimeTypes<State = HostState<T>>, G>(
                     .dispatch_event(&module, chain, *log, cursor_key.as_deref())
                     .await;
                 dispatched_events += 1;
+            }
+            NextTrigger::CursorFrontier(module, key, frontier) => {
+                supervisor.commit_chain_log_frontier(&module, &key, frontier);
             }
             NextTrigger::Extension(delivery) => {
                 supervisor.dispatch_extension_trigger(delivery).await;
@@ -821,12 +1054,40 @@ mod tests {
             .expect("one stream per source")
     }
 
+    /// Like [`spawn_chain_log_task`], with a cursor key so the bulk phase
+    /// emits frontier items.
+    fn spawn_keyed_chain_log_task(
+        pool: &ProviderPool,
+        executor: &TaskExecutor,
+        tasks: &mut TaskSet,
+        initial_cursor: Option<u64>,
+    ) -> TaggedChainLogStream {
+        let sources = vec![EventSource {
+            module: ModuleId::parse("mod").expect("valid module name"),
+            chain: alloy_chains::Chain::mainnet(),
+            filter: alloy_rpc_types_eth::Filter::default(),
+            cursor_key: Some("cursor-key".to_owned()),
+            initial_cursor,
+            max_lookback: None,
+        }];
+        open_chain_log_streams(pool, sources, executor, tasks)
+            .pop()
+            .expect("one stream per source")
+    }
+
     async fn recv(stream: &mut TaggedChainLogStream) -> Log {
-        let (_, _, log, _) = tokio::time::timeout(Duration::from_secs(600), stream.next())
+        match recv_item(stream).await {
+            ChainLogItem::Log(log) => *log,
+            ChainLogItem::Frontier(block) => panic!("expected a log, got the frontier {block}"),
+        }
+    }
+
+    async fn recv_item(stream: &mut TaggedChainLogStream) -> ChainLogItem {
+        let (_, _, item, _) = tokio::time::timeout(Duration::from_secs(600), stream.next())
             .await
             .expect("delivery within the virtual window")
             .expect("stream alive");
-        log
+        item
     }
 
     /// Wait for `n` ranged `eth_getLogs` fetches; returns their `fromBlock`s.
@@ -842,6 +1103,18 @@ mod tests {
         })
         .await
         .unwrap_or_else(|_| panic!("timed out waiting for {n} ranged log fetches"))
+    }
+
+    /// `toBlock` of every captured ranged `eth_getLogs`, in call order.
+    fn log_range_tos(rpc: &MockRpc) -> Vec<u64> {
+        rpc.captured()
+            .iter()
+            .filter(|req| req.method == "eth_getLogs")
+            .filter_map(|req| {
+                let to = req.params.get(0)?.get("toBlock")?.as_str()?;
+                u64::from_str_radix(to.trim_start_matches("0x"), 16).ok()
+            })
+            .collect()
     }
 
     /// Wait until the previous script is fully consumed; scripts end in a
@@ -1150,6 +1423,347 @@ mod tests {
             wait_for_ranged_fetches(&rpc, 2).await,
             vec![90, 95],
             "with no retraction pending the clamp still raises the start to head - cap",
+        );
+        tasks.shutdown().await;
+    }
+
+    #[test]
+    fn bulk_backfill_bounds_covers_every_finalized_block() {
+        // head 2_064 puts the handoff at 2_000, and the bulk phase takes
+        // everything below it however little that is.
+        assert_eq!(bulk_backfill_bounds(1_000, 2_064), Some((1_000, 2_000)));
+        assert_eq!(bulk_backfill_bounds(1_999, 2_064), Some((1_999, 2_000)));
+        assert_eq!(
+            bulk_backfill_bounds(2_000, 2_064),
+            None,
+            "a gap wholly inside the reorg window stays on the per-block poller",
+        );
+    }
+
+    #[test]
+    fn bulk_backfill_bounds_ignores_a_head_inside_the_reorg_window() {
+        assert_eq!(bulk_backfill_bounds(0, 63), None);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_large_gap_bulk_backfills_in_chunks_and_hands_off_to_the_poller() {
+        let rpc = MockRpc::new();
+        // Boot cursor 0 against head 2_064: handoff 2_000, three 800-block
+        // chunks, then the per-block poller from the handoff.
+        let mut script = vec![rpc_head(2_064)];
+        script.push(rpc_ok(&vec![log_at(10)]));
+        script.push(rpc_ok(&Vec::<Log>::new()));
+        script.push(rpc_ok(&vec![log_at(1_900)]));
+        // The post-pass head re-read finds no further finalized gap.
+        script.push(rpc_head(2_064));
+        script.extend(cycle(2_064, &[(2_000, vec![log_at(2_000)])]));
+        rpc.push_script(script);
+        let pool = pool_for(&rpc).with_log_range_blocks(800);
+        let manager = TaskManager::new();
+        let executor = manager.executor();
+        let mut tasks = TaskSet::new();
+        let mut stream = spawn_chain_log_task(&pool, &executor, &mut tasks, Some(0));
+
+        assert_eq!(recv(&mut stream).await.block_number, Some(10));
+        assert_eq!(recv(&mut stream).await.block_number, Some(1_900));
+        assert_eq!(
+            recv(&mut stream).await.block_number,
+            Some(2_000),
+            "the poller's first delivery follows the bulk logs in order",
+        );
+        // The script is exhausted once 2_000 delivers, so the poller's
+        // further (failing) fetches may trail the asserted prefix.
+        let froms = wait_for_ranged_fetches(&rpc, 4).await;
+        assert_eq!(
+            &froms[..4],
+            [0, 800, 1_600, 2_000],
+            "three declared-range chunks, then the poller opens at head - MAX_REORG_DEPTH",
+        );
+        assert_eq!(
+            &log_range_tos(&rpc)[..4],
+            [799, 1_599, 1_999, 2_000],
+            "the chunks stop below the handoff; the poller owns the reorg window",
+        );
+        tasks.shutdown().await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_head_that_advances_during_the_bulk_phase_is_backfilled_too() {
+        let rpc = MockRpc::new();
+        // Head 1_064 puts the first handoff at 1_000, covered by one chunk.
+        // By the re-read the chain has moved to 1_864, so a second pass takes
+        // 1_000 to 1_800 before the poller opens.
+        let mut script = vec![rpc_head(1_064)];
+        script.push(rpc_ok(&vec![log_at(10)]));
+        script.push(rpc_head(1_864));
+        script.push(rpc_ok(&vec![log_at(1_500)]));
+        script.push(rpc_head(1_864));
+        script.extend(cycle(1_864, &[(1_800, vec![log_at(1_800)])]));
+        rpc.push_script(script);
+        let pool = pool_for(&rpc).with_log_range_blocks(1_000);
+        let manager = TaskManager::new();
+        let executor = manager.executor();
+        let mut tasks = TaskSet::new();
+        let mut stream = spawn_chain_log_task(&pool, &executor, &mut tasks, Some(0));
+
+        assert_eq!(recv(&mut stream).await.block_number, Some(10));
+        assert_eq!(
+            recv(&mut stream).await.block_number,
+            Some(1_500),
+            "the drift that appeared during the first pass is bulk-fetched, not walked per block",
+        );
+        assert_eq!(recv(&mut stream).await.block_number, Some(1_800));
+        let froms = wait_for_ranged_fetches(&rpc, 3).await;
+        assert_eq!(
+            &froms[..3],
+            [0, 1_000, 1_800],
+            "two bulk passes against a moving head, then the poller at the final handoff",
+        );
+        assert_eq!(
+            &log_range_tos(&rpc)[..3],
+            [999, 1_799, 1_800],
+            "the second pass stops below the handoff the re-read produced",
+        );
+        tasks.shutdown().await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn bulk_chunks_deliver_their_frontier_through_the_log_channel() {
+        let rpc = MockRpc::new();
+        let mut script = vec![rpc_head(2_064)];
+        script.push(rpc_ok(&vec![log_at(10)]));
+        script.push(rpc_ok(&Vec::<Log>::new()));
+        script.push(rpc_ok(&vec![log_at(1_900)]));
+        script.push(rpc_head(2_064));
+        script.extend(cycle(2_064, &[(2_000, vec![log_at(2_000)])]));
+        rpc.push_script(script);
+        let pool = pool_for(&rpc).with_log_range_blocks(800);
+        let manager = TaskManager::new();
+        let executor = manager.executor();
+        let mut tasks = TaskSet::new();
+        let mut stream = spawn_keyed_chain_log_task(&pool, &executor, &mut tasks, Some(0));
+
+        assert!(matches!(
+            recv_item(&mut stream).await,
+            ChainLogItem::Log(log) if log.block_number == Some(10),
+        ));
+        assert!(
+            matches!(recv_item(&mut stream).await, ChainLogItem::Frontier(800)),
+            "each chunk closes with its frontier, behind the chunk's logs",
+        );
+        assert!(
+            matches!(recv_item(&mut stream).await, ChainLogItem::Frontier(1_600)),
+            "a log-free chunk still moves the frontier",
+        );
+        assert!(matches!(
+            recv_item(&mut stream).await,
+            ChainLogItem::Log(log) if log.block_number == Some(1_900),
+        ));
+        assert!(
+            matches!(recv_item(&mut stream).await, ChainLogItem::Frontier(2_000)),
+            "the last chunk's frontier is the handoff",
+        );
+        assert!(matches!(
+            recv_item(&mut stream).await,
+            ChainLogItem::Log(log) if log.block_number == Some(2_000),
+        ));
+        tasks.shutdown().await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_boot_cursor_mid_backfill_resumes_at_the_last_committed_chunk() {
+        let rpc = MockRpc::new();
+        // A restart left the cursor at the 800 chunk boundary; head 2_064
+        // leaves two chunks and then the poller at the handoff.
+        let mut script = vec![rpc_head(2_064)];
+        script.push(rpc_ok(&vec![log_at(900)]));
+        script.push(rpc_ok(&Vec::<Log>::new()));
+        script.push(rpc_head(2_064));
+        script.extend(cycle(2_064, &[(2_000, vec![log_at(2_000)])]));
+        rpc.push_script(script);
+        let pool = pool_for(&rpc).with_log_range_blocks(800);
+        let manager = TaskManager::new();
+        let executor = manager.executor();
+        let mut tasks = TaskSet::new();
+        let mut stream = spawn_chain_log_task(&pool, &executor, &mut tasks, Some(800));
+
+        assert_eq!(recv(&mut stream).await.block_number, Some(900));
+        assert_eq!(recv(&mut stream).await.block_number, Some(2_000));
+        let froms = wait_for_ranged_fetches(&rpc, 3).await;
+        assert_eq!(
+            &froms[..3],
+            [800, 1_600, 2_000],
+            "no block below the committed chunk boundary is refetched",
+        );
+        tasks.shutdown().await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn blocks_produced_during_the_bulk_phase_backfill_in_bulk_too() {
+        let rpc = MockRpc::new();
+        let mut script = vec![rpc_head(2_064)];
+        script.push(rpc_ok(&vec![log_at(10)]));
+        script.push(rpc_ok(&Vec::<Log>::new()));
+        script.push(rpc_ok(&Vec::<Log>::new()));
+        // The head moved a bulk-sized gap ahead during the first pass, so a
+        // second pass covers [2_000, 3_063] before the poller opens.
+        script.push(rpc_head(3_128));
+        script.push(rpc_ok(&Vec::<Log>::new()));
+        script.push(rpc_ok(&vec![log_at(3_000)]));
+        script.push(rpc_head(3_128));
+        script.extend(cycle(3_128, &[(3_064, vec![log_at(3_064)])]));
+        rpc.push_script(script);
+        let pool = pool_for(&rpc).with_log_range_blocks(800);
+        let manager = TaskManager::new();
+        let executor = manager.executor();
+        let mut tasks = TaskSet::new();
+        let mut stream = spawn_chain_log_task(&pool, &executor, &mut tasks, Some(0));
+
+        assert_eq!(recv(&mut stream).await.block_number, Some(10));
+        assert_eq!(recv(&mut stream).await.block_number, Some(3_000));
+        assert_eq!(recv(&mut stream).await.block_number, Some(3_064));
+        let froms = wait_for_ranged_fetches(&rpc, 6).await;
+        assert_eq!(
+            &froms[..6],
+            [0, 800, 1_600, 2_000, 2_800, 3_064],
+            "the second pass bulk-fetches the blocks the first pass left behind",
+        );
+        assert_eq!(
+            &log_range_tos(&rpc)[..6],
+            [799, 1_599, 1_999, 2_799, 3_063, 3_064],
+            "both passes stop below their handoff",
+        );
+        tasks.shutdown().await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_persistently_failing_chunk_abandons_the_bulk_phase_to_the_poller() {
+        let rpc = MockRpc::new();
+        let mut script = vec![rpc_head(2_064)];
+        // The first chunk delivers; every retry of the second fails.
+        script.push(rpc_ok(&vec![log_at(10)]));
+        script.extend((0..5).map(|_| rpc_err("range refused")));
+        script.extend(cycle(2_064, &[(800, vec![log_at(800)])]));
+        rpc.push_script(script);
+        let pool = pool_for(&rpc).with_log_range_blocks(800);
+        let manager = TaskManager::new();
+        let executor = manager.executor();
+        let mut tasks = TaskSet::new();
+        let mut stream = spawn_chain_log_task(&pool, &executor, &mut tasks, Some(0));
+
+        assert_eq!(recv(&mut stream).await.block_number, Some(10));
+        assert_eq!(
+            recv(&mut stream).await.block_number,
+            Some(800),
+            "the poller opens at the abandoned position, not at the handoff",
+        );
+        let froms = wait_for_ranged_fetches(&rpc, 7).await;
+        assert_eq!(
+            &froms[..7],
+            [0, 800, 800, 800, 800, 800, 800],
+            "five attempts on the failed chunk, then per-block from there",
+        );
+        assert_eq!(
+            &log_range_tos(&rpc)[..7],
+            [799, 1_599, 1_599, 1_599, 1_599, 1_599, 800],
+            "every retry repeats the chunk unchanged",
+        );
+        tasks.shutdown().await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_reconnect_after_the_bulk_phase_does_not_refetch_bulk_chunks() {
+        let rpc = MockRpc::new();
+        let mut script = vec![rpc_head(2_064)];
+        script.push(rpc_ok(&vec![log_at(10)]));
+        script.push(rpc_ok(&Vec::<Log>::new()));
+        script.push(rpc_ok(&Vec::<Log>::new()));
+        // The post-pass head re-read finds no further finalized gap.
+        script.push(rpc_head(2_064));
+        // The poller's first head fetch fails, forcing a reconnect.
+        script.push(rpc_err("stream torn down"));
+        rpc.push_script(script);
+        let pool = pool_for(&rpc).with_log_range_blocks(800);
+        let manager = TaskManager::new();
+        let executor = manager.executor();
+        let mut tasks = TaskSet::new();
+        let mut stream = spawn_chain_log_task(&pool, &executor, &mut tasks, Some(0));
+
+        assert_eq!(recv(&mut stream).await.block_number, Some(10));
+        drained(&rpc).await;
+
+        rpc.push_script(attempt(
+            2_064,
+            None,
+            vec![cycle(2_064, &[(2_000, vec![log_at(2_000)])])],
+        ));
+        let log = recv(&mut stream).await;
+        assert!(!log.removed, "nothing was retracted");
+        assert_eq!(log.block_number, Some(2_000));
+        let froms = wait_for_ranged_fetches(&rpc, 4).await;
+        assert_eq!(
+            &froms[..4],
+            [0, 800, 1_600, 2_000],
+            "the reconnect resumes at the handoff; no bulk chunk is refetched",
+        );
+        tasks.shutdown().await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_pending_retraction_keeps_the_gap_on_the_per_block_path() {
+        let rpc = MockRpc::new();
+        rpc.push_script(attempt(
+            90,
+            None,
+            vec![
+                cycle(90, &[(90, vec![log_at(90)])]),
+                vec![rpc_err("stream torn down")],
+            ],
+        ));
+        let pool = pool_for(&rpc).with_log_range_blocks(800);
+        let manager = TaskManager::new();
+        let executor = manager.executor();
+        let mut tasks = TaskSet::new();
+        let mut stream = spawn_chain_log_task(&pool, &executor, &mut tasks, None);
+        recv(&mut stream).await;
+        drained(&rpc).await;
+
+        // Head 5_000 leaves a bulk-sized gap, but height 90 reorged while
+        // disconnected, so the retraction and restatement must pair up on the
+        // per-block path.
+        let fork_hash = B256::repeat_byte(0xcc);
+        let mut fork_block = linked_block(90);
+        fork_block.header.hash = fork_hash;
+        let fork_log: Log = Log {
+            block_number: Some(90),
+            block_hash: Some(fork_hash),
+            ..Default::default()
+        };
+        rpc.push_script(attempt(
+            5_000,
+            Some(rpc_ok(&fork_block)),
+            vec![vec![
+                rpc_head(90),
+                rpc_ok(&fork_block),
+                rpc_ok(&vec![fork_log]),
+            ]],
+        ));
+
+        let retraction = recv(&mut stream).await;
+        assert!(retraction.removed, "the stale delivery is retracted");
+        assert_eq!(retraction.block_number, Some(90));
+        let replacement = recv(&mut stream).await;
+        assert!(!replacement.removed);
+        assert_eq!(replacement.block_number, Some(90));
+        assert_eq!(
+            wait_for_ranged_fetches(&rpc, 2).await,
+            vec![90, 90],
+            "the invalidated tail replays AT 90 with no bulk phase in front of it",
+        );
+        assert_eq!(
+            log_range_tos(&rpc),
+            vec![90, 90],
+            "no chunk-wide fetch ran despite the bulk-sized gap",
         );
         tasks.shutdown().await;
     }

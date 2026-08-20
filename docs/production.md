@@ -140,10 +140,13 @@ If a restored file does not open, roll forward from the previous snapshot, or st
 
 ## 4. Cursors the runtime writes
 
-The runtime writes one kind of key, best-effort after a successful dispatch, under a host-owned `host/<name>` namespace beside each component's own:
+The runtime writes one kind of key, best-effort after a successful dispatch and after each completed bulk chunk, under a host-owned `host/<name>` namespace beside each component's own:
 
 - `chainlog_cursor:<hex>`, the resume cursor for a `resume = true` event trigger.
   The engine reads it once at boot, re-opens at that block, and backfills the gap on reconnect, capped by `max_lookback`.
+  A large finalized gap first backfills in bulk `eth_getLogs` chunks (section 8).
+  The cursor commits after each chunk, so an interrupted catch-up resumes where it stopped.
+  A failed dispatch stops the per-chunk commits for that trigger, and a restart then replays the logs the module missed.
   A reorg retraction pulls the cursor back.
 
 Every key in a component's own namespace is the component's own, and `max_state_bytes` measures that namespace alone.
@@ -272,6 +275,29 @@ An elapsed deadline there retries on the source backoff and does not surface to 
 The retry warning carries a `timed_out` field, which separates a deadline from a transport error.
 The chain interface has no batch verb; the guest SDK lowers a batch of RPC requests to sequential single requests, each with the full timeout, so a batch's worst case is the entry count times that timeout.
 `nexum_runtime_chain_request_total{outcome="err"}` is the degradation signal.
+
+A `max_log_range_blocks` under `[chains.<id>]` declares the maximum block range the endpoint accepts for one `eth_getLogs` request, and defaults to 1000.
+The engine uses it as the chunk size of the bulk backfill.
+The bulk backfill runs when the finalized part of a resume gap is 1000 blocks or more.
+That threshold is fixed in the engine and is separate from this key.
+The engine fetches that finalized part in chunks of `max_log_range_blocks`, then hands off to the per-block poller for the last 64 blocks and for the live tail.
+It commits the resume cursor after each chunk.
+
+The limit is a property of the endpoint, not of the chain, so read it from the provider's JSON-RPC documentation.
+Providers state it as a maximum block range for `eth_getLogs`, and some also cap the number of results one request can return.
+Take the smaller of the two if both apply, and keep the default when the documentation states neither.
+A self-hosted archive node applies no limit, so raise the value until one chunk's response time is no longer acceptable.
+To check a raised value, send one `eth_getLogs` at that range over blocks whose logs you know, and confirm the endpoint returns all of them.
+
+Do not set a value above what the endpoint serves.
+Some endpoints answer a too-wide range with a partial result or an empty result instead of an error.
+The engine cannot tell such an answer from a truthful one.
+It commits the cursor past those blocks, and the logs in them never reach the module.
+A value below the endpoint's limit is always safe, and costs only more requests for the same catch-up.
+
+A failing chunk retries on the source backoff.
+Five consecutive failures on one chunk abandon the bulk backfill for that catch-up, which then continues per block, and the engine logs the abandonment.
+The bulk backfill logs the chunk size, the blocks remaining, and the catch-up rate, so a long recovery reads as progress rather than as a stall.
 
 Resource ceilings live in `engine.toml` `[policy]` and apply to every component; a `[policy.component.<id>]` row, keyed on `[[modules]].id`, overrides them for one.
 `[policy.total].max_memory_bytes` bounds the summed reservations, and an overcommitted set refuses at boot naming the entry that crossed it.
