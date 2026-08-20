@@ -58,6 +58,8 @@ struct ChainEndpoint {
     timeout: Duration,
     /// WS/IPC drives block following by pubsub; HTTP polls.
     supports_pubsub: bool,
+    /// Operator-declared `eth_getLogs` maximum block range.
+    log_range_blocks: u64,
 }
 
 impl ChainEndpoint {
@@ -132,6 +134,7 @@ impl ProviderPool {
                     provider,
                     timeout,
                     supports_pubsub,
+                    log_range_blocks: chain_cfg.max_log_range_blocks,
                 },
             );
         }
@@ -167,6 +170,7 @@ impl ProviderPool {
                         provider,
                         timeout: Duration::from_secs(30),
                         supports_pubsub: false,
+                        log_range_blocks: 1000,
                     },
                 )
             })
@@ -176,6 +180,17 @@ impl ProviderPool {
             log_backfill_concurrency: 1,
             poll_interval_override: Some(poll_interval),
         }
+    }
+
+    /// Every endpoint's declared `eth_getLogs` range set to `blocks`.
+    #[cfg(any(test, feature = "test-utils"))]
+    pub fn with_log_range_blocks(mut self, blocks: u64) -> Self {
+        let mut providers = (*self.providers).clone();
+        for endpoint in providers.values_mut() {
+            endpoint.log_range_blocks = blocks;
+        }
+        self.providers = Arc::new(providers);
+        self
     }
 
     fn poll_interval(&self, chain: Chain) -> Duration {
@@ -241,6 +256,32 @@ impl ProviderPool {
             .ok_or(PoolError::UnknownChain(chain))?;
         ep.deadline(ep.provider.get_block_by_number(number.into()))
             .await
+    }
+
+    /// The operator-declared `eth_getLogs` maximum block range for `chain`,
+    /// from `[chains.<id>] max_log_range_blocks`.
+    pub fn log_range_blocks(&self, chain: Chain) -> Result<u64, PoolError> {
+        self.providers
+            .get(&chain)
+            .map(|ep| ep.log_range_blocks)
+            .ok_or(PoolError::UnknownChain(chain))
+    }
+
+    /// `filter`'s matching logs over the inclusive `from..=to` range on
+    /// `chain`, in one `eth_getLogs` round trip.
+    pub async fn logs_in_range(
+        &self,
+        chain: Chain,
+        filter: &Filter,
+        from: u64,
+        to: u64,
+    ) -> Result<Vec<Log>, PoolError> {
+        let ep = self
+            .providers
+            .get(&chain)
+            .ok_or(PoolError::UnknownChain(chain))?;
+        let ranged = filter.clone().from_block(from).to_block(to);
+        ep.deadline(ep.provider.get_logs(&ranged)).await
     }
 
     /// Canonical (reorg-aware) log stream on `chain` from `start_block`. Each
@@ -433,6 +474,7 @@ mod tests {
             ChainConfig {
                 rpc_url: RpcEndpoint::try_from(rpc_url).expect("test rpc url parses"),
                 request_timeout_secs: timeout_secs,
+                max_log_range_blocks: 1000,
             },
         );
         let mut cfg = EngineConfig::default();
@@ -641,6 +683,7 @@ mod tests {
                 provider,
                 timeout: Duration::from_secs(1),
                 supports_pubsub: false,
+                log_range_blocks: 1000,
             },
         );
         let pool = ProviderPool {
@@ -649,6 +692,80 @@ mod tests {
             poll_interval_override: None,
         };
         (server, pool)
+    }
+
+    #[test]
+    fn empty_pool_rejects_log_range_lookup() {
+        let pool = ProviderPool::empty();
+        assert!(matches!(
+            pool.log_range_blocks(Chain::from_id(1)),
+            Err(PoolError::UnknownChain(c)) if c == Chain::from_id(1)
+        ));
+    }
+
+    #[tokio::test]
+    async fn log_range_blocks_reads_the_configured_range() {
+        let mut cfg = test_config(Chain::from_id(1), "http://127.0.0.1:1");
+        cfg.chains
+            .get_mut(&Chain::from_id(1))
+            .expect("entry")
+            .max_log_range_blocks = 5000;
+        let pool = ProviderPool::from_config(&cfg).await.unwrap();
+        assert_eq!(pool.log_range_blocks(Chain::from_id(1)).unwrap(), 5000);
+    }
+
+    #[tokio::test]
+    async fn logs_in_range_sends_the_given_bounds_and_returns_the_logs() {
+        use wiremock::{Mock, MockServer, Request, ResponseTemplate, matchers::any};
+
+        let server = MockServer::start().await;
+        let served: Log = Log {
+            block_number: Some(0x65),
+            ..Default::default()
+        };
+        let result = serde_json::to_string(&vec![served]).expect("test log serializes");
+        Mock::given(any())
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_string(format!(r#"{{"jsonrpc":"2.0","id":0,"result":{result}}}"#)),
+            )
+            .mount(&server)
+            .await;
+
+        let cfg = test_config(Chain::from_id(1), &server.uri());
+        let pool = ProviderPool::from_config(&cfg).await.unwrap();
+        let logs = pool
+            .logs_in_range(Chain::from_id(1), &Filter::new(), 100, 199)
+            .await
+            .unwrap();
+        assert_eq!(logs.len(), 1);
+        assert_eq!(logs[0].block_number, Some(0x65));
+
+        let requests: Vec<Request> = server.received_requests().await.expect("recording on");
+        assert_eq!(requests.len(), 1);
+        let body: serde_json::Value =
+            serde_json::from_slice(&requests[0].body).expect("json-rpc body");
+        assert_eq!(body["method"], "eth_getLogs");
+        assert_eq!(body["params"][0]["fromBlock"], "0x64");
+        assert_eq!(body["params"][0]["toBlock"], "0xc7");
+    }
+
+    #[tokio::test]
+    async fn logs_in_range_times_out_when_the_node_hangs() {
+        let (_server, pool) = hung_node_pool().await;
+        let started = std::time::Instant::now();
+        let err = pool
+            .logs_in_range(Chain::from_id(1), &Filter::new(), 0, 999)
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, PoolError::Timeout),
+            "the hung ranged fetch must fail by deadline, got: {err:?}",
+        );
+        assert!(
+            started.elapsed() < Duration::from_secs(30),
+            "the fetch must fail at the configured deadline, not the 60 s hang",
+        );
     }
 
     #[tokio::test]

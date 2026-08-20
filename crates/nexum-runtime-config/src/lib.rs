@@ -403,6 +403,53 @@ request_timeout_secs = 0
     }
 
     #[test]
+    fn max_log_range_blocks_defaults_and_overrides() {
+        let cfg = toml::from_str::<EngineConfig>("[chains.1]\nrpc_url = \"http://example.test\"\n")
+            .expect("entry without the key parses");
+        assert_eq!(
+            cfg.chains
+                .get(&Chain::from_id(1))
+                .expect("entry")
+                .max_log_range_blocks,
+            1000,
+        );
+        let cfg = toml::from_str::<EngineConfig>(
+            "[chains.1]\nrpc_url = \"http://example.test\"\nmax_log_range_blocks = 5000\n",
+        )
+        .expect("the override parses");
+        assert_eq!(
+            cfg.chains
+                .get(&Chain::from_id(1))
+                .expect("entry")
+                .max_log_range_blocks,
+            5000,
+        );
+    }
+
+    #[test]
+    fn zero_max_log_range_blocks_is_rejected_at_load() {
+        const ZERO: &str = r#"
+[chains.1]
+rpc_url = "http://example.test/x"
+max_log_range_blocks = 0
+"#;
+        let raw = toml::from_str::<RawEngineConfig>(ZERO)
+            .expect("the raw parse only decides the TOML is well formed");
+        let err = EngineConfig::try_from(raw).expect_err("a zero range must not validate");
+        assert!(
+            matches!(err, EngineConfigError::ZeroField { ref field }
+                if field == "chains.1.max_log_range_blocks"),
+            "{err:?}",
+        );
+        let err = toml::from_str::<EngineConfig>(ZERO).expect_err("a zero range must not parse");
+        assert!(
+            err.to_string()
+                .contains("max_log_range_blocks must not be 0"),
+            "unexpected parse error: {err}"
+        );
+    }
+
+    #[test]
     fn invalid_chain_key_surfaces_a_typed_refusal() {
         // A key that is neither a numeric id nor a known chain name must
         // fail validation with a variant carrying the key, not silently

@@ -17,7 +17,9 @@ use tracing_core::Level;
 
 use super::admission::enforce_extension_sections;
 use super::artifact::{DigestPolicy, read_verified_component};
-use super::cursors::{chainlog_cursor_key, commit_chain_log_cursor, read_chain_log_cursor};
+use super::cursors::{
+    chainlog_cursor_key, commit_chain_log_cursor, commit_chain_log_frontier, read_chain_log_cursor,
+};
 use super::dispatch::with_dispatch_deadline;
 use super::prepass::{
     NamespaceLedger, claim_namespace, enforce_total_reservation, unconfigured_chain,

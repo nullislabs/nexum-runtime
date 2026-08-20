@@ -10,7 +10,7 @@ use tracing::{debug, error, warn};
 use tracing_core::Level;
 
 use super::Supervisor;
-use super::cursors::commit_chain_log_cursor;
+use super::cursors::{commit_chain_log_cursor, commit_chain_log_frontier};
 use super::lifecycle::{revive_one, sweep};
 use crate::bindings::nexum;
 use crate::manifest::Trigger;
@@ -103,8 +103,37 @@ impl<T: RuntimeTypes<State = HostState<T>>> Supervisor<T> {
     }
 
     /// Returns `true` only when the module accepted the log; the resume
-    /// cursor persists only after a successful dispatch.
+    /// cursor persists only after a successful dispatch, and a failed keyed
+    /// dispatch withholds the pair's later bulk frontier commits.
     pub async fn dispatch_event(
+        &mut self,
+        module_name: &ModuleId,
+        chain: Chain,
+        log: alloy_rpc_types_eth::Log,
+        cursor_key: Option<&str>,
+    ) -> bool {
+        let ok = self
+            .dispatch_event_inner(module_name, chain, log, cursor_key)
+            .await;
+        if !ok && let Some(key) = cursor_key {
+            self.chain_log_cursors.hold(module_name.as_str(), key);
+        }
+        ok
+    }
+
+    /// Persist `module`'s resume cursor at a completed bulk chunk's frontier;
+    /// withheld once any keyed dispatch for the pair has failed.
+    pub fn commit_chain_log_frontier(&mut self, module: &ModuleId, key: &str, frontier: u64) {
+        commit_chain_log_frontier(
+            &self.shared.components.store,
+            &mut self.chain_log_cursors,
+            module.as_str(),
+            key,
+            frontier,
+        );
+    }
+
+    async fn dispatch_event_inner(
         &mut self,
         module_name: &ModuleId,
         chain: Chain,

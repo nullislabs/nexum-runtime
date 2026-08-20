@@ -65,6 +65,7 @@ pub fn test_chain_configs() -> HashMap<Chain, ChainConfig> {
                 ChainConfig {
                     rpc_url: rpc_url.clone(),
                     request_timeout_secs: 30,
+                    max_log_range_blocks: 1000,
                 },
             )
         })
