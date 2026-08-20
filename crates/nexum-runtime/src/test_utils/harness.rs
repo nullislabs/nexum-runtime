@@ -929,22 +929,45 @@ mod tests {
             .iter()
             .filter(|r| r.channel == LogChannel::HostInterface)
             .collect();
-        assert!(
-            !host.is_empty() && host.len() <= BURST as usize + 1,
-            "the rate limit dropped the flood past the burst, got {} of 32",
+        // The bucket starts full and 1/s refills nothing over a flood of
+        // milliseconds, so exactly the burst survives all 32 records.
+        assert_eq!(
             host.len(),
+            BURST as usize,
+            "the rate limit dropped the flood past the burst",
         );
         for r in &host {
+            // The measure the cap enforces: every byte the tracing render
+            // writes, the `=` and the separator around each pair included.
             let bytes = r.message.len()
                 + r.source.target.len()
                 + r.source.file.as_ref().map_or(0, String::len)
-                + r.fields.iter().map(|f| f.name.len() + 64).sum::<usize>();
+                + r.fields
+                    .iter()
+                    .map(|f| f.name.len() + f.value.to_string().len() + 2)
+                    .sum::<usize>();
             assert!(bytes <= CAP, "an admitted record measured {bytes} bytes");
-            assert!(r.fields.len() < 32, "the overflow fields were dropped");
+            assert_eq!(
+                r.source.target, "log-bomb::flood",
+                "the target rides its allowance through the cap",
+            );
         }
         assert!(
             host.iter().any(|r| r.message.ends_with("...[truncated]")),
             "the oversized message was kept and marked rather than refused",
+        );
+        let carried = host
+            .iter()
+            .find(|r| !r.fields.is_empty())
+            .expect("the flood alternates a field list into every other record");
+        assert!(
+            carried.fields.len() < 32,
+            "the overflow fields dropped rather than riding the cap: {}",
+            carried.fields.len(),
+        );
+        assert_eq!(
+            carried.fields[0].name, "f0",
+            "the earliest context survives the drop",
         );
 
         rt.shutdown();
