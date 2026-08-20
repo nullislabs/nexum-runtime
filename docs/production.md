@@ -189,7 +189,7 @@ With `enabled = false` the recorder is still installed, so call sites stay live,
 | `nexum_runtime_chain_response_capped_total` | counter | `chain_id`, `method` | Responses rejected for exceeding `[limits.chain] response_body_max_bytes` (default 1 MiB). |
 | `nexum_runtime_source_reconnects_total` | counter | `source_kind`, `chain_id`, `module` | Source reconnects. `source_kind="block"` is per chain; `source_kind="chain-log"` also carries `module`. |
 | `nexum_runtime_log_records_dropped_total` | counter | `module` | Host log records dropped whole by the per-component log rate limit (`[policy]`, default `max_log_burst = 256` and `max_log_records_per_sec = 128`). A sustained rate here is a module flooding the log sink. |
-| `nexum_runtime_log_records_truncated_total` | counter | `module` | Host log records shortened to fit `[policy] max_log_record_bytes` (default 8 KiB). The message is kept and marked `...[truncated]`; the call site is cut first. |
+| `nexum_runtime_log_records_truncated_total` | counter | `module` | Host log records shortened to fit `[policy] max_log_record_bytes` (default 8 KiB). The message is kept and marked `...[truncated]`; the file is cut first, and the target holds a 128-byte allowance ahead of the message so an oversized record still names its subsystem. |
 | `nexum_runtime_log_fields_dropped_total` | counter | `module` | Structured log fields dropped past the same per-record cap, last-recorded first, so the earliest context survives. |
 
 `crates/nexum-runtime-metrics/src/lib.rs` is the single source of the name set, and a test refuses any emitted name the table does not carry.

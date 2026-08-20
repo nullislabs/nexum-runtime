@@ -12,6 +12,11 @@ use super::{LogField, LogRecord};
 /// drops it rather than exceeding the cap.
 const TRUNCATION_MARKER: &str = "...[truncated]";
 
+/// Bytes the target holds ahead of the message, so the largest dump still
+/// names its subsystem: 128 covers a module path several segments deep and
+/// leaves a guest no room to hide payload in the target.
+const TARGET_ALLOWANCE: usize = 128;
+
 /// Per-module admission gate for the host logging verbs; not shared, so
 /// one module's flood spends only its own bucket.
 #[derive(Debug)]
@@ -30,9 +35,9 @@ impl LogBounds {
     }
 
     /// Fit `record` to the cap and spend one token; `false` drops it whole.
-    /// An admitted record keeps its message, so the overflow order is
-    /// fields last-recorded first, then the call site, then a marked prefix
-    /// of the message.
+    /// A record yields in order: fields last-recorded first, then the file,
+    /// then a marked prefix of the message, then the target down to
+    /// [`TARGET_ALLOWANCE`].
     pub fn admit(&mut self, record: &mut LogRecord, now: Instant) -> bool {
         if !self.rate.try_acquire(now) {
             let module = record.run.module.as_str().to_owned();
@@ -52,11 +57,10 @@ impl LogBounds {
         }
         let mut shortened = false;
         if total > cap {
-            // The call site yields before the message: dropping the file
-            // frees the most bytes for the fewest a reader misses.
+            // The file yields before the message: dropping it frees the
+            // most bytes for the fewest a reader misses.
             shortened |= record.source.file.take().is_some();
-            let message = record.message.len();
-            shortened |= truncate_to(&mut record.source.target, cap.saturating_sub(message));
+            shortened |= truncate_to(&mut record.source.target, TARGET_ALLOWANCE.min(cap));
             let target = record.source.target.len();
             shortened |= truncate_to(&mut record.message, cap.saturating_sub(target));
         }
@@ -182,14 +186,49 @@ mod tests {
 
     #[test]
     fn an_oversized_call_site_cannot_evade_the_cap_by_leaving_the_message() {
-        let (mut gate, now) = bounds(64, 8, 1);
+        let (mut gate, now) = bounds(512, 8, 1);
         let mut rec = record("short").with_source(LogSource {
             target: "t".repeat(4096),
             file: Some("f".repeat(4096)),
             line: Some(7),
         });
         assert!(gate.admit(&mut rec, now));
-        assert_eq!(rec.wire_bytes(), 64, "the call site is measured too");
+        assert!(rec.wire_bytes() <= 512, "the call site is measured too");
+        assert_eq!(rec.source.file, None, "the file yields before the rest");
+        assert_eq!(rec.message, "short", "the message still survives whole");
+    }
+
+    #[test]
+    fn a_message_that_fills_the_cap_still_carries_its_target() {
+        let (mut gate, now) = bounds(512, 8, 1);
+        let mut rec = record(&"m".repeat(4096)).with_source(LogSource {
+            target: "wallet::signer".to_owned(),
+            file: None,
+            line: None,
+        });
+        assert!(gate.admit(&mut rec, now));
+        assert_eq!(
+            rec.source.target, "wallet::signer",
+            "the dump that fills the cap is the one worth attributing",
+        );
+        assert!(rec.wire_bytes() <= 512, "the target is charged, not free");
+        assert!(rec.message.ends_with(TRUNCATION_MARKER));
+    }
+
+    #[test]
+    fn an_oversized_target_is_cut_to_its_allowance_and_hides_no_payload() {
+        let (mut gate, now) = bounds(4096, 8, 1);
+        let mut rec = record("short").with_source(LogSource {
+            target: "t".repeat(4096),
+            file: None,
+            line: None,
+        });
+        assert!(gate.admit(&mut rec, now));
+        assert_eq!(
+            rec.source.target.len(),
+            TARGET_ALLOWANCE,
+            "the target keeps its allowance and no more",
+        );
         assert_eq!(rec.message, "short", "the message still survives whole");
     }
 
