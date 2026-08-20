@@ -107,9 +107,10 @@ pub mod logs {
 /// The dispatch loop, for an embedder driving a [`supervisor::Supervisor`] directly.
 pub mod event_loop {
     pub use nexum_runtime_supervisor::event_loop::{
-        ChainLogItem, TaggedBlockStream, TaggedChainLog, TaggedChainLogStream, open_block_streams,
-        open_chain_log_streams, run, wait_for_os_signal,
+        ChainLogItem, RunEnd, RunOutcome, TaggedBlockStream, TaggedChainLog, TaggedChainLogStream,
+        open_block_streams, open_chain_log_streams, run, wait_for_os_signal,
     };
+    pub use nexum_tasks::SourceTermination;
 }
 
 pub use builder::{

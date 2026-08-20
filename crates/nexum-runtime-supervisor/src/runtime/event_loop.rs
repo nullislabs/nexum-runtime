@@ -10,8 +10,11 @@
 //! pumps items to an mpsc channel, and on drop waits
 //! `restart_policy::backoff_for` before reopening, resetting the backoff
 //! once the stream has been healthy for `HEALTHY_WINDOW`. The tasks exit
-//! with [`TaskExit::ReceiverGone`] when `run` drops the receivers; their
-//! handles collect into a [`TaskSet`] the loop drains on shutdown.
+//! with [`TaskExit::ReceiverGone`] when `run` drops the receivers, or with
+//! [`TaskExit::SourceTerminal`] when the source cannot continue; their
+//! handles collect into a [`TaskSet`] that `run` watches while it runs and
+//! drains on shutdown. A module-owned terminal exit poisons its module; a
+//! shared one ends `run` for the launcher to surface.
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -22,7 +25,7 @@ use alloy_transport::TransportError;
 use futures::StreamExt;
 use futures::stream::{BoxStream, select_all};
 use tokio::sync::mpsc;
-use tracing::{info, warn};
+use tracing::{error, info, warn};
 
 use crate::bindings::nexum;
 use crate::runtime::restart_policy::{backoff_for, jitter_seed};
@@ -32,7 +35,7 @@ use nexum_runtime_api::RuntimeTypes;
 use nexum_runtime_api::{ExtensionDelivery, ExtensionSource};
 use nexum_runtime_chain::{PoolError, ProviderPool};
 use nexum_runtime_wasm::HostState;
-use nexum_tasks::{TaskExecutor, TaskExit, TaskSet};
+use nexum_tasks::{SourceTermination, TaskExecutor, TaskExit, TaskSet};
 
 /// Uninterrupted-event duration before the backoff counter resets to 0.
 const HEALTHY_WINDOW: Duration = Duration::from_secs(60);
@@ -58,6 +61,9 @@ const BULK_ABANDON_ATTEMPTS: u32 = 5;
 
 /// Minimum spacing between bulk-backfill progress log lines.
 const BULK_PROGRESS_LOG_INTERVAL: Duration = Duration::from_secs(10);
+
+/// Wait on the task set for a terminal report behind a stream end.
+const TERMINAL_REPORT_GRACE: Duration = Duration::from_secs(1);
 
 /// Open one reconnect-aware block-source task per chain, spawned via
 /// `executor` with handles pushed into `tasks` for graceful shutdown.
@@ -487,6 +493,26 @@ async fn reconnecting_chain_log_task(
             head,
             lookback_floor,
         );
+        if let Some(tail_block) = invalidated_tail
+            && !restates_tail
+        {
+            warn!(
+                module = %module,
+                chain_id,
+                tail_block,
+                start_block,
+                "event source tail reorged deeper than the revalidation bound - terminal",
+            );
+            return TaskExit::SourceTerminal(SourceTermination {
+                module: Some(module.to_string()),
+                chain_id,
+                reason: format!(
+                    "delivered tail at block {tail_block} reorged deeper than the \
+                     revalidation bound ({REVALIDATE_DEPTH} blocks); no rescan \
+                     from {start_block} can restate its logs"
+                ),
+            });
+        }
         // Opt-in bound: `max_lookback` caps how far back a resume
         // trigger backfills. The default (`None`) backfills fully; a
         // set cap clamps the start up to `head - cap` and surfaces the
@@ -581,30 +607,17 @@ async fn reconnecting_chain_log_task(
                 // An itemless open re-opens at the same block.
                 boot_resume = None;
                 resume_from = Some(start_block);
-                // Retract before pumping. Within the bound the scan starts
-                // at the tail's height and restates it; deeper, the bound
-                // holds and the restatement never comes.
+                // Retract before pumping: the terminal return above leaves
+                // only the within-bound case, whose scan restates the tail.
                 if invalidated_tail.is_some()
                     && let Some(t) = tail.take()
                 {
-                    if restates_tail {
-                        warn!(
-                            module = %module,
-                            chain_id,
-                            tail_block = t.number,
-                            "event source tail reorged while disconnected - retracting its logs",
-                        );
-                    } else {
-                        warn!(
-                            module = %module,
-                            chain_id,
-                            tail_block = t.number,
-                            start_block,
-                            "event source tail reorged deeper than the revalidation \
-                             bound - retracting its logs, which the bounded rescan \
-                             will not restate",
-                        );
-                    }
+                    warn!(
+                        module = %module,
+                        chain_id,
+                        tail_block = t.number,
+                        "event source tail reorged while disconnected - retracting its logs",
+                    );
                     for mut log in t.logs {
                         log.removed = true;
                         let tagged = (
@@ -728,22 +741,54 @@ pub type TaggedChainLog = (ModuleId, Chain, ChainLogItem, Option<Arc<str>>);
 /// Stream of [`TaggedChainLog`], merged across every open event source.
 pub type TaggedChainLogStream =
     std::pin::Pin<Box<dyn futures::Stream<Item = TaggedChainLog> + Send>>;
-/// Drive the supervisor with triggers until `shutdown` resolves.
+
+/// Why [`run`] returned.
+#[derive(Debug)]
+pub enum RunEnd {
+    /// The `shutdown` future resolved; a clean stop.
+    Shutdown,
+    /// A non-empty stream set ended without a terminal report; abnormal, but
+    /// the launcher treats it as a clean stop.
+    StreamEnded,
+    /// Every event source ended terminally and no block or extension stream
+    /// is declared, so no trigger can fire again; a clean stop.
+    NothingLive,
+    /// A shared source reported a terminal condition; the launcher surfaces
+    /// it as a non-zero exit.
+    SourceTerminal(SourceTermination),
+}
+
+/// [`run`]'s dispatch tally and why it stopped.
+#[derive(Debug)]
+pub struct RunOutcome {
+    /// Blocks dispatched over the run.
+    pub dispatched_blocks: u64,
+    /// Chain-log events dispatched over the run.
+    pub dispatched_events: u64,
+    /// Why the loop returned.
+    pub end: RunEnd,
+}
+
+/// Drive the supervisor with triggers until `shutdown` resolves, watching
+/// `tasks` for a source exit in the meantime.
 ///
 /// `shutdown` is observed only between guest calls, never
 /// mid-`call_on_trigger`: here between triggers, and through the
 /// supervisor's stop probe between the per-module calls of one trigger. The
 /// in-flight call finishes before the loop exits; the guard `shutdown`
 /// yields is held until return, so the drain covers that call and its
-/// cursor commit. Returns the `(blocks, events)` dispatch tally.
+/// cursor commit.
 pub async fn run<T: RuntimeTypes<State = HostState<T>>, G>(
     supervisor: &mut Supervisor<T>,
     block_streams: Vec<TaggedBlockStream>,
     chain_log_streams: Vec<TaggedChainLogStream>,
     extension_streams: Vec<ExtensionSource>,
-    tasks: TaskSet,
+    mut tasks: TaskSet,
     shutdown: impl std::future::Future<Output = G> + Send,
-) -> (u64, u64) {
+) -> RunOutcome {
+    let chain_log_sources = chain_log_streams.len();
+    let has_blocks = !block_streams.is_empty();
+    let has_extensions = !extension_streams.is_empty();
     // `select_all` over an empty Vec yields `None` immediately, which
     // would trip the "stream ended -> shut down" arm below before the
     // first block / chain-log ever flows. Engine configs that declare
@@ -771,6 +816,9 @@ pub async fn run<T: RuntimeTypes<State = HostState<T>>, G>(
     let mut dispatched_blocks: u64 = 0;
     let mut dispatched_events: u64 = 0;
     let mut dispatched_extension_triggers: u64 = 0;
+    // Chain-log sources are the module-owned ones; once every one of them
+    // has reported terminally, the merged stream's end is expected.
+    let mut terminal_chain_log_exits: usize = 0;
     let started = Instant::now();
     loop {
         // Phase 1: pick the next trigger OR observe shutdown. The
@@ -791,11 +839,13 @@ pub async fn run<T: RuntimeTypes<State = HostState<T>>, G>(
             Extension(ExtensionDelivery),
             // Carries the drain guard `shutdown` yielded.
             Shutdown(G),
-            StreamPanic(&'static str),
+            SourceExit(TaskExit),
+            StreamEnd(&'static str),
         }
         let next = tokio::select! {
             biased;
             guard = &mut shutdown => NextTrigger::Shutdown(guard),
+            exit = tasks.join_next() => NextTrigger::SourceExit(exit),
             next = blocks.next() => match next {
                 Some(Ok((chain, header))) => NextTrigger::Block(nexum::host::types::Block {
                     chain_id: chain.id(),
@@ -807,7 +857,7 @@ pub async fn run<T: RuntimeTypes<State = HostState<T>>, G>(
                     warn!(chain_id = chain.id(), error = %err, "block source error - continuing");
                     continue;
                 }
-                None => NextTrigger::StreamPanic("block"),
+                None => NextTrigger::StreamEnd("block"),
             },
             next = chain_logs.next() => match next {
                 Some((module, chain, ChainLogItem::Log(log), cursor_key)) => {
@@ -818,12 +868,12 @@ pub async fn run<T: RuntimeTypes<State = HostState<T>>, G>(
                 }
                 // A frontier without a cursor key has nothing to commit.
                 Some((_, _, ChainLogItem::Frontier(_), None)) => continue,
-                None => NextTrigger::StreamPanic("chain-log"),
+                None => NextTrigger::StreamEnd("chain-log"),
             },
             next = extension_deliveries.next() => match next {
                 Some(delivery) => NextTrigger::Extension(delivery),
                 // Extension source tasks loop forever; `None` means one exited.
-                None => NextTrigger::StreamPanic("extension"),
+                None => NextTrigger::StreamEnd("extension"),
             },
         };
 
@@ -845,6 +895,31 @@ pub async fn run<T: RuntimeTypes<State = HostState<T>>, G>(
                 supervisor.dispatch_extension_trigger(delivery).await;
                 dispatched_extension_triggers += 1;
             }
+            NextTrigger::SourceExit(TaskExit::SourceTerminal(term)) => match term.module {
+                Some(ref name) => {
+                    terminal_chain_log_exits += 1;
+                    supervisor.poison_source(name, term.chain_id, &term.reason);
+                }
+                None => {
+                    drop(blocks);
+                    drop(chain_logs);
+                    drop(extension_deliveries);
+                    tasks.shutdown().await;
+                    error!(
+                        chain_id = term.chain_id,
+                        reason = %term.reason,
+                        "shared source terminal - engine exiting",
+                    );
+                    return RunOutcome {
+                        dispatched_blocks,
+                        dispatched_events,
+                        end: RunEnd::SourceTerminal(term),
+                    };
+                }
+            },
+            // A pump reports `ReceiverGone` only once its receiver dropped,
+            // which this loop does after it stops selecting.
+            NextTrigger::SourceExit(TaskExit::ReceiverGone) => {}
             NextTrigger::Shutdown(guard) => {
                 // Drop the stream-end receivers so the reconnect
                 // tasks observe a closed channel and exit. Then drain
@@ -862,21 +937,91 @@ pub async fn run<T: RuntimeTypes<State = HostState<T>>, G>(
                     "graceful shutdown complete",
                 );
                 drop(guard);
-                return (dispatched_blocks, dispatched_events);
+                return RunOutcome {
+                    dispatched_blocks,
+                    dispatched_events,
+                    end: RunEnd::Shutdown,
+                };
             }
-            NextTrigger::StreamPanic(kind) => {
-                // Reconnect tasks should loop forever.
-                // Hitting `None` from `select_all` means the task
-                // exited (panic or channel closed). Bail loudly.
-                drop(blocks);
-                drop(chain_logs);
-                drop(extension_deliveries);
-                tasks.shutdown().await;
-                warn!(
-                    kind,
-                    "reconnect task ended unexpectedly - shutting down for engine restart"
-                );
-                return (dispatched_blocks, dispatched_events);
+            NextTrigger::StreamEnd(kind) => {
+                // A finishing task drops its stream sender before its join
+                // handle resolves, so this end can arrive ahead of the
+                // terminal report behind it: absorb the set's imminent exits
+                // before ruling on the end.
+                let mut shared: Option<SourceTermination> = None;
+                let mut accounted = false;
+                loop {
+                    if kind == "chain-log" && terminal_chain_log_exits == chain_log_sources {
+                        accounted = true;
+                        break;
+                    }
+                    match tokio::time::timeout(TERMINAL_REPORT_GRACE, tasks.join_next()).await {
+                        Ok(TaskExit::SourceTerminal(term)) => match term.module {
+                            Some(ref name) => {
+                                terminal_chain_log_exits += 1;
+                                supervisor.poison_source(name, term.chain_id, &term.reason);
+                            }
+                            None => {
+                                shared = Some(term);
+                                break;
+                            }
+                        },
+                        Ok(TaskExit::ReceiverGone) => {}
+                        Err(_) => break,
+                    }
+                }
+                if let Some(term) = shared {
+                    drop(blocks);
+                    drop(chain_logs);
+                    drop(extension_deliveries);
+                    tasks.shutdown().await;
+                    error!(
+                        chain_id = term.chain_id,
+                        reason = %term.reason,
+                        "shared source terminal - engine exiting",
+                    );
+                    return RunOutcome {
+                        dispatched_blocks,
+                        dispatched_events,
+                        end: RunEnd::SourceTerminal(term),
+                    };
+                }
+                if accounted && (has_blocks || has_extensions) {
+                    // Park the exhausted merge so its `None` is not
+                    // re-selected.
+                    chain_logs = futures::stream::pending().boxed();
+                } else if accounted {
+                    drop(blocks);
+                    drop(chain_logs);
+                    drop(extension_deliveries);
+                    tasks.shutdown().await;
+                    warn!(
+                        "every event source is terminal and no other trigger kind \
+                         is declared - engine has nothing left to run; exiting"
+                    );
+                    return RunOutcome {
+                        dispatched_blocks,
+                        dispatched_events,
+                        end: RunEnd::NothingLive,
+                    };
+                } else {
+                    // Reconnect tasks should loop forever, so an end the set
+                    // does not account for means one exited without a report
+                    // (panic or abort).
+                    drop(blocks);
+                    drop(chain_logs);
+                    drop(extension_deliveries);
+                    tasks.shutdown().await;
+                    warn!(
+                        kind,
+                        "reconnect task ended unexpectedly - shutting down for engine restart"
+                    );
+                    return RunOutcome {
+                        dispatched_blocks,
+                        dispatched_events,
+                        end: RunEnd::StreamEnded,
+                    };
+                }
             }
         }
     }
@@ -893,8 +1038,8 @@ struct PollerStart {
 /// [`REVALIDATE_DEPTH`], else `resume_from`, else head; the reconnect arms
 /// are never head-clamped.
 ///
-/// A tail below the bound is retracted without a restatement: the bound
-/// holds, and the guest is left short rather than holding discarded logs.
+/// A tail below the bound cannot be restated at any bounded start; the
+/// caller reports it as terminal for the source's module.
 fn poller_start_block(
     boot_cursor: Option<u64>,
     resume_from: Option<u64>,
@@ -1289,7 +1434,7 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
-    async fn tail_far_below_the_lookback_floor_is_retracted_and_the_clamp_applies() {
+    async fn tail_far_below_the_lookback_floor_ends_the_task_with_a_terminal_report() {
         let rpc = MockRpc::new();
         rpc.push_script(attempt(
             90,
@@ -1309,34 +1454,35 @@ mod tests {
         drained(&rpc).await;
 
         // The floor at 998 leaves the tail at 90 more than REVALIDATE_DEPTH
-        // below it.
+        // below it, so the bound hangs off the floor and holds.
         let fork_hash = B256::repeat_byte(0xcc);
         let mut fork_block = linked_block(90);
         fork_block.header.hash = fork_hash;
-        rpc.push_script(attempt(
-            1_000,
-            Some(rpc_ok(&fork_block)),
-            vec![cycle(998, &[(998, vec![log_at(998)])])],
-        ));
+        rpc.push_script(attempt(1_000, Some(rpc_ok(&fork_block)), Vec::new()));
 
-        let next = recv(&mut stream).await;
+        let exit = tokio::time::timeout(Duration::from_secs(600), tasks.join_next())
+            .await
+            .expect("the task ends instead of reopening");
         assert!(
-            next.removed,
-            "a tail far below the floor is retracted, with no restatement to follow",
+            matches!(
+                &exit,
+                TaskExit::SourceTerminal(term) if term.module.as_deref() == Some("mod"),
+            ),
+            "a tail unrestatable under the floor-relative bound is terminal too: {exit:?}",
         );
-        let next = recv(&mut stream).await;
-        assert!(!next.removed);
-        assert_eq!(next.block_number, Some(998));
+        assert!(
+            stream.next().await.is_none(),
+            "no interim retraction is delivered; the stream ends with the task",
+        );
         assert_eq!(
-            wait_for_ranged_fetches(&rpc, 2).await,
-            vec![90, 998],
-            "past the bound the clamp applies again: the restart cannot pass below head - cap",
+            rpc.log_range_froms(),
+            vec![90],
+            "the reconnect opens no poller and fetches nothing further",
         );
-        tasks.shutdown().await;
     }
 
     #[tokio::test(start_paused = true)]
-    async fn tail_deeper_than_the_bound_retracts_without_restating() {
+    async fn tail_deeper_than_the_bound_ends_the_task_with_a_terminal_report() {
         let rpc = MockRpc::new();
         // Empty heights push the scan basis to 156, leaving the delivered
         // tail at 90 more than REVALIDATE_DEPTH below it.
@@ -1361,33 +1507,30 @@ mod tests {
         let fork_hash = B256::repeat_byte(0xcc);
         let mut fork_block = linked_block(90);
         fork_block.header.hash = fork_hash;
-        rpc.push_script(attempt(
-            156,
-            Some(rpc_ok(&fork_block)),
-            vec![cycle(92, &[(92, vec![log_at(92)])])],
-        ));
+        rpc.push_script(attempt(156, Some(rpc_ok(&fork_block)), Vec::new()));
 
-        let next = recv(&mut stream).await;
+        let exit = tokio::time::timeout(Duration::from_secs(600), tasks.join_next())
+            .await
+            .expect("the task ends instead of reopening");
+        let TaskExit::SourceTerminal(term) = exit else {
+            panic!("expected a terminal exit, got {exit:?}");
+        };
+        assert_eq!(term.module.as_deref(), Some("mod"));
+        assert_eq!(term.chain_id, 1);
         assert!(
-            next.removed,
-            "a tail deeper than the bound is still retracted, with no restatement to follow",
+            term.reason.contains("revalidation bound"),
+            "the reason names the bound: {}",
+            term.reason,
         );
-        assert_eq!(next.block_number, Some(90));
-        let restated = recv(&mut stream).await;
-        assert!(!restated.removed);
+        assert!(
+            stream.next().await.is_none(),
+            "no interim retraction is delivered; the stream ends with the task",
+        );
         assert_eq!(
-            restated.block_number,
-            Some(92),
-            "the bounded rescan resumes above the retracted height, which it never restates",
+            rpc.log_range_froms(),
+            (90..=155).collect::<Vec<u64>>(),
+            "the reconnect opens no poller and fetches nothing further",
         );
-        let mut expected: Vec<u64> = (90..=155).collect();
-        expected.push(92);
-        assert_eq!(
-            wait_for_ranged_fetches(&rpc, expected.len()).await,
-            expected,
-            "the restart is bounded to REVALIDATE_DEPTH below the basis 156, not the tail at 90",
-        );
-        tasks.shutdown().await;
     }
 
     #[tokio::test(start_paused = true)]
@@ -2402,7 +2545,7 @@ mod tests {
         );
         assert!(
             !start.restates_tail,
-            "a tail below the bound is dropped unretracted, capping the rescan a reconnect forces",
+            "a tail below the bound cannot be restated; the caller reports it terminal",
         );
     }
 
@@ -2555,7 +2698,7 @@ mod tests {
         // 500 ms only bounds wall time; the assertion is on the tally, so a
         // miss means a broken select arm, not a slow scheduler.
         let shutdown = tokio::time::sleep(Duration::from_millis(500));
-        let (blocks, events) = tokio::time::timeout(
+        let outcome = tokio::time::timeout(
             Duration::from_secs(10),
             run(
                 &mut booted.supervisor,
@@ -2568,11 +2711,15 @@ mod tests {
         )
         .await
         .expect("run() must return once shutdown fires");
-        assert_eq!(blocks, 1, "the queued block must be drained and dispatched");
         assert_eq!(
-            events, 1,
+            outcome.dispatched_blocks, 1,
+            "the queued block must be drained and dispatched",
+        );
+        assert_eq!(
+            outcome.dispatched_events, 1,
             "the queued chain-log must be drained and dispatched",
         );
+        assert!(matches!(outcome.end, RunEnd::Shutdown), "{:?}", outcome.end);
     }
 
     /// On the shutdown path `run()` aborts and joins every reconnect task, so
@@ -2620,5 +2767,236 @@ mod tests {
         )
         .await
         .expect("run() + task drain must complete promptly after shutdown");
+    }
+
+    /// The module-owned path through a real source rather than a stub exit.
+    #[tokio::test(start_paused = true)]
+    async fn a_module_owned_terminal_exit_poisons_its_module_and_ends_an_event_only_run() {
+        use crate::test_utils::{BootScenario, LocalTypes, TestManifest, example_wasm_or_skip};
+
+        let Some(wasm) = example_wasm_or_skip() else {
+            return;
+        };
+        let mut booted = BootScenario::<LocalTypes>::new()
+            .wasm(&wasm)
+            .module(TestManifest::new("example").cap("logging").block_trigger(1))
+            .boot()
+            .await
+            .expect("boot the example module");
+
+        let rpc = MockRpc::new();
+        let empty: Vec<(u64, Vec<Log>)> = (91..=155).map(|n| (n, Vec::new())).collect();
+        rpc.push_script(attempt(
+            90,
+            None,
+            vec![
+                cycle(90, &[(90, vec![log_at(90)])]),
+                cycle(155, &empty),
+                vec![rpc_err("stream torn down")],
+            ],
+        ));
+        let pool = pool_for(&rpc);
+        let manager = TaskManager::new();
+        let executor = manager.executor();
+        let mut tasks = TaskSet::new();
+        let sources = vec![EventSource {
+            module: ModuleId::parse("example").expect("valid module name"),
+            chain: alloy_chains::Chain::mainnet(),
+            filter: alloy_rpc_types_eth::Filter::default(),
+            cursor_key: None,
+            initial_cursor: None,
+            max_lookback: None,
+        }];
+        let chain_log_streams = open_chain_log_streams(&pool, sources, &executor, &mut tasks);
+
+        // Push the reorged reconnect script only once phase 1 has drained, so
+        // the torn-down stream cannot consume it.
+        let phase_two = rpc.clone();
+        let fork_hash = B256::repeat_byte(0xcc);
+        let mut fork_block = linked_block(90);
+        fork_block.header.hash = fork_hash;
+        let _pusher = executor.spawn(async move {
+            while phase_two.pending() > 0 {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+            phase_two.push_script(attempt(156, Some(rpc_ok(&fork_block)), Vec::new()));
+            TaskExit::ReceiverGone
+        });
+
+        let outcome = tokio::time::timeout(
+            Duration::from_secs(600),
+            run(
+                &mut booted.supervisor,
+                Vec::new(),
+                chain_log_streams,
+                Vec::new(),
+                tasks,
+                std::future::pending::<()>(),
+            ),
+        )
+        .await
+        .expect("run() must return without an external shutdown");
+
+        assert!(
+            matches!(outcome.end, RunEnd::NothingLive),
+            "the only source is terminal and nothing else feeds the loop: {:?}",
+            outcome.end,
+        );
+        assert_eq!(
+            outcome.dispatched_events, 1,
+            "the ordinary delivery at 90 reached the module before the terminal report",
+        );
+        assert_eq!(
+            booted.supervisor.poisoned_count(),
+            1,
+            "the terminal report quarantined the source's module",
+        );
+        assert_eq!(booted.supervisor.alive_count(), 0);
+    }
+
+    /// A shared exit is one with no owning module.
+    #[tokio::test]
+    async fn a_shared_source_terminal_exit_ends_run_with_the_reason() {
+        let mut booted = boot_mock_supervisor().await;
+        let manager = TaskManager::new();
+        let executor = manager.executor();
+        let mut tasks = TaskSet::new();
+        tasks.push(executor.spawn(async {
+            TaskExit::SourceTerminal(SourceTermination {
+                module: None,
+                chain_id: 1,
+                reason: "endpoint no longer serves chain 1".to_owned(),
+            })
+        }));
+
+        let outcome = tokio::time::timeout(
+            Duration::from_secs(10),
+            run(
+                &mut booted.supervisor,
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                tasks,
+                std::future::pending::<()>(),
+            ),
+        )
+        .await
+        .expect("a shared terminal exit must end run without a shutdown");
+
+        let RunEnd::SourceTerminal(term) = outcome.end else {
+            panic!("expected a terminal end, got {:?}", outcome.end);
+        };
+        assert_eq!(term.module, None);
+        assert_eq!(term.chain_id, 1);
+        assert_eq!(term.reason, "endpoint no longer serves chain 1");
+    }
+
+    /// A set of one task, reporting `module` and `reason` after a delay.
+    fn delayed_terminal_task(module: Option<&str>, reason: &str) -> (TaskManager, TaskSet) {
+        let manager = TaskManager::new();
+        let mut tasks = TaskSet::new();
+        let module = module.map(str::to_owned);
+        let reason = reason.to_owned();
+        tasks.push(manager.executor().spawn(async move {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+            TaskExit::SourceTerminal(SourceTermination {
+                module,
+                chain_id: 1,
+                reason,
+            })
+        }));
+        (manager, tasks)
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_module_owned_terminal_exit_keeps_the_loop_live_while_blocks_remain() {
+        let mut booted = boot_mock_supervisor().await;
+        let (manager, mut tasks) = delayed_terminal_task(Some("mod"), "unrecoverable");
+        let (tx, rx) = mpsc::channel::<TaggedChainLog>(1);
+        // The channel closes when the terminal task's report resolves.
+        let holder = manager.executor().spawn(async move {
+            let _tx = tx;
+            tokio::time::sleep(Duration::from_millis(10)).await;
+            TaskExit::ReceiverGone
+        });
+        tasks.push(holder);
+        let chain_log_streams: Vec<TaggedChainLogStream> = vec![Box::pin(receiver_stream(rx))];
+        let block_streams: Vec<TaggedBlockStream> = vec![Box::pin(futures::stream::pending())];
+
+        let shutdown = tokio::time::sleep(Duration::from_millis(200));
+        let outcome = tokio::time::timeout(
+            Duration::from_secs(600),
+            run(
+                &mut booted.supervisor,
+                block_streams,
+                chain_log_streams,
+                Vec::new(),
+                tasks,
+                shutdown,
+            ),
+        )
+        .await
+        .expect("run() must return once shutdown fires");
+        assert!(
+            matches!(outcome.end, RunEnd::Shutdown),
+            "a live block stream keeps the loop running to shutdown: {:?}",
+            outcome.end,
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_chain_log_end_ahead_of_its_terminal_report_is_not_misread() {
+        let mut booted = boot_mock_supervisor().await;
+        let (_manager, tasks) = delayed_terminal_task(Some("mod"), "unrecoverable");
+        // The stream is already closed when `run` first polls it; the
+        // report resolves only later.
+        let (tx, rx) = mpsc::channel::<TaggedChainLog>(1);
+        drop(tx);
+        let chain_log_streams: Vec<TaggedChainLogStream> = vec![Box::pin(receiver_stream(rx))];
+
+        let outcome = tokio::time::timeout(
+            Duration::from_secs(600),
+            run(
+                &mut booted.supervisor,
+                Vec::new(),
+                chain_log_streams,
+                Vec::new(),
+                tasks,
+                std::future::pending::<()>(),
+            ),
+        )
+        .await
+        .expect("run() classifies the end and returns");
+        assert!(
+            matches!(outcome.end, RunEnd::NothingLive),
+            "the late report is absorbed, not misread as a panic: {:?}",
+            outcome.end,
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_block_end_ahead_of_its_terminal_report_still_carries_the_reason() {
+        let mut booted = boot_mock_supervisor().await;
+        let (_manager, tasks) = delayed_terminal_task(None, "endpoint no longer serves chain 1");
+        let block_streams: Vec<TaggedBlockStream> = vec![Box::pin(futures::stream::empty())];
+
+        let outcome = tokio::time::timeout(
+            Duration::from_secs(600),
+            run(
+                &mut booted.supervisor,
+                block_streams,
+                Vec::new(),
+                Vec::new(),
+                tasks,
+                std::future::pending::<()>(),
+            ),
+        )
+        .await
+        .expect("run() classifies the end and returns");
+        let RunEnd::SourceTerminal(term) = outcome.end else {
+            panic!("expected a terminal end, got {:?}", outcome.end);
+        };
+        assert_eq!(term.module, None);
+        assert_eq!(term.reason, "endpoint no longer serves chain 1");
     }
 }

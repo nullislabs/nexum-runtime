@@ -184,7 +184,7 @@ With `enabled = false` the recorder is still installed, so call sites stay live,
 | `nexum_runtime_dispatch_dropped_total` | counter | `module`, `trigger_kind`, `reason` | Triggers dropped before dispatch. `reason = "rate_limited"` is the per-component dispatch rate limit (`[limits.dispatch]`, default `burst = 256` and `refill_per_sec = 128`). `reason = "shutdown"` is a stop landing mid fan-out: the fan-out follows `[[modules]]` order, so the same trailing modules are skipped at every stop. A block is not replayed; an event is, from its cursor. |
 | `nexum_runtime_module_errors_total` | counter | `module`, `error_kind` | Module faults and traps. `error_kind = "trap"` is a wasmtime trap; other values are fault labels. |
 | `nexum_runtime_module_restarts_total` | counter | `module` | Module restart attempts. |
-| `nexum_runtime_module_poisoned` | gauge | `module` | `1` once a module crosses `[limits.poison]` (default 5 failures in 600 s). Stays `1` until the process restarts. |
+| `nexum_runtime_module_poisoned` | gauge | `module` | `1` once a module crosses `[limits.poison]` (default 5 failures in 600 s) or its event source reports an unrecoverable condition. Stays `1` until the process restarts. |
 | `nexum_runtime_chain_request_total` | counter | `chain_id`, `method`, `outcome` | Every `chain::request`. A method outside the read surface is counted as `method="<denied>"` with `outcome="err"`. A request for a chain outside `[chains]` is counted as `chain_id="unconfigured"`, which bounds the series set to the configured chains plus one and shows that a module is requesting chains the operator has not configured. The `outcome="err"` rate is the RPC-degraded signal. |
 | `nexum_runtime_chain_response_capped_total` | counter | `chain_id`, `method` | Responses rejected for exceeding `[limits.chain] response_body_max_bytes` (default 1 MiB). |
 | `nexum_runtime_source_reconnects_total` | counter | `source_kind`, `chain_id`, `module` | Source reconnects. `source_kind="block"` is per chain; `source_kind="chain-log"` also carries `module`. |
@@ -314,6 +314,8 @@ journalctl -u nexum -f --output=json \
 ```
 
 Recover a poisoned component: fix the underlying bug, rebuild the artifact, update the `[component].digest` pin and the entry's `[[modules]].digest` pin, then `sudo systemctl restart nexum`.
+A component can also be poisoned by its event source: the log line `module poisoned - its event source is unrecoverable` tells the two causes apart.
+In that case the component itself is healthy: `sudo systemctl restart nexum` alone recovers it, and ingestion resumes from the persisted cursor.
 A `digest_mismatch` refusal names the pin that failed and the file it is in, so it says which of the two to edit.
 The failure ring is in memory and clears at boot.
 The engine reads `[[modules]]` at boot only, and it detects no artifact change while running, so adding, changing, or removing a component means editing `engine.toml` and restarting.

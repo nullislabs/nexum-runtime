@@ -31,6 +31,15 @@ pub enum LaunchRefusal {
     /// so nothing is left to dispatch to.
     #[error("event loop task terminated abnormally")]
     EventLoopGone,
+    /// A shared chain source reported a condition the runtime cannot
+    /// reconcile, so the engine stopped.
+    #[error("chain {chain_id} ingestion is terminal: {reason}")]
+    SourceTerminal {
+        /// The chain whose shared source failed.
+        chain_id: u64,
+        /// The source's stated reason.
+        reason: String,
+    },
     /// No module source at all: neither an override nor a config entry.
     #[error(
         "no modules to run - set a module source or declare [[modules]] entries in engine.toml"
@@ -215,11 +224,12 @@ fn boot_kind(refusal: &BootRefusal) -> &'static str {
     }
 }
 
-/// `EventLoopGone` is raised by `RuntimeHandle::wait` after a successful
-/// boot, so it carries no boot-refusal label and is never counted.
+/// `EventLoopGone` and `SourceTerminal` are raised by `RuntimeHandle::wait`
+/// after a successful boot, so they carry no boot-refusal label and are
+/// never counted.
 fn launch_kind(refusal: &LaunchRefusal) -> Option<&'static str> {
     match refusal {
-        LaunchRefusal::EventLoopGone => None,
+        LaunchRefusal::EventLoopGone | LaunchRefusal::SourceTerminal { .. } => None,
         refusal => Some(refusal.into()),
     }
 }
@@ -311,8 +321,9 @@ mod tests {
         "digest_unpinned",
         "capability_not_permitted",
         "chain_trigger_not_permitted",
-        // LaunchRefusal, less the wait-time `event_loop_gone`, which is
-        // raised after a successful boot and never counted.
+        // LaunchRefusal, less the wait-time `event_loop_gone` and
+        // `source_terminal`, which are raised after a successful boot and
+        // never counted.
         "nothing_to_run",
         "all_dead_override",
         "all_dead_configured",
@@ -337,11 +348,12 @@ mod tests {
                 .chain(ParseError::VARIANTS.iter().copied())
                 .collect(),
             "Load" => LoadRefusal::VARIANTS.to_vec(),
-            // `launch_kind` withholds the wait-time `event_loop_gone`.
+            // `launch_kind` withholds the wait-time `event_loop_gone` and
+            // `source_terminal`.
             "Launch" => LaunchRefusal::VARIANTS
                 .iter()
                 .copied()
-                .filter(|v| *v != "event_loop_gone")
+                .filter(|v| *v != "event_loop_gone" && *v != "source_terminal")
                 .collect(),
             "Capability" => CapabilityError::VARIANTS.to_vec(),
             "Digest" => vec!["digest_mismatch"],

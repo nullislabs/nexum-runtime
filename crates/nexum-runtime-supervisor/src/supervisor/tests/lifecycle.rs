@@ -485,3 +485,45 @@ async fn poison_pill_quarantines_module_after_threshold() {
     );
     assert_eq!(booted.supervisor.poisoned_count(), 1);
 }
+
+/// A terminal source report quarantines its module exactly like repeated
+/// traps.
+#[tokio::test(start_paused = true)]
+async fn a_source_terminal_report_poisons_the_module_and_stops_dispatch() {
+    let Some(wasm) = example_wasm_or_skip() else {
+        return;
+    };
+    let mut booted = scenario()
+        .wasm(wasm)
+        .module(TestManifest::new("example").cap("logging").block_trigger(1))
+        .boot()
+        .await
+        .expect("boot");
+    assert_eq!(
+        booted.dispatch_block_on(1).await,
+        1,
+        "alive before the report"
+    );
+
+    booted.supervisor.poison_source(
+        "example",
+        1,
+        "delivered tail reorged deeper than the revalidation bound",
+    );
+    assert_eq!(booted.supervisor.poisoned_count(), 1);
+    assert_eq!(booted.supervisor.alive_count(), 0);
+
+    // No backoff window applies to a poisoned module.
+    tokio::time::sleep(Duration::from_secs(3600)).await;
+    assert_eq!(
+        booted.dispatch_block_on(1).await,
+        0,
+        "a poisoned module receives no dispatch and no restart",
+    );
+    assert_eq!(booted.supervisor.poisoned_count(), 1);
+
+    // Idempotent, and an unknown module is ignored rather than panicking.
+    booted.supervisor.poison_source("example", 1, "repeat");
+    booted.supervisor.poison_source("ghost", 1, "unknown");
+    assert_eq!(booted.supervisor.poisoned_count(), 1);
+}

@@ -3,7 +3,9 @@
 //! A module reaching `max_failures` traps within a sliding `window` is
 //! poisoned: the supervisor stops dispatching to it (no further restarts),
 //! sets the `nexum_runtime_module_poisoned{module}` gauge to 1, and logs the
-//! quarantine. Recovery needs an operator-driven full engine restart.
+//! quarantine. The trap threshold is one path into that state; an event
+//! source reporting an unrecoverable condition is the other. Recovery needs
+//! an operator-driven full engine restart.
 
 use std::num::NonZeroU32;
 use std::time::Duration;

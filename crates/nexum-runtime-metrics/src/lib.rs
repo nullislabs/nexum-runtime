@@ -74,7 +74,7 @@ pub const METRICS: &[Metric] = &[
     Metric {
         name: "nexum_runtime_module_poisoned",
         kind: Kind::Gauge,
-        help: "Modules quarantined by the poison policy.",
+        help: "Modules quarantined by the poison policy or an unrecoverable event source.",
     },
     Metric {
         name: "nexum_runtime_module_restarts_total",

@@ -125,6 +125,11 @@ impl Health {
         }
     }
 
+    /// Quarantine from outside the trap path (an unrecoverable source).
+    pub(super) fn poison(&mut self) {
+        self.state = LifecycleState::Poisoned;
+    }
+
     /// Backoff slides from `now`; restart failures never feed the poison window.
     pub(super) fn defer_restart(&mut self, now: Instant, seed: u64) -> Deferral {
         self.failure_count = self.failure_count.saturating_add(1);
