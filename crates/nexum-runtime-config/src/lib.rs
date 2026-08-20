@@ -746,6 +746,30 @@ max_state_bytes       = 2_048
                 "policy.component.m.max_fuel_per_dispatch",
             ),
             (
+                "[policy]\nmax_log_record_bytes = 0\n",
+                "policy.max_log_record_bytes",
+            ),
+            ("[policy]\nmax_log_burst = 0\n", "policy.max_log_burst"),
+            (
+                "[policy]\nmax_log_records_per_sec = 0\n",
+                "policy.max_log_records_per_sec",
+            ),
+            (
+                "[policy.component.m]\nmax_log_record_bytes = 0\n\
+                 [[modules]]\nid = \"m\"\npath = \"m.wasm\"\n",
+                "policy.component.m.max_log_record_bytes",
+            ),
+            (
+                "[policy.component.m]\nmax_log_burst = 0\n\
+                 [[modules]]\nid = \"m\"\npath = \"m.wasm\"\n",
+                "policy.component.m.max_log_burst",
+            ),
+            (
+                "[policy.component.m]\nmax_log_records_per_sec = 0\n\
+                 [[modules]]\nid = \"m\"\npath = \"m.wasm\"\n",
+                "policy.component.m.max_log_records_per_sec",
+            ),
+            (
                 "[limits.chain]\nresponse_body_max_bytes = 0\n",
                 "limits.chain.response_body_max_bytes",
             ),
