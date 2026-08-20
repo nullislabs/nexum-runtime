@@ -100,7 +100,7 @@ impl LogField {
 }
 
 /// A field value in the type the guest recorded it at.
-#[derive(Debug, Clone, PartialEq, derive_more::Display, derive_more::From)]
+#[derive(Debug, Clone, PartialEq, derive_more::Display)]
 pub enum LogValue {
     /// A string, or a `Debug` rendering the guest flattened for the wire.
     Text(String),
