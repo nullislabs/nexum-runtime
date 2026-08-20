@@ -3427,6 +3427,7 @@ dependencies = [
  "nexum-primitives",
  "nexum-runtime-api",
  "nexum-runtime-config",
+ "parking_lot",
  "strum",
  "tokio",
  "tracing",
@@ -3463,6 +3464,7 @@ dependencies = [
  "alloy-primitives",
  "nexum-runtime-api",
  "nexum-tasks",
+ "parking_lot",
  "redb",
  "tempfile",
  "thiserror 2.0.18",
@@ -3534,6 +3536,7 @@ dependencies = [
  "nexum-runtime-manifest",
  "nexum-runtime-wasm",
  "nexum-world",
+ "parking_lot",
  "serde",
  "serde_json",
  "tempfile",
@@ -3559,6 +3562,7 @@ dependencies = [
  "nexum-runtime-http",
  "nexum-runtime-logs",
  "nexum-world",
+ "parking_lot",
  "reqwest",
  "serde_json",
  "strum",
@@ -3590,6 +3594,7 @@ dependencies = [
  "nexum-module-macros",
  "nexum-sdk-test",
  "nexum-world",
+ "parking_lot",
  "proptest",
  "serde_json",
  "strum",
@@ -3606,6 +3611,7 @@ version = "0.1.0"
 dependencies = [
  "derive_more",
  "nexum-sdk",
+ "parking_lot",
  "tracing",
 ]
 

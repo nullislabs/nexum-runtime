@@ -362,13 +362,14 @@ mod tests {
     /// guest fault must not, and refusals sit below WARN.
     #[test]
     fn store_fault_logs_the_full_error_host_side_and_splits_levels() {
-        use std::sync::{Arc, Mutex};
+        use parking_lot::Mutex;
+        use std::sync::Arc;
 
         #[derive(Clone, Default)]
         struct Sink(Arc<Mutex<Vec<u8>>>);
         impl std::io::Write for Sink {
             fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-                self.0.lock().expect("sink lock").extend_from_slice(buf);
+                self.0.lock().extend_from_slice(buf);
                 Ok(buf.len())
             }
             fn flush(&mut self) -> std::io::Result<()> {
@@ -400,8 +401,7 @@ mod tests {
             let io = std::io::Error::other("I/O error: /var/lib/nexum/state/local-store.redb");
             let _ = store_fault("mod-a", "get", StoreError::Backend(io.into()));
         });
-        let out = String::from_utf8(sink.0.lock().expect("sink lock").clone())
-            .expect("log output is UTF-8");
+        let out = String::from_utf8(sink.0.lock().clone()).expect("log output is UTF-8");
         let quota = out
             .lines()
             .find(|l| l.contains("123456789"))

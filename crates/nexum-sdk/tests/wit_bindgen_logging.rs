@@ -6,7 +6,7 @@ mod nexum {
     pub mod host {
         /// Stands in for the per-cdylib wit-bindgen `logging` output.
         pub mod logging {
-            use std::sync::Mutex;
+            use parking_lot::Mutex;
 
             #[derive(Clone, Copy, Debug, PartialEq, Eq)]
             pub enum Level {
@@ -20,7 +20,7 @@ mod nexum {
             pub static RECORDED: Mutex<Vec<(Level, String)>> = Mutex::new(Vec::new());
 
             pub fn log(level: Level, message: &str) {
-                RECORDED.lock().unwrap().push((level, message.to_owned()));
+                RECORDED.lock().push((level, message.to_owned()));
             }
         }
     }
@@ -33,7 +33,7 @@ use nexum::host::logging::Level as Wire;
 /// The recorder is process-wide, so every assertion is a containment
 /// check rather than an equality on the whole log.
 fn recorded(line: &str) -> Option<Wire> {
-    let recorded = nexum::host::logging::RECORDED.lock().unwrap();
+    let recorded = nexum::host::logging::RECORDED.lock();
     recorded
         .iter()
         .find(|(_, message)| message == line)

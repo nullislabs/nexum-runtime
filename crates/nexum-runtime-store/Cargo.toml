@@ -14,6 +14,7 @@ workspace = true
 # keccak256 derives the per-module namespace prefix.
 alloy-primitives.workspace = true
 nexum-runtime-api = { path = "../nexum-runtime-api" }
+parking_lot.workspace = true
 redb.workspace = true
 thiserror.workspace = true
 

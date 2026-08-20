@@ -1,7 +1,9 @@
 //! In-memory [`StateStore`] fake: per-namespace `HashMap`, no redb, no disk.
 
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+
+use parking_lot::{Mutex, MutexGuard};
 
 use nexum_runtime_api::{
     MAX_APPLY_OPS, MAX_APPLY_VALUE_BYTES, StateHandle, StateStore, StoreError, WriteOp,
@@ -51,8 +53,8 @@ impl StateStore for MockStateStore {
 }
 
 impl MockStateHandle {
-    fn lock(&self) -> std::sync::MutexGuard<'_, Namespaces> {
-        self.namespaces.lock().expect("mock store mutex poisoned")
+    fn lock(&self) -> MutexGuard<'_, Namespaces> {
+        self.namespaces.lock()
     }
 }
 

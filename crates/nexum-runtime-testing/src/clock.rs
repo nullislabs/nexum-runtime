@@ -1,8 +1,9 @@
 //! A manually-driven WASI clock for deterministic guest time in tests.
 
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use parking_lot::Mutex;
 use wasmtime_wasi::{HostMonotonicClock, HostWallClock};
 
 use nexum_runtime_api::WasiClockOverride;
@@ -46,13 +47,13 @@ impl ManualClock {
     /// untouched; a `set` after an `advance` can put wall behind monotonic.
     pub fn set(&self, time: SystemTime) {
         let wall = time.duration_since(UNIX_EPOCH).unwrap_or(Duration::ZERO);
-        self.locked().wall = wall;
+        self.inner.lock().wall = wall;
     }
 
     /// Move both the wall and monotonic sources forward by `by`.
     pub fn advance(&self, by: Duration) {
         let nanos = u64::try_from(by.as_nanos()).unwrap_or(u64::MAX);
-        let mut state = self.locked();
+        let mut state = self.inner.lock();
         state.wall = state.wall.saturating_add(by);
         state.monotonic = state.monotonic.saturating_add(nanos);
     }
@@ -63,10 +64,6 @@ impl ManualClock {
     pub fn as_override(&self) -> WasiClockOverride {
         WasiClockOverride::new(Arc::new(self.clone()), Arc::new(self.clone()))
     }
-
-    fn locked(&self) -> std::sync::MutexGuard<'_, Instant> {
-        self.inner.lock().unwrap_or_else(|e| e.into_inner())
-    }
 }
 
 impl HostWallClock for ManualClock {
@@ -75,7 +72,7 @@ impl HostWallClock for ManualClock {
     }
 
     fn now(&self) -> Duration {
-        self.locked().wall
+        self.inner.lock().wall
     }
 }
 
@@ -85,7 +82,7 @@ impl HostMonotonicClock for ManualClock {
     }
 
     fn now(&self) -> u64 {
-        self.locked().monotonic
+        self.inner.lock().monotonic
     }
 }
 

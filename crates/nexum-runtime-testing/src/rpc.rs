@@ -1,7 +1,7 @@
 //! In-process mock RPC transports behind the real [`ProviderPool`].
 
 use std::collections::{BTreeMap, HashMap};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::time::Duration;
 
@@ -13,6 +13,7 @@ use alloy_rpc_client::ClientBuilder;
 use alloy_rpc_types_eth::{Block, BlockNumberOrTag, Filter, FilterBlockOption, Header, Log};
 use alloy_transport::mock::{Asserter, MockResponse, MockTransport};
 use alloy_transport::{TransportError, TransportErrorKind, TransportFut};
+use parking_lot::{Mutex, MutexGuard};
 use serde_json::value::RawValue;
 
 use nexum_runtime_chain::ProviderPool;
@@ -36,12 +37,10 @@ fn record(sink: &Sink, req: &SerializedRequest) {
         .params()
         .and_then(|raw| serde_json::from_str(raw.get()).ok())
         .unwrap_or(serde_json::Value::Null);
-    sink.lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .push(CapturedRpc {
-            method: req.method().to_owned(),
-            params,
-        });
+    sink.lock().push(CapturedRpc {
+        method: req.method().to_owned(),
+        params,
+    });
 }
 
 fn record_packet(sink: &Sink, packet: &RequestPacket) {
@@ -121,10 +120,7 @@ impl MockRpc {
 
     /// Every request dispatched so far, in call order.
     pub fn captured(&self) -> Vec<CapturedRpc> {
-        self.captured
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .clone()
+        self.captured.lock().clone()
     }
 
     /// Responses still queued; `0` marks a phase boundary.
@@ -221,7 +217,7 @@ impl FakeNode {
     }
 
     fn state(&self) -> MutexGuard<'_, FakeNodeState> {
-        self.0.state.lock().unwrap_or_else(PoisonError::into_inner)
+        self.0.state.lock()
     }
 
     /// A pool serving every chain from this one node.

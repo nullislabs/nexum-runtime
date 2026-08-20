@@ -1,10 +1,11 @@
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::fmt::{self, Write as _};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
 
 use nexum_sdk::Level;
+use parking_lot::Mutex;
 use tracing::field::{Field, Visit};
 use tracing::level_filters::LevelFilter;
 use tracing::span::{Attributes, Id, Record};
@@ -59,19 +60,18 @@ pub struct CapturedEvents {
 impl CapturedEvents {
     /// Every captured event, in emission order.
     pub fn events(&self) -> Vec<CapturedEvent> {
-        self.events.lock().unwrap().clone()
+        self.events.lock().clone()
     }
 
     /// Whether no events were captured.
     pub fn is_empty(&self) -> bool {
-        self.events.lock().unwrap().is_empty()
+        self.events.lock().is_empty()
     }
 
     /// Count of events at `level`.
     pub fn count_at(&self, level: Level) -> usize {
         self.events
             .lock()
-            .unwrap()
             .iter()
             .filter(|e| e.level == level)
             .count()
@@ -79,13 +79,13 @@ impl CapturedEvents {
 
     /// Whether any captured event satisfies `pred`.
     pub fn any(&self, pred: impl Fn(&CapturedEvent) -> bool) -> bool {
-        self.events.lock().unwrap().iter().any(pred)
+        self.events.lock().iter().any(pred)
     }
 
     /// Exactly one matching event; panics with the full capture dump
     /// otherwise.
     pub fn expect_one(&self, pred: impl Fn(&CapturedEvent) -> bool) -> CapturedEvent {
-        let events = self.events.lock().unwrap();
+        let events = self.events.lock();
         let matches: Vec<&CapturedEvent> = events.iter().filter(|e| pred(e)).collect();
         match matches.as_slice() {
             [only] => (*only).clone(),
@@ -150,7 +150,7 @@ impl Subscriber for CaptureSubscriber {
         };
         ACTIVE_CAPTURE.with(|slot| {
             if let Some(buffer) = slot.borrow().as_ref() {
-                buffer.lock().unwrap().push(captured);
+                buffer.lock().push(captured);
             }
         });
     }

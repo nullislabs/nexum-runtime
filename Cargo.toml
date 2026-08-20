@@ -71,6 +71,10 @@ serde_json = { version = "1", default-features = false, features = ["alloc"] }
 # BorshDeserialize)]` through the same dependency.
 borsh = { version = "1", features = ["derive"] }
 
+# Non-async locks. A guard is `!Send`, so holding one across an await fails
+# to compile rather than blocking the executor.
+parking_lot = "0.12"
+
 # Observability.
 tracing = "0.1"
 # `tracing-core` alone (no subscriber registry) backs the guest-side

@@ -12,9 +12,10 @@
 
 use std::collections::HashMap;
 use std::path::Path;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use alloy_primitives::keccak256;
+use parking_lot::Mutex;
 use redb::{Database, ReadableDatabase, ReadableTable, TableDefinition};
 use thiserror::Error;
 
@@ -147,7 +148,7 @@ impl ModuleStore {
     pub fn set(&self, key: &str, value: &[u8]) -> Result<(), StorageError> {
         let full = self.build_key(key);
         let txn = self.db.begin_write().map_err(StorageError::Txn)?;
-        let mut counters = self.counters.lock().unwrap_or_else(|e| e.into_inner());
+        let mut counters = self.counters.lock();
         // Track the namespace footprint when a quota applies, or when another
         // handle of this namespace already tracks it. Untracked writes skip
         // the counter (and its seeding scan) entirely.
@@ -219,7 +220,7 @@ impl ModuleStore {
             });
         }
         let txn = self.db.begin_write().map_err(StorageError::Txn)?;
-        let mut counters = self.counters.lock().unwrap_or_else(|e| e.into_inner());
+        let mut counters = self.counters.lock();
         let track = self.quota_bytes.is_some() || counters.contains_key(&self.prefix);
         let mut projected = 0u64;
         {
@@ -320,7 +321,7 @@ impl ModuleStore {
     pub fn delete(&self, key: &str) -> Result<(), StorageError> {
         let full = self.build_key(key);
         let txn = self.db.begin_write().map_err(StorageError::Txn)?;
-        let mut counters = self.counters.lock().unwrap_or_else(|e| e.into_inner());
+        let mut counters = self.counters.lock();
         let tracked = counters.contains_key(&self.prefix);
         let mut released = 0u64;
         {
