@@ -1,7 +1,7 @@
 //! Open live chain event sources and dispatch their events to the supervisor
 //! until shutdown. Blocks come from `eth_subscribe(newHeads)` (WS); chain-logs
 //! from an `eth_getLogs` block-range poller that re-queries the reconnect gap
-//! and retracts a reorged delivered tail.
+//! and retracts a reorged delivered tail within the revalidation depth.
 //!
 //! `open_block_streams` and `open_chain_log_streams` each spawn one
 //! reconnect-aware task per event source or chain: it opens the stream,
@@ -45,6 +45,10 @@ const RECONNECT_CHANNEL_BUF: usize = 64;
 
 /// Block-gap size at or above which a re-open logs a large-backfill notice.
 const LARGE_GAP_LOG_THRESHOLD: u64 = 1_000;
+
+/// Bound in blocks for an invalidated-tail restart, measured below the higher
+/// of the scan basis and the `max_lookback` floor.
+const REVALIDATE_DEPTH: u64 = nexum_runtime_chain::MAX_REORG_DEPTH;
 
 /// Open one reconnect-aware block-source task per chain, spawned via
 /// `executor` with handles pushed into `tasks` for graceful shutdown.
@@ -236,7 +240,8 @@ fn observe_chain_head(head_seen: &mut Option<u64>, chain_id: u64, height: u64) {
 }
 
 /// Poller-backed loop for one (module, chain) event source; a
-/// re-open resumes past the scanned range and retracts a reorged tail.
+/// re-open resumes past the scanned range and retracts a reorged tail
+/// within the revalidation depth.
 async fn reconnecting_chain_log_task(
     pool: ProviderPool,
     module: ModuleId,
@@ -305,23 +310,35 @@ async fn reconnecting_chain_log_task(
                 }
             }
         }
-        let mut start_block = poller_start_block(boot_resume, resume_from, invalidated_tail, head);
+        let lookback_floor = max_lookback.map(|cap| head.saturating_sub(cap));
+        let PollerStart {
+            mut start_block,
+            restates_tail,
+        } = poller_start_block(
+            boot_resume,
+            resume_from,
+            invalidated_tail,
+            head,
+            lookback_floor,
+        );
         // Opt-in bound: `max_lookback` caps how far back a resume
         // trigger backfills. The default (`None`) backfills fully; a
         // set cap clamps the start up to `head - cap` and surfaces the
-        // dropped oldest blocks.
-        if let Some(cap) = max_lookback {
-            let floor = head.saturating_sub(cap);
-            if start_block < floor {
-                warn!(
-                    module = %module,
-                    chain_id,
-                    skipped_from = start_block,
-                    skipped_to = floor,
-                    "event source gap exceeds max_lookback - skipping the oldest missed blocks",
-                );
-                start_block = floor;
-            }
+        // dropped oldest blocks. A pending retraction is exempt: nothing
+        // would restate the retracted logs if the clamp raised the start
+        // above them.
+        if let Some(floor) = lookback_floor
+            && !restates_tail
+            && start_block < floor
+        {
+            warn!(
+                module = %module,
+                chain_id,
+                skipped_from = start_block,
+                skipped_to = floor,
+                "event source gap exceeds max_lookback - skipping the oldest missed blocks",
+            );
+            start_block = floor;
         }
         // A large gap is backfilled in full (never skipped); surface it so a long
         // catch-up is visible rather than looking like a stall.
@@ -358,16 +375,30 @@ async fn reconnecting_chain_log_task(
                 // An itemless open re-opens at the same block.
                 boot_resume = None;
                 resume_from = Some(start_block);
-                // Retract before pumping; the stream restates the height.
+                // Retract before pumping. Within the bound the scan starts
+                // at the tail's height and restates it; deeper, the bound
+                // holds and the restatement never comes.
                 if invalidated_tail.is_some()
                     && let Some(t) = tail.take()
                 {
-                    warn!(
-                        module = %module,
-                        chain_id,
-                        tail_block = t.number,
-                        "event source tail reorged while disconnected - retracting its logs",
-                    );
+                    if restates_tail {
+                        warn!(
+                            module = %module,
+                            chain_id,
+                            tail_block = t.number,
+                            "event source tail reorged while disconnected - retracting its logs",
+                        );
+                    } else {
+                        warn!(
+                            module = %module,
+                            chain_id,
+                            tail_block = t.number,
+                            start_block,
+                            "event source tail reorged deeper than the revalidation \
+                             bound - retracting its logs, which the bounded rescan \
+                             will not restate",
+                        );
+                    }
                     for mut log in t.logs {
                         log.removed = true;
                         let tagged = (module.clone(), chain, log, cursor_key.clone());
@@ -618,21 +649,53 @@ pub async fn run<T: RuntimeTypes<State = HostState<T>>, G>(
     }
 }
 
-/// Boot cursor (clamped to head), else the invalidated tail, else
-/// `resume_from`, else head; the reconnect arms are never head-clamped.
+/// Where a poller (re-)open starts, and whether that scan covers the
+/// delivered tail, so a retraction of it is followed by a restatement.
+struct PollerStart {
+    start_block: u64,
+    restates_tail: bool,
+}
+
+/// Boot cursor (clamped to head), else the invalidated tail bounded to
+/// [`REVALIDATE_DEPTH`], else `resume_from`, else head; the reconnect arms
+/// are never head-clamped.
+///
+/// A tail below the bound is retracted without a restatement: the bound
+/// holds, and the guest is left short rather than holding discarded logs.
 fn poller_start_block(
     boot_cursor: Option<u64>,
     resume_from: Option<u64>,
     invalidated_tail: Option<u64>,
     head: u64,
-) -> u64 {
+    lookback_floor: Option<u64>,
+) -> PollerStart {
     if let Some(cursor) = boot_cursor {
-        return cursor.min(head);
+        return PollerStart {
+            start_block: cursor.min(head),
+            restates_tail: false,
+        };
     }
+    let basis = resume_from.unwrap_or(head);
     if let Some(tail) = invalidated_tail {
-        return tail;
+        let bound = basis
+            .max(lookback_floor.unwrap_or(0))
+            .saturating_sub(REVALIDATE_DEPTH);
+        return if tail >= bound {
+            PollerStart {
+                start_block: tail,
+                restates_tail: true,
+            }
+        } else {
+            PollerStart {
+                start_block: bound,
+                restates_tail: false,
+            }
+        };
     }
-    resume_from.unwrap_or(head)
+    PollerStart {
+        start_block: basis,
+        restates_tail: false,
+    }
 }
 
 /// `Some(gap)` when `now` is at least `threshold` past the last event; `None`
@@ -735,13 +798,23 @@ mod tests {
         tasks: &mut TaskSet,
         initial_cursor: Option<u64>,
     ) -> TaggedChainLogStream {
+        spawn_chain_log_task_with_lookback(pool, executor, tasks, initial_cursor, None)
+    }
+
+    fn spawn_chain_log_task_with_lookback(
+        pool: &ProviderPool,
+        executor: &TaskExecutor,
+        tasks: &mut TaskSet,
+        initial_cursor: Option<u64>,
+        max_lookback: Option<u64>,
+    ) -> TaggedChainLogStream {
         let sources = vec![EventSource {
             module: ModuleId::parse("mod").expect("valid module name"),
             chain: alloy_chains::Chain::mainnet(),
             filter: alloy_rpc_types_eth::Filter::default(),
             cursor_key: None,
             initial_cursor,
-            max_lookback: None,
+            max_lookback,
         }];
         open_chain_log_streams(pool, sources, executor, tasks)
             .pop()
@@ -881,6 +954,202 @@ mod tests {
             wait_for_ranged_fetches(&rpc, 2).await,
             vec![90, 90],
             "the invalidated tail replays AT 90",
+        );
+        tasks.shutdown().await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn max_lookback_yields_to_a_pending_retraction() {
+        let rpc = MockRpc::new();
+        rpc.push_script(attempt(
+            90,
+            None,
+            vec![
+                cycle(90, &[(90, vec![log_at(90)])]),
+                vec![rpc_err("stream torn down")],
+            ],
+        ));
+        let pool = pool_for(&rpc);
+        let manager = TaskManager::new();
+        let executor = manager.executor();
+        let mut tasks = TaskSet::new();
+        // A cap of 2 puts the clamp floor at 93 on the reconnect, above the
+        // delivered tail at 90.
+        let mut stream =
+            spawn_chain_log_task_with_lookback(&pool, &executor, &mut tasks, None, Some(2));
+        recv(&mut stream).await;
+        drained(&rpc).await;
+
+        let fork_hash = B256::repeat_byte(0xcc);
+        let mut fork_block = linked_block(90);
+        fork_block.header.hash = fork_hash;
+        let fork_log: Log = Log {
+            block_number: Some(90),
+            block_hash: Some(fork_hash),
+            ..Default::default()
+        };
+        rpc.push_script(attempt(
+            95,
+            Some(rpc_ok(&fork_block)),
+            vec![vec![
+                rpc_head(90),
+                rpc_ok(&fork_block),
+                rpc_ok(&vec![fork_log]),
+            ]],
+        ));
+
+        let retraction = recv(&mut stream).await;
+        assert!(retraction.removed, "the stale delivery is retracted");
+        assert_eq!(retraction.block_number, Some(90));
+        let replacement = recv(&mut stream).await;
+        assert!(
+            !replacement.removed,
+            "the guest that received the retraction receives the restatement",
+        );
+        assert_eq!(replacement.block_number, Some(90));
+        assert_eq!(
+            wait_for_ranged_fetches(&rpc, 2).await,
+            vec![90, 90],
+            "the clamp yields: the restart stays AT the invalidated tail, below the floor 93",
+        );
+        tasks.shutdown().await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tail_far_below_the_lookback_floor_is_retracted_and_the_clamp_applies() {
+        let rpc = MockRpc::new();
+        rpc.push_script(attempt(
+            90,
+            None,
+            vec![
+                cycle(90, &[(90, vec![log_at(90)])]),
+                vec![rpc_err("stream torn down")],
+            ],
+        ));
+        let pool = pool_for(&rpc);
+        let manager = TaskManager::new();
+        let executor = manager.executor();
+        let mut tasks = TaskSet::new();
+        let mut stream =
+            spawn_chain_log_task_with_lookback(&pool, &executor, &mut tasks, None, Some(2));
+        recv(&mut stream).await;
+        drained(&rpc).await;
+
+        // The floor at 998 leaves the tail at 90 more than REVALIDATE_DEPTH
+        // below it.
+        let fork_hash = B256::repeat_byte(0xcc);
+        let mut fork_block = linked_block(90);
+        fork_block.header.hash = fork_hash;
+        rpc.push_script(attempt(
+            1_000,
+            Some(rpc_ok(&fork_block)),
+            vec![cycle(998, &[(998, vec![log_at(998)])])],
+        ));
+
+        let next = recv(&mut stream).await;
+        assert!(
+            next.removed,
+            "a tail far below the floor is retracted, with no restatement to follow",
+        );
+        let next = recv(&mut stream).await;
+        assert!(!next.removed);
+        assert_eq!(next.block_number, Some(998));
+        assert_eq!(
+            wait_for_ranged_fetches(&rpc, 2).await,
+            vec![90, 998],
+            "past the bound the clamp applies again: the restart cannot pass below head - cap",
+        );
+        tasks.shutdown().await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tail_deeper_than_the_bound_retracts_without_restating() {
+        let rpc = MockRpc::new();
+        // Empty heights push the scan basis to 156, leaving the delivered
+        // tail at 90 more than REVALIDATE_DEPTH below it.
+        let empty: Vec<(u64, Vec<Log>)> = (91..=155).map(|n| (n, Vec::new())).collect();
+        rpc.push_script(attempt(
+            90,
+            None,
+            vec![
+                cycle(90, &[(90, vec![log_at(90)])]),
+                cycle(155, &empty),
+                vec![rpc_err("stream torn down")],
+            ],
+        ));
+        let pool = pool_for(&rpc);
+        let manager = TaskManager::new();
+        let executor = manager.executor();
+        let mut tasks = TaskSet::new();
+        let mut stream = spawn_chain_log_task(&pool, &executor, &mut tasks, None);
+        recv(&mut stream).await;
+        drained(&rpc).await;
+
+        let fork_hash = B256::repeat_byte(0xcc);
+        let mut fork_block = linked_block(90);
+        fork_block.header.hash = fork_hash;
+        rpc.push_script(attempt(
+            156,
+            Some(rpc_ok(&fork_block)),
+            vec![cycle(92, &[(92, vec![log_at(92)])])],
+        ));
+
+        let next = recv(&mut stream).await;
+        assert!(
+            next.removed,
+            "a tail deeper than the bound is still retracted, with no restatement to follow",
+        );
+        assert_eq!(next.block_number, Some(90));
+        let restated = recv(&mut stream).await;
+        assert!(!restated.removed);
+        assert_eq!(
+            restated.block_number,
+            Some(92),
+            "the bounded rescan resumes above the retracted height, which it never restates",
+        );
+        let mut expected: Vec<u64> = (90..=155).collect();
+        expected.push(92);
+        assert_eq!(
+            wait_for_ranged_fetches(&rpc, expected.len()).await,
+            expected,
+            "the restart is bounded to REVALIDATE_DEPTH below the basis 156, not the tail at 90",
+        );
+        tasks.shutdown().await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn max_lookback_still_clamps_without_a_pending_retraction() {
+        let rpc = MockRpc::new();
+        rpc.push_script(attempt(
+            90,
+            None,
+            vec![
+                cycle(90, &[(90, vec![log_at(90)])]),
+                vec![rpc_err("stream torn down")],
+            ],
+        ));
+        let pool = pool_for(&rpc);
+        let manager = TaskManager::new();
+        let executor = manager.executor();
+        let mut tasks = TaskSet::new();
+        let mut stream =
+            spawn_chain_log_task_with_lookback(&pool, &executor, &mut tasks, None, Some(5));
+        recv(&mut stream).await;
+        drained(&rpc).await;
+
+        // The tail at 90 confirms, so the clamp raises the resume from 91 to 95.
+        rpc.push_script(attempt(
+            100,
+            Some(rpc_ok(&linked_block(90))),
+            vec![cycle(95, &[(95, vec![log_at(95)])])],
+        ));
+        let log = recv(&mut stream).await;
+        assert!(!log.removed, "nothing was retracted");
+        assert_eq!(log.block_number, Some(95));
+        assert_eq!(
+            wait_for_ranged_fetches(&rpc, 2).await,
+            vec![90, 95],
+            "with no retraction pending the clamp still raises the start to head - cap",
         );
         tasks.shutdown().await;
     }
@@ -1468,7 +1737,7 @@ mod tests {
     #[test]
     fn poller_start_block_first_open_starts_at_head() {
         assert_eq!(
-            poller_start_block(None, None, None, 100),
+            poller_start_block(None, None, None, 100, None).start_block,
             100,
             "first open starts at head, no history replay",
         );
@@ -1476,27 +1745,95 @@ mod tests {
 
     #[test]
     fn poller_start_block_resumes_from_the_scanned_basis() {
+        let start = poller_start_block(None, Some(91), None, 100, None);
         assert_eq!(
-            poller_start_block(None, Some(91), None, 100),
-            91,
+            start.start_block, 91,
             "a re-open with a confirmed tail resumes from the scanned basis",
         );
+        assert!(!start.restates_tail, "a confirmed tail is never restated");
     }
 
     #[test]
     fn poller_start_block_restarts_at_an_invalidated_tail() {
+        let start = poller_start_block(None, Some(96), Some(88), 100, None);
         assert_eq!(
-            poller_start_block(None, Some(96), Some(88), 100),
-            88,
-            "an invalidated tail replays AT its height, below the scanned basis",
+            start.start_block, 88,
+            "a tail within the revalidation depth replays AT its height, below the scanned basis",
         );
+        assert!(
+            start.restates_tail,
+            "the restart at the tail retracts its logs so the scan restates them",
+        );
+    }
+
+    #[test]
+    fn poller_start_block_retracts_a_tail_exactly_at_the_bound() {
+        let basis = 5_000;
+        let tail = basis - REVALIDATE_DEPTH;
+        let start = poller_start_block(None, Some(basis), Some(tail), 5_000, None);
+        assert_eq!(
+            start.start_block, tail,
+            "the bound is inclusive - a tail exactly REVALIDATE_DEPTH below the basis replays",
+        );
+        assert!(start.restates_tail);
+    }
+
+    #[test]
+    fn poller_start_block_bounds_a_tail_deeper_than_the_revalidation_depth() {
+        let start = poller_start_block(None, Some(5_000), Some(100), 5_000, None);
+        assert_eq!(
+            start.start_block,
+            5_000 - REVALIDATE_DEPTH,
+            "a tail deeper than the revalidation depth restarts at the bound, not at the tail",
+        );
+        assert!(
+            !start.restates_tail,
+            "a tail below the bound is dropped unretracted, capping the rescan a reconnect forces",
+        );
+    }
+
+    #[test]
+    fn poller_start_block_retracts_a_tail_within_the_bound_of_the_lookback_floor() {
+        // The floor at 1_030 sits above the basis 1_000, so the bound hangs
+        // off the floor.
+        let start = poller_start_block(None, Some(1_000), Some(990), 2_000, Some(1_030));
+        assert_eq!(
+            start.start_block, 990,
+            "a tail within the revalidation depth of the lookback floor replays AT its height",
+        );
+        assert!(start.restates_tail);
+    }
+
+    #[test]
+    fn poller_start_block_bounds_a_tail_against_the_lookback_floor() {
+        let floor = 99_990;
+        let start = poller_start_block(None, Some(1_000), Some(990), 100_000, Some(floor));
+        assert_eq!(
+            start.start_block,
+            floor - REVALIDATE_DEPTH,
+            "a tail more than the revalidation depth below the floor restarts at the bound",
+        );
+        assert!(
+            !start.restates_tail,
+            "the clamp exemption may not exceed the cap by more than the revalidation depth",
+        );
+    }
+
+    #[test]
+    fn poller_start_block_ignores_a_lookback_floor_below_the_basis() {
+        let start = poller_start_block(None, Some(96), Some(88), 100, Some(90));
+        assert_eq!(
+            start.start_block, 88,
+            "a floor below the basis leaves the basis-relative bound in charge",
+        );
+        assert!(start.restates_tail);
     }
 
     #[test]
     fn poller_start_block_does_not_clamp_the_reconnect_arm_to_head() {
         // Alloy parks safely when the start is past head.
         assert_eq!(
-            poller_start_block(None, Some(151), None, 100),
+            poller_start_block(None, Some(151), None, 100, None).start_block,
             151,
             "no head clamp on the reconnect arm",
         );
@@ -1505,7 +1842,7 @@ mod tests {
     #[test]
     fn poller_start_block_boot_cursor_resumes_at_the_cursor() {
         assert_eq!(
-            poller_start_block(Some(42), None, None, 100),
+            poller_start_block(Some(42), None, None, 100, None).start_block,
             42,
             "the persisted cursor replays AT its block, not after it",
         );
@@ -1514,7 +1851,7 @@ mod tests {
     #[test]
     fn poller_start_block_boot_cursor_clamps_to_head() {
         assert_eq!(
-            poller_start_block(Some(150), None, None, 100),
+            poller_start_block(Some(150), None, None, 100, None).start_block,
             100,
             "a cursor a reorg left past head starts at head and catches up",
         );
@@ -1523,7 +1860,7 @@ mod tests {
     #[test]
     fn poller_start_block_treats_a_genesis_basis_as_history() {
         assert_eq!(
-            poller_start_block(None, Some(0), None, 5_000),
+            poller_start_block(None, Some(0), None, 5_000, None).start_block,
             0,
             "an open at block 0 re-opens at block 0, not at head",
         );
