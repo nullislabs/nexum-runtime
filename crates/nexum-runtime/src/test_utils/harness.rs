@@ -940,7 +940,7 @@ mod tests {
                 + r.source.file.as_ref().map_or(0, String::len)
                 + r.fields.iter().map(|f| f.name.len() + 64).sum::<usize>();
             assert!(bytes <= CAP, "an admitted record measured {bytes} bytes");
-            assert!(r.fields.len() < 32, "the overflow fields were kept");
+            assert!(r.fields.len() < 32, "the overflow fields were dropped");
         }
         assert!(
             host.iter().any(|r| r.message.ends_with("...[truncated]")),

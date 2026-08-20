@@ -6,7 +6,7 @@ use std::time::Instant;
 
 use nexum_runtime_config::LogBoundsPolicy;
 
-use super::LogRecord;
+use super::{LogField, LogRecord};
 
 /// Appended to a message the cap shortened. A cap below its own length
 /// drops it rather than exceeding the cap.
@@ -50,20 +50,22 @@ impl LogBounds {
             let Some(field) = record.fields.pop() else {
                 break;
             };
-            total -= field.name.len() + field.value.rendered_len();
+            total -= field.rendered_len();
             dropped += 1;
         }
-        let mut truncated = false;
+        let mut shortened = false;
         if total > cap {
-            record.source.file = None;
+            // The call site yields before the message: dropping the file
+            // frees the most bytes for the fewest a reader misses.
+            shortened |= record.source.file.take().is_some();
             let message = record.message.len();
-            truncated |= truncate_to(&mut record.source.target, cap.saturating_sub(message));
+            shortened |= truncate_to(&mut record.source.target, cap.saturating_sub(message));
             let target = record.source.target.len();
-            truncated |= truncate_to(&mut record.message, cap.saturating_sub(target));
+            shortened |= truncate_to(&mut record.message, cap.saturating_sub(target));
         }
-        if truncated {
+        if shortened {
             let module = record.run.module.as_str().to_owned();
-            metrics::counter!("nexum_runtime_log_messages_truncated_total", "module" => module)
+            metrics::counter!("nexum_runtime_log_records_truncated_total", "module" => module)
                 .increment(1);
         }
         if dropped > 0 {
@@ -111,16 +113,18 @@ fn truncate_to(text: &mut String, budget: usize) -> bool {
 }
 
 impl LogRecord {
-    /// Bytes the admission cap measures: every guest-controlled byte of the
-    /// record as it will render, and no fixed overhead, because the cap
-    /// bounds the render rather than the retained struct.
+    /// Bytes the admission cap measures: every byte the guest spelled, and
+    /// no fixed overhead, because the cap bounds the transient render
+    /// rather than the retained struct. It is an upper bound on the render,
+    /// never an estimate of it, or a field list could outrun the cap it
+    /// was admitted under.
     fn wire_bytes(&self) -> usize {
         self.message.len()
             + self.source.cost()
             + self
                 .fields
                 .iter()
-                .map(|f| f.name.len() + f.value.rendered_len())
+                .map(LogField::rendered_len)
                 .sum::<usize>()
     }
 }
@@ -207,6 +211,36 @@ mod tests {
         assert!(gate.admit(&mut rec, now));
         assert_eq!(rec.wire_bytes(), 64, "the call site is measured too");
         assert_eq!(rec.message, "short", "the message still survives whole");
+    }
+
+    /// The cap bounds the render, so the measure must never sit under the
+    /// bytes the sink writes. A flat scalar charge broke this: an `f64`
+    /// renders its whole decimal expansion, so a field list measured well
+    /// inside the cap rendered thirty times over it.
+    #[test]
+    fn the_measure_never_sits_under_the_bytes_the_render_writes() {
+        let (mut gate, now) = bounds(512, 8, 1);
+        let mut rec = record("m").with_source(LogSource {
+            target: "guest::work".to_owned(),
+            file: None,
+            line: None,
+        });
+        rec.fields = (0..64)
+            .map(|i| LogField {
+                name: format!("f{i}"),
+                // The widest `f64` render: a subnormal spells out every
+                // digit of its decimal expansion.
+                value: LogValue::Float(f64::from_bits(1)),
+            })
+            .collect();
+        assert!(gate.admit(&mut rec, now));
+        let rendered = rec.message.len()
+            + rec.source.cost()
+            + crate::logs::render_fields(&rec.fields).map_or(0, |line| line.len());
+        assert!(
+            rendered <= 512,
+            "the record renders {rendered} bytes under a 512-byte cap",
+        );
     }
 
     #[test]
