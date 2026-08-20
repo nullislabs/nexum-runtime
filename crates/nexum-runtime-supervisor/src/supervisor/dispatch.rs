@@ -206,6 +206,34 @@ impl<T: RuntimeTypes<State = HostState<T>>> Supervisor<T> {
         ok
     }
 
+    /// Quarantine `module` because its event source is unrecoverable,
+    /// reaching the same state as the trap threshold.
+    pub fn poison_source(&mut self, module: &str, chain_id: u64, reason: &str) {
+        let Some(m) = self.modules.iter_mut().find(|m| m.name.as_str() == module) else {
+            warn!(
+                module,
+                chain_id, reason, "source terminal for an unknown module - ignoring"
+            );
+            return;
+        };
+        if m.health.is_poisoned() {
+            return;
+        }
+        m.health.poison();
+        warn!(
+            module = %m.name,
+            chain_id,
+            reason,
+            "module poisoned - its event source is unrecoverable; \
+             quarantined; restart the engine to retry from the cursor",
+        );
+        metrics::gauge!(
+            "nexum_runtime_module_poisoned",
+            "module" => m.name.clone(),
+        )
+        .set(1.0);
+    }
+
     /// The restart sweep runs first; returns the number of modules invoked.
     pub async fn dispatch_extension_trigger(&mut self, delivery: ExtensionDelivery) -> usize {
         let now = Instant::now();

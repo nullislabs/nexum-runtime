@@ -109,13 +109,18 @@ impl RuntimeHandle {
 /// Map an event-loop join outcome to the [`wait`](RuntimeHandle::wait) result.
 fn finish_wait(joined: Option<TaskExit>) -> Result<(), RuntimeError> {
     match joined {
-        Some(_) => Ok(()),
+        Some(TaskExit::SourceTerminal(term)) => Err(refuse_launch(LaunchRefusal::SourceTerminal {
+            chain_id: term.chain_id,
+            reason: term.reason,
+        })),
+        Some(TaskExit::ReceiverGone) => Ok(()),
         None => Err(refuse_launch(LaunchRefusal::EventLoopGone)),
     }
 }
 
-/// Counts the refusal under its `error_kind`. The wait-time
-/// [`LaunchRefusal::EventLoopGone`] has no label, so it counts nothing.
+/// Counts the refusal under its `error_kind`. The wait-time refusals
+/// ([`LaunchRefusal::EventLoopGone`], [`LaunchRefusal::SourceTerminal`])
+/// have no label, so they count nothing.
 fn refuse_launch(refusal: LaunchRefusal) -> RuntimeError {
     let refusal = RuntimeError::from(refusal);
     count_boot_refusal(&refusal);
@@ -338,7 +343,7 @@ impl<T: RuntimeTypes<State = HostState<T>>> AssembledRuntime<T> {
         let event_loop = executor.spawn_graceful(move |graceful| async move {
             let mut supervisor = supervisor; // rebind as mut: the dispatch calls below take &mut self
             supervisor.stop_on(stop);
-            event_loop::run(
+            let outcome = event_loop::run(
                 &mut supervisor,
                 block_streams,
                 chain_log_streams,
@@ -347,6 +352,9 @@ impl<T: RuntimeTypes<State = HostState<T>>> AssembledRuntime<T> {
                 graceful.into_future(),
             )
             .await;
+            if let event_loop::RunEnd::SourceTerminal(term) = outcome.end {
+                return TaskExit::SourceTerminal(term);
+            }
             info!("done");
             TaskExit::ReceiverGone
         });
@@ -1356,6 +1364,31 @@ mod tests {
         let mut handle = handle_over(tasks, event_loop);
         handle.shutdown();
         handle.wait().await.expect("wait returns after the signal");
+    }
+
+    /// A terminal source exit surfaces a non-zero result carrying the reason.
+    #[tokio::test]
+    async fn runtime_handle_wait_is_err_on_a_terminal_source_exit() {
+        let tasks = TaskManager::new();
+        let event_loop = tasks.executor().spawn(async {
+            TaskExit::SourceTerminal(nexum_tasks::SourceTermination {
+                module: None,
+                chain_id: 7,
+                reason: "endpoint no longer serves chain 7".to_owned(),
+            })
+        });
+        let err = handle_over(tasks, event_loop)
+            .wait()
+            .await
+            .expect_err("a terminal source exit is not a clean stop");
+        assert!(
+            err.to_string()
+                .contains("endpoint no longer serves chain 7"),
+            "the operator sees the source's reason: {err}",
+        );
+        Refusal::from(err).variant::<LaunchRefusal>(|e| {
+            matches!(e, LaunchRefusal::SourceTerminal { chain_id: 7, .. })
+        });
     }
 
     /// An abnormally-stopped event loop surfaces an error from `wait`.

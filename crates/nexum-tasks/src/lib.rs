@@ -13,4 +13,4 @@ pub use manager::{TaskExecutor, TaskManager};
 pub use shutdown::{
     DrainOutcome, GracefulShutdown, GracefulShutdownGuard, Shutdown, ShutdownSignal,
 };
-pub use task::{TaskExit, TaskHandle, TaskSet};
+pub use task::{SourceTermination, TaskExit, TaskHandle, TaskSet};
