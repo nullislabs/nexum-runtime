@@ -14,7 +14,7 @@
 //! - [`chain`] - typed chain access and the alloy provider seam.
 //! - [`sol_events`] - event delivery.
 //! - [`store`] - typed local-store helpers ([`WriteBatch`](store::WriteBatch), [`TypedCell`](store::TypedCell), [`TypedMap`](store::TypedMap), [`Counter`](store::Counter)).
-//! - [`config`] - config-table lookups and decimal scaling.
+//! - [`config`] - config-table lookups, decimal scaling, and the write-once [`Slot`](config::Slot).
 //! - [`address`] - EVM address parsing.
 //! - [`http`] - outbound HTTP over wasi:http.
 //! - [`tracing`] - guest-side `tracing` facade.
