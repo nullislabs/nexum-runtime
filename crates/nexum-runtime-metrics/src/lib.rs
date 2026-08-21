@@ -69,17 +69,17 @@ pub const METRICS: &[Metric] = &[
     Metric {
         name: "nexum_runtime_log_fields_dropped_total",
         kind: Kind::Counter,
-        help: "Structured log fields dropped past the per-record byte cap, by module.",
+        help: "Structured log fields dropped past the per-record byte cap, by module and channel.",
     },
     Metric {
         name: "nexum_runtime_log_records_dropped_total",
         kind: Kind::Counter,
-        help: "Host log records dropped whole by the per-module log rate limit, by module.",
+        help: "Module log records dropped whole by the per-run log rate limit, by module and channel.",
     },
     Metric {
         name: "nexum_runtime_log_records_truncated_total",
         kind: Kind::Counter,
-        help: "Host log records shortened to fit the per-record byte cap, by module.",
+        help: "Module log records shortened to fit the per-record byte cap, by module and channel.",
     },
     Metric {
         name: "nexum_runtime_module_errors_total",

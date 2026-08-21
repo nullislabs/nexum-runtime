@@ -2,7 +2,8 @@
 # invokes `on_trigger` once per block and the handler floods the
 # `nexum:host/logging` verb: half the records are far over the per-record
 # byte cap, half carry a long field list, and the count runs far past the
-# burst allowance the test configures.
+# burst allowance the test configures. One stderr line opens the dispatch,
+# spending from the same bucket.
 
 [component]
 name = "log-bomb"

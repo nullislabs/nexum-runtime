@@ -1,7 +1,10 @@
-//! Byte cap and rate bound on the host logging verbs, applied before the
+//! Byte cap and rate bound on every capture point, applied before the
 //! router renders the record.
 
+use std::sync::Arc;
 use std::time::Instant;
+
+use parking_lot::Mutex;
 
 use nexum_runtime_config::{LogBoundsPolicy, TokenBucket};
 
@@ -14,9 +17,31 @@ const TRUNCATION_MARKER: &str = "...[truncated]";
 /// names its subsystem and a guest cannot hide payload in the target.
 const TARGET_ALLOWANCE: usize = 128;
 
-/// Per-module gate; unshared, so one module's flood spends its own bucket.
+/// One run's gate, held by every capture point that run writes through, so
+/// a flood spends the same bucket whichever way it enters.
+#[derive(Clone, Debug)]
+pub struct SharedLogBounds(Arc<Mutex<LogBounds>>);
+
+impl SharedLogBounds {
+    /// Starts with a full burst, as of `now`.
+    pub fn new(policy: LogBoundsPolicy, now: Instant) -> Self {
+        Self(Arc::new(Mutex::new(LogBounds::new(policy, now))))
+    }
+
+    /// Fit `record` to the cap and spend one token; `false` drops it whole.
+    pub fn admit(&self, record: &mut LogRecord, now: Instant) -> bool {
+        self.0.lock().admit(record, now)
+    }
+
+    /// The byte cap, for a capture point that must bound a buffer before it
+    /// has a record to admit.
+    pub fn max_record_bytes(&self) -> usize {
+        self.0.lock().policy.max_record_bytes.get()
+    }
+}
+
 #[derive(Debug)]
-pub struct LogBounds {
+struct LogBounds {
     policy: LogBoundsPolicy,
     rate: TokenBucket,
 }
@@ -36,7 +61,8 @@ impl LogBounds {
     pub fn admit(&mut self, record: &mut LogRecord, now: Instant) -> bool {
         if !self.rate.try_acquire(now) {
             let module = record.run.module.as_str().to_owned();
-            metrics::counter!("nexum_runtime_log_records_dropped_total", "module" => module)
+            let channel: &'static str = record.channel.into();
+            metrics::counter!("nexum_runtime_log_records_dropped_total", "module" => module, "channel" => channel)
                 .increment(1);
             return false;
         }
@@ -66,14 +92,15 @@ impl LogBounds {
             let spare = cap - record.message.len();
             shortened |= truncate_to(&mut record.source.target, spare.min(TARGET_ALLOWANCE));
         }
+        let channel: &'static str = record.channel.into();
         if shortened {
             let module = record.run.module.as_str().to_owned();
-            metrics::counter!("nexum_runtime_log_records_truncated_total", "module" => module)
+            metrics::counter!("nexum_runtime_log_records_truncated_total", "module" => module, "channel" => channel)
                 .increment(1);
         }
         if dropped > 0 {
             let module = record.run.module.as_str().to_owned();
-            metrics::counter!("nexum_runtime_log_fields_dropped_total", "module" => module)
+            metrics::counter!("nexum_runtime_log_fields_dropped_total", "module" => module, "channel" => channel)
                 .increment(dropped);
         }
         true

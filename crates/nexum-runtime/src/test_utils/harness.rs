@@ -887,7 +887,9 @@ mod tests {
     }
 
     /// 32 records over a 256-byte cap and a burst of 4, in one dispatch.
-    /// The stderr marker is the barrier: stdio is not gated.
+    /// The barrier is two-part: the fixture's opening stderr line proves
+    /// the dispatch started, the drain proves it returned. No later record
+    /// can serve, because the flood spends the bucket stdio draws on too.
     #[tokio::test]
     async fn a_log_flood_is_capped_and_rate_limited_inside_one_dispatch() {
         let Some(wasm) = module_wasm_or_skip("log-bomb") else {
@@ -916,22 +918,30 @@ mod tests {
             .launch()
             .await
             .expect("launch log-bomb over the harness");
+        let logs = rt.logs().clone();
         rt.push_block(header_numbered(19_000_000));
-        rt.wait_for_log("log-bomb", "log-bomb emitted 32")
+        rt.wait_for_log("log-bomb", "log-bomb flooding 32")
             .await
-            .expect("the stderr marker lands once the flood dispatch returns");
+            .expect("the stderr marker opens the flood dispatch");
+        rt.shutdown();
+        rt.wait().await.expect("clean shutdown");
 
-        let run = rt.logs().list_runs("log-bomb")[0].run.clone();
-        let records = rt.logs().read(&run, 0).records;
+        let run = logs.list_runs("log-bomb")[0].run.clone();
+        let records = logs.read(&run, 0).records;
         let host: Vec<&LogRecord> = records
             .iter()
             .filter(|r| r.channel == LogChannel::HostInterface)
             .collect();
         // Starts full, 1/s refills nothing here: exactly the burst survives.
         assert_eq!(
-            host.len(),
+            records.len(),
             BURST as usize,
-            "the rate limit dropped the flood past the burst",
+            "one bucket per run, spent across both capture points",
+        );
+        assert_eq!(
+            host.len(),
+            BURST as usize - 1,
+            "the stderr marker took a token the verbs would otherwise have",
         );
         for r in &host {
             // Every byte the render writes, separators included.
@@ -965,9 +975,6 @@ mod tests {
             carried.fields[0].name, "f0",
             "the earliest context survives the drop",
         );
-
-        rt.shutdown();
-        rt.wait().await.expect("clean shutdown");
     }
 
     /// The module logs at init and on the block; stdout/stderr line splitting
