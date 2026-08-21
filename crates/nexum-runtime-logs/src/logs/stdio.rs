@@ -101,7 +101,7 @@ impl LineWriter {
 
     /// Decode one line, dropping a trailing `\r` and skipping empties, then
     /// route what the run's filter and shared bounds admit. A captured line
-    /// carries no target, so the filter sees its channel level and nothing else.
+    /// carries no target, so the filter sees its channel level alone.
     fn route(&self, bytes: &[u8]) {
         let bytes = bytes.strip_suffix(b"\r").unwrap_or(bytes);
         if bytes.is_empty() {
@@ -309,8 +309,6 @@ mod tests {
         );
     }
 
-    /// The channel level is all a captured line offers the filter, so a
-    /// `warn` console floor silences stdout and keeps stderr.
     #[test]
     fn a_console_floor_silences_stdout_without_losing_the_line() {
         let store = Arc::new(CaptureStore::default());

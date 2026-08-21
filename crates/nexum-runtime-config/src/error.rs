@@ -76,7 +76,7 @@ pub enum EngineConfigError {
         value: String,
     },
     /// Refused rather than allowed: a console louder than retention prints
-    /// what `nexum logs` never kept, which is an operator slip.
+    /// what `nexum logs` never kept.
     #[error("engine config: [{scope}] prints {console} but retains only {retain}")]
     LogRetentionTooStrict {
         /// The `[policy]` or `[policy.component.<id>]` scope.

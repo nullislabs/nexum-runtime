@@ -1,5 +1,4 @@
-//! Level and target filter on every capture point, choosing a record's
-//! sinks before the bound fits what is left.
+//! Level and target filter on every capture point.
 
 use std::sync::Arc;
 use std::time::Instant;
@@ -8,9 +7,8 @@ use nexum_runtime_config::{LogFilterPolicy, LogVerdict};
 
 use super::{LogRecord, LogRouter, SharedLogBounds};
 
-/// One run's operator filter, held by every capture point that run writes
-/// through. The death path holds none: a synthesized death record is
-/// unfilterable by construction rather than by an exemption here.
+/// One run's operator filter. The death path holds none, so a synthesized
+/// death record is unfilterable by construction.
 #[derive(Clone, Debug)]
 pub struct SharedLogFilter(Arc<LogFilterPolicy>);
 
@@ -20,11 +18,9 @@ impl SharedLogFilter {
         Self(Arc::new(policy))
     }
 
-    /// Route `record` to the sinks its level and target clear, bounding
-    /// only what reaches one. The filter runs first so a record the
-    /// operator chose not to see spends no token of `bounds`: the other
-    /// order lets a filtered flood cost the surviving records their place,
-    /// and reports that choice as a cap loss.
+    /// Route `record` to the sinks its level and target clear. The filter
+    /// runs before `bounds` so a filtered record spends no token, rather
+    /// than costing a kept record its place and reading as a cap loss.
     pub fn route(&self, router: &LogRouter, bounds: &SharedLogBounds, mut record: LogRecord) {
         let verdict = self.0.verdict(record.level, &record.source.target);
         if verdict == LogVerdict::Drop {
@@ -57,7 +53,6 @@ mod tests {
     use crate::logs::test_support::{CaptureStore, Console, run_id};
     use crate::logs::{LogChannel, LogSource};
 
-    /// Bounds wide enough to admit every record a filter test writes.
     fn unbounded() -> SharedLogBounds {
         bucket(u32::MAX)
     }
@@ -106,7 +101,6 @@ mod tests {
         (store.clone(), LogRouter::new(store))
     }
 
-    /// The whole point of the two thresholds: quiet console, full history.
     #[test]
     fn a_record_under_the_console_floor_is_retained_and_never_printed() {
         let (store, router) = pipeline();
@@ -125,8 +119,8 @@ mod tests {
         );
     }
 
-    /// The last record has no target, as every stdio line does, so the
-    /// row cannot reach it and the default decides.
+    /// The last record has no target, as every stdio line does, so the row
+    /// cannot reach it.
     #[test]
     fn a_target_row_lifts_its_own_target_and_leaves_the_rest_quiet() {
         let (_store, router) = pipeline();
@@ -141,8 +135,6 @@ mod tests {
         assert!(out.contains("source=\"keeper\""), "{out}");
     }
 
-    /// Quietening a flooding module is the point of the filter, so the
-    /// records it drops must leave the bucket for the ones it keeps.
     #[test]
     fn a_filtered_record_spends_no_token_of_the_run_bucket() {
         let (store, router) = pipeline();

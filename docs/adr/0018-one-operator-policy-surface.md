@@ -12,7 +12,7 @@ status: accepted
 > [ADR-0022](0022-cut-guest-to-guest-calling.md) landed the digest-pin dial from the Context list as `digest` on the `[[modules]]` entry it pins, not as a `[policy.component]` row; the pin binds one artifact to one entry, so it lives on the entry.
 > ADR-0022 also cut the service load path, so the `[[services]]` Consequence below carries a mark in place.
 > #123 landed the planned log bucket from the Context list as three `[policy]` dials, `max_log_record_bytes`, `max_log_burst` and `max_log_records_per_sec`, each overridable by a `[policy.component.<id>]` row.
-> #323 added the log filter to the same surface as `log_level`, `log_retain_level` and a `log_targets` table, overridable by the same row, where the row's table replaces the `[policy]` one as a `capabilities` list does.
+> #323 added the log filter to the same surface as `log_print_level`, `log_retain_level` and a `log_targets` table, overridable by the same row, where the row's table replaces the `[policy]` one as a `capabilities` list does.
 
 ## Context
 

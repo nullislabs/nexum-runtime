@@ -45,8 +45,8 @@ impl<T: RuntimeTypes> nexum::host::logging::Host for HostState<T> {
 
 impl<T: RuntimeTypes> HostState<T> {
     /// Let the operator filter pick the record's sinks, then bound what
-    /// reaches one. Neither is in the router: it renders before it
-    /// retains, and the death record it also carries is gated by neither.
+    /// reaches one. Neither sits in the router, which also carries the
+    /// ungated death record.
     fn route(&mut self, record: LogRecord) {
         self.log_filter
             .route(&self.log_router, &self.log_bounds, record);

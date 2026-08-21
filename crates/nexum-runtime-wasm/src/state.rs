@@ -35,8 +35,7 @@ pub struct HostState<T: RuntimeTypes> {
     /// Per-run admission gate every host logging call passes before the
     /// router renders it, shared with this store's stdio capture point.
     pub log_bounds: SharedLogBounds,
-    /// Per-run operator filter deciding which sinks an admitted record
-    /// reaches, shared with this store's stdio capture point.
+    /// Per-run operator filter, shared with this store's stdio capture point.
     pub log_filter: SharedLogFilter,
     /// `chain` backend: per-chain provider pool.
     pub chain: ProviderPool,

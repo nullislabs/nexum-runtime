@@ -5,8 +5,9 @@
 //! supervisor death path. The first two pass one shared
 //! [`SharedLogBounds`] and one [`SharedLogFilter`] per run; the death path
 //! is host-synthesized, so it is neither bounded nor filtered. The router
-//! fans each record to a host `tracing` event and the retention store. [`LogPipeline`] is the shared handle,
-//! carrying the write side and the store's read side.
+//! fans each record to a host `tracing` event and the retention store.
+//! [`LogPipeline`] is the shared handle, carrying the write side and the
+//! store's read side.
 //!
 //! One guest panic yields three records distinguished by [`LogChannel`]
 //! (stderr, host logging call, supervisor death), redundancy covering
@@ -264,8 +265,7 @@ impl LogRouter {
     }
 
     /// Retain without emitting: the record cleared the retention floor but
-    /// not the console one. Crate-internal, because only the filter can
-    /// tell the two floors apart.
+    /// not the console one.
     pub(crate) fn retain(&self, record: LogRecord) {
         self.store.append(record);
         self.appended.notify_waiters();

@@ -1,5 +1,4 @@
-//! Fixtures shared by the capture-point tests: a run identity, a store
-//! that keeps everything appended, and a sink for the console half.
+//! Fixtures shared by the capture-point tests.
 
 use std::sync::Arc;
 
@@ -10,13 +9,12 @@ use nexum_primitives::module_id::ModuleId;
 
 use super::{LogPage, LogRecord, RunId, RunLogStore, RunMeta};
 
-/// The run every fixture writes as.
 pub(super) fn run_id() -> RunId {
     RunId::new(ModuleId::parse("m").expect("valid module name"), 0)
 }
 
-/// Store keeping every appended record, so a test reads the retention
-/// half without the ring's eviction rules in the way.
+/// Store keeping every appended record, so a test reads the retention half
+/// without the ring's eviction rules in the way.
 #[derive(Default)]
 pub(super) struct CaptureStore {
     pub(super) records: Mutex<Vec<LogRecord>>,
@@ -44,7 +42,6 @@ impl RunLogStore for CaptureStore {
     }
 }
 
-/// A `tracing` sink keeping what the subscriber wrote.
 #[derive(Clone, Default)]
 pub(super) struct Console(Arc<Mutex<Vec<u8>>>);
 

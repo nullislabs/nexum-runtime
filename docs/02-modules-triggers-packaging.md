@@ -92,7 +92,7 @@ An extension registers further names under its own namespace: see [the linker ex
 > The dispatch deadline is `[limits.dispatch].deadline_secs` (default 120).
 > `[policy]` also bounds module logging with `max_log_record_bytes` (default 8 KiB), `max_log_burst`, and `max_log_records_per_sec`: a record over the cap is truncated and a module over the rate loses records.
 > The `nexum:host/logging` verbs and captured `stdout`/`stderr` lines share one bucket per run, so a `println!` loop is bounded exactly as a `log` loop is.
-> `log_level`, `log_retain_level` and a `[policy.log_targets]` table filter the same path by level and target: the first gates the host console, the second gates what `nexum logs` keeps, and a stdio line has no target so its channel level is all the filter sees.
+> `log_print_level`, `log_retain_level` and a `[policy.log_targets]` table filter the same path by level and target: the first gates the host console, the second gates what `nexum logs` keeps, and an unset `log_print_level` derives from `log_retain_level`.
 > A `[policy.component.<id>]` row overrides them for one component, keyed on the `[[modules]].id` the operator writes.
 > They resolve in `crates/nexum-runtime/src/engine_config/`.
 > A `[component.resources]` field narrows one of them.
