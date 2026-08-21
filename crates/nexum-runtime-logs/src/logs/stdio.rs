@@ -60,8 +60,9 @@ impl StdoutStream for StdioStream {
     }
 }
 
-/// Line-splitting writer: one record per newline. Cutting only at `\n`
-/// reassembles multi-byte code points split across writes.
+/// Line-splitting writer: one record per newline, so a code point split
+/// across writes reassembles. The force-flush past the record cap is the
+/// one cut that can land mid-character.
 struct LineWriter {
     router: Arc<LogRouter>,
     bounds: SharedLogBounds,

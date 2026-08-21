@@ -35,7 +35,7 @@ pub const DEFAULT_DISPATCH_BURST: NonZeroU32 = nz_u32(256);
 /// Default sustained ceiling, in dispatches per second.
 pub const DEFAULT_DISPATCH_REFILL_PER_SEC: NonZeroU32 = nz_u32(128);
 
-/// Default host log rate: 256-record burst, refilled at 128 per second.
+/// Default module log rate: 256-record burst, refilled at 128 per second.
 pub const DEFAULT_LOG_RATE: DispatchRatePolicy = DispatchRatePolicy::new(nz_u32(256), nz_u32(128));
 
 /// Token-bucket state for one holder; starts full, time injected.

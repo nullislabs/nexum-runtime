@@ -10,7 +10,9 @@
 //!
 //! One guest panic yields three records distinguished by [`LogChannel`]
 //! (stderr, host logging call, supervisor death), redundancy covering
-//! channels that survive different failure modes.
+//! channels that survive different failure modes. The first two spend the
+//! same bucket, so a run that has already flooded keeps only the ungated
+//! death record.
 
 mod bounds;
 mod stdio;
