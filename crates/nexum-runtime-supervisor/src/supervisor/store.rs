@@ -124,8 +124,8 @@ pub(super) struct StoreSpec {
     pub(super) fuel: u64,
     pub(super) chain_response_max_bytes: usize,
     pub(super) state_quota: u64,
-    /// Admission bounds on the host logging verbs; a restart mints a fresh
-    /// bucket, so the bound is per run rather than per module lifetime.
+    /// Admission bounds; a restart mints a fresh bucket, so this is per
+    /// run, not per module lifetime.
     pub(super) log_bounds: LogBoundsPolicy,
 }
 

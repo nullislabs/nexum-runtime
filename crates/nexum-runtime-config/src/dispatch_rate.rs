@@ -3,8 +3,8 @@ use std::time::Instant;
 
 use super::nz_u32;
 
-/// Per-module token-bucket thresholds: `[limits.dispatch]` sets the pair
-/// that paces dispatch, `[policy]` the pair that paces host log records.
+/// Per-module token-bucket thresholds, set by `[limits.dispatch]` for
+/// dispatch and `[policy]` for host log records.
 #[derive(Debug, Clone, Copy)]
 pub struct DispatchRatePolicy {
     /// The burst allowance.
@@ -35,23 +35,20 @@ pub const DEFAULT_DISPATCH_BURST: NonZeroU32 = nz_u32(256);
 /// Default sustained ceiling, in dispatches per second.
 pub const DEFAULT_DISPATCH_REFILL_PER_SEC: NonZeroU32 = nz_u32(128);
 
-/// Default host log rate: a 256-record burst refilled at 128 records per
-/// second, one bucket per component.
+/// Default host log rate: 256-record burst, refilled at 128 per second.
 pub const DEFAULT_LOG_RATE: DispatchRatePolicy = DispatchRatePolicy::new(nz_u32(256), nz_u32(128));
 
-/// Token-bucket state for one policy holder; fractional tokens, starts
-/// full. Time is injected, so the caller decides which clock the bound is
-/// measured on.
+/// Token-bucket state for one holder; starts full, time injected.
 #[derive(Debug)]
 pub struct TokenBucket {
     policy: DispatchRatePolicy,
-    /// Current tokens in `[0, capacity]`; fractional so slow refill is not lost.
+    /// Tokens in `[0, capacity]`; fractional so slow refill is not lost.
     tokens: f64,
     last_refill: Instant,
 }
 
 impl TokenBucket {
-    /// A bucket that starts full at `policy.capacity`, as of `now`.
+    /// Starts full, as of `now`.
     pub fn new(policy: DispatchRatePolicy, now: Instant) -> Self {
         Self {
             policy,
@@ -60,8 +57,7 @@ impl TokenBucket {
         }
     }
 
-    /// Refill for elapsed time, then consume one token; `true` allowed,
-    /// `false` over-rate.
+    /// Refill for elapsed time, then take one token.
     pub fn try_acquire(&mut self, now: Instant) -> bool {
         let capacity = f64::from(self.policy.capacity.get());
         let elapsed = now

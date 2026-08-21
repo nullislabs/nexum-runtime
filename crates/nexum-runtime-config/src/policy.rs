@@ -141,12 +141,11 @@ impl Default for PolicyCeilings {
 }
 
 /// What one component may push through the host logging verbs. The cap
-/// measures the whole record, so text moved out of the message and into a
-/// field or the target does not evade it.
+/// measures the whole record, so text moved into a field or the target
+/// does not evade it.
 #[derive(Debug, Clone, Copy)]
 pub struct LogBoundsPolicy {
-    /// Cap on one record: message, target, file, and every field name and
-    /// rendered value.
+    /// Cap on one record, across message, target, file and fields.
     pub max_record_bytes: NonZeroUsize,
     /// Token bucket over admitted records.
     pub rate: DispatchRatePolicy,

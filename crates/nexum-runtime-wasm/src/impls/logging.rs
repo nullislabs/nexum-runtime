@@ -46,9 +46,8 @@ impl<T: RuntimeTypes> nexum::host::logging::Host for HostState<T> {
 }
 
 impl<T: RuntimeTypes> HostState<T> {
-    /// Bound the record, then route what survives. The bound runs here
-    /// rather than in the router because the router renders before it
-    /// retains, and the render is the cost being bounded.
+    /// Bound the record, then route what survives. Not in the router: it
+    /// renders before it retains, and the render is what is bounded.
     fn route(&mut self, mut record: LogRecord) {
         if self.log_bounds.admit(&mut record, Instant::now()) {
             self.log_router.record(record);

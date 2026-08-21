@@ -103,8 +103,7 @@ impl TestRuntimeBuilder {
         self
     }
 
-    /// Replace the `[policy]` the launch resolves; defaults to the
-    /// production defaults.
+    /// Replace the `[policy]` the launch resolves.
     #[must_use]
     pub fn policy(mut self, policy: PolicySection) -> Self {
         self.policy = policy;
@@ -887,9 +886,8 @@ mod tests {
         rt.wait().await.expect("clean shutdown");
     }
 
-    /// The flood arrives inside one dispatch: 32 records over a 256-byte
-    /// cap and a burst of 4. The stderr marker is the dispatch barrier,
-    /// because stdio is a capture point this bound does not gate.
+    /// 32 records over a 256-byte cap and a burst of 4, in one dispatch.
+    /// The stderr marker is the barrier: stdio is not gated.
     #[tokio::test]
     async fn a_log_flood_is_capped_and_rate_limited_inside_one_dispatch() {
         let Some(wasm) = module_wasm_or_skip("log-bomb") else {
@@ -900,7 +898,7 @@ mod tests {
         let mut policy = PolicySection::default();
         policy.ceilings.log_bounds = LogBoundsPolicy {
             max_record_bytes: NonZeroUsize::new(CAP).expect("non-zero cap"),
-            // One per second refills nothing over a flood of milliseconds.
+            // 1/s refills nothing over a flood of milliseconds.
             rate: DispatchRatePolicy::new(
                 NonZeroU32::new(BURST).expect("non-zero burst"),
                 NonZeroU32::new(1).expect("non-zero rate"),
@@ -929,16 +927,14 @@ mod tests {
             .iter()
             .filter(|r| r.channel == LogChannel::HostInterface)
             .collect();
-        // The bucket starts full and 1/s refills nothing over a flood of
-        // milliseconds, so exactly the burst survives all 32 records.
+        // Starts full, 1/s refills nothing here: exactly the burst survives.
         assert_eq!(
             host.len(),
             BURST as usize,
             "the rate limit dropped the flood past the burst",
         );
         for r in &host {
-            // The measure the cap enforces: every byte the tracing render
-            // writes, the `=` and the separator around each pair included.
+            // Every byte the render writes, separators included.
             let bytes = r.message.len()
                 + r.source.target.len()
                 + r.source.file.as_ref().map_or(0, String::len)

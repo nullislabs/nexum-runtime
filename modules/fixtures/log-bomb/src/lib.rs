@@ -1,10 +1,7 @@
-//! # log-bomb (test fixture)
-//!
-//! Floods `nexum:host/logging` in one dispatch: alternating records carry
-//! either a message far over the per-record byte cap or a long field list,
-//! and the count runs far past the burst allowance. The completion marker
-//! goes to stderr, a capture point this bound does not gate, so the test's
-//! dispatch barrier survives the flood. Test-only.
+//! Test fixture: floods `nexum:host/logging` in one dispatch, alternating
+//! oversized messages with long field lists, well past the burst. The
+//! completion marker goes to stderr, which this bound does not gate, so
+//! the test's dispatch barrier survives the flood.
 
 #![cfg_attr(not(test), warn(unused_crate_dependencies))]
 #![allow(clippy::too_many_arguments)]

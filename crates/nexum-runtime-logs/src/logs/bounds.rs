@@ -1,6 +1,5 @@
-//! Admission bounds on the host logging verbs: a whole-record byte cap and
-//! a per-module token bucket, both applied before the router renders the
-//! record, which is the synchronous cost the bound exists to stop.
+//! Byte cap and rate bound on the host logging verbs, applied before the
+//! router renders the record.
 
 use std::time::Instant;
 
@@ -8,17 +7,14 @@ use nexum_runtime_config::{LogBoundsPolicy, TokenBucket};
 
 use super::{LogField, LogRecord};
 
-/// Appended to a message the cap shortened. A cap below its own length
-/// drops it rather than exceeding the cap.
+/// A cap below this length drops the marker rather than exceed the cap.
 const TRUNCATION_MARKER: &str = "...[truncated]";
 
-/// Bytes the target holds ahead of the message, so the largest dump still
-/// names its subsystem: 128 covers a module path several segments deep and
-/// leaves a guest no room to hide payload in the target.
+/// Bytes the target keeps ahead of the message, so an oversized dump still
+/// names its subsystem and a guest cannot hide payload in the target.
 const TARGET_ALLOWANCE: usize = 128;
 
-/// Per-module admission gate for the host logging verbs; not shared, so
-/// one module's flood spends only its own bucket.
+/// Per-module gate; unshared, so one module's flood spends its own bucket.
 #[derive(Debug)]
 pub struct LogBounds {
     policy: LogBoundsPolicy,
@@ -26,7 +22,7 @@ pub struct LogBounds {
 }
 
 impl LogBounds {
-    /// A gate that starts with a full burst allowance, as of `now`.
+    /// Starts with a full burst, as of `now`.
     pub fn new(policy: LogBoundsPolicy, now: Instant) -> Self {
         Self {
             policy,
@@ -35,11 +31,8 @@ impl LogBounds {
     }
 
     /// Fit `record` to the cap and spend one token; `false` drops it whole.
-    /// A record yields in order: fields last-recorded first, then the call
-    /// site, then a marked prefix of the message, then the target down to
-    /// its fixed allowance. Each stage yields only what the stages before
-    /// it left over the cap, so a part never pays for an overflow another
-    /// part already covered.
+    /// Yield order: fields last-first, the call site, the message, the
+    /// target. Each stage yields only what the earlier ones left over.
     pub fn admit(&mut self, record: &mut LogRecord, now: Instant) -> bool {
         if !self.rate.try_acquire(now) {
             let module = record.run.module.as_str().to_owned();
@@ -58,8 +51,7 @@ impl LogBounds {
             dropped += 1;
         }
         let mut shortened = false;
-        // The call site yields before the message: dropping it frees the
-        // most bytes for the fewest a reader misses.
+        // Most bytes freed for the fewest a reader misses.
         if total > cap
             && let Some(file) = record.source.file.take()
         {
@@ -68,10 +60,7 @@ impl LogBounds {
             shortened = true;
         }
         if total > cap {
-            // The allowance is the target's floor, not its ceiling: the
-            // message is budgeted around what the target already holds up
-            // to the allowance, and the target then yields only the bytes
-            // the truncated message still leaves over the cap.
+            // The allowance is the target's floor, not its ceiling.
             let reserved = record.source.target.len().min(TARGET_ALLOWANCE).min(cap);
             shortened |= truncate_to(&mut record.message, cap - reserved);
             let spare = cap - record.message.len();
@@ -91,9 +80,8 @@ impl LogBounds {
     }
 }
 
-/// Shorten `text` to at most `budget` bytes, reporting whether it did. The
-/// kept prefix ends on a character boundary, so a multi-byte character is
-/// dropped whole rather than left half-written.
+/// Shorten `text` to `budget` bytes, reporting whether it did. The prefix
+/// ends on a character boundary.
 fn truncate_to(text: &mut String, budget: usize) -> bool {
     if text.len() <= budget {
         return false;
@@ -110,11 +98,9 @@ fn truncate_to(text: &mut String, budget: usize) -> bool {
 }
 
 impl LogRecord {
-    /// Bytes the admission cap measures: every byte the guest spelled, and
-    /// no fixed overhead, because the cap bounds the transient render
-    /// rather than the retained struct. It is an upper bound on the render,
-    /// never an estimate of it, or a field list could outrun the cap it
-    /// was admitted under.
+    /// Bytes the cap measures: what the guest spelled, no fixed overhead,
+    /// because the cap bounds the render and not the retained struct. An
+    /// upper bound on the render, never an estimate.
     fn wire_bytes(&self) -> usize {
         self.message.len()
             + self.source.cost()
@@ -159,8 +145,7 @@ mod tests {
         )
     }
 
-    /// A multi-byte message doubles as the boundary case: a cut inside a
-    /// character would panic rather than truncate.
+    /// Multi-byte: a cut inside a character would panic.
     #[test]
     fn an_oversized_message_is_truncated_to_the_cap_with_a_marker() {
         let (mut gate, now) = bounds(64, 8, 1);
@@ -216,10 +201,8 @@ mod tests {
         );
     }
 
-    /// The allowance is a floor the target keeps under pressure, not a
-    /// ceiling every overflow imposes. A target several segments deeper
-    /// than the allowance survives whole when dropping the file already
-    /// brought the record under the cap.
+    /// The allowance is a floor, not a ceiling: an over-allowance target
+    /// survives whole when dropping the file already fit the record.
     #[test]
     fn a_target_past_its_allowance_survives_an_overflow_the_file_alone_covers() {
         let (mut gate, now) = bounds(1024, 8, 1);
@@ -276,10 +259,8 @@ mod tests {
         assert_eq!(rec.message, "short", "the message still survives whole");
     }
 
-    /// The cap bounds the render, so the measure must never sit under the
-    /// bytes the sink writes. A flat scalar charge broke this: an `f64`
-    /// renders its whole decimal expansion, so a field list measured well
-    /// inside the cap rendered thirty times over it.
+    /// The measure must never sit under the rendered bytes. A flat scalar
+    /// charge let an `f64` field list render thirty times over the cap.
     #[test]
     fn the_measure_never_sits_under_the_bytes_the_render_writes() {
         let (mut gate, now) = bounds(512, 8, 1);
