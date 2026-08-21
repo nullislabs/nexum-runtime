@@ -128,6 +128,13 @@ impl TestRuntimeBuilder {
         self
     }
 
+    /// Set the manual clock in place, without leaving the builder chain.
+    #[must_use]
+    pub fn configure_clock(self, configure: impl FnOnce(&ManualClock)) -> Self {
+        configure(&self.clock);
+        self
+    }
+
     /// The mock state store; the launched handle shares this instance.
     pub fn store(&self) -> &MockStateStore {
         &self.store
@@ -806,17 +813,13 @@ mod tests {
         // exact match on this value can only come from the override.
         const PINNED_SECS: u64 = 1_700_000_000;
 
-        let builder = TestRuntime::builder(wasm).module(
-            TestManifest::new("clock-reader")
-                .cap("logging")
-                .block_trigger(1)
-                .to_toml(),
-        );
-        builder
-            .clock()
-            .set(UNIX_EPOCH + Duration::from_secs(PINNED_SECS));
-
-        let mut rt = builder
+        let mut rt = TestRuntime::builder(wasm)
+            .module(
+                TestManifest::new("clock-reader")
+                    .cap("logging")
+                    .block_trigger(1),
+            )
+            .configure_clock(|clock| clock.set(UNIX_EPOCH + Duration::from_secs(PINNED_SECS)))
             .launch()
             .await
             .expect("launch clock-reader over the harness");
