@@ -1,11 +1,12 @@
 //! Level and target filter on every capture point, choosing a record's
-//! sinks once the bound has fitted it.
+//! sinks before the bound fits what is left.
 
 use std::sync::Arc;
+use std::time::Instant;
 
 use nexum_runtime_config::{LogFilterPolicy, LogVerdict};
 
-use super::{LogRecord, LogRouter};
+use super::{LogRecord, LogRouter, SharedLogBounds};
 
 /// One run's operator filter, held by every capture point that run writes
 /// through. The death path holds none: a synthesized death record is
@@ -19,19 +20,27 @@ impl SharedLogFilter {
         Self(Arc::new(policy))
     }
 
-    /// Route `record` to the sinks its level and target clear. A record
-    /// dropped here is counted apart from a bounded one, because a filter
-    /// drop is an operator choice and a bound drop is a loss.
-    pub fn route(&self, router: &LogRouter, record: LogRecord) {
-        match self.0.verdict(record.level, &record.source.target) {
-            LogVerdict::Emit => router.record(record),
-            LogVerdict::Retain => router.retain(record),
-            LogVerdict::Drop => {
-                let module = record.run.module.as_str().to_owned();
-                let channel: &'static str = record.channel.into();
-                metrics::counter!("nexum_runtime_log_records_filtered_total", "module" => module, "channel" => channel)
-                    .increment(1);
-            }
+    /// Route `record` to the sinks its level and target clear, bounding
+    /// only what reaches one. The filter runs first so a record the
+    /// operator chose not to see spends no token of `bounds`: the other
+    /// order lets a filtered flood cost the surviving records their place,
+    /// and reports that choice as a cap loss.
+    pub fn route(&self, router: &LogRouter, bounds: &SharedLogBounds, mut record: LogRecord) {
+        let verdict = self.0.verdict(record.level, &record.source.target);
+        if verdict == LogVerdict::Drop {
+            let module = record.run.module.as_str().to_owned();
+            let channel: &'static str = record.channel.into();
+            metrics::counter!("nexum_runtime_log_records_filtered_total", "module" => module, "channel" => channel)
+                .increment(1);
+            return;
+        }
+        if !bounds.admit(&mut record, Instant::now()) {
+            return;
+        }
+        if verdict == LogVerdict::Emit {
+            router.record(record);
+        } else {
+            router.retain(record);
         }
     }
 }
@@ -39,12 +48,33 @@ impl SharedLogFilter {
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
+    use std::num::{NonZeroU32, NonZeroUsize};
 
+    use nexum_runtime_config::{DispatchRatePolicy, LogBoundsPolicy};
     use tracing_core::Level;
 
     use super::*;
     use crate::logs::test_support::{CaptureStore, Console, run_id};
     use crate::logs::{LogChannel, LogSource};
+
+    /// Bounds wide enough to admit every record a filter test writes.
+    fn unbounded() -> SharedLogBounds {
+        bucket(u32::MAX)
+    }
+
+    fn bucket(burst: u32) -> SharedLogBounds {
+        SharedLogBounds::new(
+            LogBoundsPolicy {
+                max_record_bytes: NonZeroUsize::new(4096).expect("non-zero cap"),
+                // 1/s refills nothing over a flood of microseconds.
+                rate: DispatchRatePolicy::new(
+                    NonZeroU32::new(burst).expect("non-zero burst"),
+                    NonZeroU32::new(1).expect("non-zero rate"),
+                ),
+            },
+            std::time::Instant::now(),
+        )
+    }
 
     fn filter(console: Level, retain: Level, targets: &[(&str, Level)]) -> SharedLogFilter {
         SharedLogFilter::new(LogFilterPolicy {
@@ -80,10 +110,11 @@ mod tests {
     #[test]
     fn a_record_under_the_console_floor_is_retained_and_never_printed() {
         let (store, router) = pipeline();
+        let bounds = unbounded();
         let gate = filter(Level::WARN, Level::TRACE, &[]);
         let out = Console::printed(|| {
-            gate.route(&router, record(Level::DEBUG, "wallet::keeper"));
-            gate.route(&router, record(Level::ERROR, "wallet::keeper"));
+            gate.route(&router, &bounds, record(Level::DEBUG, "wallet::keeper"));
+            gate.route(&router, &bounds, record(Level::ERROR, "wallet::keeper"));
         });
         assert_eq!(out.lines().count(), 1, "only the error printed: {out}");
         assert!(out.contains("ERROR"), "{out}");
@@ -99,14 +130,31 @@ mod tests {
     #[test]
     fn a_target_row_lifts_its_own_target_and_leaves_the_rest_quiet() {
         let (_store, router) = pipeline();
+        let bounds = unbounded();
         let gate = filter(Level::WARN, Level::TRACE, &[("keeper", Level::DEBUG)]);
         let out = Console::printed(|| {
-            gate.route(&router, record(Level::DEBUG, "keeper"));
-            gate.route(&router, record(Level::DEBUG, "signer"));
-            gate.route(&router, record(Level::DEBUG, ""));
+            gate.route(&router, &bounds, record(Level::DEBUG, "keeper"));
+            gate.route(&router, &bounds, record(Level::DEBUG, "signer"));
+            gate.route(&router, &bounds, record(Level::DEBUG, ""));
         });
         assert_eq!(out.lines().count(), 1, "only the named target: {out}");
         assert!(out.contains("source=\"keeper\""), "{out}");
+    }
+
+    /// Quietening a flooding module is the point of the filter, so the
+    /// records it drops must leave the bucket for the ones it keeps.
+    #[test]
+    fn a_filtered_record_spends_no_token_of_the_run_bucket() {
+        let (store, router) = pipeline();
+        let bounds = bucket(1);
+        let gate = filter(Level::WARN, Level::WARN, &[]);
+        gate.route(&router, &bounds, record(Level::DEBUG, "chatter"));
+        gate.route(&router, &bounds, record(Level::ERROR, "chatter"));
+        assert_eq!(
+            store.messages().len(),
+            1,
+            "the wanted error lost its token to a record the operator filtered out",
+        );
     }
 
     #[test]
@@ -114,8 +162,13 @@ mod tests {
         let recorder = metrics_util::debugging::DebuggingRecorder::new();
         let snapshotter = recorder.snapshotter();
         let (store, router) = pipeline();
+        let bounds = unbounded();
         metrics::with_local_recorder(&recorder, || {
-            filter(Level::ERROR, Level::WARN, &[]).route(&router, record(Level::INFO, "keeper"));
+            filter(Level::ERROR, Level::WARN, &[]).route(
+                &router,
+                &bounds,
+                record(Level::INFO, "keeper"),
+            );
         });
         assert!(store.messages().is_empty(), "neither floor was cleared");
         let names: Vec<String> = snapshotter

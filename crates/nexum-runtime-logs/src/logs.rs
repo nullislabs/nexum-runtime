@@ -264,8 +264,9 @@ impl LogRouter {
     }
 
     /// Retain without emitting: the record cleared the retention floor but
-    /// not the console one.
-    pub fn retain(&self, record: LogRecord) {
+    /// not the console one. Crate-internal, because only the filter can
+    /// tell the two floors apart.
+    pub(crate) fn retain(&self, record: LogRecord) {
         self.store.append(record);
         self.appended.notify_waiters();
     }

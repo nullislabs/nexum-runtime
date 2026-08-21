@@ -6,7 +6,6 @@ use std::io;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
-use std::time::Instant;
 
 use tokio::io::AsyncWrite;
 use wasmtime_wasi::cli::{IsTerminal, StdoutStream};
@@ -101,22 +100,20 @@ impl LineWriter {
     }
 
     /// Decode one line, dropping a trailing `\r` and skipping empties, then
-    /// route what the run's shared bounds admit. A captured line carries no
-    /// target, so the operator filter sees its channel level and nothing else.
+    /// route what the run's filter and shared bounds admit. A captured line
+    /// carries no target, so the filter sees its channel level and nothing else.
     fn route(&self, bytes: &[u8]) {
         let bytes = bytes.strip_suffix(b"\r").unwrap_or(bytes);
         if bytes.is_empty() {
             return;
         }
-        let mut record = LogRecord::now(
+        let record = LogRecord::now(
             self.run.clone(),
             self.channel,
             level_for(self.channel),
             String::from_utf8_lossy(bytes).into_owned(),
         );
-        if self.bounds.admit(&mut record, Instant::now()) {
-            self.filter.route(&self.router, record);
-        }
+        self.filter.route(&self.router, &self.bounds, record);
     }
 }
 
@@ -162,6 +159,7 @@ impl Drop for LineWriter {
 mod tests {
     use std::collections::BTreeMap;
     use std::num::{NonZeroU32, NonZeroUsize};
+    use std::time::Instant;
 
     use nexum_runtime_config::{DispatchRatePolicy, LogBoundsPolicy, LogFilterPolicy};
     use tokio::io::AsyncWriteExt;

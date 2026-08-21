@@ -313,6 +313,9 @@ A module past either bound loses records rather than the host, and the three `ne
 `[policy]` also filters that path by level and target, on two thresholds: `log_level` gates the console and `log_retain_level` gates what `nexum logs` keeps, with a `[policy.log_targets]` table lifting named targets above `log_level`.
 Retention may never be stricter than the console, and a config that prints what it does not keep refuses at load.
 A captured stdout or stderr line carries no target, so it is filtered on its channel level alone, `INFO` for stdout and `WARN` for stderr; a `log_level` of `warn` therefore silences stdout wholesale while `nexum logs` still holds every line.
+The filter runs before the bound, so a record it drops spends no token of the run's bucket, and quietening a noisy module leaves the rate to the records the operator kept.
+A `[policy.log_targets]` key matches the guest-reported target exactly, which for an SDK module is the emitting Rust module path unless the guest passes an explicit `target`.
+`[policy] log_level` gates the host record alone, and the process subscriber applies `[engine] log_level` (default `info`) on top of it, so a target lifted to `debug` also needs the engine level at `debug` before it reaches a terminal.
 A component that consistently traps on fuel exhaustion is a bug, not a tuning miss.
 
 ## 9. Runbook
