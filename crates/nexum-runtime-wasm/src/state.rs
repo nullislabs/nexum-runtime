@@ -10,7 +10,7 @@ use wasmtime_wasi_http::WasiHttpCtx;
 use nexum_runtime_api::{Handle, RuntimeTypes};
 use nexum_runtime_chain::ProviderPool;
 use nexum_runtime_http::HttpGate;
-use nexum_runtime_logs::{LogRouter, RunId};
+use nexum_runtime_logs::{LogBounds, LogRouter, RunId};
 
 /// Per-module host state, generic over the [`RuntimeTypes`] lattice.
 pub struct HostState<T: RuntimeTypes> {
@@ -32,6 +32,9 @@ pub struct HostState<T: RuntimeTypes> {
     pub run: RunId,
     /// Shared log pipeline the `nexum:host/logging` glue routes through.
     pub log_router: Arc<LogRouter>,
+    /// Per-run admission gate every host logging call passes before the
+    /// router renders it; the stdio channel keeps its own line bound.
+    pub log_bounds: LogBounds,
     /// `chain` backend: per-chain provider pool.
     pub chain: ProviderPool,
     /// Cap on a chain JSON-RPC response body; larger responses are rejected.

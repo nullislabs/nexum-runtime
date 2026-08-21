@@ -26,7 +26,7 @@ The videre and shepherd repositories build on the SDK and the runtime published 
   The root `clippy.toml` bans the `tokio` free spawn functions; it cannot see spawns inside a dependency.
 - `crates/nexum-world` - per-module WIT world synthesis, the core capability table, and the extension registry.
 - `modules/example` - the minimal reference module, with balance-tracker, http-probe, and price-alert under `modules/examples/`.
-- `modules/fixtures/` - adversarial fixtures: clock-reader, env-reader, flaky-bomb, fuel-bomb, memory-bomb, panic-bomb, slow-host, and topic-parity.
+- `modules/fixtures/` - adversarial fixtures: clock-reader, env-reader, flaky-bomb, fuel-bomb, log-bomb, memory-bomb, panic-bomb, slow-host, and topic-parity.
 - `wit/nexum-host` - the `nexum:host` WIT package.
 
 ## Build, test, lint

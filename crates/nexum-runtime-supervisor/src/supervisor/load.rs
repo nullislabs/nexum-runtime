@@ -20,10 +20,9 @@ use super::store::{HostStore, ResolvedLimits, StoreSpec, fresh_run_store};
 use super::{BootEnv, Shared};
 use crate::bindings::nexum::host::types::Fault;
 use crate::bindings::{Config, TriggerModule};
-use crate::engine_config::ModuleEntry;
+use crate::engine_config::{ModuleEntry, TokenBucket};
 use crate::error::{EngineRefusal, RefusalContext as _, RuntimeError};
 use crate::manifest::{self, CapabilityRegistry, LoadedManifest, Trigger};
-use crate::runtime::dispatch_rate::TokenBucket;
 use nexum_primitives::digest::ContentDigest;
 use nexum_primitives::module_id::ModuleId;
 use nexum_runtime_api::RuntimeTypes;
@@ -327,6 +326,7 @@ pub(super) async fn module<T: RuntimeTypes>(
         fuel,
         chain_response_max_bytes: limits_cfg.chain_response_max_bytes.get(),
         state_quota: state_bytes,
+        log_bounds: effective.ceilings.log_bounds,
     };
     let config = default_init_config(&loaded_manifest.config, module_namespace.as_str());
     let seed = Seed {
@@ -386,7 +386,7 @@ pub(super) async fn module<T: RuntimeTypes>(
             bindings,
             store,
             run,
-            dispatch_bucket: TokenBucket::new(limits_cfg.dispatch, Instant::now()),
+            dispatch_bucket: TokenBucket::new(limits_cfg.dispatch, Instant::now().into_std()),
         },
         seed,
         triggers: loaded_manifest.triggers.clone(),

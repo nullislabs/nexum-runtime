@@ -14,7 +14,7 @@ mod policy;
 
 pub use chain::{ChainConfig, RpcEndpoint, RpcEndpointError, RpcTransport};
 pub use dispatch_rate::{
-    DEFAULT_DISPATCH_BURST, DEFAULT_DISPATCH_REFILL_PER_SEC, DispatchRatePolicy,
+    DEFAULT_DISPATCH_BURST, DEFAULT_DISPATCH_REFILL_PER_SEC, DispatchRatePolicy, TokenBucket,
 };
 pub use error::{EngineConfigError, EnvVarError};
 pub use limits::{
@@ -24,10 +24,12 @@ pub use limits::{
 };
 pub use load::load_or_default;
 pub use poison_policy::{POISON_MAX_FAILURES, POISON_WINDOW, PoisonPolicy, should_poison};
-pub use policy::{ComponentPolicy, EffectivePolicy, PolicyCeilings, PolicySection, TotalPolicy};
+pub use policy::{
+    ComponentPolicy, EffectivePolicy, LogBoundsPolicy, PolicyCeilings, PolicySection, TotalPolicy,
+};
 
 use std::collections::{HashMap, HashSet};
-use std::num::{NonZeroU64, NonZeroUsize};
+use std::num::{NonZeroU32, NonZeroU64, NonZeroUsize};
 use std::path::PathBuf;
 
 use alloy_chains::Chain;
@@ -48,6 +50,14 @@ const fn nz_usize(n: usize) -> NonZeroUsize {
 /// As [`nz_usize`], for `u64` constants.
 const fn nz_u64(n: u64) -> NonZeroU64 {
     match NonZeroU64::new(n) {
+        Some(v) => v,
+        None => panic!("zero constant"),
+    }
+}
+
+/// As [`nz_usize`], for `u32` constants.
+const fn nz_u32(n: u32) -> NonZeroU32 {
+    match NonZeroU32::new(n) {
         Some(v) => v,
         None => panic!("zero constant"),
     }
@@ -742,6 +752,30 @@ max_state_bytes       = 2_048
                 "[policy.component.m]\nmax_fuel_per_dispatch = 0\n\
                  [[modules]]\nid = \"m\"\npath = \"m.wasm\"\n",
                 "policy.component.m.max_fuel_per_dispatch",
+            ),
+            (
+                "[policy]\nmax_log_record_bytes = 0\n",
+                "policy.max_log_record_bytes",
+            ),
+            ("[policy]\nmax_log_burst = 0\n", "policy.max_log_burst"),
+            (
+                "[policy]\nmax_log_records_per_sec = 0\n",
+                "policy.max_log_records_per_sec",
+            ),
+            (
+                "[policy.component.m]\nmax_log_record_bytes = 0\n\
+                 [[modules]]\nid = \"m\"\npath = \"m.wasm\"\n",
+                "policy.component.m.max_log_record_bytes",
+            ),
+            (
+                "[policy.component.m]\nmax_log_burst = 0\n\
+                 [[modules]]\nid = \"m\"\npath = \"m.wasm\"\n",
+                "policy.component.m.max_log_burst",
+            ),
+            (
+                "[policy.component.m]\nmax_log_records_per_sec = 0\n\
+                 [[modules]]\nid = \"m\"\npath = \"m.wasm\"\n",
+                "policy.component.m.max_log_records_per_sec",
             ),
             (
                 "[limits.chain]\nresponse_body_max_bytes = 0\n",

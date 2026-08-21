@@ -300,7 +300,7 @@ impl<T: RuntimeTypes<State = HostState<T>>> Supervisor<T> {
         let module = &mut self.modules[idx];
         // Throttle before spending fuel or entering the guest; the bucket is
         // per-module, so a throttled module never starves the others.
-        if !module.live.dispatch_bucket.try_acquire(now) {
+        if !module.live.dispatch_bucket.try_acquire(now.into_std()) {
             debug!(
                 module = %module.name,
                 chain_id,

@@ -10,6 +10,7 @@
 //! (stderr, host logging call, supervisor death), redundancy covering
 //! channels that survive different failure modes.
 
+mod bounds;
 mod stdio;
 mod store;
 
@@ -22,6 +23,7 @@ use tracing_core::Level;
 
 use nexum_primitives::module_id::ModuleId;
 
+pub use bounds::LogBounds;
 pub use stdio::StdioStream;
 pub use store::{InMemoryRunLogStore, LogPage, RunLogStore, RunMeta};
 
@@ -98,6 +100,13 @@ impl LogField {
     fn cost(&self) -> usize {
         FIELD_OVERHEAD + self.name.len() + self.value.cost()
     }
+
+    /// Bytes the tracing render costs, counting the `=` and the separator
+    /// [`render_fields`] writes around the pair, which the guest never
+    /// sent but the sink still writes.
+    fn rendered_len(&self) -> usize {
+        self.name.len() + self.value.rendered_len() + 2
+    }
 }
 
 /// A field value in the type the guest recorded it at.
@@ -124,6 +133,32 @@ impl LogValue {
             Self::Unsigned(_) | Self::Signed(_) | Self::Float(_) => 8,
             Self::Boolean(_) => 1,
         }
+    }
+
+    /// Bytes the tracing render costs, counted through the `Display` the
+    /// render itself uses. A scalar is counted rather than charged a flat
+    /// width, because `f64` renders its whole decimal expansion and a
+    /// subnormal is over three hundred digits wide.
+    fn rendered_len(&self) -> usize {
+        match self {
+            Self::Text(text) => text.len(),
+            scalar => {
+                let mut bytes = ByteCount(0);
+                let _ = write!(bytes, "{scalar}");
+                bytes.0
+            }
+        }
+    }
+}
+
+/// A `fmt::Write` sink that keeps only the byte count, so measuring a
+/// render allocates nothing.
+struct ByteCount(usize);
+
+impl std::fmt::Write for ByteCount {
+    fn write_str(&mut self, s: &str) -> std::fmt::Result {
+        self.0 += s.len();
+        Ok(())
     }
 }
 

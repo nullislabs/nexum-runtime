@@ -10,16 +10,10 @@
 use std::num::NonZeroU32;
 use std::time::Duration;
 
-/// A literal as non-zero; a zero fails the build.
-const fn nz(n: u32) -> NonZeroU32 {
-    match NonZeroU32::new(n) {
-        Some(v) => v,
-        None => panic!("zero constant"),
-    }
-}
+use super::nz_u32;
 
 /// Production defaults: 5 traps within 10 minutes quarantines a module.
-pub const POISON_MAX_FAILURES: NonZeroU32 = nz(5);
+pub const POISON_MAX_FAILURES: NonZeroU32 = nz_u32(5);
 /// Sliding window [`POISON_MAX_FAILURES`] is counted across.
 pub const POISON_WINDOW: Duration = Duration::from_secs(600);
 
@@ -68,7 +62,7 @@ mod tests {
 
     #[test]
     fn poisons_at_threshold() {
-        let p = PoisonPolicy::new(nz(3), Duration::from_secs(60));
+        let p = PoisonPolicy::new(nz_u32(3), Duration::from_secs(60));
         assert!(!should_poison(p, 0));
         assert!(!should_poison(p, 2));
         assert!(should_poison(p, 3));
