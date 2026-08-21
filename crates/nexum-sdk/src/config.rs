@@ -47,6 +47,9 @@ pub enum ConfigError {
 impl From<ConfigError> for Fault {
     fn from(e: ConfigError) -> Self {
         let message = e.to_string();
+        // Exhaustive: `#[non_exhaustive]` does not bind the defining
+        // crate, so a later variant has to pick a destination here
+        // instead of inheriting one from a wildcard.
         match e {
             // Not a bad request: the config the module needs is not
             // ready yet.
@@ -65,6 +68,17 @@ impl From<ConfigError> for Fault {
 /// The supervisor instantiates on a fresh store and calls `init` at
 /// once, so the slot is instance memory that each (re)instantiation
 /// seeds again, and nothing persists it across one.
+///
+/// ```
+/// use nexum_sdk::config::{ConfigError, Slot};
+///
+/// static SETTINGS: Slot<u32> = Slot::new();
+///
+/// SETTINGS.store(7)?;
+/// assert_eq!(*SETTINGS.get()?, 7);
+/// assert!(SETTINGS.store(8).is_err());
+/// # Ok::<(), ConfigError>(())
+/// ```
 pub struct Slot<T: Send + Sync>(OnceLock<T>);
 
 impl<T: Send + Sync> Slot<T> {
@@ -205,18 +219,20 @@ mod tests {
 
     #[test]
     fn double_store_folds_into_an_invalid_input_fault() {
-        assert!(matches!(
-            Fault::from(ConfigError::AlreadyInitialized),
-            Fault::InvalidInput(_)
-        ));
+        let fault = Fault::from(ConfigError::AlreadyInitialized);
+        let Fault::InvalidInput(message) = fault else {
+            panic!("expected invalid-input fault, got {fault:?}");
+        };
+        assert_eq!(message, "config already initialized");
     }
 
     #[test]
     fn not_initialized_folds_into_an_unavailable_fault() {
-        assert!(matches!(
-            Fault::from(ConfigError::NotInitialized),
-            Fault::Unavailable(_)
-        ));
+        let fault = Fault::from(ConfigError::NotInitialized);
+        let Fault::Unavailable(message) = fault else {
+            panic!("expected unavailable fault, got {fault:?}");
+        };
+        assert_eq!(message, "config not initialized");
     }
 
     #[test]
