@@ -82,12 +82,12 @@ pub fn classify(answer: I256, threshold: I256, direction: Direction) -> bool {
 pub fn parse_config(entries: &[(String, String)]) -> Result<Settings, Fault> {
     let oracle_address = config::get_required(entries, "oracle_address")?
         .parse::<Address>()
-        .map_err(|e| invalid(format!("oracle_address: {e}")))?;
+        .map_err(|e| Fault::invalid_input(format!("oracle_address: {e}")))?;
     let decimals = config::get_required(entries, "decimals")?
         .parse::<u32>()
-        .map_err(|e| invalid(format!("decimals: {e}")))?;
+        .map_err(|e| Fault::invalid_input(format!("decimals: {e}")))?;
     if decimals > 38 {
-        return Err(invalid(format!(
+        return Err(Fault::invalid_input(format!(
             "decimals={decimals} exceeds the I256 power-of-ten budget"
         )));
     }
@@ -95,29 +95,26 @@ pub fn parse_config(entries: &[(String, String)]) -> Result<Settings, Fault> {
     let threshold_scaled = config::scale_decimal(threshold_decimal, decimals, "threshold")?;
     let raw_direction = config::get_required(entries, "direction")?;
     let direction = raw_direction.parse::<Direction>().map_err(|_| {
-        invalid(format!(
+        Fault::invalid_input(format!(
             "direction: expected 'above'|'below', got {raw_direction:?}"
         ))
     })?;
     let every_n_blocks = config::get_optional(entries, "every_n_blocks")
         .map(|s| {
             s.parse::<u64>()
-                .map_err(|e| invalid(format!("every_n_blocks: {e}")))
+                .map_err(|e| Fault::invalid_input(format!("every_n_blocks: {e}")))
         })
         .transpose()?
-        .unwrap_or(1)
-        .max(1);
+        .unwrap_or(1);
+    if every_n_blocks == 0 {
+        return Err(Fault::invalid_input("every_n_blocks must be >= 1"));
+    }
     Ok(Settings {
         oracle_address,
         threshold_scaled,
         direction,
         every_n_blocks,
     })
-}
-
-/// Lift a free-text detail into a [`Fault::InvalidInput`].
-fn invalid(message: impl Into<String>) -> Fault {
-    Fault::InvalidInput(message.into())
 }
 
 #[cfg(test)]
@@ -243,6 +240,25 @@ mod tests {
         let cfg = parse_config(&entries).unwrap();
         assert_eq!(cfg.every_n_blocks, 1);
         assert_eq!(cfg.direction, Direction::Above);
+    }
+
+    #[test]
+    fn parse_config_rejects_zero_every_n_blocks() {
+        let entries = vec![
+            (
+                "oracle_address".into(),
+                "0x694AA1769357215DE4FAC081bf1f309aDC325306".into(),
+            ),
+            ("decimals".into(), "8".into()),
+            ("threshold".into(), "1".into()),
+            ("direction".into(), "above".into()),
+            ("every_n_blocks".into(), "0".into()),
+        ];
+        let zero = parse_config(&entries).unwrap_err();
+        let Fault::InvalidInput(message) = zero else {
+            panic!("expected invalid-input fault, got {zero:?}");
+        };
+        assert!(message.contains("every_n_blocks"));
     }
 
     #[test]

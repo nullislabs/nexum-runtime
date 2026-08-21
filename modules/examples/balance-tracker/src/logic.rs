@@ -67,7 +67,7 @@ fn fetch_balance<H: ChainHost>(host: &H, chain_id: u64, addr: Address) -> Result
     let params = format!("[\"{addr:#x}\",\"latest\"]");
     let result_json = host.request(chain_id, "eth_getBalance", &params)?;
     parse_balance_hex(&result_json).ok_or_else(|| {
-        invalid_input(format!(
+        Fault::invalid_input(format!(
             "eth_getBalance result not a hex string: {result_json}"
         ))
     })
@@ -116,15 +116,11 @@ pub fn parse_config(entries: &[(String, String)]) -> Result<Settings, Fault> {
     let addresses = parse_address_list(addresses_raw)?;
     let change_threshold = change_threshold_raw
         .parse::<U256>()
-        .map_err(|e| invalid_input(format!("change_threshold: {e}")))?;
+        .map_err(|e| Fault::invalid_input(format!("change_threshold: {e}")))?;
     Ok(Settings {
         addresses,
         change_threshold,
     })
-}
-
-fn invalid_input(message: impl Into<String>) -> Fault {
-    Fault::InvalidInput(message.into())
 }
 
 #[cfg(test)]
