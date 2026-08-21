@@ -24,5 +24,8 @@ tracing-core.workspace = true
 wasmtime-wasi.workspace = true
 
 [dev-dependencies]
+# Snapshots the emitted label sets, so the operator-facing `channel` label
+# is asserted and not just described.
+metrics-util.workspace = true
 tokio = { workspace = true, features = ["io-util", "macros", "rt-multi-thread"] }
 tracing-subscriber.workspace = true

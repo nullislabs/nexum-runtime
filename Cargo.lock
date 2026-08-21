@@ -3433,6 +3433,7 @@ version = "0.1.0"
 dependencies = [
  "derive_more",
  "metrics",
+ "metrics-util",
  "nexum-primitives",
  "nexum-runtime-api",
  "nexum-runtime-config",

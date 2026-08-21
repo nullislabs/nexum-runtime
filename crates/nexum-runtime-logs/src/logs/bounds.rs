@@ -166,12 +166,25 @@ mod tests {
     }
 
     fn record(message: &str) -> LogRecord {
+        record_on(LogChannel::HostInterface, message)
+    }
+
+    fn record_on(channel: LogChannel, message: &str) -> LogRecord {
         LogRecord::now(
             RunId::new(ModuleId::parse("m").expect("valid module name"), 0),
-            LogChannel::HostInterface,
+            channel,
             Level::INFO,
             message.to_owned(),
         )
+    }
+
+    fn long_fields() -> Vec<LogField> {
+        (0..64)
+            .map(|i| LogField {
+                name: format!("f{i}"),
+                value: LogValue::Text("v".repeat(16)),
+            })
+            .collect()
     }
 
     /// Multi-byte: a cut inside a character would panic.
@@ -195,12 +208,7 @@ mod tests {
     fn overflow_fields_drop_last_recorded_first_and_the_message_survives() {
         let (gate, now) = bounds(64, 8, 1);
         let mut rec = record("keep me");
-        rec.fields = (0..64)
-            .map(|i| LogField {
-                name: format!("f{i}"),
-                value: LogValue::Text("v".repeat(16)),
-            })
-            .collect();
+        rec.fields = long_fields();
         assert!(gate.admit(&mut rec, now));
         assert_eq!(rec.message, "keep me", "the message is never the overflow");
         assert!(rec.wire_bytes() <= 64 && rec.fields.len() < 64);
@@ -328,5 +336,54 @@ mod tests {
         let later = now + Duration::from_millis(250);
         assert!(gate.admit(&mut record("d"), later), "4/s refills one token");
         assert!(!gate.admit(&mut record("e"), later), "only one refilled");
+    }
+
+    /// `docs/production.md` sells the `channel` label as the answer to
+    /// which capture point a module is losing records on.
+    #[test]
+    fn each_loss_counter_names_the_channel_the_record_entered_by() {
+        let recorder = metrics_util::debugging::DebuggingRecorder::new();
+        let snapshotter = recorder.snapshotter();
+        metrics::with_local_recorder(&recorder, || {
+            let (gate, now) = bounds(64, 2, 1);
+            let mut cut = record_on(LogChannel::Stdout, &"x".repeat(4096));
+            assert!(gate.admit(&mut cut, now));
+            let mut fielded = record_on(LogChannel::HostInterface, "keep me");
+            fielded.fields = long_fields();
+            assert!(gate.admit(&mut fielded, now));
+            let mut over = record_on(LogChannel::Stderr, "past the burst");
+            assert!(!gate.admit(&mut over, now));
+        });
+        let mut seen: Vec<(String, String)> = snapshotter
+            .snapshot()
+            .into_vec()
+            .into_iter()
+            .map(|(composite, ..)| {
+                let key = composite.key();
+                let channel = key
+                    .labels()
+                    .find(|label| label.key() == "channel")
+                    .map_or("<unlabelled>", |label| label.value());
+                (key.name().to_owned(), channel.to_owned())
+            })
+            .collect();
+        seen.sort();
+        assert_eq!(
+            seen,
+            [
+                (
+                    "nexum_runtime_log_fields_dropped_total".to_owned(),
+                    "host_interface".to_owned()
+                ),
+                (
+                    "nexum_runtime_log_records_dropped_total".to_owned(),
+                    "stderr".to_owned()
+                ),
+                (
+                    "nexum_runtime_log_records_truncated_total".to_owned(),
+                    "stdout".to_owned()
+                ),
+            ],
+        );
     }
 }
