@@ -202,6 +202,13 @@ tower = "0.5"
 # Compile-fail harness pinning proc-macro rejection diagnostics.
 trybuild = "1"
 
+# cargo-machete greps a crate's own source for each dependency it declares. A
+# guest module reaches `wit-bindgen` only through the expansion of `#[module]`,
+# so a module with no hand-written `wit_bindgen::` path reads as unused. The
+# entry is workspace-wide because only guest modules declare `wit-bindgen`.
+[workspace.metadata.cargo-machete]
+ignored = ["wit-bindgen"]
+
 # Workspace-standard lint set. New crates inherit via
 # `[lints] workspace = true` in their package manifest. `unsafe_code`
 # cannot be denied workspace-wide because every wit-bindgen guest

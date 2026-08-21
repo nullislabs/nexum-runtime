@@ -58,6 +58,22 @@ jobs:
         run: ./scripts/zero-leak.sh
       - name: MSRV
         run: ./scripts/msrv-lint.sh
+      # Parses manifests, so it stays toolchain-free too. The machete job below
+      # cannot cover this case: the workspace dependency table is not a crate.
+      - name: Workspace dependency inheritance
+        run: ./scripts/workspace-deps-lint.sh
+
+  machete:
+    name: cargo-machete
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: taiki-e/install-action@43aecc8d72668fbcfe75c31400bc4f890f1c5853 # v2.83.2
+        with:
+          tool: cargo-machete
+      # Invoked as the plain binary: it reads manifests and greps sources, so it
+      # needs no toolchain and must not wait on rust-setup.
+      - run: cargo-machete
 
   fmt:
     name: rustfmt

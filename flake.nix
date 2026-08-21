@@ -45,6 +45,8 @@
           buildInputs = with pkgs; [
             rustToolchain
             cargo-nextest
+            # Per-crate unused dependencies, behind `just machete`.
+            cargo-machete
             wasm-tools
             wabt
             just
