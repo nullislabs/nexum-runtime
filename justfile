@@ -55,9 +55,10 @@ zero-leak:
 msrv:
     ./scripts/msrv-lint.sh
 
-# Check that every `[workspace.dependencies]` entry has an inheritor.
-# cargo-machete cannot see this case (bnjbvr/cargo-machete#274), so the two
-# checks are complementary. Compiles nothing.
+# Check that every `[workspace.dependencies]` entry has an inheritor, and that
+# no guest module is one. cargo-machete cannot see either case
+# (bnjbvr/cargo-machete#274), so the two checks are complementary.
+# Compiles nothing.
 workspace-deps:
     ./scripts/workspace-deps-lint.sh
 
