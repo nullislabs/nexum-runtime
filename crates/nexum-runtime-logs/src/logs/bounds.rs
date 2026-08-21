@@ -20,46 +20,48 @@ const TARGET_ALLOWANCE: usize = 128;
 /// One run's gate, held by every capture point that run writes through, so
 /// a flood spends the same bucket whichever way it enters.
 #[derive(Clone, Debug)]
-pub struct SharedLogBounds(Arc<Mutex<LogBounds>>);
+pub struct SharedLogBounds(Arc<LogBounds>);
 
 impl SharedLogBounds {
     /// Starts with a full burst, as of `now`.
     pub fn new(policy: LogBoundsPolicy, now: Instant) -> Self {
-        Self(Arc::new(Mutex::new(LogBounds::new(policy, now))))
+        Self(Arc::new(LogBounds::new(policy, now)))
     }
 
     /// Fit `record` to the cap and spend one token; `false` drops it whole.
     pub fn admit(&self, record: &mut LogRecord, now: Instant) -> bool {
-        self.0.lock().admit(record, now)
+        self.0.admit(record, now)
     }
 
     /// The byte cap, for a capture point that must bound a buffer before it
     /// has a record to admit.
     pub fn max_record_bytes(&self) -> usize {
-        self.0.lock().policy.max_record_bytes.get()
+        self.0.policy.max_record_bytes.get()
     }
 }
 
+/// The bucket is the only mutable half. The cap is read on every stdio
+/// write, most of which emit nothing, so it stays outside the lock.
 #[derive(Debug)]
 struct LogBounds {
     policy: LogBoundsPolicy,
-    rate: TokenBucket,
+    rate: Mutex<TokenBucket>,
 }
 
 impl LogBounds {
     /// Starts with a full burst, as of `now`.
-    pub fn new(policy: LogBoundsPolicy, now: Instant) -> Self {
+    fn new(policy: LogBoundsPolicy, now: Instant) -> Self {
         Self {
             policy,
-            rate: TokenBucket::new(policy.rate, now),
+            rate: Mutex::new(TokenBucket::new(policy.rate, now)),
         }
     }
 
     /// Fit `record` to the cap and spend one token; `false` drops it whole.
     /// Yield order: fields last-first, the call site, the message, the
     /// target. Each stage yields only what the earlier ones left over.
-    pub fn admit(&mut self, record: &mut LogRecord, now: Instant) -> bool {
-        if !self.rate.try_acquire(now) {
+    fn admit(&self, record: &mut LogRecord, now: Instant) -> bool {
+        if !self.rate.lock().try_acquire(now) {
             let module = record.run.module.as_str().to_owned();
             let channel: &'static str = record.channel.into();
             metrics::counter!("nexum_runtime_log_records_dropped_total", "module" => module, "channel" => channel)
@@ -151,7 +153,7 @@ mod tests {
     use crate::logs::{LogChannel, LogField, LogSource, LogValue, RunId};
     use nexum_primitives::module_id::ModuleId;
 
-    fn bounds(cap: usize, burst: u32, per_sec: u32) -> (LogBounds, Instant) {
+    fn bounds(cap: usize, burst: u32, per_sec: u32) -> (SharedLogBounds, Instant) {
         let policy = LogBoundsPolicy {
             max_record_bytes: NonZeroUsize::new(cap).expect("non-zero cap"),
             rate: DispatchRatePolicy::new(
@@ -160,7 +162,7 @@ mod tests {
             ),
         };
         let now = Instant::now();
-        (LogBounds::new(policy, now), now)
+        (SharedLogBounds::new(policy, now), now)
     }
 
     fn record(message: &str) -> LogRecord {
@@ -175,7 +177,7 @@ mod tests {
     /// Multi-byte: a cut inside a character would panic.
     #[test]
     fn an_oversized_message_is_truncated_to_the_cap_with_a_marker() {
-        let (mut gate, now) = bounds(64, 8, 1);
+        let (gate, now) = bounds(64, 8, 1);
         let mut rec = record(&"\u{20ac}".repeat(4096));
         assert!(
             gate.admit(&mut rec, now),
@@ -191,7 +193,7 @@ mod tests {
 
     #[test]
     fn overflow_fields_drop_last_recorded_first_and_the_message_survives() {
-        let (mut gate, now) = bounds(64, 8, 1);
+        let (gate, now) = bounds(64, 8, 1);
         let mut rec = record("keep me");
         rec.fields = (0..64)
             .map(|i| LogField {
@@ -211,7 +213,7 @@ mod tests {
 
     #[test]
     fn an_oversized_call_site_cannot_evade_the_cap_by_leaving_the_message() {
-        let (mut gate, now) = bounds(512, 8, 1);
+        let (gate, now) = bounds(512, 8, 1);
         let mut rec = record("short").with_source(LogSource {
             target: "t".repeat(4096),
             file: Some("f".repeat(4096)),
@@ -232,7 +234,7 @@ mod tests {
     /// survives whole when dropping the file already fit the record.
     #[test]
     fn a_target_past_its_allowance_survives_an_overflow_the_file_alone_covers() {
-        let (mut gate, now) = bounds(1024, 8, 1);
+        let (gate, now) = bounds(1024, 8, 1);
         let target = "deep::module::path::".repeat(18);
         assert!(
             target.len() > TARGET_ALLOWANCE,
@@ -254,7 +256,7 @@ mod tests {
 
     #[test]
     fn a_message_that_fills_the_cap_still_carries_its_target() {
-        let (mut gate, now) = bounds(512, 8, 1);
+        let (gate, now) = bounds(512, 8, 1);
         let mut rec = record(&"m".repeat(4096)).with_source(LogSource {
             target: "wallet::signer".to_owned(),
             file: None,
@@ -271,7 +273,7 @@ mod tests {
 
     #[test]
     fn an_oversized_target_is_cut_to_its_allowance_and_hides_no_payload() {
-        let (mut gate, now) = bounds(4096, 8, 1);
+        let (gate, now) = bounds(4096, 8, 1);
         let mut rec = record("short").with_source(LogSource {
             target: "t".repeat(4096),
             file: None,
@@ -290,7 +292,7 @@ mod tests {
     /// charge let an `f64` field list render thirty times over the cap.
     #[test]
     fn the_measure_never_sits_under_the_bytes_the_render_writes() {
-        let (mut gate, now) = bounds(512, 8, 1);
+        let (gate, now) = bounds(512, 8, 1);
         let mut rec = record("m").with_source(LogSource {
             target: "guest::work".to_owned(),
             file: None,
@@ -316,7 +318,7 @@ mod tests {
 
     #[test]
     fn the_rate_drops_records_past_the_burst_and_refills() {
-        let (mut gate, now) = bounds(4096, 2, 4);
+        let (gate, now) = bounds(4096, 2, 4);
         assert!(gate.admit(&mut record("a"), now));
         assert!(gate.admit(&mut record("b"), now));
         assert!(
