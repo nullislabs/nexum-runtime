@@ -52,6 +52,12 @@ repository = "https://github.com/nullislabs/nexum-runtime"
 # real module author has no access to this table, so they express-declare
 # their own external deps and inherit only local crates via `path`.
 # Version drift across the core crates is impossible by construction.
+#
+# `wit-bindgen` is the load-bearing case. It is not hoisted here: every guest
+# module declares `wit-bindgen = { version = "0.59", default-features = false,
+# features = ["macros", "realloc"] }` for itself. 0.59 is the canonical
+# version and a bump is applied module by module by hand. A staggered bump is
+# legitimate, so nothing enforces the version across the modules.
 [workspace.dependencies]
 # Error + async plumbing.
 anyhow = "1"
@@ -91,11 +97,6 @@ tracing-subscriber = { version = "0.3", default-features = false, features = ["f
 # ad-hoc `match err { ... => "connect" ... }` ladder per call site.
 strum = { version = "0.28", default-features = false, features = ["derive"] }
 
-# `auto_impl::auto_impl(&, Arc, Box)` forwarding impls for traits
-# held through smart pointers. Available workspace-wide so any future
-# `Arc<dyn Trait>` boundary can opt in without touching root manifest.
-auto_impl = "1"
-
 # `derive_more` newtype boilerplate (`Deref`, `From`, `Display`, ...).
 # `default-features = false, features = ["full"]` keeps the proc-macro
 # surface predictable; per-derive opt-in via the standard `#[derive(...)]`
@@ -115,7 +116,6 @@ alloy-sol-types = { version = "1.6", default-features = false, features = ["std"
 # the engine and tooling add ws/ipc/pubsub/reqwest at their call sites.
 alloy-provider = { version = "2.1", default-features = false }
 alloy-rpc-types-eth = { version = "2.1", default-features = false, features = ["std"] }
-alloy-transport-ws = { version = "2.1", default-features = false }
 # Typed EIP-155 chain ids for config keys, provider pools, and the
 # chain seam. Already in the graph via alloy-provider; named here so
 # the engine can key maps and signatures on `Chain` instead of a bare u64.
@@ -139,10 +139,6 @@ bytes = "1"
 proc-macro2 = "1"
 quote = "1"
 syn = { version = "2", features = ["full"] }
-
-# `wit-bindgen` is consumed by every guest module crate (example +
-# every fixture). Hoisted so a single bump moves them in lock-step.
-wit-bindgen = { version = "0.59", default-features = false, features = ["macros", "realloc"] }
 
 # Guest-side wasi:http client behind the SDK's `http::fetch` helper.
 # Binds wasi 0.2.x through the `wasip2` crate, matching the wasi:http
@@ -191,12 +187,6 @@ url = "2"
 
 # HTTP server for test tooling.
 axum = "0.8"
-
-# Randomness for tooling.
-rand = "0.10"
-
-# Hex codec for test fixtures and receipt rendering.
-hex = "0.4"
 
 # Must resolve with what `alloy-primitives` re-exports, or `const_hex::FromHexError` becomes two types.
 const-hex = { version = "1.19", default-features = false, features = ["alloc", "core-error"] }
