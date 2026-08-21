@@ -3,9 +3,9 @@
 //! Three capture points build [`LogRecord`]s for one [`LogRouter`]: the
 //! `nexum:host/logging` glue, the per-store stdout/stderr pipes, and the
 //! supervisor death path. The first two pass one shared
-//! [`SharedLogBounds`] per run; the death path is host-synthesized and
-//! ungated. The router fans each record to a host `tracing`
-//! event and the retention store. [`LogPipeline`] is the shared handle,
+//! [`SharedLogBounds`] and one [`SharedLogFilter`] per run; the death path
+//! is host-synthesized, so it is neither bounded nor filtered. The router
+//! fans each record to a host `tracing` event and the retention store. [`LogPipeline`] is the shared handle,
 //! carrying the write side and the store's read side.
 //!
 //! One guest panic yields three records distinguished by [`LogChannel`]
@@ -15,8 +15,11 @@
 //! death record.
 
 mod bounds;
+mod filter;
 mod stdio;
 mod store;
+#[cfg(test)]
+mod test_support;
 
 use std::fmt::Write as _;
 use std::sync::Arc;
@@ -28,6 +31,7 @@ use tracing_core::Level;
 use nexum_primitives::module_id::ModuleId;
 
 pub use bounds::SharedLogBounds;
+pub use filter::SharedLogFilter;
 pub use stdio::StdioStream;
 pub use store::{InMemoryRunLogStore, LogPage, RunLogStore, RunMeta};
 
@@ -256,6 +260,12 @@ impl LogRouter {
     /// Emit the tracing event, retain the record, then wake append waiters.
     pub fn record(&self, record: LogRecord) {
         emit_tracing(&record);
+        self.retain(record);
+    }
+
+    /// Retain without emitting: the record cleared the retention floor but
+    /// not the console one.
+    pub fn retain(&self, record: LogRecord) {
         self.store.append(record);
         self.appended.notify_waiters();
     }
@@ -475,29 +485,6 @@ mod tests {
 
     #[test]
     fn a_structureless_record_emits_the_line_it_did_before_the_verb_grew() {
-        #[derive(Clone, Default)]
-        struct Sink(Arc<Mutex<Vec<u8>>>);
-        impl std::io::Write for Sink {
-            fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-                self.0.lock().extend_from_slice(buf);
-                Ok(buf.len())
-            }
-            fn flush(&mut self) -> std::io::Result<()> {
-                Ok(())
-            }
-        }
-        impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for Sink {
-            type Writer = Sink;
-            fn make_writer(&'a self) -> Sink {
-                self.clone()
-            }
-        }
-
-        let sink = Sink::default();
-        let collector = tracing_subscriber::fmt()
-            .with_ansi(false)
-            .with_writer(sink.clone())
-            .finish();
         let bare = LogRecord::now(
             RunId::new(test_module_id(), 0),
             LogChannel::Stdout,
@@ -511,11 +498,10 @@ mod tests {
                 ..LogSource::default()
             })
             .with_fields(vec![field("n", LogValue::Unsigned(9))]);
-        tracing::subscriber::with_default(collector, || {
+        let out = test_support::Console::printed(|| {
             emit_tracing(&bare);
             emit_tracing(&rich);
         });
-        let out = String::from_utf8(sink.0.lock().clone()).expect("log output is UTF-8");
         let (first, second) = out.split_once('\n').expect("two events were emitted");
         assert!(
             !first.contains("source") && !first.contains("fields"),

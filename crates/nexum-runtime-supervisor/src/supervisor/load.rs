@@ -327,6 +327,7 @@ pub(super) async fn module<T: RuntimeTypes>(
         chain_response_max_bytes: limits_cfg.chain_response_max_bytes.get(),
         state_quota: state_bytes,
         log_bounds: effective.ceilings.log_bounds,
+        log_filter: effective.log_filter,
     };
     let config = default_init_config(&loaded_manifest.config, module_namespace.as_str());
     let seed = Seed {

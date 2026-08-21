@@ -46,11 +46,12 @@ impl<T: RuntimeTypes> nexum::host::logging::Host for HostState<T> {
 }
 
 impl<T: RuntimeTypes> HostState<T> {
-    /// Bound the record, then route what survives. Not in the router: it
-    /// renders before it retains, and the render is what is bounded.
+    /// Bound the record, then let the operator filter pick its sinks.
+    /// Neither is in the router: it renders before it retains, and the
+    /// death record it also carries is bounded and filtered by nothing.
     fn route(&mut self, mut record: LogRecord) {
         if self.log_bounds.admit(&mut record, Instant::now()) {
-            self.log_router.record(record);
+            self.log_filter.route(&self.log_router, record);
         }
     }
 }

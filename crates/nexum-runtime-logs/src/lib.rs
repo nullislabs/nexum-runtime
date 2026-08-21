@@ -8,5 +8,6 @@ mod logs;
 pub use builder::LogPipelineBuilder;
 pub use logs::{
     InMemoryRunLogStore, LogChannel, LogField, LogPage, LogPipeline, LogRecord, LogRouter,
-    LogSource, LogValue, RunId, RunLogStore, RunMeta, SharedLogBounds, StdioStream,
+    LogSource, LogValue, RunId, RunLogStore, RunMeta, SharedLogBounds, SharedLogFilter,
+    StdioStream,
 };
