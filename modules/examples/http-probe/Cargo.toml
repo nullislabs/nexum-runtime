@@ -11,7 +11,7 @@ description = "Example module: fetches an allowlisted URL over wasi:http on ever
 crate-type = ["cdylib"]
 
 [dependencies]
-http.workspace = true
+http = "1"
 nexum-sdk = { path = "../../../crates/nexum-sdk" }
 tracing = { version = "0.1", default-features = false }
 wit-bindgen = { version = "0.59", default-features = false, features = ["macros", "realloc"] }

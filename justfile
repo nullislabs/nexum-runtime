@@ -55,6 +55,15 @@ zero-leak:
 msrv:
     ./scripts/msrv-lint.sh
 
+# Every `[workspace.dependencies]` entry has an inheritor, and no guest module
+# is one. Compiles nothing.
+workspace-deps:
+    ./scripts/workspace-deps-lint.sh
+
+# Per-crate unused dependencies. Compiles nothing.
+machete:
+    cargo machete
+
 # Check the workspace quickly.
 check:
     cargo check --target wasm32-wasip2 -p example
@@ -63,9 +72,7 @@ check:
 
 # Run the full CI series locally before pushing. Mirrors
 # .github/workflows/ci.yml one-to-one: house style, the zero-leak gate, the
-# MSRV gate, rustfmt, clippy, rustdoc, the module wasms the integration tests
-# need, and the workspace test suite via nextest plus the doctests, all under
-# the `-D warnings` the CI workflow sets globally.
+# The full CI series.
 ci:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -77,6 +84,8 @@ ci:
     ./scripts/content-lint.sh "main..HEAD"
     ./scripts/zero-leak.sh
     ./scripts/msrv-lint.sh
+    ./scripts/workspace-deps-lint.sh
+    cargo machete
     cargo fmt --all --check
     cargo clippy --workspace --all-targets --all-features -- -D warnings
     cargo doc --workspace --all-features --no-deps
