@@ -1,6 +1,9 @@
 //! Helpers over the `Vec<(String, String)>` `[config]` entries a
-//! module's `init` receives: required and optional key lookup, and
-//! fixed-point decimal parsing.
+//! module's `init` receives: required and optional key lookup,
+//! fixed-point decimal parsing, and a write-once [`Slot`] holding the
+//! parsed result.
+
+use std::sync::OnceLock;
 
 use alloy_primitives::{I256, U256};
 use thiserror::Error;
@@ -33,11 +36,74 @@ pub enum ConfigError {
         /// Free-text range detail.
         detail: String,
     },
+    /// A [`Slot`] was read before `init` stored anything in it.
+    #[error("config not initialized")]
+    NotInitialized,
+    /// A [`Slot`] that already holds a value was stored to again.
+    #[error("config already initialized")]
+    AlreadyInitialized,
 }
 
 impl From<ConfigError> for Fault {
     fn from(e: ConfigError) -> Self {
-        Fault::InvalidInput(e.to_string())
+        let message = e.to_string();
+        // Exhaustive: `#[non_exhaustive]` does not bind the defining
+        // crate, so a later variant has to pick a destination here
+        // instead of inheriting one from a wildcard.
+        match e {
+            // Not a bad request: the config the module needs is not
+            // ready yet.
+            ConfigError::NotInitialized => Fault::Unavailable(message),
+            ConfigError::MissingKey { .. }
+            | ConfigError::Parse { .. }
+            | ConfigError::Range { .. }
+            | ConfigError::AlreadyInitialized => Fault::InvalidInput(message),
+        }
+    }
+}
+
+/// Write-once holder for the config a module parses in `init` and
+/// reads in later dispatches.
+///
+/// The supervisor instantiates on a fresh store and calls `init` at
+/// once, so the slot is instance memory that each (re)instantiation
+/// seeds again, and nothing persists it across one.
+///
+/// ```
+/// use nexum_sdk::config::{ConfigError, Slot};
+///
+/// static SETTINGS: Slot<u32> = Slot::new();
+///
+/// SETTINGS.store(7)?;
+/// assert_eq!(*SETTINGS.get()?, 7);
+/// assert!(SETTINGS.store(8).is_err());
+/// # Ok::<(), ConfigError>(())
+/// ```
+pub struct Slot<T: Send + Sync>(OnceLock<T>);
+
+impl<T: Send + Sync> Slot<T> {
+    /// An empty slot, `const` so a `static` can hold one.
+    #[must_use]
+    pub const fn new() -> Self {
+        Self(OnceLock::new())
+    }
+
+    /// Seed the slot; `Err(AlreadyInitialized)` if already seeded.
+    pub fn store(&self, value: T) -> Result<(), ConfigError> {
+        self.0
+            .set(value)
+            .map_err(|_| ConfigError::AlreadyInitialized)
+    }
+
+    /// Borrow the seeded value; `Err(NotInitialized)` before `store`.
+    pub fn get(&self) -> Result<&T, ConfigError> {
+        self.0.get().ok_or(ConfigError::NotInitialized)
+    }
+}
+
+impl<T: Send + Sync> Default for Slot<T> {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -143,12 +209,58 @@ mod tests {
     }
 
     #[test]
-    fn config_error_folds_into_an_invalid_input_fault() {
+    fn lookup_error_folds_into_an_invalid_input_fault() {
         let fault = Fault::from(get_required(&entries(&[]), "threshold").unwrap_err());
         let Fault::InvalidInput(message) = fault else {
             panic!("expected invalid-input fault, got {fault:?}");
         };
         assert!(message.contains("threshold"));
+    }
+
+    #[test]
+    fn double_store_folds_into_an_invalid_input_fault() {
+        let fault = Fault::from(ConfigError::AlreadyInitialized);
+        let Fault::InvalidInput(message) = fault else {
+            panic!("expected invalid-input fault, got {fault:?}");
+        };
+        assert_eq!(message, "config already initialized");
+    }
+
+    #[test]
+    fn not_initialized_folds_into_an_unavailable_fault() {
+        let fault = Fault::from(ConfigError::NotInitialized);
+        let Fault::Unavailable(message) = fault else {
+            panic!("expected unavailable fault, got {fault:?}");
+        };
+        assert_eq!(message, "config not initialized");
+    }
+
+    #[test]
+    fn slot_get_borrows_the_stored_value() {
+        let slot = Slot::new();
+        slot.store("a".to_owned()).unwrap();
+        assert_eq!(slot.get().unwrap(), "a");
+        assert_eq!(slot.get().unwrap(), "a");
+    }
+
+    #[test]
+    fn slot_read_before_store_is_a_typed_error() {
+        let slot: Slot<u32> = Slot::new();
+        assert!(matches!(
+            slot.get().unwrap_err(),
+            ConfigError::NotInitialized
+        ));
+    }
+
+    #[test]
+    fn slot_second_store_refuses_and_keeps_the_first_value() {
+        let slot = Slot::new();
+        slot.store(1u32).unwrap();
+        assert!(matches!(
+            slot.store(2).unwrap_err(),
+            ConfigError::AlreadyInitialized
+        ));
+        assert_eq!(*slot.get().unwrap(), 1);
     }
 
     #[test]
