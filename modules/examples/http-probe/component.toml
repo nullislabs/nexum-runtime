@@ -25,5 +25,5 @@ probe_url = "https://api.cow.fi/mainnet/api/v1/version"
 # URL whose host is deliberately off-list. The module expects the
 # denied error and treats any other outcome as a failure.
 denied_url = "https://example.com/"
-# Throttle: only probe every Nth block. Default 1.
+# Throttle: only probe every Nth block. Default 1, and a zero refuses at init.
 every_n_blocks = "1"

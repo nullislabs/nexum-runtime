@@ -28,5 +28,5 @@ threshold = "2500.00"
 # "above" -> fires when answer >= threshold
 # "below" -> fires when answer <= threshold
 direction = "below"
-# Throttle: only poll every Nth block. Default 1.
+# Throttle: only poll every Nth block. Default 1, and a zero refuses at init.
 every_n_blocks = "1"
