@@ -82,15 +82,9 @@ impl TestRuntimeBuilder {
         self
     }
 
-    /// Add an entry loading its manifest from an existing file.
-    #[must_use]
-    pub fn manifest_path(self, path: impl Into<PathBuf>) -> Self {
-        self.module(Entry::new(ManifestInput::Path(path.into())))
-    }
-
     /// Add an entry whose `toml` is written to a temp file at launch.
     #[must_use]
-    pub fn manifest_inline(self, toml: impl Into<String>) -> Self {
+    pub fn module_inline(self, toml: impl Into<String>) -> Self {
         self.module(Entry::new(ManifestInput::Toml(toml.into())))
     }
 
@@ -358,7 +352,7 @@ mod tests {
         };
 
         let mut rt = TestRuntime::builder(wasm)
-            .manifest_inline(example_block_manifest())
+            .module_inline(example_block_manifest())
             .launch()
             .await
             .expect("launch example over the harness");
@@ -386,7 +380,7 @@ mod tests {
 
         let manifest = pinned_block_manifest("example", 1, &wasm);
         let mut rt = TestRuntime::builder(wasm)
-            .manifest_inline(manifest)
+            .module_inline(manifest)
             .launch()
             .await
             .expect("launch the pinned example over the harness");
@@ -409,7 +403,7 @@ mod tests {
         };
 
         let mut rt = TestRuntime::builder(wasm)
-            .manifest_inline(
+            .module_inline(
                 TestManifest::new("example")
                     .cap("logging")
                     .event_trigger(1)
@@ -462,7 +456,7 @@ mod tests {
 
         let mut rt = TestRuntime::builder(wasm)
             .extension(extension)
-            .manifest_inline(example_block_manifest())
+            .module_inline(example_block_manifest())
             .launch()
             .await
             .expect("launch with a trivial extension");
@@ -492,7 +486,7 @@ mod tests {
         };
 
         let mut rt = TestRuntime::builder(wasm)
-            .manifest_inline(example_block_manifest())
+            .module_inline(example_block_manifest())
             .limits(crate::test_utils::limits_with(|limits| {
                 limits.logs = LogLimitsSection {
                     bytes_per_run: Some(1),
@@ -549,7 +543,7 @@ mod tests {
             word(1),
         );
 
-        let builder = TestRuntime::builder(wasm).manifest_inline(price_alert_manifest());
+        let builder = TestRuntime::builder(wasm).module_inline(price_alert_manifest());
         builder.chain().on_method(ChainMethod::EthCall, result);
 
         let mut rt = builder
@@ -586,7 +580,7 @@ mod tests {
         };
 
         let mut rt = TestRuntime::builder(wasm)
-            .manifest_inline(
+            .module_inline(
                 TestManifest::new("example")
                     .cap("logging")
                     .block_trigger(1)
@@ -628,7 +622,7 @@ mod tests {
         };
 
         let mut rt = TestRuntime::builder(wasm)
-            .manifest_inline(example_block_manifest())
+            .module_inline(example_block_manifest())
             .launch()
             .await
             .expect("launch example over the harness");
@@ -679,7 +673,7 @@ mod tests {
         };
 
         let mut rt = TestRuntime::builder(wasm)
-            .manifest_inline(example_block_manifest())
+            .module_inline(example_block_manifest())
             .launch()
             .await
             .expect("launch example over the harness");
@@ -732,7 +726,7 @@ mod tests {
         );
 
         let builder = TestRuntime::builder(wasm)
-            .manifest_inline(price_alert_manifest())
+            .module_inline(price_alert_manifest())
             .limits(crate::test_utils::limits_with(|limits| {
                 limits.chain = ChainLimitsSection {
                     response_body_max_bytes: Some(16),
@@ -778,7 +772,7 @@ mod tests {
         };
 
         let mut rt = TestRuntime::builder(wasm)
-            .manifest_inline(example_block_manifest())
+            .module_inline(example_block_manifest())
             .launch()
             .await
             .expect("launch example over the harness");
@@ -814,7 +808,7 @@ mod tests {
         // exact match on this value can only come from the override.
         const PINNED_SECS: u64 = 1_700_000_000;
 
-        let builder = TestRuntime::builder(wasm).manifest_inline(
+        let builder = TestRuntime::builder(wasm).module_inline(
             TestManifest::new("clock-reader")
                 .cap("logging")
                 .block_trigger(1)
@@ -881,7 +875,7 @@ mod tests {
         );
 
         let mut rt = TestRuntime::builder(wasm)
-            .manifest_inline(
+            .module_inline(
                 TestManifest::new("env-reader")
                     .cap("logging")
                     .block_trigger(1)
@@ -930,7 +924,7 @@ mod tests {
         };
 
         let mut rt = TestRuntime::builder(wasm)
-            .manifest_inline(
+            .module_inline(
                 TestManifest::new("log-bomb")
                     .cap("logging")
                     .block_trigger(1)
@@ -1008,7 +1002,7 @@ mod tests {
         };
 
         let mut rt = crate::test_utils::TestRuntime::builder(wasm)
-            .manifest_inline(
+            .module_inline(
                 TestManifest::new("example")
                     .cap("logging")
                     .block_trigger(1)
@@ -1060,7 +1054,7 @@ mod tests {
         };
 
         let mut booted = TestRuntime::builder(wasm)
-            .manifest_inline(example_block_manifest())
+            .module_inline(example_block_manifest())
             .boot_supervisor()
             .await
             .expect("boot the example module to a supervisor");
@@ -1107,7 +1101,7 @@ mod tests {
             word(1),
         );
 
-        let builder = TestRuntime::builder(wasm).manifest_inline(price_alert_manifest());
+        let builder = TestRuntime::builder(wasm).module_inline(price_alert_manifest());
         builder.chain().on_method(ChainMethod::EthCall, result);
         // The boot consumes the builder; the cloned handle shares the node.
         let chain = builder.chain().clone();
