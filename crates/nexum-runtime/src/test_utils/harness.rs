@@ -33,7 +33,8 @@ use nexum_runtime_logs::{LogPipeline, LogRecord};
 use nexum_runtime_wasm::{Components, ComponentsBuilder};
 
 /// Builder for a [`TestRuntime`]; the launched handle shares the same mock
-/// backends. A manifest is mandatory.
+/// backends. A builder that adds no entry launches over a manifest
+/// discovered beside the component.
 pub struct TestRuntimeBuilder {
     wasm: PathBuf,
     modules: Vec<Entry>,
@@ -117,6 +118,14 @@ impl TestRuntimeBuilder {
     /// The fake chain node; the launched handle shares this instance.
     pub fn chain(&self) -> &FakeNode {
         &self.chain
+    }
+
+    /// Program the fake chain node in place, without leaving the builder
+    /// chain.
+    #[must_use]
+    pub fn configure_chain(self, configure: impl FnOnce(&FakeNode)) -> Self {
+        configure(&self.chain);
+        self
     }
 
     /// The mock state store; the launched handle shares this instance.
@@ -532,10 +541,11 @@ mod tests {
             word(1),
         );
 
-        let builder = TestRuntime::builder(wasm).module(price_alert_manifest());
-        builder.chain().on_method(ChainMethod::EthCall, result);
-
-        let mut rt = builder
+        let mut rt = TestRuntime::builder(wasm)
+            .module(price_alert_manifest())
+            .configure_chain(|chain| {
+                chain.on_method(ChainMethod::EthCall, result);
+            })
             .launch()
             .await
             .expect("launch price-alert over the harness");
@@ -713,16 +723,16 @@ mod tests {
             word(1),
         );
 
-        let builder = TestRuntime::builder(wasm)
+        let mut rt = TestRuntime::builder(wasm)
             .module(price_alert_manifest())
             .limits(crate::test_utils::limits_with(|limits| {
                 limits.chain = ChainLimitsSection {
                     response_body_max_bytes: Some(16),
                 }
-            }));
-        builder.chain().on_method(ChainMethod::EthCall, result);
-
-        let mut rt = builder
+            }))
+            .configure_chain(|chain| {
+                chain.on_method(ChainMethod::EthCall, result);
+            })
             .launch()
             .await
             .expect("launch price-alert with a 16-byte chain response cap");
