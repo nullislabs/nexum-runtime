@@ -155,11 +155,7 @@ impl TestRuntimeBuilder {
         config.policy = self.policy;
         // The chain gate applies even over mock backends.
         config.chains = super::test_chain_configs();
-        config.modules = entries(self.modules)
-            .into_iter()
-            .enumerate()
-            .map(|(i, entry)| entry.resolve(i, tmp.path(), &self.wasm))
-            .collect();
+        config.modules = Entry::rows(entries(self.modules), tmp.path(), &self.wasm);
 
         let pool = self.chain.pool(&self.chains, HARNESS_POLL_INTERVAL);
         let handle = RuntimeBuilder::new(&config)
@@ -1188,38 +1184,67 @@ mod tests {
         rt.wait().await.expect("clean shutdown");
     }
 
-    /// The launch takes the configured arm, so an entry id is a real
-    /// operator id and its `[policy.component]` row binds; the module-source
-    /// override arm stripped those rows instead. The row permits only
-    /// `chain`, which the manifest's `logging` declaration crosses.
-    #[tokio::test]
-    async fn a_policy_component_row_binds_to_an_entry_id() {
+    /// A `[policy.component]` row on `id` permitting only `chain`, which the
+    /// example manifest's `logging` declaration crosses.
+    fn chain_only_row(id: &str) -> PolicySection {
         use crate::engine_config::ComponentPolicy;
-        use crate::error::LoadRefusal;
-
-        let Some(wasm) = example_wasm_or_skip() else {
-            return;
-        };
 
         let mut policy = PolicySection::default();
         policy.component.insert(
-            "pinned".to_owned(),
+            id.to_owned(),
             ComponentPolicy {
                 capabilities: Some(vec!["chain".to_owned()]),
                 ..Default::default()
             },
         );
+        policy
+    }
+
+    /// The refusal a [`chain_only_row`] draws, named on the entry id rather
+    /// than the manifest namespace.
+    fn assert_logging_refused(err: RuntimeError, id: &str) {
+        use crate::error::LoadRefusal;
+
+        Refusal::from(err).variant::<LoadRefusal>(|e| {
+            matches!(e, LoadRefusal::CapabilityNotPermitted { id: on, capability, .. }
+                if on == id && capability == "logging")
+        });
+    }
+
+    /// The launch takes the configured arm, so an entry id is a real
+    /// operator id and its `[policy.component]` row binds; the module-source
+    /// override arm stripped those rows instead.
+    #[tokio::test]
+    async fn a_policy_component_row_binds_to_an_entry_id() {
+        let Some(wasm) = example_wasm_or_skip() else {
+            return;
+        };
 
         let err = TestRuntime::builder(wasm)
             .module(Entry::new(example_block_manifest()).id("pinned"))
-            .policy(policy)
+            .policy(chain_only_row("pinned"))
             .launch()
             .await
             .err()
             .expect("the row binds, so the launch is refused");
-        Refusal::from(err).variant::<LoadRefusal>(|e| {
-            matches!(e, LoadRefusal::CapabilityNotPermitted { id, capability, .. }
-                if id == "pinned" && capability == "logging")
-        });
+        assert_logging_refused(err, "pinned");
+    }
+
+    /// Both terminals read the same builder, so the `[policy]` that refuses
+    /// a launch refuses a [`TestRuntimeBuilder::boot_supervisor`] too.
+    #[tokio::test]
+    async fn boot_supervisor_carries_the_builder_policy() {
+        let Some(wasm) = example_wasm_or_skip() else {
+            return;
+        };
+
+        let err = TestRuntime::builder(wasm)
+            .module(Entry::new(example_block_manifest()).id("pinned"))
+            .policy(chain_only_row("pinned"))
+            .boot_supervisor()
+            .await
+            .err()
+            .expect("the builder policy reaches the scenario");
+        assert_logging_refused(err, "pinned");
     }
 }
