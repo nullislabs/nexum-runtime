@@ -60,6 +60,33 @@ impl Entry {
         self.digest = Some(digest);
         self
     }
+
+    /// The `[[modules]]` rows for `entries`, materializing any inline
+    /// manifest under `dir`. Position names both the defaulted id and the
+    /// manifest file, so the whole set resolves in one call.
+    pub fn rows(
+        entries: impl IntoIterator<Item = Self>,
+        dir: &Path,
+        default_wasm: &Path,
+    ) -> Vec<ModuleEntry> {
+        entries
+            .into_iter()
+            .enumerate()
+            .map(|(index, entry)| entry.resolve(index, dir, default_wasm))
+            .collect()
+    }
+
+    fn resolve(self, index: usize, dir: &Path, default_wasm: &Path) -> ModuleEntry {
+        let mut module = ModuleEntry::new(
+            self.id.unwrap_or_else(|| format!("m{index}")),
+            self.wasm.unwrap_or_else(|| default_wasm.to_path_buf()),
+        );
+        module.manifest = self
+            .manifest
+            .resolve(&dir.join(format!("module-{index}.toml")));
+        module.digest = self.digest;
+        module
+    }
 }
 
 impl From<TestManifest> for Entry {
@@ -251,15 +278,6 @@ impl<T: RuntimeTypes<State = HostState<T>>> BootScenario<T> {
     fn split(self) -> (EngineConfig, Launch<T>) {
         let dir = self.dir.path().to_path_buf();
         let default_wasm = self.wasm.unwrap_or_else(|| dir.join("component.wasm"));
-        let resolve = |i: usize, entry: Entry| {
-            let at = dir.join(format!("module-{i}.toml"));
-            (
-                entry.id.unwrap_or_else(|| format!("m{i}")),
-                entry.wasm.unwrap_or_else(|| default_wasm.clone()),
-                entry.manifest.resolve(&at),
-                entry.digest,
-            )
-        };
 
         let mut config = EngineConfig::default();
         config.limits = self
@@ -271,13 +289,7 @@ impl<T: RuntimeTypes<State = HostState<T>>> BootScenario<T> {
         config.engine.state_dir = dir.clone();
         config.engine.require_component_digest = self.require_digest;
         config.defaulted = self.defaulted;
-        for (i, entry) in self.modules.into_iter().enumerate() {
-            let (id, path, manifest, digest) = resolve(i, entry);
-            let mut module = ModuleEntry::new(id, path);
-            module.manifest = manifest;
-            module.digest = digest;
-            config.modules.push(module);
-        }
+        config.modules = Entry::rows(self.modules, &dir, &default_wasm);
         (
             config,
             Launch {

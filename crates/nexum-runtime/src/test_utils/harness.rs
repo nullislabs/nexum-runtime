@@ -1,5 +1,5 @@
-//! In-process test harness: launch one module over the mock assembly and
-//! drive it from a test.
+//! In-process test harness: launch one or more modules over the mock
+//! assembly and drive them from a test.
 //!
 //! [`TestRuntime`] wraps the public builder path over [`MockTypes`] with a
 //! manually-driven [`ManualClock`]; the chain leg is the real
@@ -36,7 +36,7 @@ use nexum_runtime_wasm::{Components, ComponentsBuilder};
 /// backends. A manifest is mandatory.
 pub struct TestRuntimeBuilder {
     wasm: PathBuf,
-    manifest: ManifestInput,
+    modules: Vec<Entry>,
     extensions: Vec<Arc<dyn Extension<MockTypes>>>,
     limits: ModuleLimits,
     policy: PolicySection,
@@ -46,12 +46,21 @@ pub struct TestRuntimeBuilder {
     clock: ManualClock,
 }
 
+/// The harness-wide component covers a builder that added no entry of its
+/// own, with its manifest discovered beside it.
+fn entries(modules: Vec<Entry>) -> Vec<Entry> {
+    if modules.is_empty() {
+        return vec![Entry::new(ManifestInput::Beside)];
+    }
+    modules
+}
+
 impl TestRuntime {
-    /// Start a harness for the module at `wasm`.
+    /// Start a harness whose entries default to the module at `wasm`.
     pub fn builder(wasm: impl Into<PathBuf>) -> TestRuntimeBuilder {
         TestRuntimeBuilder {
             wasm: wasm.into(),
-            manifest: ManifestInput::Beside,
+            modules: Vec::new(),
             extensions: Vec::new(),
             limits: ModuleLimits::default(),
             policy: PolicySection::default(),
@@ -64,18 +73,25 @@ impl TestRuntime {
 }
 
 impl TestRuntimeBuilder {
-    /// Load the manifest from an existing file.
+    /// Add a `[[modules]]` entry, defaulting to the builder's component.
+    /// Its id is an operator id, so a `[policy.component]` row keyed on it
+    /// binds.
     #[must_use]
-    pub fn manifest_path(mut self, path: impl Into<PathBuf>) -> Self {
-        self.manifest = ManifestInput::Path(path.into());
+    pub fn module(mut self, entry: impl Into<Entry>) -> Self {
+        self.modules.push(entry.into());
         self
     }
 
-    /// Write `toml` to a temp file at launch and load the module from it.
+    /// Add an entry loading its manifest from an existing file.
     #[must_use]
-    pub fn manifest_inline(mut self, toml: impl Into<String>) -> Self {
-        self.manifest = ManifestInput::Toml(toml.into());
-        self
+    pub fn manifest_path(self, path: impl Into<PathBuf>) -> Self {
+        self.module(Entry::new(ManifestInput::Path(path.into())))
+    }
+
+    /// Add an entry whose `toml` is written to a temp file at launch.
+    #[must_use]
+    pub fn manifest_inline(self, toml: impl Into<String>) -> Self {
+        self.module(Entry::new(ManifestInput::Toml(toml.into())))
     }
 
     /// Register an extension.
@@ -125,13 +141,13 @@ impl TestRuntimeBuilder {
         &self.clock
     }
 
-    /// Open the module and start the runtime through the public builder path.
+    /// Open the modules and start the runtime through the public builder
+    /// path, over configured `[[modules]]` rather than a module-source
+    /// override.
     pub async fn launch(self) -> Result<TestRuntime, RuntimeError> {
         // A temp directory roots any inline manifest and stands in as the
         // (unused, in-memory backends) state directory.
         let tmp = tempfile::tempdir().expect("harness tempdir");
-
-        let manifest = self.manifest.resolve(&tmp.path().join("component.toml"));
 
         let mut config = EngineConfig::default();
         config.engine.state_dir = tmp.path().to_path_buf();
@@ -139,12 +155,12 @@ impl TestRuntimeBuilder {
         config.policy = self.policy;
         // The chain gate applies even over mock backends.
         config.chains = super::test_chain_configs();
+        config.modules = Entry::rows(entries(self.modules), tmp.path(), &self.wasm);
 
         let pool = self.chain.pool(&self.chains, HARNESS_POLL_INTERVAL);
         let handle = RuntimeBuilder::new(&config)
             .with_types::<MockTypes>()
             .with_extensions(self.extensions)
-            .with_module_source(Some(self.wasm), manifest)
             .with_wasi_clocks(self.clock.as_override())
             .with_components(ComponentsBuilder::new(
                 Prebuilt(pool),
@@ -171,18 +187,22 @@ impl TestRuntimeBuilder {
     /// you still need to drive the mocks.
     pub async fn boot_supervisor(self) -> Result<Booted<MockTypes>, RuntimeError> {
         let pool = self.chain.pool(&self.chains, HARNESS_POLL_INTERVAL);
-        BootScenario::over(Components {
+        let mut scenario = BootScenario::over(Components {
             chain: pool,
             store: self.store,
             logs: super::in_memory_logs(),
         })
-        .wasm(self.wasm)
-        .module(Entry::new(self.manifest))
-        .extensions(self.extensions)
-        .limits(self.limits)
-        .clock(self.clock.as_override())
-        .boot()
-        .await
+        .wasm(self.wasm);
+        for entry in entries(self.modules) {
+            scenario = scenario.module(entry);
+        }
+        scenario
+            .extensions(self.extensions)
+            .limits(self.limits)
+            .policy(self.policy)
+            .clock(self.clock.as_override())
+            .boot()
+            .await
     }
 }
 
@@ -283,7 +303,9 @@ mod tests {
     use super::*;
     use crate::engine_config::{DispatchRatePolicy, LogBoundsPolicy};
     use crate::manifest::NamespaceCaps;
-    use crate::test_utils::{TestManifest, example_wasm_or_skip, manifest, module_wasm_or_skip};
+    use crate::test_utils::{
+        Refusal, TestManifest, example_wasm_or_skip, manifest, module_wasm_or_skip,
+    };
     use nexum_runtime_api::Extension;
     use nexum_runtime_logs::LogChannel;
 
@@ -1110,5 +1132,119 @@ mod tests {
                 .any(|request| request.method == "eth_call"),
             "the module's eth_call reached the fake node through the retained handle",
         );
+    }
+
+    /// An entry on both trigger legs, over the harness-wide component.
+    fn both_legs(name: &str) -> Entry {
+        Entry::new(
+            TestManifest::new(name)
+                .cap("logging")
+                .block_trigger(1)
+                .event_trigger(1),
+        )
+        .id(name)
+    }
+
+    /// Two modules share one event loop and one [`FakeNode`]: a pushed block
+    /// and a pushed chain log each reach both, so the fan-out is not
+    /// single-module.
+    #[tokio::test]
+    async fn harness_dispatches_to_two_modules_on_one_event_loop() {
+        let Some(wasm) = example_wasm_or_skip() else {
+            return;
+        };
+
+        let mut rt = TestRuntime::builder(wasm)
+            .module(both_legs("alpha"))
+            .module(both_legs("beta"))
+            .launch()
+            .await
+            .expect("launch two modules over one harness");
+
+        rt.push_block(header_numbered(31));
+        rt.wait_for_log("alpha", "block 31 on chain")
+            .await
+            .expect("alpha took the block");
+        rt.wait_for_log("beta", "block 31 on chain")
+            .await
+            .expect("beta took the same block");
+
+        rt.push_chain_log(Log {
+            block_number: Some(32),
+            ..Default::default()
+        });
+        rt.wait_for_log("alpha", "event with 0 topics on chain 1")
+            .await
+            .expect("alpha took the chain log");
+        rt.wait_for_log("beta", "event with 0 topics on chain 1")
+            .await
+            .expect("beta took the same chain log");
+
+        rt.shutdown();
+        rt.wait().await.expect("clean shutdown");
+    }
+
+    /// A `[policy.component]` row on `id` permitting only `chain`, which the
+    /// example manifest's `logging` declaration crosses.
+    fn chain_only_row(id: &str) -> PolicySection {
+        use crate::engine_config::ComponentPolicy;
+
+        let mut policy = PolicySection::default();
+        policy.component.insert(
+            id.to_owned(),
+            ComponentPolicy {
+                capabilities: Some(vec!["chain".to_owned()]),
+                ..Default::default()
+            },
+        );
+        policy
+    }
+
+    /// The refusal a [`chain_only_row`] draws, named on the entry id rather
+    /// than the manifest namespace.
+    fn assert_logging_refused(err: RuntimeError, id: &str) {
+        use crate::error::LoadRefusal;
+
+        Refusal::from(err).variant::<LoadRefusal>(|e| {
+            matches!(e, LoadRefusal::CapabilityNotPermitted { id: on, capability, .. }
+                if on == id && capability == "logging")
+        });
+    }
+
+    /// The launch takes the configured arm, so an entry id is a real
+    /// operator id and its `[policy.component]` row binds; the module-source
+    /// override arm stripped those rows instead.
+    #[tokio::test]
+    async fn a_policy_component_row_binds_to_an_entry_id() {
+        let Some(wasm) = example_wasm_or_skip() else {
+            return;
+        };
+
+        let err = TestRuntime::builder(wasm)
+            .module(Entry::new(example_block_manifest()).id("pinned"))
+            .policy(chain_only_row("pinned"))
+            .launch()
+            .await
+            .err()
+            .expect("the row binds, so the launch is refused");
+        assert_logging_refused(err, "pinned");
+    }
+
+    /// Both terminals read the same builder, so the `[policy]` that refuses
+    /// a launch refuses a [`TestRuntimeBuilder::boot_supervisor`] too.
+    #[tokio::test]
+    async fn boot_supervisor_carries_the_builder_policy() {
+        let Some(wasm) = example_wasm_or_skip() else {
+            return;
+        };
+
+        let err = TestRuntime::builder(wasm)
+            .module(Entry::new(example_block_manifest()).id("pinned"))
+            .policy(chain_only_row("pinned"))
+            .boot_supervisor()
+            .await
+            .err()
+            .expect("the builder policy reaches the scenario");
+        assert_logging_refused(err, "pinned");
     }
 }
