@@ -5,7 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Evil-by-design fixture: on_trigger floods the host logging verb with records far over the per-record byte cap and far past the log rate. Proves the host truncates the oversized record, drops the overflow fields, and drops the over-rate records, all inside one dispatch deadline."
+description = "Evil-by-design fixture: on_trigger opens with one stderr line and then floods the host logging verb with records far over the per-record byte cap and far past the log rate. Proves the host truncates the oversized record, drops the overflow fields, and drops the over-rate records against a bucket both capture points share, all inside one dispatch deadline."
 
 [lib]
 crate-type = ["cdylib"]

@@ -125,7 +125,7 @@ pub struct PolicyCeilings {
     pub max_fuel_per_dispatch: NonZeroU64,
     /// Local-store on-disk byte quota; zero denies every write.
     pub max_state_bytes: u64,
-    /// Admission bounds on the host logging verbs.
+    /// Admission bounds on module logging, verbs and stdio alike.
     pub log_bounds: LogBoundsPolicy,
 }
 
@@ -140,9 +140,9 @@ impl Default for PolicyCeilings {
     }
 }
 
-/// What one component may push through the host logging verbs. The cap
-/// measures the whole record, so text moved into a field or the target
-/// does not evade it.
+/// What one component may push into the log pipeline, by either the
+/// `nexum:host/logging` verbs or its stdio pipes. The cap measures the
+/// whole record, so text moved into a field or the target does not evade it.
 #[derive(Debug, Clone, Copy)]
 pub struct LogBoundsPolicy {
     /// Cap on one record, across message, target, file and fields.
@@ -179,11 +179,11 @@ pub struct ComponentPolicy {
     pub max_fuel_per_dispatch: Option<NonZeroU64>,
     /// Local-store quota override.
     pub max_state_bytes: Option<u64>,
-    /// Host log record byte cap override.
+    /// Log record byte cap override.
     pub max_log_record_bytes: Option<NonZeroUsize>,
-    /// Host log burst allowance override.
+    /// Log burst allowance override.
     pub max_log_burst: Option<NonZeroU32>,
-    /// Host log sustained rate override.
+    /// Log sustained rate override.
     pub max_log_records_per_sec: Option<NonZeroU32>,
     /// Capability allowlist override.
     pub capabilities: Option<Vec<String>>,

@@ -18,7 +18,7 @@ use nexum_primitives::module_id::ModuleId;
 use nexum_runtime_api::Extension;
 use nexum_runtime_api::{RuntimeTypes, StateHandle, StateStore};
 use nexum_runtime_http::HttpGate;
-use nexum_runtime_logs::{LogBounds, LogChannel, RunId, StdioStream};
+use nexum_runtime_logs::{LogChannel, RunId, SharedLogBounds, StdioStream};
 use nexum_runtime_wasm::HostState;
 
 pub(super) type HostStore<T> = Store<HostState<T>>;
@@ -124,8 +124,8 @@ pub(super) struct StoreSpec {
     pub(super) fuel: u64,
     pub(super) chain_response_max_bytes: usize,
     pub(super) state_quota: u64,
-    /// Admission bounds; a restart mints a fresh bucket, so this is per
-    /// run, not per module lifetime.
+    /// Admission bounds shared by every capture point of one run; a restart
+    /// mints a fresh bucket, so this is per run, not per module lifetime.
     pub(super) log_bounds: LogBoundsPolicy,
 }
 
@@ -150,15 +150,18 @@ fn build<T: RuntimeTypes>(
     // Stdio is captured as tagged log records, stdin stays closed; the ctx
     // grants no network, so the allowlisted wasi:http gate is the only live path.
     let router = shared.components.logs.router();
+    let bounds = SharedLogBounds::new(spec.log_bounds, std::time::Instant::now());
     let mut builder = WasiCtxBuilder::new();
     builder
         .stdout(StdioStream::new(
             router.clone(),
+            bounds.clone(),
             run.clone(),
             LogChannel::Stdout,
         ))
         .stderr(StdioStream::new(
             router.clone(),
+            bounds.clone(),
             run.clone(),
             LogChannel::Stderr,
         ));
@@ -193,7 +196,7 @@ fn build<T: RuntimeTypes>(
             ),
             run,
             log_router: router,
-            log_bounds: LogBounds::new(spec.log_bounds, std::time::Instant::now()),
+            log_bounds: bounds,
             chain: shared.components.chain.clone(),
             chain_response_max_bytes: spec.chain_response_max_bytes,
             store: module_store,

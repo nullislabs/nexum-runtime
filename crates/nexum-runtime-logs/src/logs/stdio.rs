@@ -6,31 +6,36 @@ use std::io;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
+use std::time::Instant;
 
 use tokio::io::AsyncWrite;
 use wasmtime_wasi::cli::{IsTerminal, StdoutStream};
 
 use tracing_core::Level;
 
-use super::{LogChannel, LogRecord, LogRouter, RunId};
-
-/// Cap on an unterminated in-flight line; crossing it force-flushes the
-/// buffer as one record.
-const MAX_LINE_BYTES: usize = 1 << 20;
+use super::{LogChannel, LogRecord, LogRouter, RunId, SharedLogBounds};
 
 /// Per-store stdout or stderr sink; each [`StdoutStream::async_stream`] yields
 /// a line-splitting writer bound to the run and channel.
 pub struct StdioStream {
     router: Arc<LogRouter>,
+    bounds: SharedLogBounds,
     run: RunId,
     channel: LogChannel,
 }
 
 impl StdioStream {
-    /// Sink routing `channel` lines for `run` through `router`.
-    pub fn new(router: Arc<LogRouter>, run: RunId, channel: LogChannel) -> Self {
+    /// Sink routing `channel` lines for `run` through `router`, spending the
+    /// run's shared admission bucket per line.
+    pub fn new(
+        router: Arc<LogRouter>,
+        bounds: SharedLogBounds,
+        run: RunId,
+        channel: LogChannel,
+    ) -> Self {
         Self {
             router,
+            bounds,
             run,
             channel,
         }
@@ -47,6 +52,7 @@ impl StdoutStream for StdioStream {
     fn async_stream(&self) -> Box<dyn AsyncWrite + Send + Sync> {
         Box::new(LineWriter {
             router: self.router.clone(),
+            bounds: self.bounds.clone(),
             run: self.run.clone(),
             channel: self.channel,
             buf: Vec::new(),
@@ -54,10 +60,12 @@ impl StdoutStream for StdioStream {
     }
 }
 
-/// Line-splitting writer: one record per newline. Cutting only at `\n`
-/// reassembles multi-byte code points split across writes.
+/// Line-splitting writer: one record per newline, so a code point split
+/// across writes reassembles. The force-flush past the record cap is the
+/// one cut that can land mid-character.
 struct LineWriter {
     router: Arc<LogRouter>,
+    bounds: SharedLogBounds,
     run: RunId,
     channel: LogChannel,
     buf: Vec<u8>,
@@ -65,20 +73,15 @@ struct LineWriter {
 
 impl LineWriter {
     /// Route every complete line in the buffer, then force-flush an
-    /// over-long unterminated remainder.
+    /// unterminated remainder already past the record cap.
     fn drain(&mut self) {
         while let Some(nl) = self.buf.iter().position(|&b| b == b'\n') {
             let line: Vec<u8> = self.buf.drain(..=nl).collect();
-            route_line(
-                &self.router,
-                &self.run,
-                self.channel,
-                &line[..line.len() - 1],
-            );
+            self.route(&line[..line.len() - 1]);
         }
-        if self.buf.len() > MAX_LINE_BYTES {
+        if self.buf.len() > self.bounds.max_record_bytes() {
             let chunk = std::mem::take(&mut self.buf);
-            route_line(&self.router, &self.run, self.channel, &chunk);
+            self.route(&chunk);
         }
     }
 
@@ -89,7 +92,25 @@ impl LineWriter {
             return;
         }
         let rest = std::mem::take(&mut self.buf);
-        route_line(&self.router, &self.run, self.channel, &rest);
+        self.route(&rest);
+    }
+
+    /// Decode one line, dropping a trailing `\r` and skipping empties, then
+    /// route what the run's shared bounds admit.
+    fn route(&self, bytes: &[u8]) {
+        let bytes = bytes.strip_suffix(b"\r").unwrap_or(bytes);
+        if bytes.is_empty() {
+            return;
+        }
+        let mut record = LogRecord::now(
+            self.run.clone(),
+            self.channel,
+            level_for(self.channel),
+            String::from_utf8_lossy(bytes).into_owned(),
+        );
+        if self.bounds.admit(&mut record, Instant::now()) {
+            self.router.record(record);
+        }
     }
 }
 
@@ -99,21 +120,6 @@ fn level_for(channel: LogChannel) -> Level {
         LogChannel::Stderr => Level::WARN,
         _ => Level::INFO,
     }
-}
-
-/// Decode and route one line, dropping a trailing `\r` and skipping empties.
-fn route_line(router: &LogRouter, run: &RunId, channel: LogChannel, bytes: &[u8]) {
-    let bytes = bytes.strip_suffix(b"\r").unwrap_or(bytes);
-    if bytes.is_empty() {
-        return;
-    }
-    let message = String::from_utf8_lossy(bytes).into_owned();
-    router.record(LogRecord::now(
-        run.clone(),
-        channel,
-        level_for(channel),
-        message,
-    ));
 }
 
 impl AsyncWrite for LineWriter {
@@ -148,6 +154,9 @@ impl Drop for LineWriter {
 
 #[cfg(test)]
 mod tests {
+    use std::num::{NonZeroU32, NonZeroUsize};
+
+    use nexum_runtime_config::{DispatchRatePolicy, LogBoundsPolicy};
     use parking_lot::Mutex;
     use tokio::io::AsyncWriteExt;
 
@@ -174,17 +183,36 @@ mod tests {
 
     fn setup(channel: LogChannel) -> (LineWriter, Arc<CaptureStore>) {
         let store = Arc::new(CaptureStore::default());
-        let pipeline = LogPipeline::new(store.clone());
-        let writer = LineWriter {
-            router: pipeline.router(),
+        let bounds = SharedLogBounds::new(LogBoundsPolicy::default(), Instant::now());
+        (writer(&store, &bounds, channel), store)
+    }
+
+    fn writer(
+        store: &Arc<CaptureStore>,
+        bounds: &SharedLogBounds,
+        channel: LogChannel,
+    ) -> LineWriter {
+        LineWriter {
+            router: LogPipeline::new(store.clone()).router(),
+            bounds: bounds.clone(),
             run: RunId::new(
                 nexum_primitives::module_id::ModuleId::parse("m").expect("valid module name"),
                 0,
             ),
             channel,
             buf: Vec::new(),
-        };
-        (writer, store)
+        }
+    }
+
+    fn policy(cap: usize, burst: u32) -> LogBoundsPolicy {
+        LogBoundsPolicy {
+            max_record_bytes: NonZeroUsize::new(cap).expect("non-zero cap"),
+            // 1/s refills nothing over a flood of microseconds.
+            rate: DispatchRatePolicy::new(
+                NonZeroU32::new(burst).expect("non-zero burst"),
+                NonZeroU32::new(1).expect("non-zero rate"),
+            ),
+        }
     }
 
     fn messages(store: &CaptureStore) -> Vec<String> {
@@ -266,12 +294,44 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn over_long_unterminated_line_is_force_flushed() {
+    async fn over_long_unterminated_line_is_force_flushed_and_cut_to_the_cap() {
+        let cap = LogBoundsPolicy::default().max_record_bytes.get();
         let (mut w, store) = setup(LogChannel::Stdout);
-        let flood = vec![b'x'; MAX_LINE_BYTES + 1];
-        w.write_all(&flood).await.unwrap();
-        // The force-flush bounds host memory without waiting for a newline.
+        w.write_all(&vec![b'x'; cap + 1]).await.unwrap();
+        // The force-flush bounds host memory without waiting for a newline,
+        // and the same cap the host verbs pass bounds the record it makes.
         assert_eq!(messages(&store).len(), 1);
-        assert_eq!(messages(&store)[0].len(), MAX_LINE_BYTES + 1);
+        assert_eq!(messages(&store)[0].len(), cap);
+        assert!(messages(&store)[0].ends_with("...[truncated]"));
+    }
+
+    #[tokio::test]
+    async fn a_line_flood_past_the_burst_is_dropped() {
+        let store = Arc::new(CaptureStore::default());
+        let bounds = SharedLogBounds::new(policy(4096, 2), Instant::now());
+        let mut w = writer(&store, &bounds, LogChannel::Stdout);
+        for i in 0..8 {
+            w.write_all(format!("line {i}\n").as_bytes()).await.unwrap();
+        }
+        assert_eq!(
+            messages(&store),
+            ["line 0", "line 1"],
+            "a size bound alone would have let all eight lines through",
+        );
+    }
+
+    #[tokio::test]
+    async fn one_bucket_covers_both_pipes() {
+        let store = Arc::new(CaptureStore::default());
+        let bounds = SharedLogBounds::new(policy(4096, 2), Instant::now());
+        let mut out = writer(&store, &bounds, LogChannel::Stdout);
+        let mut err = writer(&store, &bounds, LogChannel::Stderr);
+        out.write_all(b"a\nb\n").await.unwrap();
+        err.write_all(b"c\n").await.unwrap();
+        assert_eq!(
+            messages(&store),
+            ["a", "b"],
+            "stderr found the burst already spent by stdout",
+        );
     }
 }

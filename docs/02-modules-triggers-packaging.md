@@ -90,7 +90,8 @@ An extension registers further names under its own namespace: see [the linker ex
 
 > Resource ceilings are set in `engine.toml` `[policy]`: `max_fuel_per_dispatch` (default 1e9), `max_memory_bytes` (default 64 MiB), and `max_state_bytes` (default 50 MiB).
 > The dispatch deadline is `[limits.dispatch].deadline_secs` (default 120).
-> `[policy]` also bounds the host logging verbs with `max_log_record_bytes` (default 8 KiB), `max_log_burst`, and `max_log_records_per_sec`: a record over the cap is truncated and a module over the rate loses records.
+> `[policy]` also bounds module logging with `max_log_record_bytes` (default 8 KiB), `max_log_burst`, and `max_log_records_per_sec`: a record over the cap is truncated and a module over the rate loses records.
+> The `nexum:host/logging` verbs and captured `stdout`/`stderr` lines share one bucket per run, so a `println!` loop is bounded exactly as a `log` loop is.
 > A `[policy.component.<id>]` row overrides them for one component, keyed on the `[[modules]].id` the operator writes.
 > They resolve in `crates/nexum-runtime/src/engine_config/`.
 > A `[component.resources]` field narrows one of them.
