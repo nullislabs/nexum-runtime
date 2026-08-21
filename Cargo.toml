@@ -52,12 +52,8 @@ repository = "https://github.com/nullislabs/nexum-runtime"
 # real module author has no access to this table, so they express-declare
 # their own external deps and inherit only local crates via `path`.
 # Version drift across the core crates is impossible by construction.
-#
-# `wit-bindgen` is the load-bearing case. It is not hoisted here: every guest
-# module declares `wit-bindgen = { version = "0.59", default-features = false,
-# features = ["macros", "realloc"] }` for itself. 0.59 is the canonical
-# version and a bump is applied module by module by hand. A staggered bump is
-# legitimate, so nothing enforces the version across the modules.
+# `wit-bindgen` is the case that bites: every module declares 0.59 itself,
+# bumped by hand, and a staggered bump is legitimate.
 [workspace.dependencies]
 # Error + async plumbing.
 anyhow = "1"
@@ -202,10 +198,8 @@ tower = "0.5"
 # Compile-fail harness pinning proc-macro rejection diagnostics.
 trybuild = "1"
 
-# cargo-machete greps a crate's own source for each dependency it declares. A
-# guest module reaches `wit-bindgen` only through the expansion of `#[module]`,
-# so a module with no hand-written `wit_bindgen::` path reads as unused. The
-# entry is workspace-wide because only guest modules declare `wit-bindgen`.
+# A module reaches `wit-bindgen` only through the `#[module]` expansion, which
+# machete's grep cannot see.
 [workspace.metadata.cargo-machete]
 ignored = ["wit-bindgen"]
 

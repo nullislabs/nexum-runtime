@@ -1,21 +1,10 @@
 #!/usr/bin/env bash
-# Two rules about `[workspace.dependencies]` that nothing else enforces.
+# Two rules on `[workspace.dependencies]` nothing else enforces: every key has
+# an inheritor, and no `modules/**` member inherits one. cargo-machete sees
+# neither, since the table belongs to no crate (bnjbvr/cargo-machete#274).
 #
-# Every key must be inherited by at least one member, or it is dead weight that
-# no build ever resolves. cargo-machete cannot see this: it checks a crate's
-# manifest against that crate's source, and a virtual workspace's dependency
-# table belongs to no crate (bnjbvr/cargo-machete#274).
-#
-# No `modules/**` member may inherit one. A guest module is a copy-paste
-# template for an author who has no access to this table, so it declares its
-# external dependencies literally.
-#
-# A member inherits with `dep.workspace = true` or with
-# `dep = { workspace = true, ... }`, in any dependency table including a
-# `[target.'cfg(..)']` one, so both spellings count as an inheritor. The match
-# is line-shaped: a member that split an inline table over two physical lines
-# would read as no inheritor. Nothing in the tree does that, and the failure
-# direction is the safe one.
+# The inheritor match is line-shaped, so an inline table split over two lines
+# reads as none. Nothing does that, and it fails loud.
 
 set -euo pipefail
 
@@ -28,23 +17,19 @@ fail() {
     status=1
 }
 
-# axum is declared with no inheritor on purpose: nullislabs/nexum-runtime#147
-# owns the decision, because the declaration is its evidence that the health
-# endpoint was reserved for axum.
+# Reserved with no inheritor on purpose; #147 owns the decision.
 EXEMPT="axum"
 
 INHERITS='(\.workspace[[:space:]]*=[[:space:]]*true|=[[:space:]]*\{[^}]*workspace[[:space:]]*=[[:space:]]*true)'
 
 mapfile -t members < <(git ls-files '*Cargo.toml' | grep -vx 'Cargo.toml')
-# grep with no file operand reads stdin, so an empty list would hang the job
-# rather than fail it.
+# grep with no file operand reads stdin, so an empty list would hang.
 if [ "${#members[@]}" -eq 0 ]; then
     fail "found no member manifests to check"
     exit 1
 fi
 
-# A sub-table spells its key in the header; every other key is the left-hand
-# side of an assignment in the flat table.
+# A sub-table spells its key in the header; the rest assign in the flat table.
 mapfile -t keys < <(awk '
     /^\[workspace\.dependencies\][[:space:]]*(#.*)?$/ { flat = 1; next }
     /^\[workspace\.dependencies\./ {
@@ -57,8 +42,7 @@ mapfile -t keys < <(awk '
     /^\[/ { flat = 0 }
     flat && /^[A-Za-z0-9_-]+[[:space:]]*=/ { sub(/[[:space:]]*=.*$/, ""); print }
 ' Cargo.toml)
-# Reading nothing means the table moved or was respelled, not that it is clean.
-# Without this the whole check reports ok while inspecting no key at all.
+# Reading nothing means the table moved, not that it is clean.
 if [ "${#keys[@]}" -eq 0 ]; then
     fail "read no keys from [workspace.dependencies] in Cargo.toml"
     exit 1

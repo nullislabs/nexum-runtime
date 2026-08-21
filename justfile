@@ -55,14 +55,12 @@ zero-leak:
 msrv:
     ./scripts/msrv-lint.sh
 
-# Check that every `[workspace.dependencies]` entry has an inheritor, and that
-# no guest module is one. cargo-machete cannot see either case
-# (bnjbvr/cargo-machete#274), so the two checks are complementary.
-# Compiles nothing.
+# Every `[workspace.dependencies]` entry has an inheritor, and no guest module
+# is one. Compiles nothing.
 workspace-deps:
     ./scripts/workspace-deps-lint.sh
 
-# Check for per-crate unused dependencies. Compiles nothing.
+# Per-crate unused dependencies. Compiles nothing.
 machete:
     cargo machete
 
@@ -74,9 +72,7 @@ check:
 
 # Run the full CI series locally before pushing. Mirrors
 # .github/workflows/ci.yml one-to-one: house style, the zero-leak gate, the
-# MSRV gate, the two dependency gates, rustfmt, clippy, rustdoc, the module
-# wasms the integration tests need, and the workspace test suite via nextest
-# plus the doctests, all under the `-D warnings` the CI workflow sets globally.
+# The full CI series.
 ci:
     #!/usr/bin/env bash
     set -euo pipefail
