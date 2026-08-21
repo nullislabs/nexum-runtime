@@ -4,6 +4,7 @@ use std::num::{NonZeroU32, NonZeroU64, NonZeroUsize};
 
 use ipnet::IpNet;
 use serde::Deserialize;
+use tracing::Level;
 
 use nexum_primitives::host_pattern::HostPattern;
 
@@ -23,6 +24,10 @@ const DEFAULT_STATE_BYTES: u64 = 50 * 1024 * 1024;
 /// Default cap on one host log record (8 KiB).
 const DEFAULT_LOG_RECORD_BYTES: NonZeroUsize = nz_usize(8 * 1024);
 
+/// Default retention floor; the console floor derives from it, so an
+/// operator who sets nothing filters nothing.
+const DEFAULT_LOG_LEVEL: Level = Level::TRACE;
+
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct RawPolicySection {
@@ -32,6 +37,10 @@ pub(super) struct RawPolicySection {
     max_log_record_bytes: Option<usize>,
     max_log_burst: Option<u32>,
     max_log_records_per_sec: Option<u32>,
+    log_print_level: Option<String>,
+    log_retain_level: Option<String>,
+    #[serde(default)]
+    log_targets: BTreeMap<String, String>,
     capabilities: Option<Vec<String>>,
     #[serde(default)]
     http_deny: Vec<String>,
@@ -56,6 +65,9 @@ struct RawComponentPolicy {
     max_log_record_bytes: Option<usize>,
     max_log_burst: Option<u32>,
     max_log_records_per_sec: Option<u32>,
+    log_print_level: Option<String>,
+    log_retain_level: Option<String>,
+    log_targets: Option<BTreeMap<String, String>>,
     capabilities: Option<Vec<String>>,
     http_allow: Option<Vec<String>>,
 }
@@ -77,6 +89,8 @@ pub struct PolicySection {
     pub total: TotalPolicy,
     /// `[policy.component.<id>]` rows, keyed on `[[modules]].id`.
     pub component: HashMap<String, ComponentPolicy>,
+    /// Levels a captured record must clear to be printed and to be kept.
+    pub log_filter: LogFilterPolicy,
 }
 
 impl PolicySection {
@@ -111,8 +125,71 @@ impl PolicySection {
                 .and_then(|r| r.capabilities.as_deref())
                 .or(self.capabilities.as_deref()),
             http_allow: row.and_then(|r| r.http_allow.as_deref()),
+            log_filter: LogFilterPolicy {
+                // A row that sets only retain derives its console from that
+                // retain, so narrowing one knob cannot leave a louder
+                // inherited console behind it.
+                console: row
+                    .and_then(|r| r.log_print_level.or(r.log_retain_level))
+                    .unwrap_or(self.log_filter.console),
+                retain: row
+                    .and_then(|r| r.log_retain_level)
+                    .unwrap_or(self.log_filter.retain),
+                // A row's table replaces rather than extends.
+                targets: row
+                    .and_then(|r| r.log_targets.clone())
+                    .unwrap_or_else(|| self.log_filter.targets.clone()),
+            },
         }
     }
+}
+
+/// Levels a captured record clears to reach the console and the retention
+/// store; `retain` is never stricter than any console level.
+#[derive(Debug, Clone)]
+pub struct LogFilterPolicy {
+    /// Floor for the host `tracing` event, per target below.
+    pub console: Level,
+    /// Floor for the retention store, which no target row narrows.
+    pub retain: Level,
+    /// Per-target console floors; a stdio record carries no target and
+    /// always takes [`Self::console`].
+    pub targets: BTreeMap<String, Level>,
+}
+
+impl LogFilterPolicy {
+    /// Which sinks a record of `level` from `target` reaches.
+    pub fn verdict(&self, level: Level, target: &str) -> LogVerdict {
+        let console = self.targets.get(target).copied().unwrap_or(self.console);
+        if level <= console {
+            LogVerdict::Emit
+        } else if level <= self.retain {
+            LogVerdict::Retain
+        } else {
+            LogVerdict::Drop
+        }
+    }
+}
+
+impl Default for LogFilterPolicy {
+    fn default() -> Self {
+        Self {
+            console: DEFAULT_LOG_LEVEL,
+            retain: DEFAULT_LOG_LEVEL,
+            targets: BTreeMap::new(),
+        }
+    }
+}
+
+/// What a record cleared; [`LogVerdict::Emit`] implies retention too.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LogVerdict {
+    /// Neither floor: discarded.
+    Drop,
+    /// The retention floor only: kept for `nexum logs`, never printed.
+    Retain,
+    /// Both floors: printed and kept.
+    Emit,
 }
 
 /// The `[policy]` scalar ceilings; a `[component.resources]` request
@@ -185,6 +262,13 @@ pub struct ComponentPolicy {
     pub max_log_burst: Option<NonZeroU32>,
     /// Log sustained rate override.
     pub max_log_records_per_sec: Option<NonZeroU32>,
+    /// Console level override; unset, it derives from
+    /// [`Self::log_retain_level`] when that is set.
+    pub log_print_level: Option<Level>,
+    /// Retention level override.
+    pub log_retain_level: Option<Level>,
+    /// Per-target console levels, replacing the `[policy]` table whole.
+    pub log_targets: Option<BTreeMap<String, Level>>,
     /// Capability allowlist override.
     pub capabilities: Option<Vec<String>>,
     /// Operator host allowlist; the effective host set is the manifest's
@@ -193,7 +277,7 @@ pub struct ComponentPolicy {
 }
 
 /// One component's resolved view of `[policy]`.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct EffectivePolicy<'a> {
     /// Ceilings the component's manifest may narrow.
     pub ceilings: PolicyCeilings,
@@ -202,6 +286,8 @@ pub struct EffectivePolicy<'a> {
     /// Operator host allowlist; `None` leaves the manifest `hosts` list
     /// as the only name-level gate.
     pub http_allow: Option<&'a [HostPattern]>,
+    /// Levels this component's captured records clear.
+    pub log_filter: LogFilterPolicy,
 }
 
 /// A `[policy.component.<id>]` size override; a zero refuses, naming the row.
@@ -218,6 +304,50 @@ fn row_usize(
 fn row_u32(id: &str, f: &str, v: Option<u32>) -> Result<Option<NonZeroU32>, EngineConfigError> {
     v.map(|v| NonZeroU32::new(v).ok_or_else(|| zero_field(&format!("policy.component.{id}.{f}"))))
         .transpose()
+}
+
+fn opt_level(field: &str, value: Option<&String>) -> Result<Option<Level>, EngineConfigError> {
+    value.map(|v| parse_level(field, v)).transpose()
+}
+
+/// A level as the operator spelled it, refused by TOML path.
+fn parse_level(field: &str, value: &str) -> Result<Level, EngineConfigError> {
+    value
+        .parse()
+        .map_err(|_| EngineConfigError::InvalidLogLevel {
+            field: field.to_owned(),
+            value: value.to_owned(),
+        })
+}
+
+fn parse_targets(
+    scope: &str,
+    raw: BTreeMap<String, String>,
+) -> Result<BTreeMap<String, Level>, EngineConfigError> {
+    raw.into_iter()
+        .map(|(target, level)| {
+            let parsed = parse_level(&format!("{scope}.log_targets.{target}"), &level)?;
+            Ok((target, parsed))
+        })
+        .collect()
+}
+
+/// Refuse a console floor past retention, target rows folded in: printing
+/// what `nexum logs` never kept loses the record where an operator looks.
+fn check_retention(scope: &str, filter: &LogFilterPolicy) -> Result<(), EngineConfigError> {
+    let console = filter
+        .targets
+        .values()
+        .copied()
+        .fold(filter.console, Level::max);
+    if console > filter.retain {
+        return Err(EngineConfigError::LogRetentionTooStrict {
+            scope: scope.to_owned(),
+            console: console.to_string(),
+            retain: filter.retain.to_string(),
+        });
+    }
+    Ok(())
 }
 
 fn parse_http_deny(entry: &str) -> Result<IpNet, EngineConfigError> {
@@ -311,6 +441,18 @@ pub(super) fn resolve_policy(
                 "max_log_records_per_sec",
                 row.max_log_records_per_sec,
             )?,
+            log_print_level: opt_level(
+                &format!("policy.component.{id}.log_print_level"),
+                row.log_print_level.as_ref(),
+            )?,
+            log_retain_level: opt_level(
+                &format!("policy.component.{id}.log_retain_level"),
+                row.log_retain_level.as_ref(),
+            )?,
+            log_targets: row
+                .log_targets
+                .map(|t| parse_targets(&format!("policy.component.{id}"), t))
+                .transpose()?,
             capabilities: row.capabilities,
             http_allow: row.http_allow.map(|hosts| {
                 hosts
@@ -321,13 +463,31 @@ pub(super) fn resolve_policy(
         };
         component.insert(id, resolved);
     }
-    Ok(PolicySection {
+    let retain = opt_level("policy.log_retain_level", raw.log_retain_level.as_ref())?
+        .unwrap_or(DEFAULT_LOG_LEVEL);
+    let resolved = PolicySection {
         ceilings,
         capabilities: raw.capabilities,
         http_deny,
         total,
         component,
-    })
+        log_filter: LogFilterPolicy {
+            // An unset console derives from retention, so quietening
+            // retention alone stays coherent rather than refusing.
+            console: opt_level("policy.log_print_level", raw.log_print_level.as_ref())?
+                .unwrap_or(retain),
+            retain,
+            targets: parse_targets("policy", raw.log_targets)?,
+        },
+    };
+    check_retention("policy", &resolved.log_filter)?;
+    for id in resolved.component.keys() {
+        check_retention(
+            &format!("policy.component.{id}"),
+            &resolved.for_component(id).log_filter,
+        )?;
+    }
+    Ok(resolved)
 }
 
 #[cfg(test)]
@@ -403,6 +563,128 @@ path = "w.wasm"
         let bare = cfg.policy.for_component("tracker").ceilings.log_bounds;
         assert_eq!(bare.max_record_bytes.get(), 4096);
         assert_eq!(bare.rate.refill_per_sec, DEFAULT_LOG_RATE.refill_per_sec);
+    }
+
+    #[test]
+    fn log_filter_narrows_per_component_and_falls_back_to_policy() {
+        let cfg: EngineConfig = toml::from_str(
+            r#"
+[policy]
+log_print_level  = "warn"
+log_retain_level = "debug"
+[policy.log_targets]
+keeper = "info"
+[policy.component.wallet]
+log_print_level = "info"
+[policy.component.wallet.log_targets]
+keeper = "debug"
+[[modules]]
+id   = "wallet"
+path = "w.wasm"
+[[modules]]
+id   = "tracker"
+path = "t.wasm"
+"#,
+        )
+        .expect("log filter rows parse");
+        let wallet = cfg.policy.for_component("wallet").log_filter;
+        assert_eq!(wallet.console, Level::INFO);
+        // An unset row field takes the [policy] value, not the built-in.
+        assert_eq!(wallet.retain, Level::DEBUG);
+        assert_eq!(wallet.verdict(Level::DEBUG, "keeper"), LogVerdict::Emit);
+        assert_eq!(wallet.verdict(Level::DEBUG, "signer"), LogVerdict::Retain);
+        assert_eq!(wallet.verdict(Level::TRACE, "signer"), LogVerdict::Drop);
+        let bare = cfg.policy.for_component("tracker").log_filter;
+        assert_eq!(bare.verdict(Level::INFO, "keeper"), LogVerdict::Emit);
+        assert_eq!(bare.verdict(Level::INFO, "signer"), LogVerdict::Retain);
+    }
+
+    #[test]
+    fn an_unset_filter_admits_every_record_to_both_sinks() {
+        let cfg: EngineConfig = toml::from_str("").expect("empty config parses");
+        let filter = cfg.policy.for_component("anything").log_filter;
+        assert_eq!(filter.verdict(Level::TRACE, ""), LogVerdict::Emit);
+    }
+
+    #[test]
+    fn a_retain_level_alone_derives_the_console_it_never_set() {
+        let cfg: EngineConfig = toml::from_str(
+            r#"
+[policy]
+log_retain_level = "warn"
+[policy.component.wallet]
+log_retain_level = "info"
+[[modules]]
+id   = "wallet"
+path = "w.wasm"
+"#,
+        )
+        .expect("a retain level alone is coherent, not a refusal");
+        let bare = cfg.policy.for_component("tracker").log_filter;
+        assert_eq!(bare.console, Level::WARN);
+        assert_eq!(bare.retain, Level::WARN);
+        // The row's console derives from the row's retain, not the louder
+        // [policy] console it would otherwise inherit.
+        let wallet = cfg.policy.for_component("wallet").log_filter;
+        assert_eq!(wallet.console, Level::INFO);
+        assert_eq!(wallet.retain, Level::INFO);
+    }
+
+    #[test]
+    fn a_print_level_alone_leaves_retention_keeping_everything() {
+        let cfg: EngineConfig =
+            toml::from_str("[policy]\nlog_print_level = \"warn\"\n").expect("a print level alone");
+        let filter = cfg.policy.for_component("anything").log_filter;
+        assert_eq!(filter.console, Level::WARN);
+        assert_eq!(filter.retain, Level::TRACE);
+        assert_eq!(filter.verdict(Level::DEBUG, ""), LogVerdict::Retain);
+    }
+
+    #[test]
+    fn a_console_level_past_retention_refuses_naming_its_scope() {
+        let refused_scope = |src: &str| {
+            let raw = toml::from_str::<RawEngineConfig>(src)
+                .expect("the raw parse only decides the TOML is well formed");
+            match EngineConfig::try_from(raw) {
+                Err(EngineConfigError::LogRetentionTooStrict { scope, .. }) => scope,
+                Err(other) => panic!("wrong refusal: {other:?}"),
+                Ok(_) => panic!("printing what is never kept must refuse"),
+            }
+        };
+        assert_eq!(
+            refused_scope("[policy]\nlog_print_level = \"debug\"\nlog_retain_level = \"warn\"\n"),
+            "policy",
+        );
+        assert_eq!(
+            refused_scope(
+                r#"
+[policy]
+log_print_level  = "info"
+log_retain_level = "info"
+[policy.component.wallet.log_targets]
+keeper = "trace"
+[[modules]]
+id   = "wallet"
+path = "w.wasm"
+"#
+            ),
+            "policy.component.wallet",
+        );
+    }
+
+    #[test]
+    fn a_level_that_is_not_a_level_refuses_by_toml_path() {
+        let raw = toml::from_str::<RawEngineConfig>("[policy.log_targets]\nkeeper = \"verbose\"\n")
+            .expect("the raw parse only decides the TOML is well formed");
+        let err = EngineConfig::try_from(raw).expect_err("verbose is not a level");
+        assert!(
+            matches!(
+                err,
+                EngineConfigError::InvalidLogLevel { ref field, ref value }
+                    if field == "policy.log_targets.keeper" && value == "verbose"
+            ),
+            "{err:?}",
+        );
     }
 
     #[test]

@@ -6,20 +6,20 @@ use std::io;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
-use std::time::Instant;
 
 use tokio::io::AsyncWrite;
 use wasmtime_wasi::cli::{IsTerminal, StdoutStream};
 
 use tracing_core::Level;
 
-use super::{LogChannel, LogRecord, LogRouter, RunId, SharedLogBounds};
+use super::{LogChannel, LogRecord, LogRouter, RunId, SharedLogBounds, SharedLogFilter};
 
 /// Per-store stdout or stderr sink; each [`StdoutStream::async_stream`] yields
 /// a line-splitting writer bound to the run and channel.
 pub struct StdioStream {
     router: Arc<LogRouter>,
     bounds: SharedLogBounds,
+    filter: SharedLogFilter,
     run: RunId,
     channel: LogChannel,
 }
@@ -30,12 +30,14 @@ impl StdioStream {
     pub fn new(
         router: Arc<LogRouter>,
         bounds: SharedLogBounds,
+        filter: SharedLogFilter,
         run: RunId,
         channel: LogChannel,
     ) -> Self {
         Self {
             router,
             bounds,
+            filter,
             run,
             channel,
         }
@@ -53,6 +55,7 @@ impl StdoutStream for StdioStream {
         Box::new(LineWriter {
             router: self.router.clone(),
             bounds: self.bounds.clone(),
+            filter: self.filter.clone(),
             run: self.run.clone(),
             channel: self.channel,
             buf: Vec::new(),
@@ -66,6 +69,7 @@ impl StdoutStream for StdioStream {
 struct LineWriter {
     router: Arc<LogRouter>,
     bounds: SharedLogBounds,
+    filter: SharedLogFilter,
     run: RunId,
     channel: LogChannel,
     buf: Vec<u8>,
@@ -96,21 +100,20 @@ impl LineWriter {
     }
 
     /// Decode one line, dropping a trailing `\r` and skipping empties, then
-    /// route what the run's shared bounds admit.
+    /// route what the run's filter and shared bounds admit. A captured line
+    /// carries no target, so the filter sees its channel level alone.
     fn route(&self, bytes: &[u8]) {
         let bytes = bytes.strip_suffix(b"\r").unwrap_or(bytes);
         if bytes.is_empty() {
             return;
         }
-        let mut record = LogRecord::now(
+        let record = LogRecord::now(
             self.run.clone(),
             self.channel,
             level_for(self.channel),
             String::from_utf8_lossy(bytes).into_owned(),
         );
-        if self.bounds.admit(&mut record, Instant::now()) {
-            self.router.record(record);
-        }
+        self.filter.route(&self.router, &self.bounds, record);
     }
 }
 
@@ -154,32 +157,16 @@ impl Drop for LineWriter {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
     use std::num::{NonZeroU32, NonZeroUsize};
+    use std::time::Instant;
 
-    use nexum_runtime_config::{DispatchRatePolicy, LogBoundsPolicy};
-    use parking_lot::Mutex;
+    use nexum_runtime_config::{DispatchRatePolicy, LogBoundsPolicy, LogFilterPolicy};
     use tokio::io::AsyncWriteExt;
 
     use super::*;
-    use crate::logs::{LogChannel, LogPipeline, LogRecord, RunId, RunLogStore};
-
-    /// Store recording every appended message for assertions.
-    #[derive(Default)]
-    struct CaptureStore {
-        records: Mutex<Vec<LogRecord>>,
-    }
-
-    impl RunLogStore for CaptureStore {
-        fn append(&self, record: LogRecord) {
-            self.records.lock().push(record);
-        }
-        fn list_runs(&self, _module: &str) -> Vec<crate::logs::RunMeta> {
-            Vec::new()
-        }
-        fn read(&self, _run: &RunId, _cursor: u64) -> crate::logs::LogPage {
-            crate::logs::LogPage::default()
-        }
-    }
+    use crate::logs::test_support::{CaptureStore, Console, run_id};
+    use crate::logs::{LogChannel, LogPipeline};
 
     fn setup(channel: LogChannel) -> (LineWriter, Arc<CaptureStore>) {
         let store = Arc::new(CaptureStore::default());
@@ -192,13 +179,20 @@ mod tests {
         bounds: &SharedLogBounds,
         channel: LogChannel,
     ) -> LineWriter {
+        writer_filtered(store, bounds, channel, LogFilterPolicy::default())
+    }
+
+    fn writer_filtered(
+        store: &Arc<CaptureStore>,
+        bounds: &SharedLogBounds,
+        channel: LogChannel,
+        filter: LogFilterPolicy,
+    ) -> LineWriter {
         LineWriter {
             router: LogPipeline::new(store.clone()).router(),
             bounds: bounds.clone(),
-            run: RunId::new(
-                nexum_primitives::module_id::ModuleId::parse("m").expect("valid module name"),
-                0,
-            ),
+            filter: SharedLogFilter::new(filter),
+            run: run_id(),
             channel,
             buf: Vec::new(),
         }
@@ -216,12 +210,7 @@ mod tests {
     }
 
     fn messages(store: &CaptureStore) -> Vec<String> {
-        store
-            .records
-            .lock()
-            .iter()
-            .map(|r| r.message.clone())
-            .collect()
+        store.messages()
     }
 
     #[tokio::test]
@@ -317,6 +306,30 @@ mod tests {
             messages(&store),
             ["line 0", "line 1"],
             "a size bound alone would have let all eight lines through",
+        );
+    }
+
+    #[test]
+    fn a_console_floor_silences_stdout_without_losing_the_line() {
+        let store = Arc::new(CaptureStore::default());
+        let bounds = SharedLogBounds::new(LogBoundsPolicy::default(), Instant::now());
+        let quiet = LogFilterPolicy {
+            console: Level::WARN,
+            retain: Level::TRACE,
+            targets: BTreeMap::new(),
+        };
+        let out = writer_filtered(&store, &bounds, LogChannel::Stdout, quiet.clone());
+        let err = writer_filtered(&store, &bounds, LogChannel::Stderr, quiet);
+        let printed = Console::printed(|| {
+            out.route(b"println debugging");
+            err.route(b"oops");
+        });
+        assert!(!printed.contains("println debugging"), "{printed}");
+        assert!(printed.contains("oops"), "stderr clears warn: {printed}");
+        assert_eq!(
+            messages(&store),
+            ["println debugging", "oops"],
+            "`nexum logs` keeps the line the console never printed",
         );
     }
 

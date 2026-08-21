@@ -67,6 +67,25 @@ pub enum EngineConfigError {
         /// The row's key as written.
         id: String,
     },
+    /// A log level that is not one of the five names.
+    #[error("engine config: {field} value {value:?} is not a log level")]
+    InvalidLogLevel {
+        /// TOML path of the refused field.
+        field: String,
+        /// The level as written.
+        value: String,
+    },
+    /// Refused rather than allowed: a console louder than retention prints
+    /// what `nexum logs` never kept.
+    #[error("engine config: [{scope}] prints {console} but retains only {retain}")]
+    LogRetentionTooStrict {
+        /// The `[policy]` or `[policy.component.<id>]` scope.
+        scope: String,
+        /// The loudest console level in that scope, target rows included.
+        console: String,
+        /// The retention level it outruns.
+        retain: String,
+    },
     /// Refused rather than skipped: a dropped deny entry fails open.
     #[error("engine config: policy.http_deny entry {entry:?} is not an IP address or CIDR block")]
     InvalidHttpDeny {

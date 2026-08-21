@@ -191,6 +191,7 @@ With `enabled = false` the recorder is still installed, so call sites stay live,
 | `nexum_runtime_log_records_dropped_total` | counter | `module`, `channel` | Module log records dropped whole by the per-component log rate limit (`[policy]`, default `max_log_burst = 256` and `max_log_records_per_sec = 128`). `channel` is the capture point the record entered by, one of `host_interface`, `stdout` or `stderr`; all of them spend one bucket per run. A sustained rate here is a module flooding the log sink. |
 | `nexum_runtime_log_records_truncated_total` | counter | `module`, `channel` | Module log records shortened to fit `[policy] max_log_record_bytes` (default 8 KiB). The message is kept and marked `...[truncated]`; the file is cut first, and the target holds a 128-byte allowance ahead of the message so an oversized record still names its subsystem. A captured stdout or stderr line past the cap is cut the same way. |
 | `nexum_runtime_log_fields_dropped_total` | counter | `module`, `channel` | Structured log fields dropped past the same per-record cap, last-recorded first, so the earliest context survives. |
+| `nexum_runtime_log_records_filtered_total` | counter | `module`, `channel` | Module log records dropped by the `[policy]` log filter, which is an operator choice rather than a loss. A record kept out of the console but not out of retention is not counted here. |
 
 `crates/nexum-runtime-metrics/src/lib.rs` is the single source of the name set, and a test refuses any emitted name the table does not carry.
 
@@ -309,6 +310,12 @@ A `[component.resources]` field in a manifest narrows a ceiling for one componen
 The `nexum:host/logging` verbs and the captured stdout and stderr lines spend one bucket per run, so the rate is records per second for the component however it writes them.
 The supervisor's death record is host-synthesized and stays ungated.
 A module past either bound loses records rather than the host, and the three `nexum_runtime_log_*` counters in section 6 say which bound it crossed and on which channel.
+`[policy]` also filters that path by level and target, on two thresholds: `log_print_level` gates the console and `log_retain_level` gates what `nexum logs` keeps, with a `[policy.log_targets]` table lifting named targets above `log_print_level`.
+`log_retain_level` defaults to `trace` and `log_print_level` defaults to whatever retention resolves to, so setting retention alone quietens both and setting `log_print_level` alone prints less while keeping everything; a console louder than retention refuses at load, target rows included.
+A captured stdout or stderr line carries no target, so it is filtered on its channel level alone, `INFO` for stdout and `WARN` for stderr.
+The filter runs before the bound, so a record it drops spends no token of the run's bucket.
+A `[policy.log_targets]` key matches the guest-reported target exactly, which for an SDK module is the emitting Rust module path unless the guest passes an explicit `target`.
+`[policy] log_print_level` gates the host record alone, and the process subscriber applies `[engine] log_level` (default `info`) on top of it, so a target lifted to `debug` also needs the engine level at `debug` before it reaches a terminal.
 A component that consistently traps on fuel exhaustion is a bug, not a tuning miss.
 
 ## 9. Runbook

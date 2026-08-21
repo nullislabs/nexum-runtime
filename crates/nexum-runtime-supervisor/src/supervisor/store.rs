@@ -10,7 +10,7 @@ use wasmtime_wasi::{HostMonotonicClock, HostWallClock, WasiCtxBuilder};
 
 use super::Shared;
 use crate::bindings::TriggerModule;
-use crate::engine_config::{LogBoundsPolicy, OutboundHttpLimits, PolicyCeilings};
+use crate::engine_config::{LogBoundsPolicy, LogFilterPolicy, OutboundHttpLimits, PolicyCeilings};
 use crate::error::{EngineRefusal, RuntimeError};
 use crate::manifest::ResourceSection;
 use nexum_primitives::host_pattern::HostPattern;
@@ -18,7 +18,7 @@ use nexum_primitives::module_id::ModuleId;
 use nexum_runtime_api::Extension;
 use nexum_runtime_api::{RuntimeTypes, StateHandle, StateStore};
 use nexum_runtime_http::HttpGate;
-use nexum_runtime_logs::{LogChannel, RunId, SharedLogBounds, StdioStream};
+use nexum_runtime_logs::{LogChannel, RunId, SharedLogBounds, SharedLogFilter, StdioStream};
 use nexum_runtime_wasm::HostState;
 
 pub(super) type HostStore<T> = Store<HostState<T>>;
@@ -127,6 +127,8 @@ pub(super) struct StoreSpec {
     /// Admission bounds shared by every capture point of one run; a restart
     /// mints a fresh bucket, so this is per run, not per module lifetime.
     pub(super) log_bounds: LogBoundsPolicy,
+    /// Operator filter shared by the same capture points as the bounds.
+    pub(super) log_filter: LogFilterPolicy,
 }
 
 /// Mints the run identity for `name` at `seq` and builds its store.
@@ -151,17 +153,20 @@ fn build<T: RuntimeTypes>(
     // grants no network, so the allowlisted wasi:http gate is the only live path.
     let router = shared.components.logs.router();
     let bounds = SharedLogBounds::new(spec.log_bounds, std::time::Instant::now());
+    let filter = SharedLogFilter::new(spec.log_filter.clone());
     let mut builder = WasiCtxBuilder::new();
     builder
         .stdout(StdioStream::new(
             router.clone(),
             bounds.clone(),
+            filter.clone(),
             run.clone(),
             LogChannel::Stdout,
         ))
         .stderr(StdioStream::new(
             router.clone(),
             bounds.clone(),
+            filter.clone(),
             run.clone(),
             LogChannel::Stderr,
         ));
@@ -197,6 +202,7 @@ fn build<T: RuntimeTypes>(
             run,
             log_router: router,
             log_bounds: bounds,
+            log_filter: filter,
             chain: shared.components.chain.clone(),
             chain_response_max_bytes: spec.chain_response_max_bytes,
             store: module_store,

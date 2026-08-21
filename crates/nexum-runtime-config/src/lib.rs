@@ -25,7 +25,8 @@ pub use limits::{
 pub use load::load_or_default;
 pub use poison_policy::{POISON_MAX_FAILURES, POISON_WINDOW, PoisonPolicy, should_poison};
 pub use policy::{
-    ComponentPolicy, EffectivePolicy, LogBoundsPolicy, PolicyCeilings, PolicySection, TotalPolicy,
+    ComponentPolicy, EffectivePolicy, LogBoundsPolicy, LogFilterPolicy, LogVerdict, PolicyCeilings,
+    PolicySection, TotalPolicy,
 };
 
 use std::collections::{HashMap, HashSet};

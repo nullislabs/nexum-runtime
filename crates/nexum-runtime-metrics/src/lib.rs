@@ -77,6 +77,11 @@ pub const METRICS: &[Metric] = &[
         help: "Module log records dropped whole by the per-run log rate limit, by module and channel.",
     },
     Metric {
+        name: "nexum_runtime_log_records_filtered_total",
+        kind: Kind::Counter,
+        help: "Module log records dropped by the operator log filter, by module and channel. An operator choice, not a loss.",
+    },
+    Metric {
         name: "nexum_runtime_log_records_truncated_total",
         kind: Kind::Counter,
         help: "Module log records shortened to fit the per-record byte cap, by module and channel.",
