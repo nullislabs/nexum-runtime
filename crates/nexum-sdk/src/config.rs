@@ -51,9 +51,9 @@ impl From<ConfigError> for Fault {
         // crate, so a later variant has to pick a destination here
         // instead of inheriting one from a wildcard.
         match e {
-            // Not a bad request: the config the module needs is not
-            // ready yet.
-            ConfigError::NotInitialized => Fault::Unavailable(message),
+            // A module whose `init` returned `Ok` without storing: a
+            // guest bug that never recovers, so not `Unavailable`.
+            ConfigError::NotInitialized => Fault::Internal(message),
             ConfigError::MissingKey { .. }
             | ConfigError::Parse { .. }
             | ConfigError::Range { .. }
@@ -227,10 +227,10 @@ mod tests {
     }
 
     #[test]
-    fn not_initialized_folds_into_an_unavailable_fault() {
+    fn not_initialized_folds_into_an_internal_fault() {
         let fault = Fault::from(ConfigError::NotInitialized);
-        let Fault::Unavailable(message) = fault else {
-            panic!("expected unavailable fault, got {fault:?}");
+        let Fault::Internal(message) = fault else {
+            panic!("expected internal fault, got {fault:?}");
         };
         assert_eq!(message, "config not initialized");
     }
