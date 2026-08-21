@@ -54,11 +54,11 @@ fn probe_denied<F: Fetch>(fetcher: &F, url: &str) -> Result<(), Fault> {
             tracing::info!("http-probe {url} denied by allowlist, as expected");
             Ok(())
         }
-        Ok(response) => Err(internal(format!(
+        Ok(response) => Err(Fault::internal(format!(
             "expected {url} to be denied by the allowlist, got status {}",
             response.status().as_u16(),
         ))),
-        Err(other) => Err(internal(format!(
+        Err(other) => Err(Fault::internal(format!(
             "expected {url} to be denied by the allowlist, got: {other}",
         ))),
     }
@@ -68,7 +68,7 @@ fn probe_denied<F: Fetch>(fetcher: &F, url: &str) -> Result<(), Fault> {
 fn get_request(url: &str) -> Result<http::Request<Vec<u8>>, Fault> {
     http::Request::get(url)
         .body(Vec::new())
-        .map_err(|e| invalid_input(format!("probe url {url}: {e}")))
+        .map_err(|e| Fault::invalid_input(format!("probe url {url}: {e}")))
 }
 
 /// Lift a [`FetchError`] into a [`Fault`], preserving the case.
@@ -76,16 +76,12 @@ fn fetch_err(url: &str, error: &FetchError) -> Fault {
     let detail = format!("fetch {url}: {error}");
     match error {
         FetchError::Denied => Fault::Denied(detail),
-        FetchError::InvalidRequest(_) => Fault::InvalidInput(detail),
+        FetchError::InvalidRequest(_) => Fault::invalid_input(detail),
         FetchError::Timeout(_) => Fault::Timeout,
         // `FetchError` is `#[non_exhaustive]`: a future case folds to
         // retryable `unavailable` with its detail.
         _ => Fault::Unavailable(detail),
     }
-}
-
-fn internal(message: String) -> Fault {
-    Fault::Internal(message)
 }
 
 /// Parse `component.toml::[config]` into a typed [`Settings`].
@@ -95,21 +91,17 @@ pub fn parse_config(entries: &[(String, String)]) -> Result<Settings, Fault> {
     let every_n_blocks = match config::get_optional(entries, "every_n_blocks") {
         Some(raw) => raw
             .parse::<u64>()
-            .map_err(|e| invalid_input(format!("every_n_blocks: {e}")))?,
+            .map_err(|e| Fault::invalid_input(format!("every_n_blocks: {e}")))?,
         None => 1,
     };
     if every_n_blocks == 0 {
-        return Err(invalid_input("every_n_blocks must be >= 1".to_owned()));
+        return Err(Fault::invalid_input("every_n_blocks must be >= 1"));
     }
     Ok(Settings {
         probe_url: probe_url.to_owned(),
         denied_url: denied_url.to_owned(),
         every_n_blocks,
     })
-}
-
-fn invalid_input(message: String) -> Fault {
-    Fault::InvalidInput(message)
 }
 
 #[cfg(test)]

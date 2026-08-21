@@ -44,6 +44,35 @@ pub enum Fault {
     Internal(String),
 }
 
+/// Constructors for the free-text cases, lifting any detail that is
+/// `Into<String>`. The unit cases need none.
+impl Fault {
+    /// [`Fault::Unsupported`].
+    pub fn unsupported(detail: impl Into<String>) -> Self {
+        Self::Unsupported(detail.into())
+    }
+
+    /// [`Fault::Unavailable`].
+    pub fn unavailable(detail: impl Into<String>) -> Self {
+        Self::Unavailable(detail.into())
+    }
+
+    /// [`Fault::Denied`].
+    pub fn denied(detail: impl Into<String>) -> Self {
+        Self::Denied(detail.into())
+    }
+
+    /// [`Fault::InvalidInput`].
+    pub fn invalid_input(detail: impl Into<String>) -> Self {
+        Self::InvalidInput(detail.into())
+    }
+
+    /// [`Fault::Internal`].
+    pub fn internal(detail: impl Into<String>) -> Self {
+        Self::Internal(detail.into())
+    }
+}
+
 /// Closed mirror of [`Fault`], the shape the bind macro lowers to the
 /// wire enum. [`Fault`] is `#[non_exhaustive]`, so a match outside this
 /// crate needs a wildcard arm; matching this type instead keeps the
