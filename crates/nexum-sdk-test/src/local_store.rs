@@ -2,7 +2,7 @@ use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use nexum_sdk::host::{Fault, LocalStoreHost};
+use nexum_sdk::host::{EntryPage, Fault, ListQuery, LocalStoreHost, page_entries};
 
 /// In-memory [`LocalStoreHost`]: namespaced views over one shared row
 /// map, with store-wide entry and byte limits.
@@ -173,6 +173,21 @@ impl LocalStoreHost for MockLocalStore {
         keys.sort();
         Ok(keys)
     }
+    /// One call, not one per key: a module's crossing count under the
+    /// mock matches what the real host charges.
+    fn list_entries(&self, query: &ListQuery<'_>) -> Result<EntryPage, Fault> {
+        self.check_injected_error(query.prefix)?;
+        let mut rows: Vec<(String, Vec<u8>)> = self
+            .shared
+            .rows
+            .borrow()
+            .iter()
+            .filter(|((ns, _), _)| *ns == self.namespace)
+            .map(|((_, key), value)| (key.clone(), value.clone()))
+            .collect();
+        rows.sort_by(|a, b| a.0.cmp(&b.0));
+        Ok(page_entries(query, rows))
+    }
     fn contains(&self, key: &str) -> Result<bool, Fault> {
         self.check_injected_error(key)?;
         Ok(self
@@ -219,6 +234,9 @@ pub struct TrapStore<H> {
     inner: H,
     /// Write calls the trap let through.
     writes: Cell<u64>,
+    /// Every call the trap let through, so a test can hold a flow to a
+    /// boundary-crossing count.
+    calls: Cell<u64>,
     /// Writes still allowed before the trap trips; `None` when unarmed.
     remaining: Cell<Option<u64>>,
     tripped: Cell<bool>,
@@ -231,6 +249,7 @@ impl<H> TrapStore<H> {
         Self {
             inner,
             writes: Cell::new(0),
+            calls: Cell::new(0),
             remaining: Cell::new(None),
             tripped: Cell::new(false),
         }
@@ -254,6 +273,12 @@ impl<H> TrapStore<H> {
         self.writes.get()
     }
 
+    /// Every call the trap let through since construction; a write
+    /// counts once, since it is gated as a read first.
+    pub fn calls(&self) -> u64 {
+        self.calls.get()
+    }
+
     /// Whether the trap has fired.
     pub fn tripped(&self) -> bool {
         self.tripped.get()
@@ -269,6 +294,7 @@ impl<H> TrapStore<H> {
         if self.tripped.get() {
             return Err(Fault::Internal("TrapStore: trapped".into()));
         }
+        self.calls.set(self.calls.get() + 1);
         Ok(())
     }
 
@@ -303,6 +329,10 @@ impl<H: LocalStoreHost> LocalStoreHost for TrapStore<H> {
     fn list_keys(&self, prefix: &str) -> Result<Vec<String>, Fault> {
         self.read_gate()?;
         self.inner.list_keys(prefix)
+    }
+    fn list_entries(&self, query: &ListQuery<'_>) -> Result<EntryPage, Fault> {
+        self.read_gate()?;
+        self.inner.list_entries(query)
     }
     fn contains(&self, key: &str) -> Result<bool, Fault> {
         self.read_gate()?;
@@ -339,6 +369,41 @@ mod tests {
         store.set("submitted:1", b"").unwrap();
         let keys = store.list_keys("commitment:").unwrap();
         assert_eq!(keys, vec!["commitment:a:1", "commitment:a:2"]);
+    }
+
+    #[test]
+    fn local_store_list_entries_filters_pages_and_isolates_namespaces() {
+        use nexum_sdk::host::ValueFilter;
+
+        let store = MockLocalStore::default();
+        let other = store.namespaced("other");
+        store.set("p:1", b"\x01one").unwrap();
+        store.set("p:2", b"\x02two").unwrap();
+        store.set("p:3", b"\x01three").unwrap();
+        other.set("p:9", b"\x01nine").unwrap();
+        let page = |view: &MockLocalStore, start_after, limit| {
+            view.list_entries(&ListQuery {
+                prefix: "p:",
+                start_after,
+                limit,
+                scan_limit: 0,
+                filter: Some(ValueFilter::LacksPrefix(&[0x02])),
+            })
+            .unwrap()
+        };
+
+        let first = page(&store, "", 1);
+        assert_eq!(first.entries, vec![("p:1".to_owned(), b"\x01one".to_vec())]);
+        assert!(!first.exhausted);
+
+        let rest = page(&store, first.last_examined.as_deref().unwrap(), 0);
+        assert_eq!(
+            rest.entries,
+            vec![("p:3".to_owned(), b"\x01three".to_vec())],
+        );
+        assert!(rest.exhausted);
+
+        assert_eq!(page(&other, "", 0).entries.len(), 1);
     }
 
     #[test]

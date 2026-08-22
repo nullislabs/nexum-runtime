@@ -74,7 +74,7 @@ use std::future::Future;
 use alloy_primitives::{Address, B256};
 use strum::IntoStaticStr;
 
-use crate::host::{Fault, LocalStoreHost};
+use crate::host::{Fault, ListQuery, LocalStoreHost, ValueFilter};
 
 /// Prefix of every commitment-set row.
 pub const COMMITMENT_PREFIX: &str = "commitment:";
@@ -394,28 +394,43 @@ impl<'h, H: LocalStoreHost> Journal<'h, H> {
     /// value). Fail-safe and agrees with [`mark`](Self::mark): a `0x01`
     /// marker yields its `next_eligible` and body, any other
     /// non-committed value yields `0` and the post-tag bytes.
+    ///
+    /// The host drops COMMITTED markers before they cross, so the filter
+    /// must exclude that one tag rather than admit `0x01`: a corrupt tag
+    /// is a live reservation and has to reconcile.
     pub fn pending(&self) -> Result<Vec<Reservation>, Fault> {
         let mut out = Vec::new();
-        for full in self.host.list_keys(self.prefix)? {
-            let Some(v) = self.host.get(&full)? else {
-                continue;
-            };
-            if v.first().is_none_or(|&b| b == COMMITTED_TAG) {
-                continue;
+        let mut start_after = String::new();
+        loop {
+            let page = self.host.list_entries(&ListQuery {
+                prefix: self.prefix,
+                start_after: &start_after,
+                limit: 0,
+                scan_limit: 0,
+                filter: Some(ValueFilter::LacksPrefix(&[COMMITTED_TAG])),
+            })?;
+            for (full, v) in page.entries {
+                if v.is_empty() {
+                    continue;
+                }
+                let key = full.strip_prefix(self.prefix).unwrap_or(&full).to_owned();
+                let (next_eligible, body) = if v[0] == RESERVED_TAG && v.len() >= 9 {
+                    let mut be = [0u8; 8];
+                    be.copy_from_slice(&v[1..9]);
+                    (u64::from_be_bytes(be), v[9..].to_vec())
+                } else {
+                    (0, v.get(1..).unwrap_or(&[]).to_vec())
+                };
+                out.push(Reservation {
+                    key,
+                    next_eligible,
+                    body,
+                });
             }
-            let key = full.strip_prefix(self.prefix).unwrap_or(&full).to_owned();
-            let (next_eligible, body) = if v[0] == RESERVED_TAG && v.len() >= 9 {
-                let mut be = [0u8; 8];
-                be.copy_from_slice(&v[1..9]);
-                (u64::from_be_bytes(be), v[9..].to_vec())
-            } else {
-                (0, v.get(1..).unwrap_or(&[]).to_vec())
+            let Some(resume) = page.last_examined.filter(|_| !page.exhausted) else {
+                break;
             };
-            out.push(Reservation {
-                key,
-                next_eligible,
-                body,
-            });
+            start_after = resume;
         }
         Ok(out)
     }

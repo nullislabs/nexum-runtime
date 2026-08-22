@@ -1,4 +1,5 @@
 use super::*;
+use nexum_runtime_api::ValueFilter;
 
 fn fresh() -> (tempfile::TempDir, LocalStore) {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -64,6 +65,111 @@ fn list_keys_strips_namespace_prefix() {
     let keys = ms.list_keys("posted:").unwrap();
     assert_eq!(keys.len(), 2);
     assert!(keys.iter().all(|k| k.starts_with("posted:")));
+}
+
+/// A page over the seeded `p:` prefix.
+fn page<'a>(
+    ms: &ModuleStore,
+    start_after: &'a str,
+    limit: u32,
+    scan_limit: u32,
+    filter: Option<ValueFilter<'a>>,
+) -> Result<EntryPage, StorageError> {
+    ms.list_entries(&ListQuery {
+        prefix: "p:",
+        start_after,
+        limit,
+        scan_limit,
+        filter,
+    })
+}
+
+fn seed_page(ms: &ModuleStore) {
+    ms.set("p:1", b"\x01one").unwrap();
+    ms.set("p:2", b"\x02two").unwrap();
+    ms.set("p:3", b"\x01three").unwrap();
+    ms.set("other", b"z").unwrap();
+}
+
+fn keys_of(page: &EntryPage) -> Vec<&str> {
+    page.entries.iter().map(|(k, _)| k.as_str()).collect()
+}
+
+#[test]
+fn list_entries_pages_in_key_order_and_resumes_exclusively() {
+    let (_dir, store) = fresh();
+    let ms = store.module("twap").unwrap();
+    seed_page(&ms);
+
+    let first = page(&ms, "", 2, 0, None).unwrap();
+    assert_eq!(keys_of(&first), ["p:1", "p:2"]);
+    assert_eq!(first.entries[0].1, b"\x01one");
+    assert_eq!(first.last_examined.as_deref(), Some("p:2"));
+    assert!(!first.exhausted);
+
+    let second = page(&ms, "p:2", 2, 0, None).unwrap();
+    assert_eq!(keys_of(&second), ["p:3"]);
+    assert!(second.exhausted);
+}
+
+#[test]
+fn list_entries_filters_on_the_value_host_side() {
+    let (_dir, store) = fresh();
+    let ms = store.module("twap").unwrap();
+    seed_page(&ms);
+
+    let has = page(&ms, "", 0, 0, Some(ValueFilter::HasPrefix(&[0x01]))).unwrap();
+    assert_eq!(keys_of(&has), ["p:1", "p:3"]);
+    let lacks = page(&ms, "", 0, 0, Some(ValueFilter::LacksPrefix(&[0x01]))).unwrap();
+    assert_eq!(keys_of(&lacks), ["p:2"]);
+}
+
+// A filtered page is legitimately empty mid-scan, so exhaustion is the
+// host's signal and the resume key is the last key examined.
+#[test]
+fn a_filtered_page_can_be_empty_and_still_resume() {
+    let (_dir, store) = fresh();
+    let ms = store.module("twap").unwrap();
+    seed_page(&ms);
+
+    let empty = page(&ms, "", 0, 2, Some(ValueFilter::HasPrefix(&[0x09]))).unwrap();
+    assert!(empty.entries.is_empty());
+    assert!(!empty.exhausted);
+    assert_eq!(empty.last_examined.as_deref(), Some("p:2"));
+
+    let resume = empty.last_examined.unwrap();
+    let resumed = page(&ms, &resume, 0, 0, Some(ValueFilter::HasPrefix(&[0x01]))).unwrap();
+    assert_eq!(keys_of(&resumed), ["p:3"]);
+    assert!(resumed.exhausted);
+}
+
+#[test]
+fn list_entries_refuses_a_limit_past_the_cap() {
+    let (_dir, store) = fresh();
+    let ms = store.module("twap").unwrap();
+    assert!(matches!(
+        page(&ms, "", MAX_LIST_LIMIT + 1, 0, None),
+        Err(StorageError::ListLimitExceeded { .. }),
+    ));
+    assert!(matches!(
+        page(&ms, "", 0, MAX_LIST_SCAN_LIMIT + 1, None),
+        Err(StorageError::ListScanLimitExceeded { .. }),
+    ));
+}
+
+#[test]
+fn list_entries_stays_inside_the_namespace() {
+    let (_dir, store) = fresh();
+    let a = store.module("a").unwrap();
+    let b = store.module("b").unwrap();
+    a.set("p:1", b"from-a").unwrap();
+    b.set("p:1", b"from-b").unwrap();
+    b.set("p:2", b"also-b").unwrap();
+
+    // A resume key below the prefix must not walk out of the range.
+    let only = page(&a, "!", 0, 0, None).unwrap();
+    assert_eq!(only.entries, vec![("p:1".to_owned(), b"from-a".to_vec())]);
+    assert!(only.exhausted);
 }
 
 #[test]

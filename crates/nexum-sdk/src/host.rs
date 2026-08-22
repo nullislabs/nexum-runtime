@@ -239,6 +239,100 @@ pub enum WriteOp {
     },
 }
 
+/// Host-side test on a candidate value. Data, not a predicate: the host
+/// cannot run guest code.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ValueFilter<'a> {
+    /// Keep values starting with these bytes.
+    HasPrefix(&'a [u8]),
+    /// Keep values not starting with these bytes.
+    LacksPrefix(&'a [u8]),
+}
+
+impl ValueFilter<'_> {
+    /// Whether `value` survives the filter.
+    #[must_use]
+    pub fn keeps(&self, value: &[u8]) -> bool {
+        match self {
+            Self::HasPrefix(p) => value.starts_with(p),
+            Self::LacksPrefix(p) => !value.starts_with(p),
+        }
+    }
+}
+
+/// One [`LocalStoreHost::list_entries`] request.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ListQuery<'a> {
+    /// Key prefix to scan.
+    pub prefix: &'a str,
+    /// Exclusive resume key; empty starts at the beginning.
+    pub start_after: &'a str,
+    /// Entries returned at most; zero takes the host's cap.
+    pub limit: u32,
+    /// Entries examined at most; zero takes the host's cap. Separate
+    /// from `limit` because a filtered page can examine many and return
+    /// none.
+    pub scan_limit: u32,
+    /// Host-side value test; `None` keeps every entry.
+    pub filter: Option<ValueFilter<'a>>,
+}
+
+/// One page of [`LocalStoreHost::list_entries`].
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct EntryPage {
+    /// Surviving entries in key order.
+    pub entries: Vec<(String, Vec<u8>)>,
+    /// Last key examined, not the last returned: a filtered page can be
+    /// empty mid-scan and must still resume.
+    pub last_examined: Option<String>,
+    /// Whether the scan reached the end of the prefix range.
+    pub exhausted: bool,
+}
+
+/// Page `rows`, which must be in key order, against `query`. The paging
+/// an in-memory [`LocalStoreHost`] needs; the real host does this itself
+/// and caps what a zero `limit` or `scan_limit` means, which is why zero
+/// is unbounded here.
+pub fn page_entries(
+    query: &ListQuery<'_>,
+    rows: impl IntoIterator<Item = (String, Vec<u8>)>,
+) -> EntryPage {
+    let limit = if query.limit == 0 {
+        usize::MAX
+    } else {
+        query.limit as usize
+    };
+    let scan_limit = if query.scan_limit == 0 {
+        usize::MAX
+    } else {
+        query.scan_limit as usize
+    };
+    let mut page = EntryPage {
+        exhausted: true,
+        ..EntryPage::default()
+    };
+    let mut examined = 0usize;
+    for (key, value) in rows {
+        if !key.starts_with(query.prefix) || key.as_str() <= query.start_after {
+            continue;
+        }
+        if examined == scan_limit {
+            page.exhausted = false;
+            break;
+        }
+        if query.filter.is_none_or(|f| f.keeps(&value)) {
+            if page.entries.len() == limit {
+                page.exhausted = false;
+                break;
+            }
+            page.entries.push((key.clone(), value));
+        }
+        examined += 1;
+        page.last_examined = Some(key);
+    }
+    page
+}
+
 /// `nexum:host/local-store` - per-module key-value persistence.
 pub trait LocalStoreHost {
     /// Fetch a value. `Ok(None)` when the key is absent.
@@ -249,6 +343,24 @@ pub trait LocalStoreHost {
     fn delete(&self, key: &str) -> Result<(), Fault>;
     /// Enumerate keys whose raw form starts with `prefix`.
     fn list_keys(&self, prefix: &str) -> Result<Vec<String>, Fault>;
+    /// One page of entries under `query`, in key order. One boundary
+    /// crossing on the real host adapter, which overrides this with the
+    /// host's `list-entries` verb; the default is a per-key fallback for
+    /// arbitrary impls such as mocks. The host keeps no cursor, so a
+    /// caller resumes from [`EntryPage::last_examined`]: a filtered page
+    /// can be empty while the scan is unfinished, and only
+    /// [`EntryPage::exhausted`] ends it.
+    fn list_entries(&self, query: &ListQuery<'_>) -> Result<EntryPage, Fault> {
+        let mut keys = self.list_keys(query.prefix)?;
+        keys.sort();
+        let mut rows = Vec::new();
+        for key in keys {
+            if let Some(value) = self.get(&key)? {
+                rows.push((key, value));
+            }
+        }
+        Ok(page_entries(query, rows))
+    }
     /// Apply a batch of writes; later ops on a key supersede earlier
     /// ones. Atomic (every op lands or none does) only on the real
     /// host adapter, which overrides this with the host's `apply`
@@ -332,6 +444,28 @@ mod tests {
         assert_eq!(TwoRows.count("").unwrap(), 2);
         assert_eq!(TwoRows.count("a").unwrap(), 1);
         assert_eq!(TwoRows.count("z").unwrap(), 0);
+
+        use super::{ListQuery, ValueFilter};
+        let page = TwoRows
+            .list_entries(&ListQuery {
+                filter: Some(ValueFilter::HasPrefix(b"ab")),
+                ..ListQuery::default()
+            })
+            .unwrap();
+        assert_eq!(page.entries, vec![("a".to_owned(), b"abc".to_vec())]);
+        // "b" was examined and filtered out, so the resume key is past it.
+        assert_eq!(page.last_examined.as_deref(), Some("b"));
+        assert!(page.exhausted);
+
+        let capped = TwoRows
+            .list_entries(&ListQuery {
+                limit: 1,
+                ..ListQuery::default()
+            })
+            .unwrap();
+        assert_eq!(capped.entries.len(), 1);
+        assert_eq!(capped.last_examined.as_deref(), Some("a"));
+        assert!(!capped.exhausted);
     }
 
     #[test]

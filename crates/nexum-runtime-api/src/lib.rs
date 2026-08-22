@@ -23,7 +23,9 @@ pub use extension::{
 };
 pub use runtime_types::{Handle, RuntimeTypes};
 pub use state::{
-    MAX_APPLY_OPS, MAX_APPLY_VALUE_BYTES, StateHandle, StateStore, StoreError, WriteOp,
+    EntryPage, ListQuery, MAX_APPLY_OPS, MAX_APPLY_VALUE_BYTES, MAX_LIST_LIMIT,
+    MAX_LIST_RESPONSE_BYTES, MAX_LIST_SCAN_LIMIT, StateHandle, StateStore, StoreError, ValueFilter,
+    WriteOp,
 };
 
 /// The error an implementor-facing seam takes, so implementing one needs
