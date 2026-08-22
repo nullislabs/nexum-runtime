@@ -8,7 +8,7 @@ use std::fmt::Write as _;
 use std::path::Path;
 
 use wit_parser::{
-    Function, Handle, Resolve, Type, TypeDefKind, TypeId, TypeOwner, World, WorldItem,
+    Function, Handle, Interface, Resolve, Type, TypeDefKind, TypeId, TypeOwner, World, WorldItem,
 };
 
 /// Named in the failure message, so a red points at its own fix.
@@ -66,16 +66,11 @@ fn render(resolve: &Resolve) -> String {
     out.push_str(&by_name(resolve.packages.iter().map(|(_, pkg)| {
         (pkg.name.to_string(), format!("package {}\n", pkg.name))
     })));
+    // An interface with no id is inline in a world, and is rendered there.
     out.push_str(&by_name(resolve.interfaces.iter().filter_map(
         |(id, iface)| {
             let name = resolve.id_of(id)?;
-            let mut items: Vec<String> = iface
-                .types
-                .iter()
-                .map(|(name, id)| type_def(resolve, name, *id))
-                .chain(iface.functions.values().map(|f| function(resolve, f)))
-                .collect();
-            items.sort();
+            let items = interface_items(resolve, iface);
             let block = format!("\ninterface {name} {{\n{}}}\n", indent(&items));
             Some((name, block))
         },
@@ -98,16 +93,34 @@ fn by_name(blocks: impl Iterator<Item = (String, String)>) -> String {
     blocks.into_iter().map(|(_, block)| block).collect()
 }
 
+/// Sorted: a verb moved within its file is not a surface change.
+fn interface_items(resolve: &Resolve, iface: &Interface) -> Vec<String> {
+    let mut items: Vec<String> = iface
+        .types
+        .iter()
+        .map(|(name, id)| type_def(resolve, name, *id))
+        .chain(iface.functions.values().map(|f| function(resolve, f)))
+        .collect();
+    items.sort();
+    items
+}
+
 fn world_items(resolve: &Resolve, world: &World) -> Vec<String> {
     let mut items = Vec::new();
     for (direction, group) in [("import", &world.imports), ("export", &world.exports)] {
         let mut rendered: Vec<String> = group
             .iter()
             .map(|(key, item)| match item {
-                WorldItem::Interface { id, .. } => {
-                    let id = resolve.id_of(*id).unwrap_or_default();
-                    format!("{direction} interface {id}")
-                }
+                // An inline interface has no id, so the world key is the only
+                // name it has and this is the only place its body appears.
+                WorldItem::Interface { id, .. } => match resolve.id_of(*id) {
+                    Some(name) => format!("{direction} interface {name}"),
+                    None => format!(
+                        "{direction} interface {} {{\n{}}}",
+                        String::from(key.clone()),
+                        indent(&interface_items(resolve, &resolve.interfaces[*id])),
+                    ),
+                },
                 WorldItem::Function(f) => format!("{direction} {}", function(resolve, f)),
                 WorldItem::Type { id, .. } => {
                     let def = type_def(resolve, &String::from(key.clone()), *id);
