@@ -747,8 +747,8 @@ pub type TaggedChainLogStream =
 pub enum RunEnd {
     /// The `shutdown` future resolved; a clean stop.
     Shutdown,
-    /// A non-empty stream set ended without a terminal report; abnormal, but
-    /// the launcher treats it as a clean stop.
+    /// A non-empty stream set ended without a terminal report, so a pump
+    /// panicked or was aborted; the launcher surfaces it as a non-zero exit.
     StreamEnded,
     /// Every event source ended terminally and no block or extension stream
     /// is declared, so no trigger can fire again; a clean stop.
@@ -2970,6 +2970,43 @@ mod tests {
         assert!(
             matches!(outcome.end, RunEnd::NothingLive),
             "the late report is absorbed, not misread as a panic: {:?}",
+            outcome.end,
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn an_aborted_reconnect_task_ends_the_run_as_unaccounted() {
+        let mut booted = boot_mock_supervisor().await;
+        let manager = TaskManager::new();
+        let mut tasks = TaskSet::new();
+        let (tx, rx) = mpsc::channel::<TaggedChainLog>(1);
+        // An aborted task yields no exit, so the set never accounts for the
+        // end of the stream its dropped sender closes.
+        let handle = manager.executor().spawn(async move {
+            let _tx = tx;
+            std::future::pending::<()>().await;
+            TaskExit::ReceiverGone
+        });
+        handle.abort();
+        tasks.push(handle);
+        let chain_log_streams: Vec<TaggedChainLogStream> = vec![Box::pin(receiver_stream(rx))];
+
+        let outcome = tokio::time::timeout(
+            Duration::from_secs(600),
+            run(
+                &mut booted.supervisor,
+                Vec::new(),
+                chain_log_streams,
+                Vec::new(),
+                tasks,
+                std::future::pending::<()>(),
+            ),
+        )
+        .await
+        .expect("run() classifies the end and returns");
+        assert!(
+            matches!(outcome.end, RunEnd::StreamEnded),
+            "a dead reconnect task is an unexpected end, not a clean stop: {:?}",
             outcome.end,
         );
     }

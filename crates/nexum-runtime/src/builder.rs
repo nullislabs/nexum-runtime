@@ -14,7 +14,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use nexum_tasks::{DrainOutcome, TaskExit, TaskHandle, TaskManager, TaskSet};
+use nexum_tasks::{DrainOutcome, TaskHandle, TaskManager, TaskSet};
 use tracing::{error, info, warn};
 
 use crate::addons::{AddOnHandle, AddOns, AddOnsContext};
@@ -24,6 +24,7 @@ use nexum_runtime_api::{BuilderContext, ComponentBuilder, Extension, RuntimeType
 use nexum_runtime_chain::ProviderPool;
 use nexum_runtime_logs::LogPipeline;
 use nexum_runtime_supervisor::event_loop;
+use nexum_runtime_supervisor::event_loop::RunEnd;
 use nexum_runtime_supervisor::supervisor::count_boot_refusal;
 use nexum_runtime_wasm::{Components, ComponentsBuilder, HostState, attach_wall_clock};
 
@@ -42,7 +43,7 @@ pub struct LaunchContext<'a> {
 /// A running runtime. [`shutdown`](Self::shutdown) or dropping fires shutdown;
 /// [`wait`](Self::wait) blocks on the bounded drain.
 pub struct RuntimeHandle {
-    event_loop: TaskHandle<TaskExit>,
+    event_loop: TaskHandle<RunEnd>,
     tasks: TaskManager,
     logs: LogPipeline,
     // `[limits.shutdown] drain_secs`.
@@ -107,14 +108,16 @@ impl RuntimeHandle {
 }
 
 /// Map an event-loop join outcome to the [`wait`](RuntimeHandle::wait) result.
-fn finish_wait(joined: Option<TaskExit>) -> Result<(), RuntimeError> {
+/// [`RunEnd::NothingLive`] is a deliberate quiet stop and must stay `Ok`;
+/// an unaccounted stream end is a dead pump and must not.
+fn finish_wait(joined: Option<RunEnd>) -> Result<(), RuntimeError> {
     match joined {
-        Some(TaskExit::SourceTerminal(term)) => Err(refuse_launch(LaunchRefusal::SourceTerminal {
+        Some(RunEnd::SourceTerminal(term)) => Err(refuse_launch(LaunchRefusal::SourceTerminal {
             chain_id: term.chain_id,
             reason: term.reason,
         })),
-        Some(TaskExit::ReceiverGone) => Ok(()),
-        None => Err(refuse_launch(LaunchRefusal::EventLoopGone)),
+        Some(RunEnd::Shutdown | RunEnd::NothingLive) => Ok(()),
+        Some(RunEnd::StreamEnded) | None => Err(refuse_launch(LaunchRefusal::EventLoopGone)),
     }
 }
 
@@ -308,7 +311,7 @@ impl<T: RuntimeTypes<State = HostState<T>>> AssembledRuntime<T> {
                 // Nothing to drive: return a handle whose event loop is
                 // already complete so `wait` resolves immediately.
                 info!("no [[trigger]] entries - engine has nothing to run; exiting");
-                let event_loop = executor.spawn(async { TaskExit::ReceiverGone });
+                let event_loop = executor.spawn(async { RunEnd::NothingLive });
                 return Ok(RuntimeHandle {
                     event_loop,
                     tasks,
@@ -352,11 +355,10 @@ impl<T: RuntimeTypes<State = HostState<T>>> AssembledRuntime<T> {
                 graceful.into_future(),
             )
             .await;
-            if let event_loop::RunEnd::SourceTerminal(term) = outcome.end {
-                return TaskExit::SourceTerminal(term);
+            if matches!(outcome.end, RunEnd::Shutdown | RunEnd::NothingLive) {
+                info!("done");
             }
-            info!("done");
-            TaskExit::ReceiverGone
+            outcome.end
         });
 
         Ok(RuntimeHandle {
@@ -1327,7 +1329,7 @@ mod tests {
         handle.wait().await.expect("clean shutdown");
     }
 
-    fn handle_over(tasks: TaskManager, event_loop: TaskHandle<TaskExit>) -> RuntimeHandle {
+    fn handle_over(tasks: TaskManager, event_loop: TaskHandle<RunEnd>) -> RuntimeHandle {
         RuntimeHandle {
             event_loop,
             tasks,
@@ -1345,7 +1347,7 @@ mod tests {
     #[tokio::test]
     async fn runtime_handle_wait_is_ok_on_clean_completion() {
         let tasks = TaskManager::new();
-        let event_loop = tasks.executor().spawn(async { TaskExit::ReceiverGone });
+        let event_loop = tasks.executor().spawn(async { RunEnd::Shutdown });
         handle_over(tasks, event_loop)
             .wait()
             .await
@@ -1359,7 +1361,7 @@ mod tests {
         let tasks = TaskManager::new();
         let event_loop = tasks.executor().spawn_graceful(|graceful| async move {
             drop(graceful.await);
-            TaskExit::ReceiverGone
+            RunEnd::Shutdown
         });
         let mut handle = handle_over(tasks, event_loop);
         handle.shutdown();
@@ -1371,7 +1373,7 @@ mod tests {
     async fn runtime_handle_wait_is_err_on_a_terminal_source_exit() {
         let tasks = TaskManager::new();
         let event_loop = tasks.executor().spawn(async {
-            TaskExit::SourceTerminal(nexum_tasks::SourceTermination {
+            RunEnd::SourceTerminal(nexum_tasks::SourceTermination {
                 module: None,
                 chain_id: 7,
                 reason: "endpoint no longer serves chain 7".to_owned(),
@@ -1397,7 +1399,7 @@ mod tests {
         let tasks = TaskManager::new();
         let event_loop = tasks.executor().spawn(async {
             std::future::pending::<()>().await;
-            TaskExit::ReceiverGone
+            RunEnd::Shutdown
         });
         event_loop.abort();
         let err = handle_over(tasks, event_loop)
@@ -1405,6 +1407,31 @@ mod tests {
             .await
             .expect_err("aborted task surfaces an error");
         Refusal::from(err).variant::<LaunchRefusal>(|e| matches!(e, LaunchRefusal::EventLoopGone));
+    }
+
+    /// An unaccounted stream end means a dead pump, so it exits non-zero for
+    /// the `Restart=on-failure` unit the loop's own warning asks for.
+    #[tokio::test]
+    async fn runtime_handle_wait_is_err_on_an_unexpected_stream_end() {
+        let tasks = TaskManager::new();
+        let event_loop = tasks.executor().spawn(async { RunEnd::StreamEnded });
+        let err = handle_over(tasks, event_loop)
+            .wait()
+            .await
+            .expect_err("an unexpected task end is not a clean stop");
+        Refusal::from(err).variant::<LaunchRefusal>(|e| matches!(e, LaunchRefusal::EventLoopGone));
+    }
+
+    /// Every source ending terminally with nothing else declared is the
+    /// deliberate quiet stop, so it must stay a zero exit.
+    #[tokio::test]
+    async fn runtime_handle_wait_is_ok_when_nothing_is_live() {
+        let tasks = TaskManager::new();
+        let event_loop = tasks.executor().spawn(async { RunEnd::NothingLive });
+        handle_over(tasks, event_loop)
+            .wait()
+            .await
+            .expect("a run with nothing left to do stops cleanly");
     }
 
     /// Dropping the handle without `wait` still drains the event loop.
@@ -1417,7 +1444,7 @@ mod tests {
             let guard = graceful.await;
             seen.fetch_add(1, Ordering::SeqCst);
             drop(guard);
-            TaskExit::ReceiverGone
+            RunEnd::Shutdown
         });
         let handle = handle_over(tasks, event_loop);
 
