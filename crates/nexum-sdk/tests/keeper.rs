@@ -9,7 +9,7 @@ use nexum_sdk::keeper::{
     NEXT_BLOCK_PREFIX, NEXT_EPOCH_PREFIX, Poller, REFUSED_PREFIX, Reservation, Retrier,
     RetryAction, Tick, commitment_key,
 };
-use nexum_sdk_test::MockHost;
+use nexum_sdk_test::{MockHost, MockLocalStore, TrapStore};
 
 fn sample_owner() -> Address {
     address!("00112233445566778899aabbccddeeff00112233")
@@ -437,6 +437,52 @@ fn mark_and_pending_agree_on_every_non_committed_value() {
         .unwrap();
     assert_eq!(corrupt.next_eligible, 0);
     assert!(corrupt.body.is_empty());
+}
+
+/// The reason the verb exists: the whole scan is one crossing, not one
+/// per key, and the committed marker is dropped host-side.
+#[test]
+fn pending_scans_the_prefix_in_one_crossing() {
+    let host = TrapStore::new(MockLocalStore::default());
+    let journal = Journal::submitted(&host);
+    journal.reserve("live", b"body").unwrap();
+    journal.commit("done").unwrap();
+
+    let before = host.calls();
+    let listed = journal.pending().unwrap();
+    assert_eq!(
+        listed,
+        vec![Reservation {
+            key: "live".into(),
+            next_eligible: 0,
+            body: b"body".to_vec(),
+        }],
+    );
+    assert_eq!(host.calls() - before, 1);
+}
+
+/// Past one host page every later reservation still has to reconcile,
+/// and a page whose entries are all committed is empty while the scan
+/// is unfinished, so resuming on the last key returned rather than the
+/// last examined strands the tail.
+#[test]
+fn pending_resumes_past_a_capped_page() {
+    let host = MockLocalStore::default();
+    host.set_max_page(2);
+    let journal = Journal::submitted(&host);
+    for i in 0..7u32 {
+        journal.reserve(&format!("k{i}"), b"body").unwrap();
+    }
+    journal.commit("k2").unwrap();
+    journal.commit("k3").unwrap();
+
+    let keys: Vec<String> = journal
+        .pending()
+        .unwrap()
+        .into_iter()
+        .map(|r| r.key)
+        .collect();
+    assert_eq!(keys, ["k0", "k1", "k4", "k5", "k6"]);
 }
 
 #[test]

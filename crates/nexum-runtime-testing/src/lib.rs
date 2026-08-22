@@ -174,4 +174,40 @@ mod tests {
 
         assert!(store.module("").is_err(), "empty namespace rejected");
     }
+
+    /// The fake pages, filters and resumes as the redb backend does, so a
+    /// harness test of a scan is not testing a different scan.
+    #[test]
+    fn store_pages_filtered_entries_and_resumes_from_the_last_examined() {
+        use nexum_runtime_api::{ListQuery, ValueFilter};
+
+        let store = MockStateStore::new();
+        let a = store.module("mod-a").expect("namespace a");
+        a.set("p:1", b"\x01one").expect("set 1");
+        a.set("p:2", b"\x02two").expect("set 2");
+        a.set("p:3", b"\x01three").expect("set 3");
+        let page = |start_after, scan_limit, filter| {
+            a.list_entries(&ListQuery {
+                prefix: "p:",
+                start_after,
+                limit: 0,
+                scan_limit,
+                filter,
+            })
+            .expect("page")
+        };
+
+        let empty = page("", 2, Some(ValueFilter::HasPrefix(&[0x09])));
+        assert!(empty.entries.is_empty());
+        assert!(!empty.exhausted);
+        assert_eq!(empty.last_examined.as_deref(), Some("p:2"));
+
+        let resumed = page("p:2", 0, Some(ValueFilter::LacksPrefix(&[0x02])));
+        assert_eq!(keys(&resumed), ["p:3"]);
+        assert!(resumed.exhausted);
+    }
+
+    fn keys(page: &nexum_runtime_api::EntryPage) -> Vec<&str> {
+        page.entries.iter().map(|(k, _)| k.as_str()).collect()
+    }
 }

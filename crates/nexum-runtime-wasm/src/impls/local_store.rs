@@ -1,9 +1,11 @@
 //! `nexum:host/local-store`: the lattice's store handle, namespaced host-side.
 
 use nexum_runtime_api::bindings::nexum;
-use nexum_runtime_api::bindings::nexum::host::local_store::{KeyValue, WriteOp};
+use nexum_runtime_api::bindings::nexum::host::local_store::{
+    EntryPage, KeyValue, ValueFilter, WriteOp,
+};
 use nexum_runtime_api::bindings::nexum::host::types::Fault;
-use nexum_runtime_api::{RuntimeTypes, StateHandle, StoreError};
+use nexum_runtime_api::{ListQuery, RuntimeTypes, StateHandle, StoreError};
 
 use crate::state::HostState;
 
@@ -34,6 +36,39 @@ impl<T: RuntimeTypes> nexum::host::local_store::Host for HostState<T> {
         self.store
             .list_keys(&prefix)
             .map_err(|e| self.store_fault("list-keys", e))
+    }
+
+    async fn list_entries(
+        &mut self,
+        prefix: String,
+        start_after: String,
+        limit: u32,
+        scan_limit: u32,
+        filter: Option<ValueFilter>,
+    ) -> Result<EntryPage, Fault> {
+        let filter = filter.as_ref().map(|f| match f {
+            ValueFilter::HasPrefix(bytes) => nexum_runtime_api::ValueFilter::HasPrefix(bytes),
+            ValueFilter::LacksPrefix(bytes) => nexum_runtime_api::ValueFilter::LacksPrefix(bytes),
+        });
+        let page = self
+            .store
+            .list_entries(&ListQuery {
+                prefix: &prefix,
+                start_after: &start_after,
+                limit,
+                scan_limit,
+                filter,
+            })
+            .map_err(|e| self.store_fault("list-entries", e))?;
+        Ok(EntryPage {
+            entries: page
+                .entries
+                .into_iter()
+                .map(|(key, value)| KeyValue { key, value })
+                .collect(),
+            last_examined: page.last_examined,
+            exhausted: page.exhausted,
+        })
     }
 
     async fn contains(&mut self, key: String) -> Result<bool, Fault> {

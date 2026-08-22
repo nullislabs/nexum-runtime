@@ -11,6 +11,7 @@
 #![allow(clippy::result_large_err)]
 
 use std::collections::HashMap;
+use std::ops::Bound;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -20,7 +21,8 @@ use redb::{Database, ReadableDatabase, ReadableTable, TableDefinition};
 use thiserror::Error;
 
 use nexum_runtime_api::{
-    MAX_APPLY_OPS, MAX_APPLY_VALUE_BYTES, StateHandle, StateStore, StoreError, WriteOp,
+    EntryPage, ListQuery, MAX_APPLY_OPS, MAX_APPLY_VALUE_BYTES, MAX_LIST_LIMIT,
+    MAX_LIST_RESPONSE_BYTES, MAX_LIST_SCAN_LIMIT, StateHandle, StateStore, StoreError, WriteOp,
 };
 
 const TABLE: TableDefinition<'static, &[u8], &[u8]> = TableDefinition::new("nexum:local-store");
@@ -371,6 +373,78 @@ impl ModuleStore {
         Ok(out)
     }
 
+    /// One page of entries under `query`, in key order. The read
+    /// transaction opens and drops inside the call, so no page is pinned
+    /// between calls; a caller resumes from
+    /// [`EntryPage::last_examined`].
+    pub fn list_entries(&self, query: &ListQuery<'_>) -> Result<EntryPage, StorageError> {
+        let limit = query
+            .resolved_limit()
+            .ok_or(StorageError::ListLimitExceeded {
+                limit: query.limit,
+                cap: MAX_LIST_LIMIT,
+            })?;
+        let scan_limit =
+            query
+                .resolved_scan_limit()
+                .ok_or(StorageError::ListScanLimitExceeded {
+                    scan_limit: query.scan_limit,
+                    cap: MAX_LIST_SCAN_LIMIT,
+                })?;
+        let full_prefix = self.build_key(query.prefix);
+        let resume = self.build_key(query.start_after);
+        // A resume key below the prefix range would start the walk before
+        // the prefix and break on the first key, reporting exhaustion.
+        let lower = if query.start_after.is_empty() || query.start_after < query.prefix {
+            Bound::Included(full_prefix.as_slice())
+        } else {
+            Bound::Excluded(resume.as_slice())
+        };
+        let txn = self.db.begin_read().map_err(StorageError::Txn)?;
+        let table = txn.open_table(TABLE).map_err(StorageError::Table)?;
+        let mut page = EntryPage {
+            exhausted: true,
+            ..EntryPage::default()
+        };
+        let mut examined = 0usize;
+        let mut bytes = 0u64;
+        for entry in table
+            .range::<&[u8]>((lower, Bound::Unbounded))
+            .map_err(StorageError::Storage)?
+        {
+            let (k, v) = entry.map_err(StorageError::Storage)?;
+            let key_bytes = k.value();
+            if !key_bytes.starts_with(&full_prefix) {
+                break;
+            }
+            if examined == scan_limit {
+                page.exhausted = false;
+                break;
+            }
+            let Ok(key) = std::str::from_utf8(&key_bytes[self.prefix.len()..]) else {
+                examined += 1;
+                continue;
+            };
+            let value = v.value();
+            if query.filter.is_none_or(|f| f.keeps(value)) {
+                let cost = (key.len() + value.len()) as u64;
+                // The first match always lands, so an oversized value
+                // cannot stall the scan at a page that never advances.
+                let full = page.entries.len() == limit
+                    || (!page.entries.is_empty() && bytes + cost > MAX_LIST_RESPONSE_BYTES);
+                if full {
+                    page.exhausted = false;
+                    break;
+                }
+                bytes += cost;
+                page.entries.push((key.to_owned(), value.to_vec()));
+            }
+            examined += 1;
+            page.last_examined = Some(key.to_owned());
+        }
+        Ok(page)
+    }
+
     fn build_key(&self, key: &str) -> Vec<u8> {
         let mut out = self.prefix.clone();
         out.extend_from_slice(key.as_bytes());
@@ -437,6 +511,23 @@ pub enum StorageError {
         /// Per-batch value-byte cap.
         cap: u64,
     },
+    /// The page asks for more entries than one call may return.
+    #[error("list-entries asks for {limit} entries but the cap is {cap}")]
+    ListLimitExceeded {
+        /// Entries the rejected page asked for.
+        limit: u32,
+        /// Per-page return cap.
+        cap: u32,
+    },
+    /// The page asks the host to examine more entries than one call may,
+    /// which is the bound on host work when a filter returns nothing.
+    #[error("list-entries would examine {scan_limit} entries but the cap is {cap}")]
+    ListScanLimitExceeded {
+        /// Entries the rejected page would examine.
+        scan_limit: u32,
+        /// Per-page scan cap.
+        cap: u32,
+    },
 }
 
 fn store_error(err: StorageError) -> StoreError {
@@ -451,6 +542,12 @@ fn store_error(err: StorageError) -> StoreError {
         StorageError::ApplyOpsExceeded { ops, cap } => StoreError::ApplyOpsExceeded { ops, cap },
         StorageError::ApplyBytesExceeded { bytes, cap } => {
             StoreError::ApplyBytesExceeded { bytes, cap }
+        }
+        StorageError::ListLimitExceeded { limit, cap } => {
+            StoreError::ListLimitExceeded { limit, cap }
+        }
+        StorageError::ListScanLimitExceeded { scan_limit, cap } => {
+            StoreError::ListScanLimitExceeded { scan_limit, cap }
         }
         err @ (StorageError::Open(_)
         | StorageError::Txn(_)
@@ -487,6 +584,10 @@ impl StateHandle for ModuleStore {
 
     fn list_keys(&self, prefix: &str) -> Result<Vec<String>, StoreError> {
         ModuleStore::list_keys(self, prefix).map_err(store_error)
+    }
+
+    fn list_entries(&self, query: &ListQuery<'_>) -> Result<EntryPage, StoreError> {
+        ModuleStore::list_entries(self, query).map_err(store_error)
     }
 
     fn contains(&self, key: &str) -> Result<bool, StoreError> {

@@ -1,5 +1,7 @@
 use nexum_sdk::Level;
-use nexum_sdk::host::{ChainError, ChainHost, Fault, LocalStoreHost, LoggingHost};
+use nexum_sdk::host::{
+    ChainError, ChainHost, EntryPage, Fault, ListQuery, LocalStoreHost, LoggingHost,
+};
 
 use crate::chain::MockChain;
 use crate::local_store::MockLocalStore;
@@ -41,6 +43,9 @@ impl LocalStoreHost for MockHost {
     }
     fn list_keys(&self, prefix: &str) -> Result<Vec<String>, Fault> {
         self.store.list_keys(prefix)
+    }
+    fn list_entries(&self, query: &ListQuery<'_>) -> Result<EntryPage, Fault> {
+        self.store.list_entries(query)
     }
     fn contains(&self, key: &str) -> Result<bool, Fault> {
         self.store.contains(key)

@@ -187,6 +187,38 @@ macro_rules! __bind_host_cap_via_wit_bindgen {
             {
                 nexum::host::local_store::list_keys(prefix).map_err($crate::host::Fault::from)
             }
+            // Overrides the trait's per-key fallback with the host's
+            // paged verb, so a filtered scan crosses once.
+            fn list_entries(
+                &self,
+                query: &$crate::host::ListQuery<'_>,
+            ) -> ::core::result::Result<$crate::host::EntryPage, $crate::host::Fault> {
+                let filter = query.filter.map(|f| match f {
+                    $crate::host::ValueFilter::HasPrefix(bytes) => {
+                        nexum::host::local_store::ValueFilter::HasPrefix(bytes.to_vec())
+                    }
+                    $crate::host::ValueFilter::LacksPrefix(bytes) => {
+                        nexum::host::local_store::ValueFilter::LacksPrefix(bytes.to_vec())
+                    }
+                });
+                let page = nexum::host::local_store::list_entries(
+                    query.prefix,
+                    query.start_after,
+                    query.limit,
+                    query.scan_limit,
+                    filter.as_ref(),
+                )
+                .map_err($crate::host::Fault::from)?;
+                ::core::result::Result::Ok($crate::host::EntryPage {
+                    entries: page
+                        .entries
+                        .into_iter()
+                        .map(|kv| (kv.key, kv.value))
+                        .collect(),
+                    last_examined: page.last_examined,
+                    exhausted: page.exhausted,
+                })
+            }
             fn contains(&self, key: &str) -> ::core::result::Result<bool, $crate::host::Fault> {
                 nexum::host::local_store::contains(key).map_err($crate::host::Fault::from)
             }

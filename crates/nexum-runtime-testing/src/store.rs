@@ -6,7 +6,8 @@ use std::sync::Arc;
 use parking_lot::{Mutex, MutexGuard};
 
 use nexum_runtime_api::{
-    MAX_APPLY_OPS, MAX_APPLY_VALUE_BYTES, StateHandle, StateStore, StoreError, WriteOp,
+    EntryPage, ListQuery, MAX_APPLY_OPS, MAX_APPLY_VALUE_BYTES, MAX_LIST_LIMIT,
+    MAX_LIST_RESPONSE_BYTES, MAX_LIST_SCAN_LIMIT, StateHandle, StateStore, StoreError, WriteOp,
 };
 
 type Namespaces = HashMap<String, HashMap<String, Vec<u8>>>;
@@ -120,6 +121,55 @@ impl StateHandle for MockStateHandle {
         // Sorted for deterministic enumeration, matching the redb B-tree order.
         keys.sort();
         Ok(keys)
+    }
+
+    fn list_entries(&self, query: &ListQuery<'_>) -> Result<EntryPage, StoreError> {
+        let limit = query
+            .resolved_limit()
+            .ok_or(StoreError::ListLimitExceeded {
+                limit: query.limit,
+                cap: MAX_LIST_LIMIT,
+            })?;
+        let scan_limit = query
+            .resolved_scan_limit()
+            .ok_or(StoreError::ListScanLimitExceeded {
+                scan_limit: query.scan_limit,
+                cap: MAX_LIST_SCAN_LIMIT,
+            })?;
+        let map = self.lock();
+        let mut rows: Vec<(&String, &Vec<u8>)> = map
+            .get(&self.namespace)
+            .into_iter()
+            .flat_map(|m| m.iter())
+            .filter(|(k, _)| k.starts_with(query.prefix) && k.as_str() > query.start_after)
+            .collect();
+        rows.sort_by(|a, b| a.0.cmp(b.0));
+        let mut page = EntryPage {
+            exhausted: true,
+            ..EntryPage::default()
+        };
+        let mut bytes = 0u64;
+        for (examined, (key, value)) in rows.into_iter().enumerate() {
+            if examined == scan_limit {
+                page.exhausted = false;
+                break;
+            }
+            if query.filter.is_none_or(|f| f.keeps(value)) {
+                let cost = (key.len() + value.len()) as u64;
+                // The first match always lands, so an oversized value
+                // cannot stall the scan at a page that never advances.
+                let full = page.entries.len() == limit
+                    || (!page.entries.is_empty() && bytes + cost > MAX_LIST_RESPONSE_BYTES);
+                if full {
+                    page.exhausted = false;
+                    break;
+                }
+                bytes += cost;
+                page.entries.push((key.clone(), value.clone()));
+            }
+            page.last_examined = Some(key.clone());
+        }
+        Ok(page)
     }
 
     fn apply(&self, ops: &[WriteOp]) -> Result<(), StoreError> {

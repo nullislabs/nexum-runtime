@@ -42,6 +42,10 @@ pub(crate) enum LocalStoreFaultMessage {
     ApplyOpsOverCap,
     #[strum(serialize = "apply batch exceeds the per-batch value-byte cap")]
     ApplyBytesOverCap,
+    #[strum(serialize = "list-entries exceeds the per-page entry cap")]
+    ListLimitOverCap,
+    #[strum(serialize = "list-entries exceeds the per-page scan cap")]
+    ListScanLimitOverCap,
     #[strum(serialize = "local-store backend failure")]
     BackendFailure,
 }
@@ -66,6 +70,8 @@ pub(crate) fn store_fault(
             | StoreError::QuotaUnsatisfiable { .. }
             | StoreError::ApplyOpsExceeded { .. }
             | StoreError::ApplyBytesExceeded { .. }
+            | StoreError::ListLimitExceeded { .. }
+            | StoreError::ListScanLimitExceeded { .. }
     );
     if refusal {
         // Below WARN: a module sitting at its quota or batch cap would
@@ -87,6 +93,14 @@ pub(crate) fn store_fault(
         StoreError::ApplyBytesExceeded { .. } => {
             Fault::InvalidInput(LocalStoreFaultMessage::ApplyBytesOverCap.text().to_owned())
         }
+        StoreError::ListLimitExceeded { .. } => {
+            Fault::InvalidInput(LocalStoreFaultMessage::ListLimitOverCap.text().to_owned())
+        }
+        StoreError::ListScanLimitExceeded { .. } => Fault::InvalidInput(
+            LocalStoreFaultMessage::ListScanLimitOverCap
+                .text()
+                .to_owned(),
+        ),
         StoreError::Backend(_) | StoreError::InvalidNamespace(_) => {
             Fault::Internal(LocalStoreFaultMessage::BackendFailure.text().to_owned())
         }
@@ -278,6 +292,8 @@ mod tests {
                 "local-store write can never fit the namespace quota",
                 "apply batch exceeds the per-batch op cap",
                 "apply batch exceeds the per-batch value-byte cap",
+                "list-entries exceeds the per-page entry cap",
+                "list-entries exceeds the per-page scan cap",
                 "local-store backend failure",
             ],
         );
