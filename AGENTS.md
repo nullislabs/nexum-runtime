@@ -28,6 +28,8 @@ The videre and shepherd repositories build on the SDK and the runtime published 
 - `modules/example` - the minimal reference module, with balance-tracker, http-probe, and price-alert under `modules/examples/`.
 - `modules/fixtures/` - adversarial fixtures: clock-reader, env-reader, flaky-bomb, fuel-bomb, log-bomb, memory-bomb, panic-bomb, slow-host, and topic-parity.
 - `wit/nexum-host` - the `nexum:host` WIT package.
+- `wit/nexum-host.snapshot` - the rendered `nexum:host` surface, every interface, function signature and type.
+  Generated, never hand-edited: any edit under `wit/nexum-host` must run `just wit-snapshot` in the same change, and the `test` job fails while the two disagree.
 
 ## Build, test, lint
 
@@ -44,6 +46,7 @@ just build   # the engine plus every guest wasm
 just test    # host engine unit tests through nextest
 just fmt     # cargo fmt --all
 just lint    # cargo clippy --workspace --all-targets --all-features -- -D warnings
+just wit-snapshot  # rewrite wit/nexum-host.snapshot after a WIT edit
 just ci      # the full CI series: fmt, clippy, doc, wasms, nextest, doctests
 ```
 
