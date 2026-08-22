@@ -461,6 +461,30 @@ fn pending_scans_the_prefix_in_one_crossing() {
     assert_eq!(host.calls() - before, 1);
 }
 
+/// Past one host page every later reservation still has to reconcile,
+/// and a page whose entries are all committed is empty while the scan
+/// is unfinished, so resuming on the last key returned rather than the
+/// last examined strands the tail.
+#[test]
+fn pending_resumes_past_a_capped_page() {
+    let host = MockLocalStore::default();
+    host.set_max_page(2);
+    let journal = Journal::submitted(&host);
+    for i in 0..7u32 {
+        journal.reserve(&format!("k{i}"), b"body").unwrap();
+    }
+    journal.commit("k2").unwrap();
+    journal.commit("k3").unwrap();
+
+    let keys: Vec<String> = journal
+        .pending()
+        .unwrap()
+        .into_iter()
+        .map(|r| r.key)
+        .collect();
+    assert_eq!(keys, ["k0", "k1", "k4", "k5", "k6"]);
+}
+
 #[test]
 fn pending_ignores_committed_and_legacy_and_returns_bodies() {
     let host = MockHost::new();

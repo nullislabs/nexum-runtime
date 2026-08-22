@@ -30,6 +30,9 @@ struct SharedRows {
     max_entries: Cell<Option<usize>>,
     /// When set, `set` fails once stored bytes would exceed this.
     max_bytes: Cell<Option<usize>>,
+    /// When set, one `list_entries` page returns and examines at most
+    /// this many, as the host's caps do.
+    max_page: Cell<Option<u32>>,
 }
 
 impl MockLocalStore {
@@ -90,6 +93,13 @@ impl MockLocalStore {
         self.shared.max_bytes.set(Some(limit));
     }
 
+    /// Cap what one `list_entries` page returns and examines, standing
+    /// in for the host's caps. Unset, a page spans the namespace, so a
+    /// caller that never resumes still passes.
+    pub fn set_max_page(&self, limit: u32) {
+        self.shared.max_page.set(Some(limit));
+    }
+
     /// Inject a fault for any operation whose key starts with `prefix`;
     /// first registered match fires.
     pub fn fail_on(&self, prefix: impl Into<String>, fault: Fault) {
@@ -106,6 +116,12 @@ impl MockLocalStore {
         }
         Ok(())
     }
+}
+
+/// Hold an asked-for page bound under `cap`; zero asks for unbounded,
+/// which the cap answers, as the host answers it with its own.
+fn clamp_page(asked: u32, cap: u32) -> u32 {
+    if asked == 0 { cap } else { asked.min(cap) }
 }
 
 impl LocalStoreHost for MockLocalStore {
@@ -186,7 +202,12 @@ impl LocalStoreHost for MockLocalStore {
             .map(|((_, key), value)| (key.clone(), value.clone()))
             .collect();
         rows.sort_by(|a, b| a.0.cmp(&b.0));
-        Ok(page_entries(query, rows))
+        let mut query = *query;
+        if let Some(cap) = self.shared.max_page.get() {
+            query.limit = clamp_page(query.limit, cap);
+            query.scan_limit = clamp_page(query.scan_limit, cap);
+        }
+        Ok(page_entries(&query, rows))
     }
     fn contains(&self, key: &str) -> Result<bool, Fault> {
         self.check_injected_error(key)?;

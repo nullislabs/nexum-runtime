@@ -165,11 +165,32 @@ fn list_entries_stays_inside_the_namespace() {
     a.set("p:1", b"from-a").unwrap();
     b.set("p:1", b"from-b").unwrap();
     b.set("p:2", b"also-b").unwrap();
+    // Below the prefix range and in the way: seeking to the resume key
+    // rather than to the prefix would break here and report exhaustion.
+    a.set("a:0", b"before").unwrap();
 
-    // A resume key below the prefix must not walk out of the range.
     let only = page(&a, "!", 0, 0, None).unwrap();
     assert_eq!(only.entries, vec![("p:1".to_owned(), b"from-a".to_vec())]);
     assert!(only.exhausted);
+}
+
+// The byte cap ends a page, and the first match lands whatever it
+// costs, so an oversized value cannot stall a scan on a page that never
+// advances.
+#[test]
+fn list_entries_ends_a_page_at_the_response_byte_cap() {
+    let (_dir, store) = fresh();
+    let ms = store.module("twap").unwrap();
+    let big = vec![0u8; MAX_LIST_RESPONSE_BYTES as usize];
+    ms.set("p:1", &big).unwrap();
+    ms.set("p:2", &big).unwrap();
+
+    let first = page(&ms, "", 0, 0, None).unwrap();
+    assert_eq!(keys_of(&first), ["p:1"]);
+    assert!(!first.exhausted);
+    let second = page(&ms, "p:1", 0, 0, None).unwrap();
+    assert_eq!(keys_of(&second), ["p:2"]);
+    assert!(second.exhausted);
 }
 
 #[test]
