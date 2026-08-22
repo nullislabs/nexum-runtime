@@ -1,0 +1,135 @@
+# The resolved nexum:host surface, rendered from wit/nexum-host.
+# Regenerate with `just wit-snapshot`; never hand-edit.
+
+package nexum:host@0.1.0
+
+interface nexum:host/chain@0.1.0 {
+  record rpc-error {
+    code: s32,
+    message: string,
+    data: option<list<u8>>,
+  }
+  request: func(chain-id: chain-id, method: string, params: string) -> result<string, chain-error>
+  type chain-id = nexum:host/types@0.1.0/chain-id
+  type fault = nexum:host/types@0.1.0/fault
+  variant chain-error {
+    fault(fault),
+    rpc(rpc-error),
+  }
+}
+
+interface nexum:host/local-store@0.1.0 {
+  apply: func(ops: list<write-op>) -> result<_, fault>
+  contains: func(key: string) -> result<bool, fault>
+  count: func(prefix: string) -> result<u64, fault>
+  delete: func(key: string) -> result<_, fault>
+  get: func(key: string) -> result<option<list<u8>>, fault>
+  len: func(key: string) -> result<option<u64>, fault>
+  list-entries: func(prefix: string, start-after: string, limit: u32, scan-limit: u32, filter: option<value-filter>) -> result<entry-page, fault>
+  list-keys: func(prefix: string) -> result<list<string>, fault>
+  record entry-page {
+    entries: list<key-value>,
+    last-examined: option<string>,
+    exhausted: bool,
+  }
+  record key-value {
+    key: string,
+    value: list<u8>,
+  }
+  set: func(key: string, value: list<u8>) -> result<_, fault>
+  type fault = nexum:host/types@0.1.0/fault
+  variant value-filter {
+    has-prefix(list<u8>),
+    lacks-prefix(list<u8>),
+  }
+  variant write-op {
+    set(key-value),
+    delete(string),
+  }
+}
+
+interface nexum:host/logging@0.1.0 {
+  enum level {
+    trace,
+    debug,
+    info,
+    warn,
+    error,
+  }
+  log-event: func(level: level, source: source, message: string, fields: list<field>)
+  log: func(level: level, message: string)
+  record field {
+    name: string,
+    value: field-value,
+  }
+  record source {
+    target: string,
+    file: option<string>,
+    line: option<u32>,
+  }
+  variant field-value {
+    text(string),
+    unsigned(u64),
+    signed(s64),
+    float(f64),
+    boolean(bool),
+  }
+}
+
+interface nexum:host/types@0.1.0 {
+  record block {
+    chain-id: chain-id,
+    number: u64,
+    hash: list<u8>,
+    timestamp: u64,
+  }
+  record extension-trigger {
+    extension-kind: string,
+    payload: list<u8>,
+  }
+  record log {
+    chain-id: chain-id,
+    address: list<u8>,
+    topics: list<list<u8>>,
+    data: list<u8>,
+    block-hash: option<list<u8>>,
+    block-number: option<u64>,
+    block-timestamp: option<u64>,
+    transaction-hash: option<list<u8>>,
+    transaction-index: option<u64>,
+    log-index: option<u64>,
+    removed: bool,
+  }
+  record schedule-tick {
+    fired-at: u64,
+  }
+  type chain-id = u64
+  type config = list<tuple<string, string>>
+  variant fault {
+    unsupported(string),
+    unavailable(string),
+    denied(string),
+    rate-limited,
+    timeout,
+    invalid-input(string),
+    internal(string),
+  }
+  variant trigger {
+    block(block),
+    event(log),
+    schedule(schedule-tick),
+    extension(extension-trigger),
+  }
+}
+
+world nexum:host/trigger-module@0.1.0 {
+  import interface nexum:host/chain@0.1.0
+  import interface nexum:host/local-store@0.1.0
+  import interface nexum:host/logging@0.1.0
+  import interface nexum:host/types@0.1.0
+  import type config = nexum:host/types@0.1.0/config
+  import type fault = nexum:host/types@0.1.0/fault
+  import type trigger = nexum:host/types@0.1.0/trigger
+  export init: func(config: config) -> result<_, fault>
+  export on-trigger: func(trigger: trigger) -> result<_, fault>
+}

@@ -60,6 +60,11 @@ msrv:
 workspace-deps:
     ./scripts/workspace-deps-lint.sh
 
+# Rewrite wit/nexum-host.snapshot from the WIT tree. Run this in the same
+# change as any edit under wit/nexum-host, and review the diff.
+wit-snapshot:
+    NEXUM_UPDATE_WIT_SNAPSHOT=1 cargo nextest run -p nexum-world --test wit_snapshot
+
 # Per-crate unused dependencies. Compiles nothing.
 machete:
     cargo machete
