@@ -1,10 +1,11 @@
 //! The metric names the runtime emits, described once.
 //!
-//! [`METRICS`] is the single source: [`describe_all`] emits the HELP and
-//! TYPE text from it, and a test scans the emitting crates for
-//! `nexum_runtime_` literals and refuses any that the table does not
-//! carry. A metric name is an operator contract, so adding or renaming one
-//! is a deliberate diff here rather than an incidental string somewhere.
+//! [`METRICS`] is the single source, and [`describe_all`] emits the HELP
+//! and TYPE text from it. A metric name is an operator contract, so adding
+//! or renaming one is a deliberate diff here rather than an incidental
+//! string somewhere. `nexum-runtime-guards` holds the guard that scans the
+//! tree for a name this table does not carry, because that guard reads the
+//! whole workspace and not this crate.
 
 #![forbid(unsafe_code)]
 
@@ -137,62 +138,6 @@ mod tests {
             table_names().len(),
             METRICS.len(),
             "a duplicate name would describe one series twice and hide the other",
-        );
-    }
-
-    /// Scans every crate in the tree for a `nexum_runtime_` literal. A name
-    /// reaching an operator without passing through the table is the failure
-    /// mode, so the roots are derived rather than listed: a crate that starts
-    /// emitting is in the walk the moment it exists.
-    ///
-    /// `crate_source_roots` refuses an empty enumeration, which is what a
-    /// walk that lost its root looks like from here.
-    #[test]
-    fn every_emitted_name_is_in_the_table_and_every_entry_is_emitted() {
-        let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-        let mut found: BTreeSet<String> = BTreeSet::new();
-        let mut stack: Vec<std::path::PathBuf> =
-            nexum_runtime_testing::crate_source_roots(&nexum_runtime_testing::workspace_root())
-                .into_iter()
-                // This crate holds the table, so scanning it would find every
-                // entry through its own literal and pass the unused check
-                // vacuously.
-                .filter(|src| !src.starts_with(manifest))
-                .collect();
-        while let Some(dir) = stack.pop() {
-            for entry in std::fs::read_dir(&dir).expect("read the crate source tree") {
-                let path = entry.expect("dir entry").path();
-                if path.is_dir() {
-                    stack.push(path);
-                    continue;
-                }
-                if path.extension().is_none_or(|e| e != "rs") {
-                    continue;
-                }
-                let src = std::fs::read_to_string(&path).expect("read a source file");
-                for (idx, _) in src.match_indices("\"nexum_runtime_") {
-                    let rest = &src[idx + 1..];
-                    if let Some(end) = rest.find('"') {
-                        found.insert(rest[..end].to_owned());
-                    }
-                }
-            }
-        }
-
-        let table = table_names();
-        let missing: Vec<&String> = found
-            .iter()
-            .filter(|n| !table.contains(n.as_str()))
-            .collect();
-        assert!(
-            missing.is_empty(),
-            "emitted but undescribed, add to METRICS: {missing:?}",
-        );
-
-        let unused: Vec<&&str> = table.iter().filter(|n| !found.contains(**n)).collect();
-        assert!(
-            unused.is_empty(),
-            "described but never emitted, remove from METRICS: {unused:?}",
         );
     }
 }

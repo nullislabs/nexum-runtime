@@ -1,7 +1,32 @@
-//! Derived enumeration of the workspace's crate sources, for the guards that
-//! read source text.
+//! Guards on the repository rather than on a crate.
+//!
+//! Every guard beside this file reads the whole workspace source tree, so it
+//! is a test of the repository and not of whichever crate it once sat in.
+//! Holding them here keeps a guard from adding a dependency edge to a crate
+//! it only polices, and the `publish = false` member costs nothing because
+//! nothing depends on it.
+//!
+//! The library half is the enumeration the guards walk. The guards are the
+//! integration tests beside it.
+
+#![forbid(unsafe_code)]
+// Guard support, so `allow-unwrap-in-tests` never sees it. A walk that cannot
+// read the tree it exists to check has nothing to recover from.
+#![allow(clippy::expect_used)]
 
 use std::path::{Path, PathBuf};
+
+/// The workspace root: the outermost ancestor of this crate that carries a
+/// `Cargo.toml`.
+pub fn workspace_root() -> PathBuf {
+    let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
+    manifest
+        .ancestors()
+        .filter(|dir| dir.join("Cargo.toml").is_file())
+        .last()
+        .unwrap_or(manifest)
+        .to_path_buf()
+}
 
 /// The `src` of every crate under `root`, found on disk rather than read from
 /// `workspace.members`.
@@ -50,10 +75,17 @@ mod tests {
     use super::*;
 
     #[test]
+    fn the_root_is_the_workspace_and_not_this_crate() {
+        let manifest = std::fs::read_to_string(workspace_root().join("Cargo.toml"))
+            .expect("the workspace manifest reads");
+        assert!(manifest.contains("[workspace]"), "{manifest}");
+    }
+
+    #[test]
     fn the_enumeration_reaches_crates_outside_the_crates_directory() {
-        let roots = crate_source_roots(&crate::workspace_root());
-        let holds = |suffix: &str| roots.iter().any(|r| r.ends_with(suffix));
-        assert!(holds("crates/nexum-runtime-testing/src"), "{roots:?}");
+        let roots = crate_source_roots(&workspace_root());
+        let holds = |suffix: &str| roots.iter().any(|root| root.ends_with(suffix));
+        assert!(holds("crates/nexum-runtime-metrics/src"), "{roots:?}");
         assert!(holds("modules/example/src"), "{roots:?}");
     }
 

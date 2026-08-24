@@ -3412,6 +3412,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "nexum-runtime-guards"
+version = "0.1.0"
+dependencies = [
+ "nexum-runtime-metrics",
+ "tempfile",
+]
+
+[[package]]
 name = "nexum-runtime-http"
 version = "0.1.0"
 dependencies = [
@@ -3468,7 +3476,6 @@ name = "nexum-runtime-metrics"
 version = "0.1.0"
 dependencies = [
  "metrics",
- "nexum-runtime-testing",
 ]
 
 [[package]]

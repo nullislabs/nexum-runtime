@@ -1,0 +1,20 @@
+[package]
+name = "nexum-runtime-guards"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Guards on the repository rather than on a crate: the tests that read the whole source tree."
+# Nothing depends on this member and it ships no runtime code, so it stays
+# out of the published set and can never sit in a dependency cycle.
+publish = false
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+# The metric table, read as a typed constant rather than parsed back out of
+# the source that declares it. A graph leaf, so this edge reaches nothing.
+nexum-runtime-metrics = { path = "../nexum-runtime-metrics" }
+tempfile.workspace = true
