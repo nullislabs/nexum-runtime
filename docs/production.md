@@ -9,12 +9,18 @@ A downstream composition root that registers extensions runs the same way, under
 - The engine built in release: `cargo build -p nexum-cli --release` gives `target/release/nexum`.
 - Every component `.wasm` artifact present on a path the service user can read.
 - An `engine.toml` with `state_dir` on a persistent path (never `/tmp`), `log_level = "info"`, `[engine.metrics] enabled = true` with `bind_addr = "127.0.0.1:9100"`, one `[chains.<id>]` per triggered chain with a paid RPC URL, and one `[[modules]]` per module, each with an operator-written `id`.
-- `require_component_digest = true` under `[engine]`, with every manifest carrying a `[component].digest` pin.
 - A `digest` on each `[[modules]]` entry, set to the line `nexum digest <artifact>` prints for that file.
-  The command reads the artifact and prints its `sha256:<64 hex chars>` pin on stdout, with nothing around it, so the value pastes into `[[modules]].digest` or `[component].digest` unedited.
-  This is the operator's own pin, in trusted config: the default sibling manifest lives in the same trust domain as the artifact, so its `[component].digest` does not hold against a compromised artifact store.
-  An operator-owned manifest outside the artifact directory, named by the `manifest` key on the entry and combined with `require_component_digest = true`, closes the same gap; `[[modules]].digest` is the direct form and needs no separate manifest path.
+  The engine requires this by default and refuses to boot an entry without one, so there is no `[engine]` key to set here: leave `require_component_digest` alone ([ADR-0025](adr/0025-the-required-digest-is-the-operator-pin.md)).
+  The command reads the artifact and prints its `sha256:<64 hex chars>` pin on stdout, with nothing around it, so the value pastes into `[[modules]].digest` unedited.
+  The refusal for a missing pin reports the same value, so a first boot on a new artifact also gives you the line.
+  This is the operator's own pin, in trusted config: the default sibling manifest lives in the same trust domain as the artifact, so its `[component].digest` is evidence of intent and not of authorization.
+- An operator-owned `component.toml` outside every artifact directory, named by the `manifest` key on each `[[modules]]` entry, if the artifact store is not trusted.
+  `[[modules]].digest` alone does not close artifact-store compromise.
+  It fixes the artifact bytes and says nothing about the manifest beside them, and that manifest is the sole HTTP allowlist, the `[config]` source, and the state-namespace selector.
+  Only relocating the manifest out of the store closes the gap.
+- A `[component].digest` in each manifest is optional and independent.
   Both pins are verified against the exact bytes handed to the compiler, and a mismatch refuses the boot naming which pin failed and the file it is in.
+  An author pin never substitutes for the operator pin.
 - The `state_dir` exists and is writable by the service user.
 - A Prometheus instance scraping `/metrics` (section 6) with the alert rules in section 7.
 - A log aggregator ingesting the engine's JSON stdout (section 5).

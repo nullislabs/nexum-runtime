@@ -46,6 +46,13 @@ Every manifest must also declare a `[component].name` that is not blank.
 The engine uses the name as the state namespace, and it refuses a missing, empty, or whitespace-only name.
 
 ```sh
+cargo run -p nexum-cli -- --engine-config engine.dev.toml
+```
+
+`engine.dev.toml` is committed, and it declares the example as a `[[modules]]` entry, which is the path a deployment uses.
+The engine also takes a wasm and a manifest as positional arguments, which boots one module without any `engine.toml`:
+
+```sh
 cargo run -p nexum-cli -- target/wasm32-wasip2/release/example.wasm modules/example/component.toml
 ```
 
@@ -58,22 +65,29 @@ rpc_url = "http://localhost:8545"
 ```
 
 `http(s)://` URLs are not dialled at boot; `ws(s)://` URLs are.
-The example module declares no triggers, so `just run` needs no `engine.toml`; the modules under `modules/examples/` and `modules/fixtures/` do.
+The example module declares no triggers, so `engine.dev.toml` configures no chain; the modules under `modules/examples/` and `modules/fixtures/` need one.
 
 ## Component integrity
 
-A manifest may pin its artifact with `digest = "sha256:<64 hex chars>"` in `[component]`.
+Every `[[modules]]` entry in `engine.toml` carries `digest = "sha256:<64 hex chars>"`, and the engine refuses to boot an entry without one.
 `nexum digest <artifact>` prints that value, and it prints nothing else, so the line pastes into the key:
 
 ```sh
 nexum digest target/wasm32-wasip2/release/example.wasm
 ```
 
-A present pin is strictly verified against the loaded bytes before compilation; a mismatch or a malformed pin refuses the boot.
-An absent pin loads with a warning that logs the computed digest; set `require_component_digest = true` under `[engine]` in `engine.toml` to make an absent pin a boot error.
-An operator may pin the same artifact independently with `digest` on its `[[modules]]` entry in `engine.toml`; both pins are verified against the loaded bytes, and the warning is silent when the operator pin covers the artifact.
+The refusal also reports the digest of the bytes it read, so a first boot tells you the value to paste.
+Set `require_component_digest = false` under `[engine]` to relax the requirement, which is what the committed `engine.dev.toml` does for a build that changes on every `just build-module`.
+A component given on the command line instead of in a `[[modules]]` entry is exempt: there is no entry for a pin to sit on, and naming the path is the same authorization.
+
+A manifest may also pin its own artifact with `digest` in `[component]`.
+Both pins are verified strictly against the loaded bytes before compilation, and a mismatch or a malformed pin refuses the boot naming which pin failed.
+The two are independent, so the author pin never satisfies the operator requirement.
 The default sibling `component.toml` lives in the same trust domain as the artifact, so an author-side pin closes accidental drift only.
-Against a compromised artifact store, set `[[modules]].digest`, which lives in trusted config; an operator-owned manifest outside the artifact directory via the `manifest` key on `[[modules]]` combined with `require_component_digest = true` closes the same gap.
+
+`[[modules]].digest` does not on its own close a compromised artifact store.
+It fixes the bytes of the `.wasm`, but the sibling `component.toml` stays inside the compromised directory, and that manifest is the sole HTTP allowlist, the `[config]` source, and the state-namespace selector.
+Closing the gap needs an operator-owned manifest outside the artifact directory, named by the `manifest` key on the `[[modules]]` entry.
 
 ## Licence
 
