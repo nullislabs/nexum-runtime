@@ -207,10 +207,10 @@ fn the_test_engine_compiles_components_and_meters_fuel() {
 /// copies to the site the ban exists to prevent. A lint attribute cannot
 /// suppress a test, so the token is counted here instead.
 ///
-/// Every `.rs` file cargo compiles from a crate directory is walked, in every
-/// crate: the compile path is reachable from `nexum-runtime-wasm` and
-/// `nexum-runtime` as well, and a file is production by declaration rather
-/// than by looking test-shaped, so nothing is skipped for its name.
+/// The walk covers `src`, `tests` and `examples` in every crate: the compile
+/// path is reachable from `nexum-runtime-wasm` and `nexum-runtime` as well,
+/// and a file is production by declaration rather than by looking
+/// test-shaped, so nothing is skipped for its name.
 #[test]
 fn only_artifact_rs_suppresses_the_compile_constructor_ban() {
     let root = workspace_root();
