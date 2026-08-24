@@ -17,7 +17,8 @@ use clap::{CommandFactory, FromArgMatches, Parser, Subcommand};
 /// it the engine emits JSON log lines per the structured-logging contract.
 ///
 /// A `digest` token is the subcommand wherever it sits, so a file of that
-/// name has to be written `./digest`. `args_conflicts_with_subcommands`
+/// name has to be written `./digest` or passed after `--`.
+/// `args_conflicts_with_subcommands`
 /// stays off: in clap 4 it suppresses subcommand matching once any
 /// top-level argument is seen, which would make `--pretty-logs digest
 /// x.wasm` a launch of an artifact called `digest`.
@@ -123,12 +124,16 @@ mod tests {
     }
 
     /// The subcommand name wins over either positional, so an artifact or
-    /// manifest called `digest` is reachable only through a qualified path.
+    /// manifest called `digest` needs a qualified path or the `--` escape.
     #[test]
     fn a_qualified_path_named_digest_stays_a_launch() {
         let cli = parse(["nexum", "./digest", "./digest"]).expect("positionals parse");
         assert_eq!(cli.wasm, Some(PathBuf::from("./digest")));
         assert_eq!(cli.manifest, Some(PathBuf::from("./digest")));
+        assert!(cli.command.is_none());
+
+        let cli = parse(["nexum", "--", "digest"]).expect("an escaped positional parses");
+        assert_eq!(cli.wasm, Some(PathBuf::from("digest")));
         assert!(cli.command.is_none());
     }
 

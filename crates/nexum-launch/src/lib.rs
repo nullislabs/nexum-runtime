@@ -46,13 +46,19 @@ pub enum RunError {
 /// [`launch`] keeps taking a [`Cli`] that always means launch.
 pub async fn run<R: Runtime>(name: &'static str, preset: R) -> Result<(), RunError> {
     let cli = Cli::parse_as(name);
-    if let Some(Command::Digest { path }) = &cli.command {
-        return digest::write_digest(path, &mut std::io::stdout()).map_err(|source| {
-            RunError::Digest {
-                path: path.clone(),
-                source,
+    // Exhaustive over `Command`, so a later subcommand cannot fall through
+    // to a boot the operator did not ask for.
+    if let Some(command) = &cli.command {
+        return match command {
+            Command::Digest { path } => {
+                digest::write_digest(path, &mut std::io::stdout()).map_err(|source| {
+                    RunError::Digest {
+                        path: path.clone(),
+                        source,
+                    }
+                })
             }
-        });
+        };
     }
     Ok(launch(name, preset, cli).await?)
 }
