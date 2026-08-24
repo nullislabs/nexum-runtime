@@ -10,7 +10,8 @@ A downstream composition root that registers extensions runs the same way, under
 - Every component `.wasm` artifact present on a path the service user can read.
 - An `engine.toml` with `state_dir` on a persistent path (never `/tmp`), `log_level = "info"`, `[engine.metrics] enabled = true` with `bind_addr = "127.0.0.1:9100"`, one `[chains.<id>]` per triggered chain with a paid RPC URL, and one `[[modules]]` per module, each with an operator-written `id`.
 - `require_component_digest = true` under `[engine]`, with every manifest carrying a `[component].digest` pin.
-- A `digest` on each `[[modules]]` entry, set to the artifact's sha256.
+- A `digest` on each `[[modules]]` entry, set to the line `nexum digest <artifact>` prints for that file.
+  The command reads the artifact and prints its `sha256:<64 hex chars>` pin on stdout, with nothing around it, so the value pastes into `[[modules]].digest` or `[component].digest` unedited.
   This is the operator's own pin, in trusted config: the default sibling manifest lives in the same trust domain as the artifact, so its `[component].digest` does not hold against a compromised artifact store.
   An operator-owned manifest outside the artifact directory, named by the `manifest` key on the entry and combined with `require_component_digest = true`, closes the same gap; `[[modules]].digest` is the direct form and needs no separate manifest path.
   Both pins are verified against the exact bytes handed to the compiler, and a mismatch refuses the boot naming which pin failed and the file it is in.
