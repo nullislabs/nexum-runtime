@@ -60,9 +60,10 @@ enable_alerts = true
 Key design points:
 
 - **`digest` is a verification pin, not a locator.**
-  The engine hashes the bytes it read and compares them to the pin before it compiles them (`crates/nexum-runtime/src/supervisor/artifact.rs`).
-  The pin is optional: an absent pin loads with a warning, unless `require_component_digest = true` under `[engine]` in `engine.toml` makes it a boot error.
-  The operator can pin the same artifact independently with `digest` on its `[[modules]]` entry in `engine.toml`, and the warning is silent when that pin covers the artifact, because the bytes are verified either way.
+  The engine hashes the bytes it read and compares them to the pin before it compiles them (`crates/nexum-runtime-supervisor/src/supervisor/artifact.rs`).
+  The `[component].digest` pin here is the author's, and it is optional: an absent one warns and logs the computed digest only when the operator pin is absent too, so an entry the operator pinned loads silently.
+  The operator pins the same artifact independently with `digest` on its `[[modules]]` entry in `engine.toml`, and that pin is required by default, because the manifest is author-owned and untrusted while `engine.toml` is not ([ADR-0025](adr/0025-the-required-digest-is-the-operator-pin.md)).
+  An author pin never satisfies the operator requirement, and `require_component_digest = false` under `[engine]` relaxes it.
   A refusal names which of the two pins the bytes disagree with, so the operator knows which file to edit.
 - **`[[trigger]]` tables are declarative.**
   A component does not open its own sources imperatively.
@@ -110,7 +111,8 @@ twap-monitor/
 
 The engine reads the artifact from the local filesystem path in the `[[modules]]` entry.
 The manifest defaults to a `component.toml` beside the artifact, and the `manifest` key names one elsewhere.
-An operator-owned manifest from outside the artifact directory, combined with `require_component_digest = true`, is what closes the gap against a compromised artifact store: the default sibling manifest sits in the same trust domain as the artifact it pins.
+An operator-owned manifest from outside the artifact directory is what closes the gap against a compromised artifact store: the default sibling manifest sits in the same trust domain as the artifact it pins, and it is the sole HTTP allowlist, the `[config]` source, and the state-namespace selector.
+`[[modules]].digest` fixes the artifact bytes and does not on its own close that gap, because it says nothing about the manifest beside them.
 
 ### Distribution
 
@@ -322,8 +324,9 @@ An operator deploys a module:
    local-store namespace, and checks that every triggered chain has a
    [chains.<id>] entry.
 
-3. The supervisor reads the artifact, verifies sha256 against
-   [component].digest, and compiles the Component.
+3. The supervisor reads the artifact, verifies sha256 against the entry's
+   [[modules]].digest (required by default) and against [component].digest
+   when the manifest carries one, then compiles the Component.
 
 4. It cross-checks the component's WIT imports against [dependencies] and
    refuses an import the manifest does not declare.

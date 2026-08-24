@@ -45,6 +45,7 @@ pub struct TestRuntimeBuilder {
     chains: Vec<Chain>,
     store: MockStateStore,
     clock: ManualClock,
+    require_digest: bool,
 }
 
 /// The harness-wide component covers a builder that added no entry of its
@@ -69,6 +70,7 @@ impl TestRuntime {
             chains: vec![Chain::from_id(1)],
             store: MockStateStore::new(),
             clock: ManualClock::new(),
+            require_digest: false,
         }
     }
 }
@@ -112,6 +114,14 @@ impl TestRuntimeBuilder {
     #[must_use]
     pub fn policy(mut self, policy: PolicySection) -> Self {
         self.policy = policy;
+        self
+    }
+
+    /// Demand a `[[modules]].digest` on every entry, as a defaulted
+    /// `engine.toml` does. Off here so a test states what it exercises.
+    #[must_use]
+    pub fn require_digest(mut self) -> Self {
+        self.require_digest = true;
         self
     }
 
@@ -159,6 +169,7 @@ impl TestRuntimeBuilder {
         config.policy = self.policy;
         // The chain gate applies even over mock backends.
         config.chains = super::test_chain_configs();
+        config.engine.require_component_digest = self.require_digest;
         config.modules = Entry::rows(entries(self.modules), tmp.path(), &self.wasm);
 
         let pool = self.chain.pool(&self.chains, HARNESS_POLL_INTERVAL);
@@ -199,6 +210,10 @@ impl TestRuntimeBuilder {
         .wasm(self.wasm);
         for entry in entries(self.modules) {
             scenario = scenario.module(entry);
+        }
+        // Both terminals honour the opt-in, so a test need not know which.
+        if self.require_digest {
+            scenario = scenario.require_digest();
         }
         scenario
             .extensions(self.extensions)
@@ -377,6 +392,32 @@ mod tests {
             nexum_runtime_logs::LogChannel::HostInterface,
             "the example module logs through the host interface",
         );
+
+        rt.shutdown();
+        rt.wait().await.expect("clean shutdown");
+    }
+
+    /// No manifest pin is involved.
+    #[tokio::test]
+    async fn harness_launches_under_the_operator_pin_requirement() {
+        let Some(wasm) = example_wasm_or_skip() else {
+            return;
+        };
+        let digest = nexum_primitives::digest::ContentDigest::of_bytes(
+            &std::fs::read(&wasm).expect("read module wasm for pinning"),
+        );
+
+        let mut rt = TestRuntime::builder(&wasm)
+            .require_digest()
+            .module(Entry::from(example_block_manifest()).digest(digest))
+            .launch()
+            .await
+            .expect("an operator-pinned entry boots under the requirement");
+
+        rt.push_block(header_numbered(19_000_001));
+        rt.wait_for_log("example", "block 19000001")
+            .await
+            .expect("the pinned module dispatches after strict verification");
 
         rt.shutdown();
         rt.wait().await.expect("clean shutdown");

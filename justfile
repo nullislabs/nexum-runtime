@@ -20,11 +20,12 @@ build-fixtures:
 # Build everything the E2E suite needs.
 build: build-engine build-module build-examples build-fixtures
 
-# Build the module then run the engine with it. The second argument is the
-# module's component.toml; a manifest is mandatory (an explicit path or a
-# component.toml sibling of the wasm), and the engine refuses to boot without one.
+# Build the module then run the engine over the committed dev config.
+# engine.dev.toml declares the example as a [[modules]] entry, which is the
+# path a deployment uses, so the dev loop does not depend on the absence of a
+# config file. A manifest stays mandatory: the entry names one.
 run: build-module build-engine
-    cargo run -p nexum-cli -- target/wasm32-wasip2/release/example.wasm modules/example/component.toml
+    cargo run -p nexum-cli -- --engine-config engine.dev.toml
 
 # Run host engine unit tests.
 test:

@@ -75,15 +75,20 @@ pub enum LoadRefusal {
         kind: String,
     },
     /// Enforced before compile, so unverified bytes never reach the
-    /// compiler.
+    /// compiler. Carries the computed digest: the requirement holds by
+    /// default, so there is no key the operator set to grep for.
     #[error(
-        "no [component].digest digest for {} and [engine] require_component_digest is set; \
-         pin the artifact's sha256 in its component.toml",
+        "the [[modules]] entry for {} in engine.toml carries no digest; \
+         write digest = \"{actual}\" on that entry, \
+         or set [engine] require_component_digest = false to relax. \
+         A single-wasm command-line override has no [[modules]] entry and is exempt",
         path.display()
     )]
     DigestUnpinned {
         /// The unpinned entry's component path.
         path: PathBuf,
+        /// sha256 of the bytes just read; the value the pin has to carry.
+        actual: ContentDigest,
     },
     /// The operator's capability allowlist is the ceiling; a manifest
     /// declaration cannot widen it (ADR-0001: grant whole or refuse).
@@ -282,7 +287,7 @@ pub(super) async fn module<T: RuntimeTypes>(
     let pins = DigestPolicy {
         operator: entry.digest.as_ref(),
         author: loaded_manifest.component_digest.as_ref(),
-        require_author: require_component_digest,
+        require_operator: require_component_digest,
     };
     let ((), component, digest) = admit_and_verify(
         shared,

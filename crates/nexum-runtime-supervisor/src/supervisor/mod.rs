@@ -63,7 +63,8 @@ pub struct BootEnv<'a> {
     pub policy: &'a PolicySection,
     /// Chains with an `engine.toml` entry; a trigger elsewhere refuses.
     pub configured_chains: ConfiguredChains,
-    /// Refuse a component whose manifest declares no digest.
+    /// Refuse a `[[modules]]` entry that carries no `digest` (ADR-0025).
+    /// A caller booting a component no entry describes sets this `false`.
     pub require_component_digest: bool,
 }
 

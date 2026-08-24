@@ -120,6 +120,8 @@ mod tests {
             "the missing-file fallback carries provenance"
         );
         assert!(cfg.chains.is_empty());
+        // The absent-file path must not be the fail-open one.
+        assert!(cfg.engine.require_component_digest);
     }
 
     #[test]

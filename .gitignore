@@ -48,8 +48,8 @@ scripts/.state
 scripts/.env
 
 # Operator-supplied engine config (carries paid RPC URLs / API keys).
-# The committed siblings `engine.example.toml`, `engine.docker.toml`,
-# and `engine.{m2,m3,e2e,load}.toml` are placeholder templates.
+# Only the exact name is ignored: the committed `engine.dev.toml` that
+# `just run` reads is a secret-free template and stays tracked.
 /engine.toml
 
 # Generated reports under e2e-reports/ (operator commits the filled-in ones

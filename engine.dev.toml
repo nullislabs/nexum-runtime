@@ -1,0 +1,25 @@
+# Development engine config, used by `just run`.
+#
+# It boots the example module over a real `[[modules]]` entry, which is the
+# path a deployment uses. The dev loop must not depend on the absence of a
+# config file.
+#
+# The artifact here is whatever the last `just build-module` produced, so a
+# committed digest would go stale on every rebuild. This file relaxes the
+# operator-pin requirement instead. Relaxing is an affirmative edit to the
+# trusted file, and this is what one looks like (ADR-0025).
+#
+# A deployment does the opposite: it keeps the default and writes the line
+# `nexum digest target/wasm32-wasip2/release/example.wasm` prints into the
+# `digest` key below. See docs/production.md.
+
+[engine]
+state_dir = "./data"
+log_level = "info"
+require_component_digest = false
+
+[[modules]]
+id = "example"
+path = "target/wasm32-wasip2/release/example.wasm"
+manifest = "modules/example/component.toml"
+# digest = "sha256:<64 hex chars>"

@@ -18,6 +18,10 @@ async fn main() -> anyhow::Result<()> {
     let mut cfg = EngineConfig::default();
     let mut entry = ModuleEntry::new("example", "target/wasm32-wasip2/release/example.wasm");
     entry.manifest = Some("modules/example/component.toml".into());
+    // This loads whatever the last `just build-module` produced, so it has no
+    // stable value to pin. A deployment sets `entry.digest` from `nexum digest`
+    // and leaves the requirement on.
+    cfg.engine.require_component_digest = false;
     cfg.modules.push(entry);
 
     // Bind the default preset and launch: the component builders open the

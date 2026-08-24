@@ -178,9 +178,8 @@ pub struct ModuleEntry {
     pub path: std::path::PathBuf,
     /// Path to the module's `component.toml`. Defaults to `<path-parent>/component.toml`.
     pub manifest: Option<std::path::PathBuf>,
-    /// The operator's pin on this entry's artifact, verified against the
-    /// exact bytes handed to the compiler. Independent of the author's
-    /// `[component].digest`: both are verified when present.
+    /// The operator's pin, verified against the exact bytes handed to the
+    /// compiler. Required unless `[engine].require_component_digest` is `false`.
     pub digest: Option<ContentDigest>,
 }
 
@@ -239,9 +238,9 @@ pub struct EngineSection {
     /// treated as `1`.
     #[serde(default = "default_log_backfill_concurrency")]
     pub log_backfill_concurrency: usize,
-    /// Refuse to boot any component without a `[component].digest` pin; a
-    /// present pin is verified regardless.
-    #[serde(default)]
+    /// Refuse to boot any `[[modules]]` entry that carries no `digest`.
+    /// The author's `[component].digest` never substitutes for it (ADR-0025).
+    #[serde(default = "default_require_component_digest")]
     pub require_component_digest: bool,
 }
 
@@ -252,13 +251,18 @@ impl Default for EngineSection {
             log_level: default_log_level(),
             metrics: MetricsSection::default(),
             log_backfill_concurrency: default_log_backfill_concurrency(),
-            require_component_digest: false,
+            require_component_digest: default_require_component_digest(),
         }
     }
 }
 
 fn default_log_backfill_concurrency() -> usize {
     16
+}
+
+/// Shared with the `Default` impl, which an `[engine]` omitting the key never reaches.
+fn default_require_component_digest() -> bool {
+    true
 }
 
 /// `[engine.metrics]`. When `enabled`, serves `/metrics` on `bind_addr`
@@ -480,12 +484,33 @@ max_log_range_blocks = 0
         assert!(err.to_string().contains("bogus"), "{err}");
     }
 
+    /// Editing only the `Default` impl leaves the third path, the common
+    /// operator config, fail-open.
     #[test]
-    fn require_component_digest_defaults_false_and_parses() {
-        assert!(!EngineConfig::default().engine.require_component_digest);
-        let cfg: EngineConfig = toml::from_str("[engine]\nrequire_component_digest = true\n")
+    fn require_component_digest_defaults_true_on_every_path() {
+        assert!(
+            EngineConfig::default().engine.require_component_digest,
+            "the hand-written Default impl",
+        );
+        for (label, src) in [
+            (
+                "an engine.toml with no [engine] table",
+                "[chains.11155111]\nrpc_url = \"http://localhost:8545\"\n",
+            ),
+            (
+                "an [engine] table that omits the key",
+                "[engine]\nlog_level = \"debug\"\n",
+            ),
+        ] {
+            let cfg: EngineConfig = toml::from_str(src).expect("the config parses");
+            assert!(cfg.engine.require_component_digest, "{label}");
+        }
+        let cfg: EngineConfig = toml::from_str("[engine]\nrequire_component_digest = false\n")
             .expect("the [engine] flag parses");
-        assert!(cfg.engine.require_component_digest);
+        assert!(
+            !cfg.engine.require_component_digest,
+            "relaxing stays an affirmative edit to the trusted file",
+        );
     }
 
     /// An ignored key reads as an absent one, and an absent policy section
