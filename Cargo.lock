@@ -3468,6 +3468,7 @@ name = "nexum-runtime-metrics"
 version = "0.1.0"
 dependencies = [
  "metrics",
+ "nexum-runtime-testing",
 ]
 
 [[package]]

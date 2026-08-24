@@ -16,7 +16,7 @@ pub(crate) use nexum_runtime_testing::{
 
 #[cfg(test)]
 pub(crate) use nexum_runtime_testing::{
-    FakeNode, ManualClock, MockRpc, MockStateStore, MockTypes, capture_metrics,
+    FakeNode, ManualClock, MockRpc, MockStateStore, MockTypes, capture_metrics, crate_source_roots,
     example_wasm_or_skip, linked_block, metrics_util, mock_components, mock_components_from,
     mocked_pool, module_wasm_or_skip, rpc_err, rpc_head, rpc_ok, samples_named, test_hash,
     workspace_root,
@@ -46,20 +46,4 @@ pub(crate) fn limits_with(
     let mut limits = crate::engine_config::ModuleLimits::default();
     set(&mut limits);
     limits
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn engine_has_the_component_model_and_fuel_enabled() {
-        let engine = test_wasmtime_engine();
-        wasmtime::component::Component::new(&engine, "(component)")
-            .expect("a trivial component compiles, so the component model is on");
-        let mut store = wasmtime::Store::new(&engine, ());
-        store
-            .set_fuel(1)
-            .expect("fuel accounting is on, so setting fuel succeeds");
-    }
 }

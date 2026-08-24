@@ -42,4 +42,21 @@ disallowed-methods = [
     { path = "tokio::task::spawn", reason = "raw spawning belongs to nexum-tasks: use TaskExecutor::spawn" },
     { path = "tokio::task::spawn_blocking", reason = "raw spawning belongs to nexum-tasks: use TaskExecutor::spawn_blocking" },
     { path = "tokio::task::spawn_local", reason = "raw spawning belongs to nexum-tasks: use TaskExecutor::spawn" },
+    # Every route in wasmtime that yields a `Component`. The operator digest
+    # pin is worth exactly the guarantee that nothing compiles around it, so
+    # the verified bytes have to be the compiled bytes.
+    #
+    # Unlike `Handle::spawn` above, this ban does take one `#[allow]`, in
+    # `crates/nexum-runtime-supervisor/src/supervisor/artifact.rs`.
+    # `only_artifact_rs_allows_the_compile_constructor_ban` in
+    # `supervisor/tests/digest.rs` asserts that one production file carries
+    # the token, so the copy the note above fears fails a test rather than
+    # waiting for review.
+    { path = "wasmtime::component::Component::new", reason = "compiles bytes that nothing verified: use read_verified_component" },
+    { path = "wasmtime::component::Component::from_file", reason = "compiles a file that nothing verified, and reopens the artifact-swap window: use read_verified_component" },
+    { path = "wasmtime::component::Component::from_binary", reason = "compiles bytes that nothing verified: use read_verified_component" },
+    { path = "wasmtime::component::Component::deserialize", reason = "loads a precompiled component that nothing verified: use read_verified_component" },
+    { path = "wasmtime::component::Component::deserialize_file", reason = "loads a precompiled component that nothing verified: use read_verified_component" },
+    { path = "wasmtime::component::Component::deserialize_raw", reason = "loads a precompiled component that nothing verified: use read_verified_component" },
+    { path = "wasmtime::CodeBuilder::compile_component", reason = "compiles bytes that nothing verified: use read_verified_component" },
 ]

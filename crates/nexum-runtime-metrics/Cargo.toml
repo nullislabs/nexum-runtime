@@ -12,3 +12,8 @@ workspace = true
 
 [dependencies]
 metrics.workspace = true
+
+[dev-dependencies]
+# The derived crate enumeration the emitted-name guard walks, shared with the
+# compile-constructor guard in nexum-runtime-supervisor.
+nexum-runtime-testing = { path = "../nexum-runtime-testing" }

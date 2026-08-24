@@ -10,6 +10,7 @@ mod clock;
 mod manifest;
 mod metrics_capture;
 mod rpc;
+mod source_tree;
 mod store;
 mod types;
 mod wasm;
@@ -26,6 +27,7 @@ pub use metrics_capture::{Sample, capture_metrics, samples_named};
 pub use rpc::{
     CapturedRpc, FakeNode, MockRpc, linked_block, mocked_pool, rpc_err, rpc_head, rpc_ok, test_hash,
 };
+pub use source_tree::crate_source_roots;
 pub use store::{MockStateHandle, MockStateStore};
 pub use types::MockTypes;
 pub use wasm::{

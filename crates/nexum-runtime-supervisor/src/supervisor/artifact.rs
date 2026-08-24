@@ -97,10 +97,22 @@ pub(super) fn read_verified_component(
     }
     let component = CodeBuilder::new(engine)
         .wasm_binary_or_text(&bytes, Some(path))
-        .and_then(|builder| builder.compile_component())
+        .and_then(compile)
         // wasmtime::Error is not StdError, so anyhow's with_context needs the bridge.
         .map_err(Error::from)
         .with_context(|| format!("compile {}", path.display()))
         .map_err(EngineRefusal::new)?;
     Ok((component, actual))
+}
+
+/// The workspace's one exemption from the compile-constructor ban in
+/// `clippy.toml`.
+///
+/// It is a function so the `#[allow]` covers one call and nothing else. The
+/// token is the escape hatch the ban creates, so a guard test in
+/// `supervisor/tests/digest.rs` refuses a second production file that carries
+/// it.
+#[allow(clippy::disallowed_methods)]
+fn compile(builder: &mut CodeBuilder<'_>) -> Result<Component, wasmtime::Error> {
+    builder.compile_component()
 }
