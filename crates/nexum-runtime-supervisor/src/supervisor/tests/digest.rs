@@ -203,18 +203,20 @@ fn the_test_engine_compiles_components_and_meters_fuel() {
 
 /// `clippy.toml` bans every wasmtime route to a `Component` by resolved path,
 /// which catches an aliased import or a re-export that a source scan cannot.
-/// The ban costs one `#[allow]`, and an `#[allow]` is what a later author
-/// copies to the site the ban exists to prevent. An `#[allow]` cannot
+/// The ban costs one suppression, and that token is what a later author
+/// copies to the site the ban exists to prevent. A lint attribute cannot
 /// suppress a test, so the token is counted here instead.
 ///
-/// The walk covers every crate in the tree, because the compile path is
-/// reachable from `nexum-runtime-wasm` and `nexum-runtime` as well.
+/// Every `.rs` file cargo compiles from a crate directory is walked, in every
+/// crate: the compile path is reachable from `nexum-runtime-wasm` and
+/// `nexum-runtime` as well, and a file is production by declaration rather
+/// than by looking test-shaped, so nothing is skipped for its name.
 #[test]
-fn only_artifact_rs_allows_the_compile_constructor_ban() {
+fn only_artifact_rs_suppresses_the_compile_constructor_ban() {
     let root = workspace_root();
     let mut sites = Vec::new();
-    for src in crate_source_roots(&root) {
-        collect_allow_sites(&root, &src, &mut sites);
+    for dir in walked_dirs(&root) {
+        collect_allow_sites(&root, &dir, &mut sites);
     }
     // Sorted so a second site fails with a stable message; `read_dir` order
     // is filesystem-defined.
@@ -227,25 +229,34 @@ fn only_artifact_rs_allows_the_compile_constructor_ban() {
     );
 }
 
-/// The lint the ban hands to `artifact.rs`, and the needle below.
-const COMPILE_ALLOW: &str = "clippy::disallowed_methods";
+/// Every compiled directory of every crate: `src`, plus the `tests` and
+/// `examples` targets beside it. `crate_source_roots` enumerates only `src`,
+/// which is what the metrics guard wants and less than this one does.
+fn walked_dirs(root: &Path) -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    for src in crate_source_roots(root) {
+        let crate_dir = src.parent().expect("a crate src has a parent").to_owned();
+        dirs.push(src);
+        dirs.extend(
+            ["tests", "examples"]
+                .into_iter()
+                .map(|target| crate_dir.join(target))
+                .filter(|dir| dir.is_dir()),
+        );
+    }
+    dirs
+}
 
-/// Recurses so a nested module cannot hide the token. Test sources are
-/// skipped, which scopes the count to production and is also why this file
-/// spelling the needle above does not match itself. Sites are
+/// The lint the ban hands to `artifact.rs`, split across two literals: the
+/// walk covers this file too, and a needle that spells itself counts itself.
+const COMPILE_ALLOW: &str = concat!("clippy::", "disallowed_methods");
+
+/// Recurses so a nested module cannot hide the token. Sites are
 /// workspace-relative, since a bare file name does not say which crate it
 /// came from.
 fn collect_allow_sites(root: &Path, dir: &Path, sites: &mut Vec<String>) {
     for entry in std::fs::read_dir(dir).expect("read a crate source directory") {
         let path = entry.expect("directory entry").path();
-        let name = path
-            .file_name()
-            .expect("source entry name")
-            .to_string_lossy()
-            .into_owned();
-        if name == "tests" || name == "tests.rs" {
-            continue;
-        }
         if path.is_dir() {
             collect_allow_sites(root, &path, sites);
             continue;

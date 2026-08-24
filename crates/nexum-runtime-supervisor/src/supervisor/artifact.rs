@@ -108,11 +108,15 @@ pub(super) fn read_verified_component(
 /// The workspace's one exemption from the compile-constructor ban in
 /// `clippy.toml`.
 ///
-/// It is a function so the `#[allow]` covers one call and nothing else. The
-/// token is the escape hatch the ban creates, so a guard test in
-/// `supervisor/tests/digest.rs` refuses a second production file that carries
-/// it.
-#[allow(clippy::disallowed_methods)]
+/// It is a function so the exemption covers one call and nothing else, and
+/// `#[expect]` rather than `#[allow]` so an exemption that stops covering a
+/// banned call fails CI rather than sitting here blessed. The token is the
+/// escape hatch the ban creates, so a guard test in
+/// `supervisor/tests/digest.rs` refuses a second file that carries it.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "the compile call the ban exists to funnel here"
+)]
 fn compile(builder: &mut CodeBuilder<'_>) -> Result<Component, wasmtime::Error> {
     builder.compile_component()
 }
