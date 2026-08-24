@@ -1195,6 +1195,45 @@ mod tests {
             .lacks("carries no digest");
     }
 
+    /// The mirror of the exemption, and the point of the default: a
+    /// configured `[[modules]]` entry with no `digest` refuses over an
+    /// `EngineConfig` nobody touched, before any compile (ADR-0025). The
+    /// scenario suite pins the gate under an explicitly set flag, so this
+    /// is the only place the defaulted value reaches a boot.
+    #[tokio::test]
+    async fn a_configured_entry_without_a_digest_refuses_under_the_default_config() {
+        use crate::error::LoadRefusal;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let wasm = dir.path().join("configured.wasm");
+        std::fs::write(&wasm, b"not a component").expect("write artifact");
+        let manifest = TestManifest::new("configured")
+            .cap("logging")
+            .write_to(dir.path());
+
+        let mut config = EngineConfig::default();
+        config.engine.state_dir = dir.path().join("state");
+        let mut entry = ModuleEntry::new("configured", wasm);
+        entry.manifest = Some(manifest);
+        config.modules.push(entry);
+
+        let err = match RuntimeBuilder::new(&config)
+            .with_types::<CoreRuntime>()
+            .with_components(ComponentsBuilder::new(
+                ProviderPoolBuilder,
+                LocalStoreBuilder,
+            ))
+            .launch()
+            .await
+        {
+            Ok(_) => panic!("an unpinned entry must not launch under the default"),
+            Err(err) => err,
+        };
+        Refusal::from(err)
+            .variant::<LoadRefusal>(|e| matches!(e, LoadRefusal::DigestUnpinned { .. }))
+            .lacks("compile");
+    }
+
     /// Every module failing `init` aborts launch instead of idling.
     #[tokio::test]
     async fn launch_bails_when_all_modules_fail_init() {

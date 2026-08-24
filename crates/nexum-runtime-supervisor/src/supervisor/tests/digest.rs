@@ -116,6 +116,33 @@ fn read_verified_component_requires_an_operator_pin_despite_an_author_pin() {
         .lacks("compile");
 }
 
+/// A present author pin is still verified when the operator pin is absent
+/// (ADR-0025), so the unpinned refusal never tells an operator to paste a
+/// digest that a pin already on disk contradicts.
+#[test]
+fn read_verified_component_reports_an_author_mismatch_before_the_missing_operator_pin() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("tampered.wasm");
+    std::fs::write(&path, b"not the pinned bytes").expect("write artifact");
+
+    let engine = test_wasmtime_engine();
+    let declared = wrong_digest();
+    let pins = DigestPolicy {
+        operator: None,
+        author: Some(&declared),
+        require_operator: true,
+    };
+    let err = read_verified_component(&engine, &path, pins)
+        .err()
+        .expect("a mismatched author pin must refuse the component");
+    Refusal::from(err)
+        .variant::<DigestMismatch>(|e| {
+            e.pin == nexum_primitives::digest::DigestPin::Author && e.declared == declared
+        })
+        .lacks("carries no digest")
+        .lacks("compile");
+}
+
 /// A matching operator pin is what the requirement asks for, with no
 /// author pin anywhere.
 #[test]

@@ -40,6 +40,8 @@ The author pin keeps exactly one property and loses exactly one.
 It is still verified when it is present, on the same bytes, with the same refusal, reported as `DigestPin::Author`.
 It is no longer the thing this flag mandates, and it never satisfies the flag: a matching author pin on an entry with no operator pin still refuses.
 The two pins stay independent, so an entry that carries both and whose pins disagree refuses, with the operator's expectation reported first.
+Every pin that is present is verified before the missing-pin refusal fires, so a mismatched author pin on an unpinned entry reports `DigestPin::Author` rather than the unpinned refusal.
+The unpinned refusal prints the digest it wants pasted into trusted config, and it must never print a value that a pin already on disk contradicts.
 
 ### No second key
 

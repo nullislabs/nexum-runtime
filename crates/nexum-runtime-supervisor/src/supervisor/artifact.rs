@@ -30,7 +30,8 @@ pub(super) struct DigestPolicy<'a> {
     /// `[engine].require_component_digest`: an absent operator pin
     /// refuses, and an author pin does not excuse it, because the party
     /// who can rewrite the artifact can rewrite the manifest beside it
-    /// (ADR-0001, ADR-0025).
+    /// (ADR-0001, ADR-0025). Every pin that is present is verified before
+    /// this refuses.
     pub(super) require_operator: bool,
 }
 
@@ -56,50 +57,51 @@ pub(super) fn read_verified_component(
         .with_context(|| format!("read component {}", path.display()))
         .map_err(EngineRefusal::new)?;
     let actual = ContentDigest::of_bytes(&bytes);
-    match pins.operator {
-        Some(operator) => {
-            if actual != *operator {
-                return Err(DigestMismatch {
-                    path: path.to_owned(),
-                    pin: DigestPin::Operator,
-                    declared: *operator,
-                    actual,
-                }
-                .into());
+    // Operator first on a disagreement: a mismatch reports the operator's
+    // expectation.
+    if let Some(operator) = pins.operator {
+        if actual != *operator {
+            return Err(DigestMismatch {
+                path: path.to_owned(),
+                pin: DigestPin::Operator,
+                declared: *operator,
+                actual,
             }
-            debug!(component = %path.display(), digest = %actual, "operator [[modules]].digest pin verified");
+            .into());
         }
-        // The refusal carries `actual`, so the value it demands is
-        // readable without a second run or a second tool.
-        None if pins.require_operator => {
+        debug!(component = %path.display(), digest = %actual, "operator [[modules]].digest pin verified");
+    }
+    // A mismatch stays a typed arm of the refusal: callers match on it.
+    if let Some(declared) = pins.author {
+        if actual != *declared {
+            return Err(DigestMismatch {
+                path: path.to_owned(),
+                pin: DigestPin::Author,
+                declared: *declared,
+                actual,
+            }
+            .into());
+        }
+        debug!(component = %path.display(), digest = %actual, "component digest verified");
+    }
+    if pins.operator.is_none() {
+        // Every present pin is checked above before this refuses, so the
+        // `actual` it tells the operator to paste is never a value a pin
+        // already on disk contradicts.
+        if pins.require_operator {
             return Err(LoadRefusal::DigestUnpinned {
                 path: path.to_owned(),
                 actual,
             }
             .into());
         }
-        None => {}
-    }
-    match pins.author {
-        // A mismatch stays a typed arm of the refusal: callers match on it.
-        Some(declared) => {
-            if actual != *declared {
-                return Err(DigestMismatch {
-                    path: path.to_owned(),
-                    pin: DigestPin::Author,
-                    declared: *declared,
-                    actual,
-                }
-                .into());
-            }
-            debug!(component = %path.display(), digest = %actual, "component digest verified");
+        if pins.author.is_none() {
+            warn!(
+                component = %path.display(),
+                digest = %actual,
+                "no [[modules]].digest and no [component].digest - loading unverified",
+            );
         }
-        None if pins.operator.is_none() => warn!(
-            component = %path.display(),
-            digest = %actual,
-            "no [[modules]].digest and no [component].digest - loading unverified",
-        ),
-        None => {}
     }
     let component = CodeBuilder::new(engine)
         .wasm_binary_or_text(&bytes, Some(path))

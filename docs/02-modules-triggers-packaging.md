@@ -61,7 +61,7 @@ Key design points:
 
 - **`digest` is a verification pin, not a locator.**
   The engine hashes the bytes it read and compares them to the pin before it compiles them (`crates/nexum-runtime-supervisor/src/supervisor/artifact.rs`).
-  The `[component].digest` pin here is the author's, and it is optional: an absent one loads with a warning that logs the computed digest.
+  The `[component].digest` pin here is the author's, and it is optional: an absent one warns and logs the computed digest only when the operator pin is absent too, so an entry the operator pinned loads silently.
   The operator pins the same artifact independently with `digest` on its `[[modules]]` entry in `engine.toml`, and that pin is required by default, because the manifest is author-owned and untrusted while `engine.toml` is not ([ADR-0025](adr/0025-the-required-digest-is-the-operator-pin.md)).
   An author pin never satisfies the operator requirement, and `require_component_digest = false` under `[engine]` relaxes it.
   A refusal names which of the two pins the bytes disagree with, so the operator knows which file to edit.
