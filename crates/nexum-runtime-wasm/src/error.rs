@@ -666,6 +666,7 @@ mod tests {
         };
         assert_eq!(msg, ChainFaultMessage::InvalidParams.text());
     }
+
     /// Text before a `#[cfg(test)] mod`. A single gated item is kept, which
     /// only over-scans.
     fn shipped_region(text: &str) -> &str {
@@ -758,6 +759,22 @@ mod tests {
                     "a fault payload at `{prefix}` is not a vocabulary projection",
                 );
             }
+        }
+
+        // The `message:` check above only reaches a payload built where it can
+        // see it, and clippy bans the wrapper rather than the record, so an
+        // `RpcError` assembled in another crate and wrapped here would carry
+        // node text past both. It has to be built inline.
+        let wrapped = occurrences(&funnel, "ChainError::Rpc(");
+        assert!(
+            !wrapped.is_empty(),
+            "the funnel builds no `ChainError::Rpc(`, so this guard reads the wrong region",
+        );
+        for rest in wrapped {
+            assert!(
+                rest.starts_with("RpcError{"),
+                "an rpc error must be built where its `message:` is checked",
+            );
         }
 
         for (seam, source) in [("store_fault", "StoreError"), ("pool_fault", "PoolError")] {
