@@ -2,6 +2,10 @@
 //! exact bytes handed to the compiler, so any refusal precedes compile and
 //! the verified bytes are the compiled bytes; a guard test pins every
 //! production compile call to this file.
+//!
+//! The operator's `[[modules]].digest` is the pin the engine requires by
+//! default; the author's `[component].digest` is verified when present and
+//! never substitutes for it (ADR-0025).
 
 use std::path::Path;
 
@@ -23,18 +27,21 @@ pub(super) struct DigestPolicy<'a> {
     pub(super) operator: Option<&'a ContentDigest>,
     /// The manifest's `[component].digest` pin.
     pub(super) author: Option<&'a ContentDigest>,
-    /// `[engine].require_component_digest`: an operator pin does not
-    /// excuse a missing author pin.
-    pub(super) require_author: bool,
+    /// `[engine].require_component_digest`: an absent operator pin
+    /// refuses, and an author pin does not excuse it, because the party
+    /// who can rewrite the artifact can rewrite the manifest beside it
+    /// (ADR-0001, ADR-0025).
+    pub(super) require_operator: bool,
 }
 
 #[cfg(test)]
 impl<'a> DigestPolicy<'a> {
-    pub(super) fn author(declared: Option<&'a ContentDigest>, require: bool) -> Self {
+    /// Only the author pin, with the operator requirement relaxed.
+    pub(super) fn author(declared: Option<&'a ContentDigest>) -> Self {
         Self {
             operator: None,
             author: declared,
-            require_author: require,
+            require_operator: false,
         }
     }
 }
@@ -49,17 +56,29 @@ pub(super) fn read_verified_component(
         .with_context(|| format!("read component {}", path.display()))
         .map_err(EngineRefusal::new)?;
     let actual = ContentDigest::of_bytes(&bytes);
-    if let Some(operator) = pins.operator {
-        if actual != *operator {
-            return Err(DigestMismatch {
+    match pins.operator {
+        Some(operator) => {
+            if actual != *operator {
+                return Err(DigestMismatch {
+                    path: path.to_owned(),
+                    pin: DigestPin::Operator,
+                    declared: *operator,
+                    actual,
+                }
+                .into());
+            }
+            debug!(component = %path.display(), digest = %actual, "operator [[modules]].digest pin verified");
+        }
+        // The refusal carries `actual`, so the value it demands is
+        // readable without a second run or a second tool.
+        None if pins.require_operator => {
+            return Err(LoadRefusal::DigestUnpinned {
                 path: path.to_owned(),
-                pin: DigestPin::Operator,
-                declared: *operator,
                 actual,
             }
             .into());
         }
-        debug!(component = %path.display(), digest = %actual, "operator [[modules]].digest pin verified");
+        None => {}
     }
     match pins.author {
         // A mismatch stays a typed arm of the refusal: callers match on it.
@@ -75,16 +94,10 @@ pub(super) fn read_verified_component(
             }
             debug!(component = %path.display(), digest = %actual, "component digest verified");
         }
-        None if pins.require_author => {
-            return Err(LoadRefusal::DigestUnpinned {
-                path: path.to_owned(),
-            }
-            .into());
-        }
         None if pins.operator.is_none() => warn!(
             component = %path.display(),
             digest = %actual,
-            "no [component].digest digest - loading unverified",
+            "no [[modules]].digest and no [component].digest - loading unverified",
         ),
         None => {}
     }

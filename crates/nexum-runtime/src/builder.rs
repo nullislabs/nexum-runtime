@@ -208,14 +208,19 @@ impl<T: RuntimeTypes<State = HostState<T>>> AssembledRuntime<T> {
             };
             let env = supervisor::BootEnv {
                 policy: &policy,
+                // No [[modules]] entry describes the override, so no
+                // operator pin can apply to it and the requirement has
+                // nothing to bind to. The override path is exempt by
+                // construction, not by an escape hatch: the operator
+                // named this artifact on the command line, which is the
+                // same authorization the pin records (ADR-0025).
+                require_component_digest: false,
                 ..supervisor::BootEnv::from_config(engine_cfg)
             };
             let id = wasm
                 .file_stem()
                 .map(|s| s.to_string_lossy().into_owned())
                 .unwrap_or_else(|| "module".to_owned());
-            // No [[modules]] entry describes the override, so no
-            // operator pin can apply to it.
             let mut entry = ModuleEntry::new(id, wasm);
             entry.manifest = manifest;
             Supervisor::boot_single(
@@ -1149,6 +1154,45 @@ mod tests {
             .expect("the row must not bind to the override");
         handle.shutdown();
         handle.wait().await.expect("clean shutdown");
+    }
+
+    /// The single-wasm override is exempt from the operator-pin
+    /// requirement by construction: no `[[modules]]` entry describes it,
+    /// so no pin can apply to it (ADR-0025). The config here is the
+    /// defaulted, strict one, and the artifact is not a component, so the
+    /// launch must fail at compile rather than at the digest gate.
+    #[tokio::test]
+    async fn a_module_source_override_is_exempt_from_the_operator_pin_requirement() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let wasm = dir.path().join("override.wasm");
+        std::fs::write(&wasm, b"not a component").expect("write artifact");
+        let manifest = TestManifest::new("override")
+            .cap("logging")
+            .write_to(dir.path());
+
+        let mut config = EngineConfig::default();
+        config.engine.state_dir = dir.path().join("state");
+        assert!(
+            config.engine.require_component_digest,
+            "the exemption only means anything under the strict default",
+        );
+
+        let err = match RuntimeBuilder::new(&config)
+            .with_types::<CoreRuntime>()
+            .with_module_source(Some(wasm), Some(manifest))
+            .with_components(ComponentsBuilder::new(
+                ProviderPoolBuilder,
+                LocalStoreBuilder,
+            ))
+            .launch()
+            .await
+        {
+            Ok(_) => panic!("an artifact that is not a component must not launch"),
+            Err(err) => err,
+        };
+        Refusal::from(err)
+            .names("compile")
+            .lacks("carries no digest");
     }
 
     /// Every module failing `init` aborts launch instead of idling.

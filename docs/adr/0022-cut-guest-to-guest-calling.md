@@ -6,6 +6,10 @@ amends: 0017-capabilities-and-services.md, 0018-one-operator-policy-surface.md, 
 
 # Guest-to-guest calling is cut and the single-store model stands
 
+> Amendment: [ADR-0025](0025-the-required-digest-is-the-operator-pin.md) redefined what `[engine].require_component_digest` requires, from the author pin to the operator pin this record moved onto `[[modules]].digest`.
+> `DigestPolicy`'s third field is `require_operator`, not `require_author`.
+> The two-independent-pins decision this record states is unchanged.
+
 ## Context
 
 [ADR-0021](0021-provides-and-implements.md) shipped `[component].provides` verification and `[implements]` authorization for a service edge no artifact ever took (#253).
@@ -41,6 +45,7 @@ Kept, deliberately:
 `Implementer.digest` was the only operator-written artifact pin in trusted config, and it dies with `[implements]`.
 The pin therefore moves: `ModuleEntry` gains `digest: Option<ContentDigest>`, parsed under the same strict grammar as the manifest pin.
 `DigestPolicy` is unchanged in shape: `operator`, `author` and `require_author`, two independent pins, both verified against the exact bytes handed to the compiler, the operator's expectation reported first on a disagreement.
+Amended by [ADR-0025](0025-the-required-digest-is-the-operator-pin.md): the third field is now `require_operator` and it mandates the pin this section moves.
 `DigestPin::Operator`'s `Display` retargets from the `[implements]` digest to `[[modules]].digest in engine.toml`; the test that pins that wording changes with it.
 
 This is a net security gain.
