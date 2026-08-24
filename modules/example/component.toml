@@ -3,8 +3,9 @@
 [component]
 name = "example"
 version = "0.1.0"
-# Optional content pin, verified when present:
-#   component = "sha256:<64 hex chars>"   (sha256sum of the .wasm)
+# Optional content pin, verified when present. `nexum digest <artifact>`
+# prints the value:
+#   digest = "sha256:<64 hex chars>"
 
 [dependencies]
 logging = {}
