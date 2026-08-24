@@ -16,14 +16,19 @@
 
 use std::path::{Path, PathBuf};
 
-/// The workspace root: the outermost ancestor of this crate that carries a
-/// `Cargo.toml`.
+/// The workspace root: the nearest ancestor of this crate whose `Cargo.toml`
+/// declares a `[workspace]`.
+///
+/// Nearest rather than outermost, so a checkout nested inside an unrelated
+/// cargo workspace walks this tree and not the one around it.
 pub fn workspace_root() -> PathBuf {
     let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
     manifest
         .ancestors()
-        .filter(|dir| dir.join("Cargo.toml").is_file())
-        .last()
+        .find(|dir| {
+            std::fs::read_to_string(dir.join("Cargo.toml"))
+                .is_ok_and(|text| text.contains("[workspace]"))
+        })
         .unwrap_or(manifest)
         .to_path_buf()
 }
@@ -74,11 +79,15 @@ fn collect(dir: &Path, roots: &mut Vec<PathBuf>) {
 mod tests {
     use super::*;
 
+    /// Asserts the distance, not the shape: any ancestor carrying a
+    /// `[workspace]` satisfies the search, so only the depth says the walk
+    /// starts at this repository.
     #[test]
     fn the_root_is_the_workspace_and_not_this_crate() {
-        let manifest = std::fs::read_to_string(workspace_root().join("Cargo.toml"))
-            .expect("the workspace manifest reads");
-        assert!(manifest.contains("[workspace]"), "{manifest}");
+        assert_eq!(
+            workspace_root().join("crates").join("nexum-runtime-guards"),
+            Path::new(env!("CARGO_MANIFEST_DIR")),
+        );
     }
 
     #[test]
