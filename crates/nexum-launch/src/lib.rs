@@ -9,18 +9,58 @@
 #![forbid(unsafe_code)]
 
 mod cli;
+mod digest;
 
-pub use cli::Cli;
+pub use cli::{Cli, Command};
+
+use std::path::PathBuf;
 
 use nexum_runtime::config::{self, EngineConfig};
 use nexum_runtime::error::RuntimeError;
 use nexum_runtime::{Runtime, RuntimeBuilder};
+use thiserror::Error;
 use tracing::info;
 use tracing_subscriber::EnvFilter;
 
-/// Parse the process arguments as `name`, then [`launch`] the preset.
-pub async fn run<R: Runtime>(name: &'static str, preset: R) -> Result<(), RuntimeError> {
-    launch(name, preset, Cli::parse_as(name)).await
+/// Why [`run`] stopped: a subcommand's own failure, or the boot path's.
+#[derive(Debug, Error)]
+pub enum RunError {
+    /// The boot path refused.
+    #[error(transparent)]
+    Runtime(#[from] RuntimeError),
+    /// `digest` could not read the artifact or write its line.
+    #[error("cannot digest {}", path.display())]
+    Digest {
+        /// The artifact path as given on the command line.
+        path: PathBuf,
+        /// The io failure.
+        #[source]
+        source: std::io::Error,
+    },
+}
+
+/// Parse the process arguments as `name`, then answer a subcommand or
+/// [`launch`] the preset.
+///
+/// A subcommand short-circuits here, ahead of the config load, so
+/// [`launch`] keeps taking a [`Cli`] that always means launch.
+pub async fn run<R: Runtime>(name: &'static str, preset: R) -> Result<(), RunError> {
+    let cli = Cli::parse_as(name);
+    // Exhaustive over `Command`, so a later subcommand cannot fall through
+    // to a boot the operator did not ask for.
+    if let Some(command) = &cli.command {
+        return match command {
+            Command::Digest { path } => {
+                digest::write_digest(path, &mut std::io::stdout()).map_err(|source| {
+                    RunError::Digest {
+                        path: path.clone(),
+                        source,
+                    }
+                })
+            }
+        };
+    }
+    Ok(launch(name, preset, cli).await?)
 }
 
 /// Load the config, initialize tracing, and run the preset until shutdown.

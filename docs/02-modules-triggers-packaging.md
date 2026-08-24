@@ -17,7 +17,7 @@ The operator config is a separate, trusted file: see [ADR-0001](adr/0001-operato
 name    = "twap-monitor"
 version = "0.3.0"
 
-# Optional content pin: one sha256sum of the compiled .wasm.
+# Optional content pin: the line `nexum digest <artifact>` prints.
 digest = "sha256:9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
 
 # Per-component resource requests. Each field narrows the engine [policy]

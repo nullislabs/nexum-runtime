@@ -13,5 +13,9 @@ workspace = true
 nexum-runtime = { path = "../nexum-runtime" }
 
 clap.workspace = true
+thiserror.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

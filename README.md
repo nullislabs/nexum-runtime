@@ -62,7 +62,13 @@ The example module declares no triggers, so `just run` needs no `engine.toml`; t
 
 ## Component integrity
 
-A manifest may pin its artifact with `digest = "sha256:<64 hex chars>"` in `[component]` (one `sha256sum` of the `.wasm`).
+A manifest may pin its artifact with `digest = "sha256:<64 hex chars>"` in `[component]`.
+`nexum digest <artifact>` prints that value, and it prints nothing else, so the line pastes into the key:
+
+```sh
+nexum digest target/wasm32-wasip2/release/example.wasm
+```
+
 A present pin is strictly verified against the loaded bytes before compilation; a mismatch or a malformed pin refuses the boot.
 An absent pin loads with a warning that logs the computed digest; set `require_component_digest = true` under `[engine]` in `engine.toml` to make an absent pin a boot error.
 An operator may pin the same artifact independently with `digest` on its `[[modules]]` entry in `engine.toml`; both pins are verified against the loaded bytes, and the warning is silent when the operator pin covers the artifact.
