@@ -75,9 +75,8 @@ pub enum LoadRefusal {
         kind: String,
     },
     /// Enforced before compile, so unverified bytes never reach the
-    /// compiler. It carries the computed digest because the requirement
-    /// holds by default: the operator never set the key an older message
-    /// would have sent them to grep for.
+    /// compiler. Carries the computed digest: the requirement holds by
+    /// default, so there is no key the operator set to grep for.
     #[error(
         "the [[modules]] entry for {} in engine.toml carries no digest; \
          write digest = \"{actual}\" on that entry, \
@@ -88,8 +87,7 @@ pub enum LoadRefusal {
     DigestUnpinned {
         /// The unpinned entry's component path.
         path: PathBuf,
-        /// sha256 of the bytes just read, which is the value the pin has
-        /// to carry.
+        /// sha256 of the bytes just read; the value the pin has to carry.
         actual: ContentDigest,
     },
     /// The operator's capability allowlist is the ceiling; a manifest

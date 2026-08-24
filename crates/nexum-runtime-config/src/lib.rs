@@ -178,10 +178,8 @@ pub struct ModuleEntry {
     pub path: std::path::PathBuf,
     /// Path to the module's `component.toml`. Defaults to `<path-parent>/component.toml`.
     pub manifest: Option<std::path::PathBuf>,
-    /// The operator's pin on this entry's artifact, verified against the
-    /// exact bytes handed to the compiler. Independent of the author's
-    /// `[component].digest`: both are verified when present. Required
-    /// unless `[engine].require_component_digest` is set `false`.
+    /// The operator's pin, verified against the exact bytes handed to the
+    /// compiler. Required unless `[engine].require_component_digest` is `false`.
     pub digest: Option<ContentDigest>,
 }
 
@@ -241,11 +239,7 @@ pub struct EngineSection {
     #[serde(default = "default_log_backfill_concurrency")]
     pub log_backfill_concurrency: usize,
     /// Refuse to boot any `[[modules]]` entry that carries no `digest`.
-    /// Defaults to `true`: the operator pin is the authorization, and the
-    /// manifest's `[component].digest` is untrusted evidence of intent
-    /// that never substitutes for it (ADR-0025). A present pin of either
-    /// kind is verified regardless. Set `false` to relax, which is an
-    /// affirmative edit to the trusted file.
+    /// The author's `[component].digest` never substitutes for it (ADR-0025).
     #[serde(default = "default_require_component_digest")]
     pub require_component_digest: bool,
 }
@@ -266,8 +260,7 @@ fn default_log_backfill_concurrency() -> usize {
     16
 }
 
-/// Shared by this impl and the field-level `serde(default)`, because an
-/// `engine.toml` whose `[engine]` omits the key never reaches the impl.
+/// Shared with the `Default` impl, which an `[engine]` omitting the key never reaches.
 fn default_require_component_digest() -> bool {
     true
 }
@@ -491,11 +484,8 @@ max_log_range_blocks = 0
         assert!(err.to_string().contains("bogus"), "{err}");
     }
 
-    /// Three sources reach this value and none of them consults another:
-    /// the `Default` impl, the section-level `serde(default)` on the
-    /// `engine` field, and the field-level `serde(default)` on the key.
-    /// The third is the common operator config, so a change that edits
-    /// only the impl leaves every real deployment fail-open.
+    /// Editing only the `Default` impl leaves the third path, the common
+    /// operator config, fail-open.
     #[test]
     fn require_component_digest_defaults_true_on_every_path() {
         assert!(

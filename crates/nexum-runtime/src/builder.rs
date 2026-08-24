@@ -208,12 +208,11 @@ impl<T: RuntimeTypes<State = HostState<T>>> AssembledRuntime<T> {
             };
             let env = supervisor::BootEnv {
                 policy: &policy,
-                // No [[modules]] entry describes the override, so no
-                // operator pin can apply to it and the requirement has
-                // nothing to bind to. The override path is exempt by
-                // construction, not by an escape hatch: the operator
-                // named this artifact on the command line, which is the
-                // same authorization the pin records (ADR-0025).
+                // No [[modules]] entry describes the override, so no operator
+                // pin can apply and the requirement has nothing to bind to.
+                // Exempt by construction, not by an escape hatch: naming the
+                // artifact on the command line is the same authorization the
+                // pin records (ADR-0025).
                 require_component_digest: false,
                 ..supervisor::BootEnv::from_config(engine_cfg)
             };
@@ -1156,11 +1155,8 @@ mod tests {
         handle.wait().await.expect("clean shutdown");
     }
 
-    /// The single-wasm override is exempt from the operator-pin
-    /// requirement by construction: no `[[modules]]` entry describes it,
-    /// so no pin can apply to it (ADR-0025). The config here is the
-    /// defaulted, strict one, and the artifact is not a component, so the
-    /// launch must fail at compile rather than at the digest gate.
+    /// Under the defaulted, strict config. The artifact is not a component,
+    /// so the launch must fail at compile rather than at the digest gate.
     #[tokio::test]
     async fn a_module_source_override_is_exempt_from_the_operator_pin_requirement() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -1195,11 +1191,8 @@ mod tests {
             .lacks("carries no digest");
     }
 
-    /// The mirror of the exemption, and the point of the default: a
-    /// configured `[[modules]]` entry with no `digest` refuses over an
-    /// `EngineConfig` nobody touched, before any compile (ADR-0025). The
-    /// scenario suite pins the gate under an explicitly set flag, so this
-    /// is the only place the defaulted value reaches a boot.
+    /// The scenario suite sets the flag explicitly, so this is the only place
+    /// the defaulted value reaches a boot.
     #[tokio::test]
     async fn a_configured_entry_without_a_digest_refuses_under_the_default_config() {
         use crate::error::LoadRefusal;

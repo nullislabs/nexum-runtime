@@ -64,8 +64,7 @@ pub struct BootEnv<'a> {
     /// Chains with an `engine.toml` entry; a trigger elsewhere refuses.
     pub configured_chains: ConfiguredChains,
     /// Refuse a `[[modules]]` entry that carries no `digest` (ADR-0025).
-    /// A caller booting a component that no `[[modules]]` entry
-    /// describes sets this `false`: no operator pin can apply to it.
+    /// A caller booting a component no entry describes sets this `false`.
     pub require_component_digest: bool,
 }
 

@@ -18,12 +18,9 @@ async fn main() -> anyhow::Result<()> {
     let mut cfg = EngineConfig::default();
     let mut entry = ModuleEntry::new("example", "target/wasm32-wasip2/release/example.wasm");
     entry.manifest = Some("modules/example/component.toml".into());
-    // A `[[modules]]` entry carries the operator's digest pin by default
-    // (ADR-0025), and this one loads whatever the last `just build-module`
-    // produced, so it has no stable value to pin. A deployment instead sets
-    // `entry.digest` to the value `nexum digest <artifact>` prints and leaves
-    // the requirement on. An embedder relaxes it here, in trusted host Rust,
-    // rather than in a config file that gets templated and copied.
+    // This loads whatever the last `just build-module` produced, so it has no
+    // stable value to pin. A deployment sets `entry.digest` from `nexum digest`
+    // and leaves the requirement on.
     cfg.engine.require_component_digest = false;
     cfg.modules.push(entry);
 

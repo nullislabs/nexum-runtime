@@ -2,10 +2,6 @@
 //! exact bytes handed to the compiler, so any refusal precedes compile and
 //! the verified bytes are the compiled bytes; a guard test pins every
 //! production compile call to this file.
-//!
-//! The operator's `[[modules]].digest` is the pin the engine requires by
-//! default; the author's `[component].digest` is verified when present and
-//! never substitutes for it (ADR-0025).
 
 use std::path::Path;
 
@@ -18,20 +14,16 @@ use super::load::LoadRefusal;
 use crate::error::{EngineRefusal, RuntimeError};
 use nexum_primitives::digest::{ContentDigest, DigestMismatch, DigestPin};
 
-/// Digest expectations for one artifact. The operator's `[[modules]]`
-/// pin and the author's `[component].digest` are independent: both are
-/// verified when present, so a disagreement between them refuses.
+/// Digest expectations for one artifact. Both pins are independent and both
+/// are verified when present, so a disagreement between them refuses.
 pub(super) struct DigestPolicy<'a> {
-    /// The `[[modules]].digest` pin; checked first, so a disagreement
-    /// reports the operator's expectation.
+    /// The `[[modules]].digest` pin, checked first so a disagreement reports
+    /// the operator's expectation.
     pub(super) operator: Option<&'a ContentDigest>,
     /// The manifest's `[component].digest` pin.
     pub(super) author: Option<&'a ContentDigest>,
-    /// `[engine].require_component_digest`: an absent operator pin
-    /// refuses, and an author pin does not excuse it, because the party
-    /// who can rewrite the artifact can rewrite the manifest beside it
-    /// (ADR-0001, ADR-0025). Every pin that is present is verified before
-    /// this refuses.
+    /// `[engine].require_component_digest`. An author pin does not excuse an
+    /// absent operator pin (ADR-0025).
     pub(super) require_operator: bool,
 }
 

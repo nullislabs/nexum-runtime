@@ -118,10 +118,7 @@ impl TestRuntimeBuilder {
     }
 
     /// Demand a `[[modules]].digest` on every entry, as a defaulted
-    /// `engine.toml` does. Off here so a harness test states what it
-    /// exercises, mirroring [`BootScenario::require_digest`].
-    ///
-    /// [`BootScenario::require_digest`]: super::BootScenario::require_digest
+    /// `engine.toml` does. Off here so a test states what it exercises.
     #[must_use]
     pub fn require_digest(mut self) -> Self {
         self.require_digest = true;
@@ -214,8 +211,7 @@ impl TestRuntimeBuilder {
         for entry in entries(self.modules) {
             scenario = scenario.module(entry);
         }
-        // Both terminals honour the opt-in, so a test does not have to know
-        // which one it is on.
+        // Both terminals honour the opt-in, so a test need not know which.
         if self.require_digest {
             scenario = scenario.require_digest();
         }
@@ -401,9 +397,7 @@ mod tests {
         rt.wait().await.expect("clean shutdown");
     }
 
-    /// The requirement a defaulted `engine.toml` carries, over the whole
-    /// builder path: an operator-pinned entry boots under it, and no
-    /// manifest pin is involved.
+    /// No manifest pin is involved.
     #[tokio::test]
     async fn harness_launches_under_the_operator_pin_requirement() {
         let Some(wasm) = example_wasm_or_skip() else {

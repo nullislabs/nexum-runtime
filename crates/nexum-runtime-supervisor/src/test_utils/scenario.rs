@@ -222,10 +222,9 @@ impl<T: RuntimeTypes<State = HostState<T>>> BootScenario<T> {
 
     /// Refuse any entry that carries no `[[modules]].digest` pin.
     ///
-    /// Off by default, unlike a defaulted `engine.toml`, and it stays
-    /// that way: the scenario overwrites the engine flag from this value,
-    /// so flipping the default here would silently rewrite the expected
-    /// refusal of every unpinned scenario test.
+    /// Off, unlike a defaulted `engine.toml`, and it stays that way: the
+    /// scenario overwrites the engine flag from this value, so flipping it
+    /// would rewrite the expected refusal of every unpinned scenario test.
     #[must_use]
     pub fn require_digest(mut self) -> Self {
         self.require_digest = true;

@@ -64,8 +64,6 @@ fn read_verified_component_rejects_a_mismatched_operator_pin() {
         .lacks("compile");
 }
 
-/// The refusal reports the digest it demands, so an operator learns the
-/// value from the run that refused rather than from a second tool.
 #[test]
 fn read_verified_component_requires_an_operator_pin_and_reports_the_digest() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -93,8 +91,6 @@ fn read_verified_component_requires_an_operator_pin_and_reports_the_digest() {
         .lacks("compile");
 }
 
-/// The author pin is untrusted evidence of intent (ADR-0001), so it never
-/// stands in for the operator's authorization (ADR-0025).
 #[test]
 fn read_verified_component_requires_an_operator_pin_despite_an_author_pin() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -116,9 +112,8 @@ fn read_verified_component_requires_an_operator_pin_despite_an_author_pin() {
         .lacks("compile");
 }
 
-/// A present author pin is still verified when the operator pin is absent
-/// (ADR-0025), so the unpinned refusal never tells an operator to paste a
-/// digest that a pin already on disk contradicts.
+/// So the unpinned refusal never tells an operator to paste a digest that a
+/// pin already on disk contradicts.
 #[test]
 fn read_verified_component_reports_an_author_mismatch_before_the_missing_operator_pin() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -143,8 +138,6 @@ fn read_verified_component_reports_an_author_mismatch_before_the_missing_operato
         .lacks("compile");
 }
 
-/// A matching operator pin is what the requirement asks for, with no
-/// author pin anywhere.
 #[test]
 fn read_verified_component_accepts_an_operator_pin_alone() {
     let (wat, _manifest) = pinned_fixture();
@@ -257,9 +250,8 @@ async fn boot_single_refuses_a_mismatched_component_digest() {
         .lacks("compile");
 }
 
-/// The gate lives in the load path, so it fires wherever the caller
-/// passes the requirement in. The production single-wasm caller passes
-/// `false` instead; that exemption is pinned in `nexum-runtime`.
+/// The production single-wasm caller passes `false`; that exemption is
+/// pinned in `nexum-runtime`.
 #[tokio::test]
 async fn boot_single_requires_an_operator_pin_when_the_engine_flag_is_set() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -277,8 +269,6 @@ async fn boot_single_requires_an_operator_pin_when_the_engine_flag_is_set() {
     .lacks("compile");
 }
 
-/// The author pin stays verified when present, which is the half of the
-/// old behaviour ADR-0025 keeps.
 #[tokio::test]
 async fn e2e_boot_single_accepts_a_matching_author_pin() {
     let Some(wasm) = example_wasm_or_skip() else {
@@ -318,8 +308,7 @@ async fn boot_refuses_a_mismatched_operator_pin_before_compile() {
         .lacks("compile");
 }
 
-/// Both pins present and disagreeing: at most one matches the bytes, so
-/// the artifact refuses; the operator's expectation is reported first.
+/// At most one can match the bytes. The operator's expectation is reported.
 #[tokio::test]
 async fn disagreeing_operator_and_author_pins_refuse() {
     let scenario = scenario();
@@ -378,8 +367,6 @@ async fn boot_requires_a_module_digest_when_the_engine_flag_is_set() {
         .lacks("compile");
 }
 
-/// An author pin is not the thing the requirement mandates, so an entry
-/// carrying only one still refuses (ADR-0025).
 #[tokio::test]
 async fn boot_requires_an_operator_pin_despite_a_matching_manifest_pin() {
     let scenario = scenario().require_digest();
@@ -397,9 +384,7 @@ async fn boot_requires_an_operator_pin_despite_a_matching_manifest_pin() {
         .lacks("compile");
 }
 
-/// The operator pin is the whole requirement: an entry that carries one
-/// clears the gate with no manifest pin anywhere. These bytes are not a
-/// component, so the boot still fails, at compile and past the gate.
+/// The bytes are not a component, so the boot still fails past the gate.
 #[tokio::test]
 async fn a_matching_operator_pin_clears_the_gate_with_no_manifest_pin() {
     let scenario = scenario().require_digest();
