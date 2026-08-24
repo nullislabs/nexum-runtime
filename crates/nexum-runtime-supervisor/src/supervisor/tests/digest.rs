@@ -183,32 +183,78 @@ fn read_verified_component_computes_a_digest_for_unpinned_loads() {
 
 /// A stray `Component::from_file` would reopen the artifact-swap window,
 /// and a compile call outside artifact.rs would bypass digest verification.
+/// The walk covers every workspace member, because the compile path is
+/// reachable from `nexum-runtime-wasm` and `nexum-runtime` as well.
 #[test]
 fn no_production_component_from_file_call_remains() {
-    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/supervisor");
     let mut compile_sites = Vec::new();
-    collect_compile_sites(&dir, &mut compile_sites);
+    for root in workspace_source_roots() {
+        collect_compile_sites(&root, &mut compile_sites);
+    }
     // Sorted so a second site fails with a stable message; `read_dir` order
     // is filesystem-defined.
     compile_sites.sort();
     assert_eq!(
         compile_sites,
-        ["artifact.rs"],
+        ["crates/nexum-runtime-supervisor/src/supervisor/artifact.rs"],
         "the only production compile call must live in artifact.rs",
     );
 }
 
+/// The `src` of every workspace member, read from the root manifest so a crate
+/// added tomorrow is walked without editing a list here. Enumerating nothing
+/// means the members table moved rather than that the workspace is clean, so
+/// each step refuses instead of passing vacuously; a walk that shrinks past
+/// the supervisor also drops `artifact.rs` and fails the equality above.
+fn workspace_source_roots() -> Vec<PathBuf> {
+    let root = workspace_root();
+    let raw =
+        std::fs::read_to_string(root.join("Cargo.toml")).expect("read the workspace manifest");
+    let manifest =
+        toml::from_str::<toml::Table>(&raw).expect("the workspace manifest is valid TOML");
+    let members = manifest["workspace"]["members"]
+        .as_array()
+        .expect("`workspace.members` is an array of member paths");
+    assert!(
+        !members.is_empty(),
+        "enumerated no workspace members; the members table moved",
+    );
+    members
+        .iter()
+        .map(|member| {
+            let member = member.as_str().expect("a member path is a string");
+            let src = root.join(member).join("src");
+            assert!(src.is_dir(), "workspace member {member} has no src to walk");
+            src
+        })
+        .collect()
+}
+
+/// Members are named relative to the root, which sits two levels above a
+/// `crates/<name>` manifest.
+fn workspace_root() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .ancestors()
+        .nth(2)
+        .expect("the workspace root is two levels above this crate manifest")
+        .to_path_buf()
+}
+
 /// Recurses so a nested module cannot host an unpinned compile path; test
-/// sources are skipped.
+/// sources are skipped. Sites are workspace-relative, since a bare file name
+/// no longer says which crate it came from.
 fn collect_compile_sites(dir: &Path, sites: &mut Vec<String>) {
-    for entry in std::fs::read_dir(dir).expect("read supervisor source directory") {
+    for entry in std::fs::read_dir(dir).expect("read a crate source directory") {
         let path = entry.expect("directory entry").path();
         let name = path
             .file_name()
             .expect("source entry name")
             .to_string_lossy()
             .into_owned();
-        if name == "tests" || name == "tests.rs" {
+        if matches!(
+            name.as_str(),
+            "tests" | "tests.rs" | "test_utils" | "test_utils.rs"
+        ) {
             continue;
         }
         if path.is_dir() {
@@ -218,13 +264,18 @@ fn collect_compile_sites(dir: &Path, sites: &mut Vec<String>) {
         if path.extension().and_then(|e| e.to_str()) != Some("rs") {
             continue;
         }
-        let src = std::fs::read_to_string(&path).expect("read supervisor source file");
+        let src = std::fs::read_to_string(&path).expect("read a crate source file");
+        let site = path
+            .strip_prefix(workspace_root())
+            .expect("a walked file lives under the workspace root")
+            .to_string_lossy()
+            .into_owned();
         assert!(
             !src.contains("Component::from_file("),
-            "{name} must compile components only via read_verified_component",
+            "{site} must compile components only via read_verified_component",
         );
         if src.contains("compile_component(") {
-            sites.push(name);
+            sites.push(site);
         }
     }
 }
