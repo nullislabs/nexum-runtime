@@ -1,7 +1,7 @@
 //! The single production compile path. Digest verification happens on the
 //! exact bytes handed to the compiler, so any refusal precedes compile and
-//! the verified bytes are the compiled bytes; a guard test pins every
-//! production compile call to this file.
+//! the verified bytes are the compiled bytes; `clippy.toml` bans every other
+//! route to a component, and this file holds the one exemption.
 
 use std::path::Path;
 
@@ -111,8 +111,8 @@ pub(super) fn read_verified_component(
 /// It is a function so the exemption covers one call and nothing else, and
 /// `#[expect]` rather than `#[allow]` so an exemption that stops covering a
 /// banned call fails CI rather than sitting here blessed. The token is the
-/// escape hatch the ban creates, so a guard test in
-/// `supervisor/tests/digest.rs` refuses a second file that carries it.
+/// escape hatch the ban creates, so `nexum-runtime-guards` counts every
+/// occurrence in the tree and refuses a second one here.
 #[expect(
     clippy::disallowed_methods,
     reason = "the compile call the ban exists to funnel here"

@@ -48,12 +48,12 @@ disallowed-methods = [
     #
     # Unlike `Handle::spawn` above, this ban does take one suppression, in
     # `crates/nexum-runtime-supervisor/src/supervisor/artifact.rs`.
-    # `only_artifact_rs_suppresses_the_compile_constructor_ban` in
-    # `supervisor/tests/digest.rs` asserts that one file in the whole tree
-    # carries the token, so the copy the note above fears fails a test rather
-    # than waiting for review. A blanket `clippy::all` or `warnings` allow
-    # still evades both; nothing in the tree carries one, and `forbid` is not
-    # available here because the exemption has to exist.
+    # `only_the_two_funnels_suppress_a_disallowed_method` in
+    # `crates/nexum-runtime-guards/tests/disallowed_methods.rs` counts every
+    # occurrence of the token in the tree, so the copy the note above fears
+    # fails a test rather than waiting for review. A blanket `clippy::all` or
+    # `warnings` allow still evades both; nothing in the tree carries one, and
+    # `forbid` is not available here because the exemption has to exist.
     { path = "wasmtime::component::Component::new", reason = "compiles bytes that nothing verified: use read_verified_component" },
     { path = "wasmtime::component::Component::from_file", reason = "compiles a file that nothing verified, and reopens the artifact-swap window: use read_verified_component" },
     { path = "wasmtime::component::Component::from_binary", reason = "compiles bytes that nothing verified: use read_verified_component" },
@@ -76,9 +76,9 @@ disallowed-methods = [
     # that fails the crate that defines the type. The flag drops the report
     # and leaves the ban firing at every call site.
     #
-    # The funnel takes the second suppression in the tree, in
-    # `crates/nexum-runtime-wasm/src/error.rs`;
-    # `only_the_two_funnels_suppress_a_disallowed_method` counts both.
+    # The funnel takes the remaining suppressions in the tree, in
+    # `crates/nexum-runtime-wasm/src/error.rs`; the guard named above counts
+    # those too.
     { path = "nexum_runtime_api::bindings::nexum::host::types::Fault::Unsupported", reason = "a guest-visible fault payload belongs to the vocabulary in nexum-runtime-wasm/src/error.rs", allow-invalid = true },
     { path = "nexum_runtime_api::bindings::nexum::host::types::Fault::Unavailable", reason = "a guest-visible fault payload belongs to the vocabulary in nexum-runtime-wasm/src/error.rs", allow-invalid = true },
     { path = "nexum_runtime_api::bindings::nexum::host::types::Fault::Denied", reason = "a guest-visible fault payload belongs to the vocabulary in nexum-runtime-wasm/src/error.rs", allow-invalid = true },
