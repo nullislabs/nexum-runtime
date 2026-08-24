@@ -201,31 +201,35 @@ fn the_test_engine_compiles_components_and_meters_fuel() {
         .expect("fuel accounting is on, so setting fuel succeeds");
 }
 
-/// `clippy.toml` bans every wasmtime route to a `Component` by resolved path,
-/// which catches an aliased import or a re-export that a source scan cannot.
-/// The ban costs one suppression, and that token is what a later author
-/// copies to the site the ban exists to prevent. A lint attribute cannot
-/// suppress a test, so the token is counted here instead.
+/// `clippy.toml` bans the wasmtime routes to a `Component` and the
+/// string-carrying guest fault constructors, both by resolved path, which
+/// catches an aliased import or a re-export that a source scan cannot. Each
+/// ban costs a suppression, and that token is what a later author copies to
+/// the site the ban exists to prevent. A lint attribute cannot suppress a
+/// test, so the token is counted here instead.
 ///
 /// The walk covers `src`, `tests` and `examples` in every crate: the compile
 /// path is reachable from `nexum-runtime-wasm` and `nexum-runtime` as well,
 /// and a file is production by declaration rather than by looking
 /// test-shaped, so nothing is skipped for its name.
 #[test]
-fn only_artifact_rs_suppresses_the_compile_constructor_ban() {
+fn only_the_two_funnels_suppress_a_disallowed_method() {
     let root = workspace_root();
     let mut sites = Vec::new();
     for dir in walked_dirs(&root) {
         collect_allow_sites(&root, &dir, &mut sites);
     }
-    // Sorted so a second site fails with a stable message; `read_dir` order
-    // is filesystem-defined.
+    // Sorted so a third site fails with a stable message; `read_dir` order is
+    // filesystem-defined.
     sites.sort();
     assert_eq!(
         sites,
-        ["crates/nexum-runtime-supervisor/src/supervisor/artifact.rs"],
-        "only read_verified_component may reopen the compile-constructor ban \
-         in clippy.toml; every other caller goes through it",
+        [
+            "crates/nexum-runtime-supervisor/src/supervisor/artifact.rs",
+            "crates/nexum-runtime-wasm/src/error.rs",
+        ],
+        "only read_verified_component and the fault funnel may reopen a ban \
+         in clippy.toml; every other caller goes through them",
     );
 }
 
@@ -247,8 +251,8 @@ fn walked_dirs(root: &Path) -> Vec<PathBuf> {
     dirs
 }
 
-/// The lint the ban hands to `artifact.rs`, split across two literals: the
-/// walk covers this file too, and a needle that spells itself counts itself.
+/// The lint each ban hands to its funnel, split across two literals: the walk
+/// covers this file too, and a needle that spells itself counts itself.
 const COMPILE_ALLOW: &str = concat!("clippy::", "disallowed_methods");
 
 /// Recurses so a nested module cannot hide the token. Sites are

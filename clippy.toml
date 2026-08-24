@@ -61,4 +61,29 @@ disallowed-methods = [
     { path = "wasmtime::component::Component::deserialize_file", reason = "loads a precompiled component that nothing verified: use read_verified_component" },
     { path = "wasmtime::component::Component::deserialize_raw", reason = "loads a precompiled component that nothing verified: use read_verified_component" },
     { path = "wasmtime::CodeBuilder::compile_component", reason = "compiles bytes that nothing verified: use read_verified_component" },
+    # Every string-carrying route to a guest-visible fault. A `Fault` payload
+    # crosses the WIT boundary verbatim, so a runtime string built anywhere
+    # but the funnel discloses host state to a module author.
+    #
+    # `nexum-sdk` declares its own `Fault` at `crates/nexum-sdk/src/host.rs`,
+    # a different resolved path, so the SDK and the guest modules are outside
+    # these entries by construction. That is the whole reason the guard this
+    # replaces carried a hand-written root list.
+    #
+    # `allow-invalid = true` on each: clippy resolves these paths to variant
+    # constructors, which it reports as `does not refer to a reachable
+    # function` while it lints `nexum-runtime-api` itself. Under `-D warnings`
+    # that fails the crate that defines the type. The flag drops the report
+    # and leaves the ban firing at every call site.
+    #
+    # The funnel takes the second suppression in the tree, in
+    # `crates/nexum-runtime-wasm/src/error.rs`;
+    # `only_the_two_funnels_suppress_a_disallowed_method` counts both.
+    { path = "nexum_runtime_api::bindings::nexum::host::types::Fault::Unsupported", reason = "a guest-visible fault payload belongs to the vocabulary in nexum-runtime-wasm/src/error.rs", allow-invalid = true },
+    { path = "nexum_runtime_api::bindings::nexum::host::types::Fault::Unavailable", reason = "a guest-visible fault payload belongs to the vocabulary in nexum-runtime-wasm/src/error.rs", allow-invalid = true },
+    { path = "nexum_runtime_api::bindings::nexum::host::types::Fault::Denied", reason = "a guest-visible fault payload belongs to the vocabulary in nexum-runtime-wasm/src/error.rs", allow-invalid = true },
+    { path = "nexum_runtime_api::bindings::nexum::host::types::Fault::InvalidInput", reason = "a guest-visible fault payload belongs to the vocabulary in nexum-runtime-wasm/src/error.rs", allow-invalid = true },
+    { path = "nexum_runtime_api::bindings::nexum::host::types::Fault::Internal", reason = "a guest-visible fault payload belongs to the vocabulary in nexum-runtime-wasm/src/error.rs", allow-invalid = true },
+    { path = "nexum_runtime_api::bindings::nexum::host::chain::ChainError::Fault", reason = "a guest-visible chain error belongs to the funnel in nexum-runtime-wasm/src/error.rs", allow-invalid = true },
+    { path = "nexum_runtime_api::bindings::nexum::host::chain::ChainError::Rpc", reason = "a guest-visible chain error belongs to the funnel in nexum-runtime-wasm/src/error.rs", allow-invalid = true },
 ]
