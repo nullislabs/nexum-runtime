@@ -55,6 +55,9 @@ fn only_the_two_funnels_suppress_a_disallowed_method() {
     }
 }
 
+/// Attributes and `[lints]` tables only. A `-A clippy::all` in
+/// `.cargo/config.toml` evades this; CI sets `RUSTFLAGS` in the environment,
+/// which overrides a config file, so the gap is not reachable there.
 #[test]
 fn no_blanket_suppression_reopens_a_ban() {
     let root = workspace_root();
