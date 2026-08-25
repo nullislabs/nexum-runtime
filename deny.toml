@@ -38,14 +38,15 @@ confidence-threshold = 0.8
 
 # `GPL-2.0-only OR BSD-3-Clause`, reached through wasmtime's default
 # `profiling` feature. GPL-2.0-only cannot combine with an AGPL-3.0 work, so
-# the BSD-3-Clause arm is selected here rather than left to the resolver.
+# the BSD-3-Clause arm is named. Version-scoped: neither crate ships a licence
+# file to hash against, so a relicensed 0.5 must fail rather than inherit this.
 [[licenses.clarify]]
-crate = "ittapi"
+crate = "ittapi@0.4"
 expression = "BSD-3-Clause"
 license-files = []
 
 [[licenses.clarify]]
-crate = "ittapi-sys"
+crate = "ittapi-sys@0.4"
 expression = "BSD-3-Clause"
 license-files = []
 

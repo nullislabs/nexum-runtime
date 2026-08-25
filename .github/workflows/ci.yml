@@ -89,8 +89,10 @@ jobs:
       - uses: taiki-e/install-action@43aecc8d72668fbcfe75c31400bc4f890f1c5853 # v2.83.2
         with:
           tool: cargo-deny
-      # Reads Cargo.lock and the RustSec database, so no toolchain.
-      - run: cargo deny check
+      # Reads Cargo.lock and the RustSec database, so no toolchain. `--locked`
+      # keeps the gate on the committed graph; without it a stale lock is
+      # re-resolved and the check passes on a graph that never ships.
+      - run: cargo deny --locked check
 
   fmt:
     name: rustfmt
