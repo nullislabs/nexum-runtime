@@ -187,6 +187,12 @@ impl<T: RuntimeTypes> Supervisor<T> {
             .count()
     }
 
+    /// Modules whose bytes were checked against a pin at boot. The
+    /// remainder run unverified and carry `nexum_runtime_module_unverified`.
+    pub fn verified_count(&self) -> usize {
+        self.modules.iter().filter(|m| m.verified).count()
+    }
+
     /// Modules quarantined after repeated traps. Only a full engine
     /// restart clears one.
     pub fn poisoned_count(&self) -> usize {

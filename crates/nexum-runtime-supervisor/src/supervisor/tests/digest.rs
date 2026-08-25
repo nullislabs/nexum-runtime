@@ -48,6 +48,7 @@ fn read_verified_component_rejects_a_mismatched_operator_pin() {
     let engine = test_wasmtime_engine();
     let declared = wrong_digest();
     let pins = DigestPolicy {
+        module: "test-module",
         operator: Some(&declared),
         author: None,
         require_operator: false,
@@ -73,6 +74,7 @@ fn read_verified_component_requires_an_operator_pin_and_reports_the_digest() {
     let engine = test_wasmtime_engine();
     let expected = ContentDigest::of_bytes(b"any bytes at all");
     let pins = DigestPolicy {
+        module: "test-module",
         operator: None,
         author: None,
         require_operator: true,
@@ -100,6 +102,7 @@ fn read_verified_component_requires_an_operator_pin_despite_an_author_pin() {
     let engine = test_wasmtime_engine();
     let matching = ContentDigest::of_bytes(b"author pinned bytes");
     let pins = DigestPolicy {
+        module: "test-module",
         operator: None,
         author: Some(&matching),
         require_operator: true,
@@ -123,6 +126,7 @@ fn read_verified_component_reports_an_author_mismatch_before_the_missing_operato
     let engine = test_wasmtime_engine();
     let declared = wrong_digest();
     let pins = DigestPolicy {
+        module: "test-module",
         operator: None,
         author: Some(&declared),
         require_operator: true,
@@ -146,6 +150,7 @@ fn read_verified_component_accepts_an_operator_pin_alone() {
 
     let engine = test_wasmtime_engine();
     let pins = DigestPolicy {
+        module: "test-module",
         operator: Some(&operator),
         author: None,
         require_operator: true,
@@ -372,4 +377,73 @@ async fn a_matching_operator_pin_clears_the_gate_with_no_manifest_pin() {
         .await
         .names("compile")
         .lacks("carries no digest");
+}
+
+#[test]
+fn the_unverified_gauge_fires_on_an_unpinned_load_and_on_no_other() {
+    use crate::test_utils::metrics_util::debugging::DebugValue;
+    use crate::test_utils::{capture_metrics, samples_named};
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let wat = dir.path().join("trivial.wat");
+    std::fs::write(&wat, b"(component)").expect("write a trivial component");
+    let matching = ContentDigest::of_bytes(b"(component)");
+
+    let engine = test_wasmtime_engine();
+    let load = |operator: Option<&ContentDigest>, author: Option<&ContentDigest>| {
+        let pins = DigestPolicy {
+            module: "gauged",
+            operator,
+            author,
+            require_operator: false,
+        };
+        capture_metrics(|| {
+            read_verified_component(&engine, &wat, pins).expect("a trivial component compiles");
+        })
+        .1
+    };
+
+    let samples = load(None, None);
+    let hits = samples_named(&samples, "nexum_runtime_module_unverified");
+    assert_eq!(hits.len(), 1, "one series: {samples:?}");
+    assert!(
+        hits[0].has_label("module", "gauged"),
+        "{:?}",
+        hits[0].labels
+    );
+    assert!(
+        matches!(hits[0].value, DebugValue::Gauge(v) if v.0 == 1.0),
+        "{:?}",
+        hits[0].value,
+    );
+
+    for pins in [
+        (Some(&matching), None),
+        (None, Some(&matching)),
+        (Some(&matching), Some(&matching)),
+    ] {
+        let samples = load(pins.0, pins.1);
+        assert!(
+            samples_named(&samples, "nexum_runtime_module_unverified").is_empty(),
+            "a checked pin is verified execution: {samples:?}",
+        );
+    }
+}
+
+/// The count feeding `verified` on the `supervisor ready` line.
+#[tokio::test]
+async fn e2e_verified_count_excludes_the_module_no_pin_covers() {
+    let Some(wasm) = example_wasm_or_skip() else {
+        return;
+    };
+    let digest = ContentDigest::of_bytes(&std::fs::read(&wasm).expect("read example wasm"));
+    let booted = scenario()
+        .wasm(wasm)
+        .module(Entry::new(TestManifest::new("pinned").cap("logging")).digest(digest))
+        .module(Entry::new(TestManifest::new("unpinned").cap("logging")))
+        .boot()
+        .await
+        .expect("an unpinned entry loads while the requirement is relaxed");
+    assert_eq!(booted.supervisor.module_count(), 2);
+    assert_eq!(booted.supervisor.verified_count(), 1);
 }

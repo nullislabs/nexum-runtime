@@ -21,6 +21,7 @@ A downstream composition root that registers extensions runs the same way, under
 - A `[component].digest` in each manifest is optional and independent.
   Both pins are verified against the exact bytes handed to the compiler, and a mismatch refuses the boot naming which pin failed and the file it is in.
   An author pin never substitutes for the operator pin.
+  A module carrying neither pin loads with nothing checking its bytes: the `supervisor ready` line then reports `verified` below `modules`, and `nexum_runtime_module_unverified` names each such module for the life of the process.
 - The `state_dir` exists and is writable by the service user.
 - A Prometheus instance scraping `/metrics` (section 6) with the alert rules in section 7.
 - A log aggregator ingesting the engine's JSON stdout (section 5).
@@ -192,6 +193,7 @@ With `enabled = false` the recorder is still installed, so call sites stay live,
 | `nexum_runtime_module_errors_total` | counter | `module`, `error_kind` | Module faults and traps. `error_kind = "trap"` is a wasmtime trap; other values are fault labels. |
 | `nexum_runtime_module_restarts_total` | counter | `module` | Module restart attempts. |
 | `nexum_runtime_module_poisoned` | gauge | `module` | `1` once a module crosses `[limits.poison]` (default 5 failures in 600 s) or its event source reports an unrecoverable condition. Stays `1` until the process restarts. |
+| `nexum_runtime_module_unverified` | gauge | `module` | `1` for a module loaded with neither a `[[modules]].digest` nor a `[component].digest`, so nothing checked its bytes. Set once at boot and never cleared; a pinned module emits no series, so `sum` is the fleet's unverified count. Reaching this state at all needs `require_component_digest = false`, or a single-wasm command-line override. |
 | `nexum_runtime_chain_request_total` | counter | `chain_id`, `method`, `outcome` | Every `chain::request`. A method outside the read surface is counted as `method="<denied>"` with `outcome="err"`. A request for a chain outside `[chains]` is counted as `chain_id="unconfigured"`, which bounds the series set to the configured chains plus one and shows that a module is requesting chains the operator has not configured. The `outcome="err"` rate is the RPC-degraded signal. |
 | `nexum_runtime_chain_response_capped_total` | counter | `chain_id`, `method` | Responses rejected for exceeding `[limits.chain] response_body_max_bytes` (default 1 MiB). |
 | `nexum_runtime_source_reconnects_total` | counter | `source_kind`, `chain_id`, `module` | Source reconnects. `source_kind="block"` is per chain; `source_kind="chain-log"` also carries `module`. |
@@ -227,6 +229,13 @@ groups:
         labels: { severity: page }
         annotations:
           summary: "Nexum module {{ $labels.module }} is poisoned"
+
+      - alert: NexumModuleUnverified
+        expr: nexum_runtime_module_unverified > 0
+        for: 1m
+        labels: { severity: ticket }
+        annotations:
+          summary: "Nexum module {{ $labels.module }} is running unverified; pin its digest in engine.toml"
 
       - alert: NexumModuleTraps
         expr: rate(nexum_runtime_module_errors_total{error_kind="trap"}[5m]) > 0

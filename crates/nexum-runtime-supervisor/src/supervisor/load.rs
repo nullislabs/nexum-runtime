@@ -150,6 +150,8 @@ pub(super) struct LoadedModule<T: RuntimeTypes> {
     pub(super) seed: Seed,
     pub(super) triggers: Vec<Trigger>,
     pub(super) health: Health,
+    /// Some digest pin was checked against the loaded bytes.
+    pub(super) verified: bool,
 }
 
 /// Every refusal precedes compile cost.
@@ -285,10 +287,12 @@ pub(super) async fn module<T: RuntimeTypes>(
     let registry = capability_registry(&shared.extensions);
     let sections = &loaded_manifest.extensions;
     let pins = DigestPolicy {
+        module: module_namespace.as_str(),
         operator: entry.digest.as_ref(),
         author: loaded_manifest.component_digest.as_ref(),
         require_operator: require_component_digest,
     };
+    let verified = !pins.unpinned();
     let ((), component, digest) = admit_and_verify(
         shared,
         module_namespace.as_str(),
@@ -397,5 +401,6 @@ pub(super) async fn module<T: RuntimeTypes>(
         seed,
         triggers: loaded_manifest.triggers.clone(),
         health: Health::from_init(init_succeeded),
+        verified,
     })
 }
