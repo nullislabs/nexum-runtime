@@ -55,8 +55,6 @@ fn only_the_two_funnels_suppress_a_disallowed_method() {
     }
 }
 
-/// Refused outright rather than enumerated: the set of blanket spellings is
-/// closed, the set of lints they cover is not (#353).
 #[test]
 fn no_blanket_suppression_reopens_a_ban() {
     let root = workspace_root();
@@ -79,8 +77,9 @@ fn no_blanket_suppression_reopens_a_ban() {
     );
 }
 
-/// Every compiled directory: `src`, plus `tests`, `examples` and `benches`.
-/// `crate_source_roots` gives only `src`, which is less than this needs.
+/// Every compiled `.rs` file: under `src`, plus `tests`, `examples` and
+/// `benches`. `crate_source_roots` gives only `src`, which is less than this
+/// needs.
 fn walked_files(root: &Path) -> Vec<PathBuf> {
     let mut files = Vec::new();
     for src in crate_source_roots(root) {
@@ -147,9 +146,21 @@ fn squash(src: &str) -> String {
 /// needle that spells itself counts itself.
 const LINT: &str = "disallowed_methods";
 
-/// Blanket spellings, each covering every ban at once. Same rule as `LINT`:
-/// the clippy groups are joined to their prefix at use, never in source.
-const BLANKET_GROUPS: [&str; 4] = ["all", "style", "pedantic", "nursery"];
+/// Every clippy lint group, not the subset covering today's bans:
+/// `restriction` holds the workspace's `unwrap_used`. Same rule as `LINT`:
+/// joined to its tool prefix at use, never in source.
+const BLANKET_GROUPS: [&str; 10] = [
+    "all",
+    "cargo",
+    "complexity",
+    "correctness",
+    "nursery",
+    "pedantic",
+    "perf",
+    "restriction",
+    "style",
+    "suspicious",
+];
 const BLANKET_WARNINGS: &str = "warnings";
 
 fn blanket_needles() -> Vec<String> {
@@ -191,8 +202,11 @@ fn enclosing_call(prefix: &str) -> Option<&str> {
         match bytes[at] {
             b')' => depth += 1,
             b'(' if depth == 0 => {
-                let start = prefix[..at]
-                    .rfind(|c: char| !c.is_ascii_alphanumeric() && c != '_')
+                // Byte-wise: a trailing byte of a multi-byte char ends the
+                // name, so `boundary + 1` is a char boundary and never splits.
+                let start = bytes[..at]
+                    .iter()
+                    .rposition(|byte| !byte.is_ascii_alphanumeric() && *byte != b'_')
                     .map_or(0, |boundary| boundary + 1);
                 return if start == at {
                     None
@@ -261,6 +275,8 @@ mod parsing {
             "#[deny(warnings)]",
             "//! CI runs with warnings denied.",
             "fn no_warnings() {}",
+            // Non-ASCII before the paren: the name scan must not split a char.
+            "//! Café(warnings)",
         ] {
             assert!(blanket_suppressions(&squash(source)).is_empty(), "{source}",);
         }
@@ -268,17 +284,19 @@ mod parsing {
 
     #[test]
     fn a_group_entry_in_a_lints_table_is_a_suppression() {
-        let group = BLANKET_GROUPS[1];
-        let table = |level: &str| format!("[lints.clippy]\n{group} = {level}\n");
-        assert_eq!(blanket_manifest_key(&table("\"allow\"")), Some(group));
-        assert_eq!(
-            blanket_manifest_key(&table("{ level = \"allow\", priority = -1 }")),
-            Some(group),
-        );
-        assert_eq!(blanket_manifest_key(&table("\"deny\"")), None);
-        assert_eq!(
-            blanket_manifest_key(&format!("# {group} = \"allow\"\n")),
-            None
-        );
+        for group in BLANKET_GROUPS.into_iter().chain([BLANKET_WARNINGS]) {
+            let table = |level: &str| format!("[lints.clippy]\n{group} = {level}\n");
+            assert_eq!(blanket_manifest_key(&table("\"allow\"")), Some(group));
+            assert_eq!(
+                blanket_manifest_key(&table("{ level = \"allow\", priority = -1 }")),
+                Some(group),
+            );
+            assert_eq!(blanket_manifest_key(&table("\"deny\"")), None, "{group}");
+            assert_eq!(
+                blanket_manifest_key(&format!("# {group} = \"allow\"\n")),
+                None,
+                "{group}",
+            );
+        }
     }
 }
