@@ -13,6 +13,23 @@ use nexum_runtime_guards::{crate_source_roots, workspace_root};
 use nexum_runtime_metrics::METRICS;
 
 const GATE: &str = "#[cfg(test)]";
+const TABLE_SRC: &str = "crates/nexum-runtime-metrics/src";
+
+/// Every `GATE` that opens its own line, as that line's start and the offset
+/// past the attribute. One in a doc comment or a string is not a gate.
+fn gates(text: &str) -> Vec<(usize, usize)> {
+    let mut out = Vec::new();
+    let mut from = 0;
+    while let Some(i) = text[from..].find(GATE) {
+        let at = from + i;
+        from = at + GATE.len();
+        let line = text[..at].rfind('\n').map_or(0, |nl| nl + 1);
+        if text[line..at].chars().all(char::is_whitespace) {
+            out.push((line, from));
+        }
+    }
+    out
+}
 
 /// The module `GATE` gates, and whether it is a separate file.
 fn gated_module(after_gate: &str) -> Option<(&str, bool)> {
@@ -28,22 +45,24 @@ fn gated_module(after_gate: &str) -> Option<(&str, bool)> {
     Some((rest[..end].trim(), rest.as_bytes()[end] == b';'))
 }
 
-/// Text before the first inline `#[cfg(test)] mod`. A gated item that is not a
-/// module is kept, which only over-scans.
-///
-/// Widens `shipped_region` in `nexum-runtime-wasm`, which also cuts at the
-/// declaration form: that would drop the rest of a file whose gated module is
-/// declared near the top, so a declaration is excluded by path instead.
-fn shipped_region(text: &str) -> &str {
-    let mut from = 0;
-    while let Some(i) = text[from..].find(GATE) {
-        let at = from + i;
-        if let Some((_, false)) = gated_module(&text[at + GATE.len()..]) {
-            return &text[..at];
+/// `text` with each inline `#[cfg(test)] mod` cut out and the rest kept: a
+/// file may carry shipped code after one. The cut ends at the first `}` on the
+/// gate's indentation; anything unparsed stays in, which only over-scans.
+fn shipped_region(text: &str) -> String {
+    let mut out = String::new();
+    let mut kept = 0;
+    for (line, after) in gates(text) {
+        if line < kept || !matches!(gated_module(&text[after..]), Some((_, false))) {
+            continue;
         }
-        from = at + GATE.len();
+        let close = format!("\n{}}}\n", &text[line..after - GATE.len()]);
+        out.push_str(&text[kept..line]);
+        kept = text[after..]
+            .find(&close)
+            .map_or(text.len(), |end| after + end + close.len());
     }
-    text
+    out.push_str(&text[kept..]);
+    out
 }
 
 /// Prefixes of the paths a `#[cfg(test)] mod NAME;` in `file` gates, both
@@ -59,17 +78,14 @@ fn gated_module_paths(file: &Path, text: &str) -> Vec<PathBuf> {
     } else {
         file.with_extension("")
     };
-    let mut out = Vec::new();
-    let mut from = 0;
-    while let Some(i) = text[from..].find(GATE) {
-        let at = from + i;
-        if let Some((name, true)) = gated_module(&text[at + GATE.len()..]) {
-            out.push(dir.join(name).with_extension("rs"));
-            out.push(dir.join(name));
-        }
-        from = at + GATE.len();
-    }
-    out
+    gates(text)
+        .into_iter()
+        .filter_map(|(_, after)| match gated_module(&text[after..]) {
+            Some((name, true)) => Some(name),
+            _ => None,
+        })
+        .flat_map(|name| [dir.join(name).with_extension("rs"), dir.join(name)])
+        .collect()
 }
 
 /// Derived, so a crate that starts emitting is in the walk at once.
@@ -81,7 +97,7 @@ fn gated_module_paths(file: &Path, text: &str) -> Vec<PathBuf> {
 #[test]
 fn every_emitted_name_is_in_the_table_and_every_entry_is_emitted() {
     let root = workspace_root();
-    let table_src = root.join("crates/nexum-runtime-metrics/src");
+    let table_src = root.join(TABLE_SRC);
     let all = crate_source_roots(&root);
     let mut stack: Vec<PathBuf> = all
         .iter()
@@ -91,8 +107,7 @@ fn every_emitted_name_is_in_the_table_and_every_entry_is_emitted() {
     assert_eq!(
         stack.len() + 1,
         all.len(),
-        "{} is not a crate source root, so this guard would scan the table itself",
-        table_src.display(),
+        "{TABLE_SRC} is not a crate source root, so this guard would scan the table itself",
     );
 
     let mut sources: Vec<(PathBuf, String)> = Vec::new();
@@ -110,6 +125,8 @@ fn every_emitted_name_is_in_the_table_and_every_entry_is_emitted() {
             sources.push((path, text));
         }
     }
+    // The reported emit site is the first file holding the name.
+    sources.sort();
 
     let gated: Vec<PathBuf> = sources
         .iter()
@@ -152,8 +169,7 @@ fn every_emitted_name_is_in_the_table_and_every_entry_is_emitted() {
         .collect();
     assert!(
         unused.is_empty(),
-        "described but never emitted, remove from METRICS in {}: {unused:?}",
-        table_src.display(),
+        "described but never emitted, remove from METRICS in {TABLE_SRC}: {unused:?}",
     );
 }
 
@@ -161,6 +177,19 @@ fn every_emitted_name_is_in_the_table_and_every_entry_is_emitted() {
 fn a_name_only_a_gated_inline_module_uses_is_not_emitted() {
     let text = "fn emit() {}\n#[cfg(test)]\nmod tests {\n    \"nexum_runtime_gone_total\";\n}\n";
     assert!(!shipped_region(text).contains("nexum_runtime_gone_total"));
+}
+
+#[test]
+fn code_after_a_gated_inline_module_is_still_scanned() {
+    let text = "#[cfg(test)]\nmod tests {\n    fn t() {}\n}\n\"nexum_runtime_late_total\";\n";
+    assert!(shipped_region(text).contains("nexum_runtime_late_total"));
+}
+
+#[test]
+fn a_gate_that_does_not_open_its_line_is_not_a_gate() {
+    let text = "/// `#[cfg(test)] mod x {`\n\"nexum_runtime_kept_total\";\n";
+    assert!(shipped_region(text).contains("nexum_runtime_kept_total"));
+    assert!(gated_module_paths(Path::new("/w/src/lib.rs"), "// #[cfg(test)] mod x;\n").is_empty());
 }
 
 #[test]
