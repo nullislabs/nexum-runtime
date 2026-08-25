@@ -154,6 +154,9 @@ wasmtime-wasi-http = "46"
 # Pinned to the exact wit-parser version wasmtime v46.0.1 embeds, so the
 # WIT cross-check test parses with the same parser the runtime does.
 wit-parser = "=0.251.0"
+# Test-only: the compile path takes binary components, so a `.wat` fixture
+# stays readable in the tree and is assembled before a test loads it (#356).
+wat = "1"
 
 # Manifest parsing.
 toml = "1"

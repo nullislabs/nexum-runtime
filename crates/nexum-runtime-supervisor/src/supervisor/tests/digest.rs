@@ -2,10 +2,33 @@
 
 use super::*;
 
-/// The committed byte-stable `.wat` fixture and the manifest pinning its sha256.
-fn pinned_fixture() -> (PathBuf, PathBuf) {
+const TRIVIAL: &str = "(component)";
+
+/// The compile path takes binary components only (#356).
+fn assemble(text: &str) -> Vec<u8> {
+    wat::parse_str(text).expect("assemble a component")
+}
+
+/// The committed `.wat` assembled, and the manifest whose pin covers the
+/// assembled bytes.
+struct PinnedFixture {
+    /// Dropping it removes `wasm`.
+    _dir: tempfile::TempDir,
+    wasm: PathBuf,
+    manifest: PathBuf,
+}
+
+fn pinned_fixture() -> PinnedFixture {
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("testdata/pinned");
-    (dir.join("component.wat"), dir.join("component.toml"))
+    let text = std::fs::read_to_string(dir.join("component.wat")).expect("read fixture");
+    let temp = tempfile::tempdir().expect("tempdir");
+    let wasm = temp.path().join("component.wasm");
+    std::fs::write(&wasm, assemble(&text)).expect("write the assembled fixture");
+    PinnedFixture {
+        _dir: temp,
+        wasm,
+        manifest: dir.join("component.toml"),
+    }
 }
 
 fn wrong_digest() -> ContentDigest {
@@ -144,8 +167,8 @@ fn read_verified_component_reports_an_author_mismatch_before_the_missing_operato
 
 #[test]
 fn read_verified_component_accepts_an_operator_pin_alone() {
-    let (wat, _manifest) = pinned_fixture();
-    let bytes = std::fs::read(&wat).expect("read fixture");
+    let fixture = pinned_fixture();
+    let bytes = std::fs::read(&fixture.wasm).expect("read fixture");
     let operator = ContentDigest::of_bytes(&bytes);
 
     let engine = test_wasmtime_engine();
@@ -155,42 +178,60 @@ fn read_verified_component_accepts_an_operator_pin_alone() {
         author: None,
         require_operator: true,
     };
-    let (_component, actual) = read_verified_component(&engine, &wat, pins)
+    let (_component, actual) = read_verified_component(&engine, &fixture.wasm, pins)
         .expect("a matching operator pin satisfies the requirement");
     assert_eq!(actual, operator);
 }
 
 #[test]
 fn read_verified_component_verifies_the_committed_pinned_fixture() {
-    let (wat, manifest) = pinned_fixture();
-    let loaded = manifest::load(&manifest, &CapabilityRegistry::core())
+    let fixture = pinned_fixture();
+    let loaded = manifest::load(&fixture.manifest, &CapabilityRegistry::core())
         .expect("the committed fixture manifest loads");
     let declared = loaded
         .component_digest
         .expect("the fixture manifest carries a pin");
 
     let engine = test_wasmtime_engine();
-    let (_component, actual) =
-        read_verified_component(&engine, &wat, DigestPolicy::author(Some(&declared)))
-            .expect("the pinned fixture verifies and compiles");
+    let (_component, actual) = read_verified_component(
+        &engine,
+        &fixture.wasm,
+        DigestPolicy::author(Some(&declared)),
+    )
+    .expect("the pinned fixture verifies and compiles");
     assert_eq!(actual, declared);
 }
 
 #[test]
 fn read_verified_component_computes_a_digest_for_unpinned_loads() {
-    let (wat, _manifest) = pinned_fixture();
+    let fixture = pinned_fixture();
     let engine = test_wasmtime_engine();
-    let (_component, actual) = read_verified_component(&engine, &wat, DigestPolicy::author(None))
-        .expect("unpinned load compiles");
-    let bytes = std::fs::read(&wat).expect("read fixture");
+    let (_component, actual) =
+        read_verified_component(&engine, &fixture.wasm, DigestPolicy::author(None))
+            .expect("unpinned load compiles");
+    let bytes = std::fs::read(&fixture.wasm).expect("read fixture");
     assert_eq!(actual, ContentDigest::of_bytes(&bytes));
+}
+
+#[test]
+fn read_verified_component_refuses_a_text_artifact() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("text.wat");
+    std::fs::write(&path, TRIVIAL).expect("write a text component");
+
+    let engine = test_wasmtime_engine();
+    let err = read_verified_component(&engine, &path, DigestPolicy::author(None))
+        .err()
+        .expect("the compile path takes binary components only");
+    Refusal::from(err).names("compile");
 }
 
 #[test]
 fn read_verified_component_ignores_a_planted_dwp_sidecar() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let path = dir.path().join("module.wat");
-    std::fs::write(&path, b"(component)").expect("write a trivial component");
+    let path = dir.path().join("module.wasm");
+    let bytes = assemble(TRIVIAL);
+    std::fs::write(&path, &bytes).expect("write a trivial component");
     // Directories, so every read fails: a compile that reached either refuses.
     // Both spellings, so a change to the probe's naming cannot quietly leave
     // this passing.
@@ -201,7 +242,7 @@ fn read_verified_component_ignores_a_planted_dwp_sidecar() {
     let engine = test_wasmtime_engine();
     let (_component, actual) = read_verified_component(&engine, &path, DigestPolicy::author(None))
         .expect("no file outside the digested bytes is read inside the compile call");
-    assert_eq!(actual, ContentDigest::of_bytes(b"(component)"));
+    assert_eq!(actual, ContentDigest::of_bytes(&bytes));
 }
 
 /// The launch config turns on the component model and fuel accounting.
@@ -211,8 +252,8 @@ fn read_verified_component_ignores_a_planted_dwp_sidecar() {
 #[test]
 fn the_test_engine_compiles_components_and_meters_fuel() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let path = dir.path().join("trivial.wat");
-    std::fs::write(&path, b"(component)").expect("write a trivial component");
+    let path = dir.path().join("trivial.wasm");
+    std::fs::write(&path, assemble(TRIVIAL)).expect("write a trivial component");
 
     let engine = test_wasmtime_engine();
     read_verified_component(&engine, &path, DigestPolicy::author(None))
@@ -403,9 +444,10 @@ fn the_unverified_gauge_fires_on_an_unpinned_load_and_on_no_other() {
     use crate::test_utils::{capture_metrics, samples_named};
 
     let dir = tempfile::tempdir().expect("tempdir");
-    let wat = dir.path().join("trivial.wat");
-    std::fs::write(&wat, b"(component)").expect("write a trivial component");
-    let matching = ContentDigest::of_bytes(b"(component)");
+    let wasm = dir.path().join("trivial.wasm");
+    let bytes = assemble(TRIVIAL);
+    std::fs::write(&wasm, &bytes).expect("write a trivial component");
+    let matching = ContentDigest::of_bytes(&bytes);
 
     let engine = test_wasmtime_engine();
     let load = |operator: Option<&ContentDigest>, author: Option<&ContentDigest>| {
@@ -416,7 +458,7 @@ fn the_unverified_gauge_fires_on_an_unpinned_load_and_on_no_other() {
             require_operator: false,
         };
         capture_metrics(|| {
-            read_verified_component(&engine, &wat, pins).expect("a trivial component compiles");
+            read_verified_component(&engine, &wasm, pins).expect("a trivial component compiles");
         })
         .1
     };
