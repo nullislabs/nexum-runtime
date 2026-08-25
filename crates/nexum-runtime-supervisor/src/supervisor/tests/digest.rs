@@ -4,14 +4,13 @@ use super::*;
 
 const TRIVIAL: &str = "(component)";
 
-/// The compile path takes binary components, so a test artifact is assembled
-/// before it is written.
+/// The compile path takes binary components only (#356).
 fn assemble(text: &str) -> Vec<u8> {
     wat::parse_str(text).expect("assemble a component")
 }
 
-/// The committed `.wat` fixture assembled to the artifact the runtime loads,
-/// and the manifest pinning its sha256.
+/// The committed `.wat` assembled, and the manifest whose pin covers the
+/// assembled bytes.
 struct PinnedFixture {
     /// Dropping it removes `wasm`.
     _dir: tempfile::TempDir,
