@@ -104,7 +104,7 @@ pub(super) fn read_verified_component(
                 digest = %actual,
                 "no [[modules]].digest and no [component].digest - loading unverified",
             );
-            // The warn does not survive log rotation (#344).
+            // The warn does not survive log rotation; the gauge does.
             metrics::gauge!(
                 "nexum_runtime_module_unverified",
                 "module" => pins.module.to_owned(),
@@ -115,7 +115,7 @@ pub(super) fn read_verified_component(
     let component = CodeBuilder::new(engine)
         // No path: given `Some`, wasmtime probes for a `.dwp` beside the
         // artifact and reads it into the compile, and no digest covers those
-        // bytes (#343).
+        // bytes.
         .wasm_binary(&bytes, None)
         .and_then(compile)
         // wasmtime::Error is not StdError, so anyhow's with_context needs the bridge.

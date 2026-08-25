@@ -3,7 +3,7 @@
 //! Each ban costs a suppression, and that token is what a later author copies
 //! to the site the ban exists to prevent. A lint attribute cannot suppress a
 //! test, so it is counted here. A blanket allow carries no such token, so it
-//! is refused outright rather than enumerated (#353).
+//! is refused outright rather than enumerated.
 
 // A guard that cannot read the tree it checks has nothing to recover from.
 #![allow(clippy::expect_used)]

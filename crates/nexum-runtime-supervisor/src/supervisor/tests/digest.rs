@@ -4,7 +4,7 @@ use super::*;
 
 const TRIVIAL: &str = "(component)";
 
-/// The compile path takes binary components only (#356).
+/// The compile path takes binary components only.
 fn assemble(text: &str) -> Vec<u8> {
     wat::parse_str(text).expect("assemble a component")
 }
