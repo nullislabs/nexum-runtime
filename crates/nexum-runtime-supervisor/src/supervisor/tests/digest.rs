@@ -186,9 +186,12 @@ fn read_verified_component_ignores_a_planted_dwp_sidecar() {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("module.wat");
     std::fs::write(&path, b"(component)").expect("write a trivial component");
-    // A directory: the sidecar exists and every read of it fails, so a probe
-    // that reached it surfaces as a compile refusal.
-    std::fs::create_dir(path.with_extension("dwp")).expect("plant the sidecar");
+    // Directories, so every read fails: a compile that reached either refuses.
+    // Both spellings, so a change to the probe's naming cannot quietly leave
+    // this passing.
+    for sidecar in [path.with_extension("dwp"), path.with_added_extension("dwp")] {
+        std::fs::create_dir(sidecar).expect("plant the sidecar");
+    }
 
     let engine = test_wasmtime_engine();
     let (_component, actual) = read_verified_component(&engine, &path, DigestPolicy::author(None))
