@@ -47,6 +47,8 @@
             cargo-nextest
             # Per-crate unused dependencies.
             cargo-machete
+            # Advisories, licences, bans and sources over the resolved graph.
+            cargo-deny
             wasm-tools
             wabt
             just

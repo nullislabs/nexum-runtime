@@ -75,6 +75,25 @@ jobs:
       # Reads manifests and greps sources, so no toolchain.
       - run: cargo-machete
 
+  deny:
+    name: cargo-deny
+    runs-on: ubuntu-latest
+    env:
+      # This job resolves the graph and compiles nothing, and the runner's
+      # preinstalled cargo has no sccache beside it. cargo routes its rustc
+      # version-probe through the wrapper, so the workflow-level value would
+      # fail the probe here.
+      RUSTC_WRAPPER: ""
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: taiki-e/install-action@43aecc8d72668fbcfe75c31400bc4f890f1c5853 # v2.83.2
+        with:
+          tool: cargo-deny
+      # Reads Cargo.lock and the RustSec database, so no toolchain. `--locked`
+      # keeps the gate on the committed graph; without it a stale lock is
+      # re-resolved and the check passes on a graph that never ships.
+      - run: cargo deny --locked check
+
   fmt:
     name: rustfmt
     runs-on: ubuntu-latest

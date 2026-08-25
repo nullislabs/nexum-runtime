@@ -1,0 +1,69 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "description": [
+    "Routine updates arrive weekly and grouped by ecosystem, so a batch is triaged as one review rather than ten.",
+    "fetchChangeLogs is off because the content job checks the pull-request body for house style, which upstream release notes do not follow."
+  ],
+  "extends": [
+    "config:recommended"
+  ],
+  "timezone": "Etc/UTC",
+  "schedule": [
+    "before 06:00 on monday"
+  ],
+  "labels": [
+    "dependencies"
+  ],
+  "prConcurrentLimit": 3,
+  "semanticCommits": "enabled",
+  "semanticCommitType": "chore",
+  "semanticCommitScope": "deps",
+  "fetchChangeLogs": "off",
+  "nix": {
+    "enabled": true
+  },
+  "lockFileMaintenance": {
+    "description": "Refresh Cargo.lock weekly, which is how a transitive advisory fix reaches the graph without a manifest bump.",
+    "enabled": true,
+    "schedule": [
+      "before 06:00 on monday"
+    ]
+  },
+  "packageRules": [
+    {
+      "matchManagers": [
+        "cargo"
+      ],
+      "groupName": "cargo dependencies"
+    },
+    {
+      "description": "wit-parser is pinned to the version wasmtime embeds and moves with it by hand. A bump on its own is silent: the WIT cross-check passes against the wrong parser.",
+      "matchPackageNames": [
+        "wit-parser"
+      ],
+      "enabled": false
+    },
+    {
+      "description": "CI pins every action by digest; Renovate keeps the digest and its version comment in step.",
+      "matchManagers": [
+        "github-actions"
+      ],
+      "groupName": "github actions",
+      "pinDigests": true
+    },
+    {
+      "matchManagers": [
+        "nix"
+      ],
+      "groupName": "nix flake inputs"
+    }
+  ],
+  "vulnerabilityAlerts": {
+    "description": "A security fix leaves the weekly batch and its group, so it is not lost behind a routine bump.",
+    "labels": [
+      "dependencies",
+      "security"
+    ]
+  },
+  "osvVulnerabilityAlerts": true
+}
