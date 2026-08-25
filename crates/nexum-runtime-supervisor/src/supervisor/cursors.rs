@@ -9,6 +9,8 @@ use tracing::warn;
 
 use nexum_runtime_api::{StateHandle, StateStore};
 
+use crate::runtime::event_loop::SOURCE_KIND_CHAIN_LOG;
+
 /// In-memory cursor mirror, `module -> cursor key -> block`; additions only
 /// move forward, retractions pull back to the retracted height.
 #[derive(Default)]
@@ -102,6 +104,7 @@ pub(super) fn commit_chain_log_cursor<S: StateStore>(
                 warn!(
                     module = %module,
                     error = %e,
+                    source_kind = SOURCE_KIND_CHAIN_LOG,
                     "failed to persist event source cursor",
                 );
             }
@@ -109,6 +112,7 @@ pub(super) fn commit_chain_log_cursor<S: StateStore>(
         Err(e) => warn!(
             module = %module,
             error = %e,
+            source_kind = SOURCE_KIND_CHAIN_LOG,
             "failed to open host store for event source cursor",
         ),
     }

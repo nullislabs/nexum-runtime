@@ -67,6 +67,15 @@ if [ -n "$hits" ]; then
     printf '%s\n' "$hits" | sed 's/^/    /' >&2
 fi
 
+# Source outlives the tracker, so a bare issue number in code tells a later
+# reader nothing they can act on. The invariant belongs in the comment and the
+# number in the commit message. Rust only: markdown and manifests cite freely.
+hits=$(git grep --untracked -nIPe '#[0-9]{2,4}\b' -- '*.rs' || true)
+if [ -n "$hits" ]; then
+    fail "issue number in Rust source; state the invariant, cite an ADR by name:"
+    printf '%s\n' "$hits" | sed 's/^/    /' >&2
+fi
+
 if [ -n "${1:-}" ]; then
     echo "content-lint: commit messages in $1"
     while read -r sha; do
