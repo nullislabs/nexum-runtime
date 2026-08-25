@@ -173,12 +173,15 @@ impl<'a> SourceContext<'a> {
         }
     }
 
-    /// Spawn a source task; it must end when its stream's receiver
-    /// drops.
-    pub fn spawn(&mut self, task: impl Future<Output = ()> + Send + 'static) {
-        self.tasks.push(self.executor.spawn(async move {
-            task.await;
-            TaskExit::ReceiverGone
-        }));
+    /// Spawn a source task under `label`, the name the engine's reports of
+    /// it carry; it must end when its stream's receiver drops.
+    pub fn spawn(&mut self, label: &str, task: impl Future<Output = ()> + Send + 'static) {
+        self.tasks.push(
+            label,
+            self.executor.spawn(async move {
+                task.await;
+                TaskExit::ReceiverGone
+            }),
+        );
     }
 }

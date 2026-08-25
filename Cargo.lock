@@ -3527,6 +3527,7 @@ dependencies = [
  "toml 1.1.2+spec-1.1.0",
  "tracing",
  "tracing-core",
+ "tracing-subscriber",
  "url",
  "wasmtime",
  "wasmtime-wasi",
@@ -3645,6 +3646,7 @@ dependencies = [
  "futures",
  "tokio",
  "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]

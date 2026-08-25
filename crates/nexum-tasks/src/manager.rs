@@ -129,7 +129,7 @@ impl TaskExecutor {
         F: Future + Send + 'static,
         F::Output: Send + 'static,
     {
-        TaskHandle(self.handle.spawn(fut))
+        TaskHandle::new(self.handle.spawn(fut))
     }
 
     /// Spawn a task whose end, by return or panic, shuts the runtime down.
@@ -140,7 +140,7 @@ impl TaskExecutor {
         let name = name.to_owned();
         let signal_tx = self.signal_tx.clone();
         let critical_tx = self.critical_tx.clone();
-        TaskHandle(self.handle.spawn(async move {
+        TaskHandle::new(self.handle.spawn(async move {
             match AssertUnwindSafe(fut).catch_unwind().await {
                 Ok(()) => info!(task = %name, "critical task ended, shutting down"),
                 Err(_) => error!(task = %name, "critical task panicked, shutting down"),
@@ -164,7 +164,7 @@ impl TaskExecutor {
             },
             GracefulShutdownGuard::new(self.outstanding.clone(), self.drained_tx.clone()),
         );
-        TaskHandle(self.handle.spawn(f(graceful)))
+        TaskHandle::new(self.handle.spawn(f(graceful)))
     }
 
     /// Run a blocking closure on the blocking pool.
@@ -173,7 +173,7 @@ impl TaskExecutor {
         F: FnOnce() -> T + Send + 'static,
         T: Send + 'static,
     {
-        TaskHandle(self.handle.spawn_blocking(f))
+        TaskHandle::new(self.handle.spawn_blocking(f))
     }
 }
 

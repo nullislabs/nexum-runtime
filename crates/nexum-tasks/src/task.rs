@@ -3,9 +3,13 @@
 
 use std::future::Future;
 use std::pin::Pin;
+use std::sync::Arc;
 use std::task::Poll;
 
 use tracing::debug;
+
+/// Stands in for the label of a handle no [`TaskSet`] took ownership of.
+const UNLABELLED: &str = "unlabelled";
 
 /// A source task's report that its source cannot continue and must not be
 /// reopened.
@@ -29,19 +33,32 @@ pub enum TaskExit {
     SourceTerminal(SourceTermination),
 }
 
-/// Handle to one spawned task.
+/// Handle to one spawned task, carrying the name every report of that task
+/// is filed under.
 #[derive(Debug)]
-pub struct TaskHandle<T>(pub(crate) tokio::task::JoinHandle<T>);
+pub struct TaskHandle<T> {
+    inner: tokio::task::JoinHandle<T>,
+    label: Option<Arc<str>>,
+}
 
 impl<T> TaskHandle<T> {
+    pub(crate) fn new(inner: tokio::task::JoinHandle<T>) -> Self {
+        Self { inner, label: None }
+    }
+
+    /// Operator-facing name, set when a [`TaskSet`] takes the handle.
+    pub fn label(&self) -> &str {
+        self.label.as_deref().unwrap_or(UNLABELLED)
+    }
+
     /// Request cancellation; the task stops at its next await point.
     pub fn abort(&self) {
-        self.0.abort();
+        self.inner.abort();
     }
 
     /// Wait for the task to finish. `None` when it was aborted or panicked.
     pub async fn join(self) -> Option<T> {
-        self.0.await.ok()
+        self.inner.await.ok()
     }
 }
 
@@ -50,6 +67,7 @@ impl<T> TaskHandle<T> {
 #[derive(Debug, Default)]
 pub struct TaskSet {
     handles: Vec<TaskHandle<TaskExit>>,
+    died: Vec<Arc<str>>,
 }
 
 impl TaskSet {
@@ -58,27 +76,40 @@ impl TaskSet {
         Self::default()
     }
 
-    /// Take ownership of a freshly spawned task's handle.
-    pub fn push(&mut self, handle: TaskHandle<TaskExit>) {
+    /// Take ownership of a freshly spawned task's handle under `label`, the
+    /// name every report of that task carries.
+    pub fn push(&mut self, label: impl Into<Arc<str>>, mut handle: TaskHandle<TaskExit>) {
+        handle.label = Some(label.into());
         self.handles.push(handle);
+    }
+
+    /// Labels of the tasks that ended without an exit, in the order the set
+    /// observed them; see [`join_next`](TaskSet::join_next).
+    pub fn died(&self) -> &[Arc<str>] {
+        &self.died
     }
 
     /// Resolve with the exit of the next task to finish on its own, removing
     /// its handle; pends while none has, including on an empty set. A
-    /// panicked or aborted task is discarded rather than yielded.
-    /// Cancel-safe.
+    /// panicked or aborted task is discarded rather than yielded, its label
+    /// recorded in [`died`](TaskSet::died). Cancel-safe.
+    ///
+    /// A panic reaches that discard only under `cargo test`, which forces
+    /// unwind: `panic = "abort"` in both workspace profiles aborts the
+    /// process instead. An abort reaches it in any build.
     pub async fn join_next(&mut self) -> TaskExit {
         std::future::poll_fn(|cx| {
             let mut i = 0;
             while i < self.handles.len() {
-                match Pin::new(&mut self.handles[i].0).poll(cx) {
+                match Pin::new(&mut self.handles[i].inner).poll(cx) {
                     Poll::Ready(Ok(exit)) => {
                         self.handles.swap_remove(i);
                         return Poll::Ready(exit);
                     }
                     // The swapped-in handle re-polls at the same index.
                     Poll::Ready(Err(_)) => {
-                        self.handles.swap_remove(i);
+                        let handle = self.handles.swap_remove(i);
+                        self.died.push(handle.label().into());
                     }
                     Poll::Pending => i += 1,
                 }
@@ -89,22 +120,29 @@ impl TaskSet {
     }
 
     /// Abort every task, then await each handle so all tasks are observed
-    /// to finish. A `None` join (aborted or panicked) counts against the
-    /// aborted tally in the drain summary.
+    /// to finish. A `None` join (aborted or panicked) is named in the drain
+    /// summary's aborted list.
     pub async fn shutdown(mut self) {
         for handle in &self.handles {
             handle.abort();
         }
         let total = self.handles.len();
         let mut clean = 0usize;
-        let mut aborted = 0usize;
+        let mut aborted: Vec<Arc<str>> = Vec::new();
         for handle in self.handles.drain(..) {
+            let label: Arc<str> = handle.label().into();
             match handle.join().await {
                 Some(_) => clean += 1,
-                None => aborted += 1,
+                None => aborted.push(label),
             }
         }
-        debug!(total, clean, aborted, "pump task set drained");
+        debug!(
+            total,
+            clean,
+            aborted = aborted.len(),
+            aborted_tasks = %aborted.join(", "),
+            "pump task set drained"
+        );
     }
 }
 
@@ -123,6 +161,8 @@ impl Drop for TaskSet {
 mod tests {
     use std::time::Duration;
 
+    use tracing::instrument::WithSubscriber;
+
     use super::*;
     use crate::TaskManager;
 
@@ -139,14 +179,18 @@ mod tests {
         let manager = TaskManager::new();
         let mut set = TaskSet::new();
         set.push(
+            "terminal",
             manager
                 .executor()
                 .spawn(async { TaskExit::SourceTerminal(termination()) }),
         );
-        set.push(manager.executor().spawn(async {
-            std::future::pending::<()>().await;
-            TaskExit::ReceiverGone
-        }));
+        set.push(
+            "live",
+            manager.executor().spawn(async {
+                std::future::pending::<()>().await;
+                TaskExit::ReceiverGone
+            }),
+        );
 
         let exit = tokio::time::timeout(Duration::from_secs(5), set.join_next())
             .await
@@ -172,9 +216,110 @@ mod tests {
     async fn join_next_discards_a_panicked_task_without_a_yield() {
         let manager = TaskManager::new();
         let mut set = TaskSet::new();
-        set.push(manager.executor().spawn(async { panic!("boom") }));
+        set.push(
+            "panicking",
+            manager.executor().spawn(async { panic!("boom") }),
+        );
         let idle = tokio::time::timeout(Duration::from_millis(50), set.join_next()).await;
         assert!(idle.is_err(), "a panic is not an observable exit");
         set.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn join_next_records_the_label_of_a_task_it_discards() {
+        let manager = TaskManager::new();
+        let mut set = TaskSet::new();
+        let handle = manager.executor().spawn(async {
+            std::future::pending::<()>().await;
+            TaskExit::ReceiverGone
+        });
+        handle.abort();
+        set.push("chain-log:1:mod", handle);
+        set.push(
+            "block:1",
+            manager.executor().spawn(async {
+                std::future::pending::<()>().await;
+                TaskExit::ReceiverGone
+            }),
+        );
+
+        let idle = tokio::time::timeout(Duration::from_millis(50), set.join_next()).await;
+        assert!(idle.is_err(), "an aborted task is not an observable exit");
+        assert_eq!(
+            set.died().iter().map(|l| &**l).collect::<Vec<_>>(),
+            vec!["chain-log:1:mod"],
+            "the dead pump is the only one named",
+        );
+        set.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn the_drain_summary_names_every_task_that_did_not_stop_cleanly() {
+        let manager = TaskManager::new();
+        let mut set = TaskSet::new();
+        set.push(
+            "block:1",
+            manager.executor().spawn(async {
+                std::future::pending::<()>().await;
+                TaskExit::ReceiverGone
+            }),
+        );
+        let (ran_tx, ran_rx) = tokio::sync::oneshot::channel();
+        set.push(
+            "chain-log:1:mod",
+            manager.executor().spawn(async move {
+                let _ = ran_tx.send(());
+                TaskExit::ReceiverGone
+            }),
+        );
+        ran_rx.await.expect("the clean task ran before the drain");
+
+        let sink = Sink::default();
+        let collector = tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::DEBUG)
+            .with_ansi(false)
+            .with_writer(sink.clone())
+            .finish();
+        set.shutdown().with_subscriber(collector).await;
+
+        let out = String::from_utf8(sink.0.lock().expect("sink is not poisoned").clone())
+            .expect("log output is UTF-8");
+        let summary = out
+            .lines()
+            .find(|line| line.contains("pump task set drained"))
+            .expect("the drain logs a summary");
+        assert!(
+            summary.contains("block:1"),
+            "the aborted pump is named: {summary}",
+        );
+        assert!(
+            !summary.contains("chain-log:1:mod"),
+            "a clean stop is not named as aborted: {summary}",
+        );
+    }
+
+    #[derive(Clone, Default)]
+    struct Sink(Arc<std::sync::Mutex<Vec<u8>>>);
+
+    impl std::io::Write for Sink {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0
+                .lock()
+                .expect("sink is not poisoned")
+                .extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for Sink {
+        type Writer = Sink;
+
+        fn make_writer(&'a self) -> Sink {
+            self.clone()
+        }
     }
 }
