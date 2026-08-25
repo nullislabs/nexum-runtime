@@ -7,6 +7,9 @@ license.workspace = true
 repository.workspace = true
 description = "Guest-side SDK for nexum runtime modules: host-neutral helpers usable by any module, independent of the CoW domain layer."
 
+[lints]
+workspace = true
+
 [lib]
 # Plain library - modules link this and emit their own cdylib for the
 # WASM Component. Building on the host target is also supported so the

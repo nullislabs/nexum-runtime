@@ -61,6 +61,8 @@ jobs:
       # Parses manifests, so no toolchain.
       - name: Workspace dependency inheritance
         run: ./scripts/workspace-deps-lint.sh
+      - name: Workspace lint inheritance
+        run: ./scripts/crate-lints-lint.sh
 
   machete:
     name: cargo-machete

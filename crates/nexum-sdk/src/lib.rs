@@ -21,8 +21,6 @@
 //! - [`module`] and [`bind_host_via_wit_bindgen!`](crate::bind_host_via_wit_bindgen) generate the per-cdylib glue.
 
 #![cfg_attr(not(test), warn(unused_crate_dependencies))]
-#![warn(missing_docs)]
-#![cfg_attr(docsrs, feature(doc_cfg))]
 
 /// Generate the per-cdylib module glue from an `impl` block of named
 /// handlers. See [`nexum_module_macros::module`].

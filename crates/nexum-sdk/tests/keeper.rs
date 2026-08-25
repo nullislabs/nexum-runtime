@@ -556,10 +556,8 @@ fn release_of_absent_is_a_no_op() {
     assert!(host.store.is_empty());
 }
 
-fn seeded_commitment(host: &MockHost) -> String {
-    CommitmentSet::new(host)
-        .put(&sample_owner(), &sample_hash(), b"params")
-        .unwrap()
+fn seeded_commitment(host: &MockHost) -> Result<String, Fault> {
+    CommitmentSet::new(host).put(&sample_owner(), &sample_hash(), b"params")
 }
 
 fn tick_at(block: u64, epoch_s: u64) -> Tick {
@@ -573,7 +571,7 @@ fn tick_at(block: u64, epoch_s: u64) -> Tick {
 #[test]
 fn ledger_try_next_block_leaves_the_store_untouched() {
     let host = MockHost::new();
-    let key = seeded_commitment(&host);
+    let key = seeded_commitment(&host).unwrap();
     let before = host.store.snapshot();
 
     Retrier::new(&host)
@@ -590,7 +588,7 @@ fn ledger_try_next_block_leaves_the_store_untouched() {
 #[test]
 fn ledger_backoff_gates_the_commitment_on_the_epoch_clock() {
     let host = MockHost::new();
-    let key = seeded_commitment(&host);
+    let key = seeded_commitment(&host).unwrap();
     let commitment = CommitmentRef::parse(&key).unwrap();
     let ledger = Retrier::new(&host);
 
@@ -621,7 +619,7 @@ fn ledger_backoff_gates_the_commitment_on_the_epoch_clock() {
 #[test]
 fn ledger_backoff_saturates_on_the_epoch_clock() {
     let host = MockHost::new();
-    let key = seeded_commitment(&host);
+    let key = seeded_commitment(&host).unwrap();
     let commitment = CommitmentRef::parse(&key).unwrap();
 
     Retrier::new(&host)
@@ -644,7 +642,7 @@ fn ledger_backoff_saturates_on_the_epoch_clock() {
 #[test]
 fn ledger_drop_removes_the_commitment_and_its_gates() {
     let host = MockHost::new();
-    let key = seeded_commitment(&host);
+    let key = seeded_commitment(&host).unwrap();
     let commitment = CommitmentRef::parse(&key).unwrap();
     Gates::new(&host).set_next_block(commitment, 500).unwrap();
 
@@ -658,7 +656,7 @@ fn ledger_drop_removes_the_commitment_and_its_gates() {
 #[test]
 fn ledger_drop_on_repeat_grants_one_next_block_retry() {
     let host = MockHost::new();
-    let key = seeded_commitment(&host);
+    let key = seeded_commitment(&host).unwrap();
     let commitment = CommitmentRef::parse(&key).unwrap();
     let ledger = Retrier::new(&host);
 
@@ -702,7 +700,7 @@ fn ledger_drop_on_repeat_grants_one_next_block_retry() {
 #[test]
 fn ledger_clear_refusal_resets_the_one_block_grace() {
     let host = MockHost::new();
-    let key = seeded_commitment(&host);
+    let key = seeded_commitment(&host).unwrap();
     let commitment = CommitmentRef::parse(&key).unwrap();
     let ledger = Retrier::new(&host);
 
@@ -738,7 +736,7 @@ fn ledger_clear_refusal_resets_the_one_block_grace() {
 #[test]
 fn ledger_drop_removes_the_refused_marker() {
     let host = MockHost::new();
-    let key = seeded_commitment(&host);
+    let key = seeded_commitment(&host).unwrap();
     let commitment = CommitmentRef::parse(&key).unwrap();
 
     let ledger = Retrier::new(&host);
@@ -796,7 +794,7 @@ fn poller_sees_params_and_tick_verbatim() {
     }
 
     let host = MockHost::new();
-    let key = seeded_commitment(&host);
+    let key = seeded_commitment(&host).unwrap();
     let commitment = CommitmentRef::parse(&key).unwrap();
     let tick = Tick {
         chain_id: 1,
