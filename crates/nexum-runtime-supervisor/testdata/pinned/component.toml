@@ -1,7 +1,8 @@
-# `digest` pins the sibling component.wat; re-pin with `sha256sum` after edits.
+# `digest` pins the sibling component.wat assembled to binary; re-pin with
+# `wasm-tools parse component.wat | sha256sum` after edits.
 
 [component]
 name = "pinned-wat"
-digest = "sha256:9e16f4d6bae777d6aa817a4ee1ad0d3ebf6fa1e757acabe432e989ec0f1b7a1e"
+digest = "sha256:24eaf3439a60c96764c4f2c92a0a81b52bd4fe5d5b91f090184a0f6486b1bf29"
 
 [dependencies]

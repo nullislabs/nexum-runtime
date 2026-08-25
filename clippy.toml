@@ -52,6 +52,9 @@ disallowed-methods = [
     { path = "wasmtime::component::Component::deserialize_file", reason = "loads a precompiled component that nothing verified: use read_verified_component" },
     { path = "wasmtime::component::Component::deserialize_raw", reason = "loads a precompiled component that nothing verified: use read_verified_component" },
     { path = "wasmtime::CodeBuilder::compile_component", reason = "compiles bytes that nothing verified: use read_verified_component" },
+    # Takes no suppression: the compile path builds from `wasm_binary`, so
+    # nothing in the tree calls this (#356).
+    { path = "wasmtime::CodeBuilder::wasm_binary_or_text", reason = "runs the WAT text parser over an artifact: read_verified_component compiles binary only" },
     # Every string-carrying route to a guest-visible fault: a payload crosses
     # the WIT boundary verbatim. `nexum-sdk` declares its own `Fault` at a
     # different resolved path, so guest crates are outside these by

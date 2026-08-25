@@ -1,4 +1,2 @@
-# The pinned-digest fixture is hashed byte-for-byte; never rewrite its line endings.
-crates/nexum-runtime/testdata/pinned/component.wat -text
 # The WIT snapshot is compared byte-for-byte against a freshly rendered string.
 wit/nexum-host.snapshot -text
