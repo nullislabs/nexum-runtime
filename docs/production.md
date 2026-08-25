@@ -358,8 +358,53 @@ A logging-level change also needs a restart.
   A `TimeoutStopSec` below the release's drain bound turns every stop into a SIGKILL with no log line.
 - Cold-backup the local store (section 3).
 - Stage the new binary, run it once against the production `engine.toml`, and confirm it boots before you stop it.
+  Section 11 lists the refusals that trial boot can produce and the config each one needs.
 - Swap the binary and `sudo systemctl restart nexum`.
 - Watch `journalctl -u nexum -f` for new ERROR and WARN lines for at least 5 minutes.
+
+## 11. Refusals an upgrade meets
+
+Section 8 describes the `[policy]` dials.
+This section answers the other question an upgrade asks: which of them can refuse a boot that succeeded before, and what to write to get the earlier behaviour back on purpose.
+Every refusal below is reachable from an `engine.toml` that ran under an earlier release.
+The trial boot in section 10 surfaces all of them except the two that fire on an outbound request.
+
+A ceiling breach means a component asked for more than the operator granted.
+A validation refusal means the config does not resolve, so the engine refuses at load rather than running on a value it had to guess.
+The spelling is `[policy.component.<id>]`, and `<id>` is the `[[modules]].id` of the entry the row binds to.
+
+| Refusal | Kind | What to write |
+| --- | --- | --- |
+| `DigestUnpinned`: a `[[modules]]` entry carries no `digest` | Validation refusal, at load, before any compile | A `digest` on that entry, taken from `nexum digest <artifact>`. `[engine] require_component_digest = false` relaxes every entry at once. |
+| `RetiredKey`: `[limits] fuel_per_event`, `memory_bytes` or `state_bytes` | Validation refusal, at load | The value under the `[policy]` key the message names. The old key refuses rather than being ignored, because a dead knob reads as an applied cap. |
+| `CapabilityNotPermitted`: a manifest declares a dependency `[policy].capabilities` excludes | Ceiling breach, at boot | The capability name in `[policy].capabilities`, or in `[policy.component.<id>].capabilities` for one component. An absent key permits every capability. |
+| `ChainTriggerNotPermitted`: a block or event trigger under a capability set without `chain` | Ceiling breach, at boot | `"chain"` in the same list. A chain trigger delivers chain data without an import, so the same grant gates it. |
+| `HttpRequestDenied`: a host outside the manifest `hosts` list intersected with `http_allow` | Ceiling breach, at the request | The host in `[policy.component.<id>].http_allow`. An absent key leaves the manifest list as the only name gate. |
+| `DestinationIpProhibited`: a destination that resolves into a `[policy].http_deny` range | Ceiling breach, at the request | A narrower range, or no range. The deny list subtracts after every allowlist, so no allow entry can override it. |
+| `InvalidHttpDeny`: a `[policy].http_deny` entry that is not an IP address or a CIDR block | Validation refusal, at load | An address or a CIDR block. A skipped deny entry would fail open. |
+| `TotalMemoryExceeded`: summed reservations cross `[policy.total].max_memory_bytes` | Ceiling breach, at boot | A higher total, a lower per-component `max_memory_bytes`, or no total, which leaves the sum unbounded. The message names the entry that crossed it. |
+| `ZeroField`: a `0` on a `[policy]` or `[policy.component.<id>]` numeric field | Validation refusal, at load | A positive value, or no key, which takes the default. `max_state_bytes` is the exception: `0` is legal and denies every local-store write. |
+| `UnknownPolicyComponent`: a row keyed on an id no `[[modules]]` entry declares | Validation refusal, at load | The key corrected to a declared `[[modules]].id`. A narrowing row that binds to nothing fails open, so the engine refuses instead of ignoring it. |
+| `EmptyComponentId`: a `[[modules]]` entry whose `id` is blank | Validation refusal, at load | A non-empty `id`, which is the `[policy.component]` join column. |
+| `DuplicateComponentId`: two `[[modules]]` entries claim one `id` | Validation refusal, at load | A unique `id` per entry, or the policy join is ambiguous. |
+| `LogRetentionTooStrict`: a console level louder than what retention keeps | Validation refusal, at load | A higher `log_retain_level`, or a lower `log_print_level` and no `[policy.log_targets]` row above it. Both levels default to `trace`, so this fires only after you set one. |
+| `InvalidLogLevel`: a value that is not one of the five level names | Validation refusal, at load | `trace`, `debug`, `info`, `warn` or `error`. |
+
+One refusal fires on an `engine.toml` that was not edited at all.
+`[engine].require_component_digest` defaults to `true`, and what it requires is the operator's pin on `[[modules]].digest`, not the author's pin in the manifest beside the artifact ([ADR-0025](adr/0025-the-required-digest-is-the-operator-pin.md)).
+An upgrade therefore refuses at the first entry that carries no `digest`.
+Run `nexum digest <artifact>` for each artifact and paste what it prints into that entry: the command writes the `sha256:<hex>` pin alone on stdout, so the value needs no editing.
+The refusal itself also reports the value, so a first boot on a new artifact gives you the line.
+A single-wasm command-line override has no `[[modules]]` entry and stays exempt.
+
+Omitting a `[policy.component.<id>]` row is a decision, not an oversight.
+The component still takes the `[policy]` ceilings: 64 MiB of linear memory, 1e9 fuel per dispatch, 50 MiB of local-store bytes, an 8 KiB cap on one log record, and a 256-record burst that refills at 128 records per second.
+It also still counts against `[policy.total].max_memory_bytes`.
+What it does not take is a narrowing: an unset `capabilities` permits every capability the runtime supports, and an unset `http_allow` leaves the manifest `hosts` list as the only name-level gate.
+An unnamed component is therefore bounded by capacity and unbounded by name.
+
+Every other row in the table needs a key you wrote, so `[engine] require_component_digest = false` is the one line that returns the earlier posture wholesale.
+Write it deliberately or not at all: the relaxation is then auditable in the config, which is what a fail-closed default is for.
 
 ## References
 
@@ -368,4 +413,5 @@ A logging-level change also needs a restart.
 - [ADR-0014](adr/0014-local-store-durability-model.md): the local-store durability model.
 - [ADR-0016](adr/0016-component-vocabulary.md): the `[component]` and `[dependencies]` vocabulary.
 - [ADR-0024](adr/0024-blocks-are-clocks-and-host-keys-leave-the-module-namespace.md): logs replay, blocks do not, and host keys live outside a component's namespace.
+- [ADR-0025](adr/0025-the-required-digest-is-the-operator-pin.md): the required digest is the operator pin.
 - [Component lifecycle, trigger system, and packaging](02-modules-triggers-packaging.md).
