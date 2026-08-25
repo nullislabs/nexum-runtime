@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
-# Every `crates/**` member inherits `[workspace.lints]`. Cargo never warns on a
-# member that omits the table, so a crate opts out of `unwrap_used` and
-# `missing_docs` in silence. Guest modules under `modules/` are out of scope
-# (#265).
+# Every `crates/**` member inherits `[workspace.lints]`; `modules/**` carries no
+# such rule yet. Cargo never warns on a member that omits the table, so a crate
+# opts out of `unwrap_used` and `missing_docs` in silence.
+#
+# The match is line-shaped, so an inline `lints = { workspace = true }` reads as
+# none. Nothing does that, and it fails loud.
 
 set -euo pipefail
 
