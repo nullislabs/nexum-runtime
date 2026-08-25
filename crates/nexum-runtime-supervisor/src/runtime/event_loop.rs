@@ -65,8 +65,7 @@ const BULK_PROGRESS_LOG_INTERVAL: Duration = Duration::from_secs(10);
 /// Wait on the task set for a terminal report behind a stream end.
 const TERMINAL_REPORT_GRACE: Duration = Duration::from_secs(1);
 
-// Spelled once so the `source_kind` metric label and the `source_kind` log
-// field cannot drift; the value an alert reports has to find its log lines.
+// One spelling for the `source_kind` metric label and the log field (#280).
 pub(crate) const SOURCE_KIND_BLOCK: &str = "block";
 pub(crate) const SOURCE_KIND_CHAIN_LOG: &str = "chain-log";
 
@@ -3105,46 +3104,87 @@ mod tests {
 
     const TRACING_MACROS: &[&str] = &["info!(", "warn!(", "error!(", "debug!(", "trace!("];
 
-    /// Bodies whose every log line describes one source, so the scan below
-    /// covers a line added later without anyone remembering the field.
+    /// Bodies whose every log line describes one source.
     const SOURCE_TASK_SIGNATURES: &[&str] = &[
         "async fn reconnecting_block_task(",
         "async fn reconnecting_chain_log_task(",
         "async fn backfill(",
     ];
 
-    /// `src` with string literals and comments blanked to spaces, newlines
-    /// kept, so a search hits code and line numbers still count.
+    /// `src` with literals and comments blanked to spaces, newlines kept, so a
+    /// search hits code and line numbers still count. An unpaired quote would
+    /// blank live code, so anything that can carry one is consumed or refused.
     fn code_only(src: &str) -> String {
         let bytes = src.as_bytes();
         let mut out: Vec<u8> = bytes.to_vec();
-        let blank_to = |out: &mut Vec<u8>, from: usize, to: usize| {
-            for b in &mut out[from..to.min(bytes.len())] {
-                if *b != b'\n' {
-                    *b = b' ';
-                }
-            }
-        };
         let mut i = 0;
         while i < bytes.len() {
+            let from = i;
             match bytes[i] {
+                b'r' if matches!(bytes.get(i + 1), Some(&(b'"' | b'#')))
+                    && !bytes[..i]
+                        .last()
+                        .is_some_and(|b| b.is_ascii_alphanumeric() || *b == b'_') =>
+                {
+                    panic!(
+                        "raw string at line {}; this scan does not lex one",
+                        line_of(src, i)
+                    );
+                }
                 b'"' => {
-                    let from = i;
                     i += 1;
                     while i < bytes.len() && bytes[i] != b'"' {
                         i += if bytes[i] == b'\\' { 2 } else { 1 };
                     }
                     i = (i + 1).min(bytes.len());
-                    blank_to(&mut out, from, i);
+                }
+                // A closing quote two or three bytes on makes it a char
+                // literal; anything else is a lifetime.
+                b'\'' => {
+                    let close = if bytes.get(i + 1) == Some(&b'\\') {
+                        i + 3
+                    } else {
+                        i + 2
+                    };
+                    if bytes.get(close) != Some(&b'\'') {
+                        i += 1;
+                        continue;
+                    }
+                    i = close + 1;
                 }
                 b'/' if bytes.get(i + 1) == Some(&b'/') => {
-                    let from = i;
                     while i < bytes.len() && bytes[i] != b'\n' {
                         i += 1;
                     }
-                    blank_to(&mut out, from, i);
                 }
-                _ => i += 1,
+                b'/' if bytes.get(i + 1) == Some(&b'*') => {
+                    let mut depth = 0u32;
+                    while i < bytes.len() {
+                        match (bytes[i], bytes.get(i + 1)) {
+                            (b'/', Some(&b'*')) => {
+                                depth += 1;
+                                i += 2;
+                            }
+                            (b'*', Some(&b'/')) => {
+                                depth -= 1;
+                                i += 2;
+                                if depth == 0 {
+                                    break;
+                                }
+                            }
+                            _ => i += 1,
+                        }
+                    }
+                }
+                _ => {
+                    i += 1;
+                    continue;
+                }
+            }
+            for b in &mut out[from..i.min(bytes.len())] {
+                if *b != b'\n' {
+                    *b = b' ';
+                }
             }
         }
         String::from_utf8(out).expect("blanking keeps the text valid utf-8")
@@ -3183,6 +3223,15 @@ mod tests {
         ];
         for (file, src) in files {
             let code = code_only(src);
+            // `(macro, args-open, args-close)` for every log call in the file.
+            let calls: Vec<(usize, usize, usize)> = TRACING_MACROS
+                .iter()
+                .flat_map(|mac| code.match_indices(mac))
+                .map(|(at, _)| {
+                    let (open, close) = delimited(&code, at, b'(', b')');
+                    (at, open, close)
+                })
+                .collect();
             let scopes: Vec<(usize, usize)> = if file == "event_loop.rs" {
                 SOURCE_TASK_SIGNATURES
                     .iter()
@@ -3197,31 +3246,28 @@ mod tests {
                 vec![(0, code.len())]
             };
             for (start, end) in scopes {
-                let scope = &code[start..end];
                 let mut seen = 0;
-                for mac in TRACING_MACROS {
-                    for (at, _) in scope.match_indices(mac) {
-                        let (args_from, args_to) = delimited(scope, at, b'(', b')');
-                        assert!(
-                            scope[args_from..args_to].contains("source_kind"),
-                            "{file}:{} logs a source without `source_kind`, so the value \
-                             NexumReconnectStorm reports will not find it",
-                            line_of(&code, start + at),
-                        );
-                        seen += 1;
-                    }
+                for &(at, open, close) in calls.iter().filter(|c| (start..end).contains(&c.0)) {
+                    assert!(
+                        code[open..close].contains("source_kind"),
+                        "{file}:{} logs a source without `source_kind`, so the value \
+                         NexumReconnectStorm reports will not find it",
+                        line_of(&code, at),
+                    );
+                    seen += 1;
                 }
                 assert!(seen > 0, "{file}: the scan matched no log line at all");
             }
-            // The field is `source_kind` throughout, matching the metric label.
-            for pattern in ["kind = ", "kind,"] {
-                for (at, _) in code.match_indices(pattern) {
-                    assert_eq!(
-                        code[..at].chars().last(),
-                        Some('_'),
-                        "{file}:{} spells the field `kind`",
-                        line_of(&code, at),
-                    );
+            for &(at, open, close) in &calls {
+                for pattern in ["kind = ", "kind,"] {
+                    for (offset, _) in code[open..close].match_indices(pattern) {
+                        assert_eq!(
+                            code[open..open + offset].chars().last(),
+                            Some('_'),
+                            "{file}:{} spells the field `kind`",
+                            line_of(&code, at),
+                        );
+                    }
                 }
             }
         }
