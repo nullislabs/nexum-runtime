@@ -364,7 +364,7 @@ A logging-level change also needs a restart.
 
 ## 11. Refusals an upgrade meets
 
-Section 8 describes the `[policy]` dials.
+Section 8 describes the `[policy]` resource and logging dials.
 This section answers the other question an upgrade asks: which of them can refuse a boot that succeeded before, and what to write to get the earlier behaviour back on purpose.
 Every refusal below is reachable from an `engine.toml` that ran under an earlier release.
 The trial boot in section 10 surfaces all of them except the two that fire on an outbound request.
@@ -377,24 +377,23 @@ The spelling is `[policy.component.<id>]`, and `<id>` is the `[[modules]].id` of
 | --- | --- | --- |
 | `DigestUnpinned`: a `[[modules]]` entry carries no `digest` | Validation refusal, at load, before any compile | A `digest` on that entry, taken from `nexum digest <artifact>`. `[engine] require_component_digest = false` relaxes every entry at once. |
 | `RetiredKey`: `[limits] fuel_per_event`, `memory_bytes` or `state_bytes` | Validation refusal, at load | The value under the `[policy]` key the message names. The old key refuses rather than being ignored, because a dead knob reads as an applied cap. |
-| `CapabilityNotPermitted`: a manifest declares a dependency `[policy].capabilities` excludes | Ceiling breach, at boot | The capability name in `[policy].capabilities`, or in `[policy.component.<id>].capabilities` for one component. An absent key permits every capability. |
+| `CapabilityNotPermitted`: a manifest declares a dependency `[policy].capabilities` excludes | Ceiling breach, at boot | The capability name in `[policy].capabilities`, or in `[policy.component.<id>].capabilities`, which replaces that list for one component rather than extending it. An absent key permits every capability. |
 | `ChainTriggerNotPermitted`: a block or event trigger under a capability set without `chain` | Ceiling breach, at boot | `"chain"` in the same list. A chain trigger delivers chain data without an import, so the same grant gates it. |
-| `HttpRequestDenied`: a host outside the manifest `hosts` list intersected with `http_allow` | Ceiling breach, at the request | The host in `[policy.component.<id>].http_allow`. An absent key leaves the manifest list as the only name gate. |
-| `DestinationIpProhibited`: a destination that resolves into a `[policy].http_deny` range | Ceiling breach, at the request | A narrower range, or no range. The deny list subtracts after every allowlist, so no allow entry can override it. |
+| `HttpRequestDenied`: a host outside the manifest `hosts` list intersected with `http_allow` | Ceiling breach, at the request | The host in `[policy.component.<id>].http_allow`, when that list is the side excluding it. An absent key leaves the manifest list as the only name gate, and no operator key widens past that list. |
+| `DestinationIpProhibited`: a destination that resolves into a `[policy].http_deny` range, or into loopback or private space | Ceiling breach, at the request | A narrower range, or no range. The deny list subtracts after every allowlist, so no allow entry can override it. Loopback and private space are refused by a standing rule that only `[limits.http].permit_destinations` relaxes. |
 | `InvalidHttpDeny`: a `[policy].http_deny` entry that is not an IP address or a CIDR block | Validation refusal, at load | An address or a CIDR block. A skipped deny entry would fail open. |
 | `TotalMemoryExceeded`: summed reservations cross `[policy.total].max_memory_bytes` | Ceiling breach, at boot | A higher total, a lower per-component `max_memory_bytes`, or no total, which leaves the sum unbounded. The message names the entry that crossed it. |
 | `ZeroField`: a `0` on a `[policy]` or `[policy.component.<id>]` numeric field | Validation refusal, at load | A positive value, or no key, which takes the default. `max_state_bytes` is the exception: `0` is legal and denies every local-store write. |
 | `UnknownPolicyComponent`: a row keyed on an id no `[[modules]]` entry declares | Validation refusal, at load | The key corrected to a declared `[[modules]].id`. A narrowing row that binds to nothing fails open, so the engine refuses instead of ignoring it. |
 | `EmptyComponentId`: a `[[modules]]` entry whose `id` is blank | Validation refusal, at load | A non-empty `id`, which is the `[policy.component]` join column. |
 | `DuplicateComponentId`: two `[[modules]]` entries claim one `id` | Validation refusal, at load | A unique `id` per entry, or the policy join is ambiguous. |
-| `LogRetentionTooStrict`: a console level louder than what retention keeps | Validation refusal, at load | A higher `log_retain_level`, or a lower `log_print_level` and no `[policy.log_targets]` row above it. Both levels default to `trace`, so this fires only after you set one. |
+| `LogRetentionTooStrict`: a console level louder than what retention keeps | Validation refusal, at load | A `log_retain_level` at least as loud as every console level, or a quieter `log_print_level` and no `[policy.log_targets]` row above it. Both default to `trace`, so this needs a retention level you set and a console or target level above it. |
 | `InvalidLogLevel`: a value that is not one of the five level names | Validation refusal, at load | `trace`, `debug`, `info`, `warn` or `error`. |
 
-One refusal fires on an `engine.toml` that was not edited at all.
+The digest requirement is the one default that changed direction, so it fires on an `engine.toml` nobody edited.
 `[engine].require_component_digest` defaults to `true`, and what it requires is the operator's pin on `[[modules]].digest`, not the author's pin in the manifest beside the artifact ([ADR-0025](adr/0025-the-required-digest-is-the-operator-pin.md)).
 An upgrade therefore refuses at the first entry that carries no `digest`.
-Run `nexum digest <artifact>` for each artifact and paste what it prints into that entry: the command writes the `sha256:<hex>` pin alone on stdout, so the value needs no editing.
-The refusal itself also reports the value, so a first boot on a new artifact gives you the line.
+Section 1 gives the pin each entry needs and how to obtain it.
 A single-wasm command-line override has no `[[modules]]` entry and stays exempt.
 
 Omitting a `[policy.component.<id>]` row is a decision, not an oversight.
@@ -403,7 +402,7 @@ It also still counts against `[policy.total].max_memory_bytes`.
 What it does not take is a narrowing: an unset `capabilities` permits every capability the runtime supports, and an unset `http_allow` leaves the manifest `hosts` list as the only name-level gate.
 An unnamed component is therefore bounded by capacity and unbounded by name.
 
-Every other row in the table needs a key you wrote, so `[engine] require_component_digest = false` is the one line that returns the earlier posture wholesale.
+`[engine] require_component_digest = false` is the only relaxation in the table that reaches more than one entry, and the only one that returns an earlier posture wholesale.
 Write it deliberately or not at all: the relaxation is then auditable in the config, which is what a fail-closed default is for.
 
 ## References

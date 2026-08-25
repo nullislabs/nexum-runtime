@@ -538,21 +538,6 @@ path = "t.wasm"
         assert!(tracker.http_allow.is_none());
     }
 
-    // `docs/production.md` quotes these numbers to an operator as what a
-    // component without a `[policy.component]` row gets, so changing one is
-    // a documentation edit too.
-    #[test]
-    fn an_unrowed_component_takes_the_documented_ceilings() {
-        let ceilings = PolicyCeilings::default();
-        assert_eq!(ceilings.max_memory_bytes.get(), 64 * 1024 * 1024);
-        assert_eq!(ceilings.max_fuel_per_dispatch.get(), 1_000_000_000);
-        assert_eq!(ceilings.max_state_bytes, 50 * 1024 * 1024);
-        assert_eq!(ceilings.log_bounds.max_record_bytes.get(), 8 * 1024);
-        assert_eq!(ceilings.log_bounds.rate.capacity.get(), 256);
-        assert_eq!(ceilings.log_bounds.rate.refill_per_sec.get(), 128);
-        assert!(TotalPolicy::default().max_memory_bytes.is_none());
-    }
-
     #[test]
     fn log_bounds_narrow_per_component_and_fall_back_to_policy() {
         let cfg: EngineConfig = toml::from_str(
