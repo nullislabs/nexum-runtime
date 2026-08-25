@@ -27,6 +27,11 @@
       "groupName": "cargo dependencies"
     },
     {
+      "description": "wit-parser is pinned to the version wasmtime embeds and moves with it by hand. A bump on its own is silent: the WIT cross-check passes against the wrong parser.",
+      "matchPackageNames": ["wit-parser"],
+      "enabled": false
+    },
+    {
       "description": "CI pins every action by digest; Renovate keeps the digest and its version comment in step.",
       "matchManagers": ["github-actions"],
       "groupName": "github actions",
