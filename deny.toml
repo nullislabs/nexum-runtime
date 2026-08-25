@@ -1,0 +1,66 @@
+# Supply-chain gate over the resolved dependency graph: advisories, licences,
+# duplicate versions and package sources. Run it with `just deny`.
+
+[graph]
+# Match the feature set every other gate compiles under, so a dependency that
+# only appears behind a feature is still checked.
+all-features = true
+
+[advisories]
+db-urls = ["https://github.com/rustsec/advisory-db"]
+yanked = "deny"
+# An unmaintained crate is a maintenance signal, not a vulnerability, and only
+# a dependency the workspace declares itself can be acted on here.
+unmaintained = "workspace"
+# Every suppression needs an advisory id and a reason next to it.
+ignore = []
+
+[licenses]
+# Explicit allowlist, deny by default: a licence that is not named here fails
+# the gate and gets a deliberate decision rather than a silent admission.
+# Derived from the resolved graph, so it is the set actually relied on and not
+# the set that is merely tolerable.
+allow = [
+    "0BSD",
+    # The workspace itself.
+    "AGPL-3.0-or-later",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-3-Clause",
+    "CDLA-Permissive-2.0",
+    "ISC",
+    "MIT",
+    "Unicode-3.0",
+    "Unlicense",
+    "Zlib",
+]
+confidence-threshold = 0.8
+
+# `GPL-2.0-only OR BSD-3-Clause`, reached through wasmtime's default
+# `profiling` feature. GPL-2.0-only cannot combine with an AGPL-3.0 work, so
+# the BSD-3-Clause arm is selected here rather than left to the resolver.
+[[licenses.clarify]]
+crate = "ittapi"
+expression = "BSD-3-Clause"
+license-files = []
+
+[[licenses.clarify]]
+crate = "ittapi-sys"
+expression = "BSD-3-Clause"
+license-files = []
+
+[bans]
+# Dozens of crates already resolve at more than one version, so denying this
+# now turns a supply-chain gate into a dependency-tree cleanup. Tighten to
+# "deny" once the count reaches zero.
+multiple-versions = "warn"
+# Every wildcard in this graph is a version-less path dependency between
+# workspace members. `allow-wildcard-paths` exempts only crates marked
+# `publish = false`, which these are not, so it cannot separate the two here.
+wildcards = "allow"
+
+[sources]
+# Cargo.lock carries no git sources, so this is strict from the start.
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

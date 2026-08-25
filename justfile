@@ -74,6 +74,10 @@ wit-snapshot:
 machete:
     cargo machete
 
+# Advisories, licences, bans and sources. Fetches the RustSec database. Compiles nothing.
+deny:
+    cargo deny check
+
 # Check the workspace quickly.
 check:
     cargo check --target wasm32-wasip2 -p example
@@ -97,6 +101,7 @@ ci:
     ./scripts/workspace-deps-lint.sh
     ./scripts/crate-lints-lint.sh
     cargo machete
+    cargo deny check
     cargo fmt --all --check
     cargo clippy --workspace --all-targets --all-features -- -D warnings
     cargo doc --workspace --all-features --no-deps
