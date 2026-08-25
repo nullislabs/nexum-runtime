@@ -7,7 +7,6 @@
 //! emitted `tracing` events.
 
 #![cfg_attr(not(test), warn(unused_crate_dependencies))]
-#![warn(missing_docs)]
 
 mod capture;
 mod chain;

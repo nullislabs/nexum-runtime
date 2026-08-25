@@ -7,6 +7,9 @@ license.workspace = true
 repository.workspace = true
 description = "In-memory host mocks for nexum module unit tests. Implements nexum_sdk::host::{ChainHost, LocalStoreHost, LoggingHost}."
 
+[lints]
+workspace = true
+
 [lib]
 # Plain library, host-only - module Cargo.toml lists this under
 # [dev-dependencies] so it never ships in the wasm bundle.
