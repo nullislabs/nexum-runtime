@@ -30,8 +30,8 @@ pub(super) struct DigestPolicy<'a> {
 }
 
 impl DigestPolicy<'_> {
-    /// Neither pin present, so nothing checked these bytes. Independent of
-    /// `require_operator`, which decides only whether that refuses.
+    /// Nothing checked these bytes. Independent of `require_operator`,
+    /// which decides only whether that refuses.
     pub(super) fn unpinned(&self) -> bool {
         self.operator.is_none() && self.author.is_none()
     }
@@ -104,8 +104,7 @@ pub(super) fn read_verified_component(
                 digest = %actual,
                 "no [[modules]].digest and no [component].digest - loading unverified",
             );
-            // The warn is gone after log rotation; the gauge is what an
-            // operator alerts on (#344).
+            // The warn does not survive log rotation (#344).
             metrics::gauge!(
                 "nexum_runtime_module_unverified",
                 "module" => pins.module.to_owned(),

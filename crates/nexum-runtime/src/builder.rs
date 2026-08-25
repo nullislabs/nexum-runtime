@@ -251,8 +251,7 @@ impl<T: RuntimeTypes<State = HostState<T>>> AssembledRuntime<T> {
         info!(
             modules = supervisor.module_count(),
             alive,
-            // `verified < modules` is unverified execution; the difference is
-            // per-module on `nexum_runtime_module_unverified`.
+            // The shortfall is per-module on `nexum_runtime_module_unverified`.
             verified = supervisor.verified_count(),
             chains = plan.block_chains.len(),
             // The drain default tracks `deadline_secs`, so a systemd

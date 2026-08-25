@@ -361,6 +361,49 @@ mod tests {
             .to_toml()
     }
 
+    /// Formatted `tracing` output from this thread while the install guard
+    /// is alive. A task spawned off the thread keeps the global default, so
+    /// only what `launch` emits inline is captured.
+    #[derive(Clone, Default)]
+    struct LogSink(Arc<std::sync::Mutex<Vec<u8>>>);
+
+    impl LogSink {
+        fn lock(&self) -> std::sync::MutexGuard<'_, Vec<u8>> {
+            self.0.lock().expect("the sink is only locked to append")
+        }
+
+        fn install(&self) -> tracing::subscriber::DefaultGuard {
+            tracing::subscriber::set_default(
+                tracing_subscriber::fmt()
+                    .with_ansi(false)
+                    .with_max_level(tracing::Level::INFO)
+                    .with_writer(self.clone())
+                    .finish(),
+            )
+        }
+
+        fn text(&self) -> String {
+            String::from_utf8(self.lock().clone()).expect("tracing output is UTF-8")
+        }
+    }
+
+    impl std::io::Write for LogSink {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.lock().extend_from_slice(buf);
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for LogSink {
+        type Writer = Self;
+        fn make_writer(&'a self) -> Self {
+            self.clone()
+        }
+    }
+
     /// A header carrying just the block number.
     fn header_numbered(number: u64) -> Header {
         let mut header: Header = Header::default();
@@ -395,6 +438,42 @@ mod tests {
 
         rt.shutdown();
         rt.wait().await.expect("clean shutdown");
+    }
+
+    /// The only reader of `verified` on the ready line.
+    #[tokio::test]
+    async fn harness_ready_line_reports_the_verified_count() {
+        let Some(wasm) = example_wasm_or_skip() else {
+            return;
+        };
+        let sink = LogSink::default();
+        let guard = sink.install();
+        let mut rt = TestRuntime::builder(&wasm)
+            .module(pinned_block_manifest("pinned", 1, &wasm))
+            .module(
+                manifest("unpinned")
+                    .cap("logging")
+                    .block_trigger(1)
+                    .to_toml(),
+            )
+            .launch()
+            .await
+            .expect("an unpinned entry launches while the requirement is relaxed");
+        drop(guard);
+
+        rt.shutdown();
+        rt.wait().await.expect("clean shutdown");
+
+        let line = sink
+            .text()
+            .lines()
+            .find(|line| line.contains("supervisor ready"))
+            .expect("the ready line is emitted inline by launch")
+            .to_owned();
+        assert!(
+            line.contains("modules=2") && line.contains("verified=1"),
+            "{line}",
+        );
     }
 
     /// No manifest pin is involved.

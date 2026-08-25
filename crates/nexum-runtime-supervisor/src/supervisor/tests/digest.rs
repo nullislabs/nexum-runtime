@@ -430,20 +430,26 @@ fn the_unverified_gauge_fires_on_an_unpinned_load_and_on_no_other() {
     }
 }
 
-/// The count feeding `verified` on the `supervisor ready` line.
+/// The author-pinned entry is what separates this count from
+/// `entry.digest.is_some()`.
 #[tokio::test]
-async fn e2e_verified_count_excludes_the_module_no_pin_covers() {
+async fn e2e_verified_count_takes_either_pin_and_excludes_neither() {
     let Some(wasm) = example_wasm_or_skip() else {
         return;
     };
     let digest = ContentDigest::of_bytes(&std::fs::read(&wasm).expect("read example wasm"));
     let booted = scenario()
         .wasm(wasm)
-        .module(Entry::new(TestManifest::new("pinned").cap("logging")).digest(digest))
+        .module(Entry::new(TestManifest::new("operator-pinned").cap("logging")).digest(digest))
+        .module(Entry::new(
+            TestManifest::new("author-pinned")
+                .cap("logging")
+                .component_digest(digest.to_string()),
+        ))
         .module(Entry::new(TestManifest::new("unpinned").cap("logging")))
         .boot()
         .await
         .expect("an unpinned entry loads while the requirement is relaxed");
-    assert_eq!(booted.supervisor.module_count(), 2);
-    assert_eq!(booted.supervisor.verified_count(), 1);
+    assert_eq!(booted.supervisor.module_count(), 3);
+    assert_eq!(booted.supervisor.verified_count(), 2);
 }
