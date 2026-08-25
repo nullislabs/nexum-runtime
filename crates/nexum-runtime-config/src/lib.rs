@@ -623,17 +623,26 @@ digest = "sha256:ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015a
     /// Pins the built-in numbers, not the constants, so a resolution that
     /// pairs a field with the wrong default constant fails here. The parse
     /// path fills its own fallbacks in `resolve_policy`, so it is pinned
-    /// separately from the `Default` impl.
+    /// separately from the `Default` impl. `docs/production.md` quotes these
+    /// to operators as what an unrowed component gets.
     #[test]
     fn core_limits_default_when_absent() {
         let limits = ResolvedModuleLimits::default();
         assert_eq!(limits.dispatch_deadline, Duration::from_secs(120));
         let parsed: EngineConfig = toml::from_str("").expect("empty config parses");
-        for ceilings in [PolicyCeilings::default(), parsed.policy.ceilings] {
+        for ceilings in [
+            PolicyCeilings::default(),
+            parsed.policy.ceilings,
+            parsed.policy.for_component("unrowed").ceilings,
+        ] {
             assert_eq!(ceilings.max_fuel_per_dispatch.get(), 1_000_000_000);
             assert_eq!(ceilings.max_memory_bytes.get(), 64 * 1024 * 1024);
             assert_eq!(ceilings.max_state_bytes, 50 * 1024 * 1024);
+            assert_eq!(ceilings.log_bounds.max_record_bytes.get(), 8 * 1024);
+            assert_eq!(ceilings.log_bounds.rate.capacity.get(), 256);
+            assert_eq!(ceilings.log_bounds.rate.refill_per_sec.get(), 128);
         }
+        assert!(parsed.policy.total.max_memory_bytes.is_none());
     }
 
     #[test]
