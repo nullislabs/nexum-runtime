@@ -96,7 +96,10 @@ pub(super) fn read_verified_component(
         }
     }
     let component = CodeBuilder::new(engine)
-        .wasm_binary_or_text(&bytes, Some(path))
+        // No path: given `Some(path)` wasmtime reads a sibling `<artifact>.dwp`
+        // into the compile, and no digest covers those bytes (#343). The cost is
+        // the path on a WAT parse error.
+        .wasm_binary_or_text(&bytes, None)
         .and_then(compile)
         // wasmtime::Error is not StdError, so anyhow's with_context needs the bridge.
         .map_err(Error::from)
