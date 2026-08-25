@@ -7,9 +7,9 @@
 //! emitted `tracing` events.
 //!
 //! The mocks have no manifest, so every seam answers regardless of what
-//! `component.toml` declares. `#[nexum_sdk::module]` is what checks the
-//! declaration: it binds only the declared adapters, so an undeclared seam
-//! does not build. `http` alone is gated at runtime, by the host allowlist.
+//! `component.toml` declares. The declaration check is
+//! `#[nexum_sdk::module]`, which binds only the declared adapters; `http`
+//! has no adapter, and is gated at runtime by the host allowlist alone.
 
 #![cfg_attr(not(test), warn(unused_crate_dependencies))]
 

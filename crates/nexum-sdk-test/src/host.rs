@@ -8,8 +8,8 @@ use crate::local_store::MockLocalStore;
 use crate::logging::MockLogging;
 
 /// Composed in-memory host; each field is the per-seam mock. Every seam
-/// answers whether or not the module declares it; the synthesized world is
-/// what refuses an undeclared seam, and `http` is not in that world.
+/// answers whether or not the module declares it; `#[nexum_sdk::module]` is
+/// the declaration check, and it does not reach `http`.
 #[derive(Default)]
 pub struct MockHost {
     /// `nexum:host/chain` mock.

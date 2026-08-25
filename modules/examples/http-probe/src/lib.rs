@@ -7,8 +7,9 @@
 //! path. Pure logic lives in `logic`; `lib.rs` is the
 //! `#[nexum_sdk::module]` glue.
 //!
-//! Egress is the one seam the synthesized world does not gate: the host
-//! enforces that list at call time, and the manifest check at load.
+//! Unlike `logging`, egress carries no synthesized world import: nothing
+//! refuses an undeclared use at build time, only the host allowlist at call
+//! time and the manifest capability check at load.
 
 // wit_bindgen::generate! expands to host-import shims whose arity matches
 // the WIT signatures, which can exceed clippy's too-many-arguments threshold.
