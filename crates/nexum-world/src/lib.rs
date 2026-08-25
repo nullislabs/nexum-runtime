@@ -245,6 +245,10 @@ pub const CORE: &[Capability] = &[
         packages: &[],
         adapter: Some("logging"),
     },
+    // The one importless row: `wasi:http` is not vendored under `wit/` and
+    // `resolve_wit_packages` refuses a package that is not, so no synthesized
+    // world can carry it. An undeclared use is refused by the manifest
+    // capability check at load, not by the compiler.
     Capability {
         name: Cap::Http,
         import: None,

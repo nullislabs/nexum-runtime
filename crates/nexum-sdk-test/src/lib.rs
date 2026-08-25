@@ -5,6 +5,11 @@
 //! [`MockHost`] composes the per-seam mocks ([`MockChain`],
 //! [`MockLocalStore`], [`MockLogging`]); [`capture_tracing`] records
 //! emitted `tracing` events.
+//!
+//! The mocks have no manifest, so every seam answers regardless of what
+//! `component.toml` declares. The declaration check is
+//! `#[nexum_sdk::module]`, which binds only the declared adapters; `http`
+//! has no adapter, and is gated at runtime by the host allowlist alone.
 
 #![cfg_attr(not(test), warn(unused_crate_dependencies))]
 
