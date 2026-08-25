@@ -186,6 +186,24 @@ fn read_verified_component_computes_a_digest_for_unpinned_loads() {
     assert_eq!(actual, ContentDigest::of_bytes(&bytes));
 }
 
+#[test]
+fn read_verified_component_ignores_a_planted_dwp_sidecar() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("module.wat");
+    std::fs::write(&path, b"(component)").expect("write a trivial component");
+    // Directories, so every read fails: a compile that reached either refuses.
+    // Both spellings, so a change to the probe's naming cannot quietly leave
+    // this passing.
+    for sidecar in [path.with_extension("dwp"), path.with_added_extension("dwp")] {
+        std::fs::create_dir(sidecar).expect("plant the sidecar");
+    }
+
+    let engine = test_wasmtime_engine();
+    let (_component, actual) = read_verified_component(&engine, &path, DigestPolicy::author(None))
+        .expect("no file outside the digested bytes is read inside the compile call");
+    assert_eq!(actual, ContentDigest::of_bytes(b"(component)"));
+}
+
 /// The launch config turns on the component model and fuel accounting.
 ///
 /// The first half goes through the production path, because that path is now
