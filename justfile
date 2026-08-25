@@ -61,6 +61,10 @@ msrv:
 workspace-deps:
     ./scripts/workspace-deps-lint.sh
 
+# Every `crates/**` member inherits `[workspace.lints]`. Compiles nothing.
+crate-lints:
+    ./scripts/crate-lints-lint.sh
+
 # Rewrite wit/nexum-host.snapshot from the WIT tree. Run this in the same
 # change as any edit under wit/nexum-host, and review the diff.
 wit-snapshot:
@@ -91,6 +95,7 @@ ci:
     ./scripts/zero-leak.sh
     ./scripts/msrv-lint.sh
     ./scripts/workspace-deps-lint.sh
+    ./scripts/crate-lints-lint.sh
     cargo machete
     cargo fmt --all --check
     cargo clippy --workspace --all-targets --all-features -- -D warnings
