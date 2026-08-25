@@ -42,9 +42,9 @@ disallowed-methods = [
     { path = "tokio::task::spawn", reason = "raw spawning belongs to nexum-tasks: use TaskExecutor::spawn" },
     { path = "tokio::task::spawn_blocking", reason = "raw spawning belongs to nexum-tasks: use TaskExecutor::spawn_blocking" },
     { path = "tokio::task::spawn_local", reason = "raw spawning belongs to nexum-tasks: use TaskExecutor::spawn" },
-    # Every route in wasmtime that yields a `Component`, so the verified bytes
-    # are the compiled bytes (ADR-0025). Both bans below take suppressions;
-    # `nexum-runtime-guards` counts every occurrence in the tree.
+    # Every route in wasmtime that yields a `Component`, and every builder
+    # input that feeds one, so the verified bytes are the compiled bytes
+    # (ADR-0025). `nexum-runtime-guards` counts every suppression in the tree.
     { path = "wasmtime::component::Component::new", reason = "compiles bytes that nothing verified: use read_verified_component" },
     { path = "wasmtime::component::Component::from_file", reason = "compiles a file that nothing verified: use read_verified_component" },
     { path = "wasmtime::component::Component::from_binary", reason = "compiles bytes that nothing verified: use read_verified_component" },
@@ -52,9 +52,11 @@ disallowed-methods = [
     { path = "wasmtime::component::Component::deserialize_file", reason = "loads a precompiled component that nothing verified: use read_verified_component" },
     { path = "wasmtime::component::Component::deserialize_raw", reason = "loads a precompiled component that nothing verified: use read_verified_component" },
     { path = "wasmtime::CodeBuilder::compile_component", reason = "compiles bytes that nothing verified: use read_verified_component" },
-    # Takes no suppression: the compile path builds from `wasm_binary`, so
-    # nothing in the tree calls this (#356).
+    # The three below take no suppression: the compile path builds from
+    # `wasm_binary` over bytes it already hashed (#356).
     { path = "wasmtime::CodeBuilder::wasm_binary_or_text", reason = "runs the WAT text parser over an artifact: read_verified_component compiles binary only" },
+    { path = "wasmtime::CodeBuilder::wasm_binary_or_text_file", reason = "reads a file no digest covers and parses WAT: use read_verified_component" },
+    { path = "wasmtime::CodeBuilder::wasm_binary_file", reason = "reads a file no digest covers, and probes for a .dwp beside it: use read_verified_component" },
     # Every string-carrying route to a guest-visible fault: a payload crosses
     # the WIT boundary verbatim. `nexum-sdk` declares its own `Fault` at a
     # different resolved path, so guest crates are outside these by
