@@ -1,14 +1,9 @@
-//! Every emitted metric name is described, and every described name is
-//! emitted.
+//! Every emitted metric name is described, and every described name is emitted.
 //!
-//! A metric name is an operator contract, so a name that reaches `/metrics`
-//! without passing through `nexum_runtime_metrics::METRICS` carries no HELP
-//! or TYPE text, and a table entry nothing emits promises a series that never
-//! appears.
+//! A name reaching `/metrics` with no `METRICS` entry carries no HELP or TYPE,
+//! and an entry nothing emits promises a series that never appears.
 
-// An integration-test helper sits outside a `#[test]` function, which is
-// what `allow-expect-in-tests` keys on. A guard that cannot read the tree
-// it exists to check has nothing to recover from.
+// A guard that cannot read the tree it checks has nothing to recover from.
 #![allow(clippy::expect_used)]
 
 use std::collections::BTreeSet;
@@ -17,14 +12,12 @@ use std::path::PathBuf;
 use nexum_runtime_guards::{crate_source_roots, workspace_root};
 use nexum_runtime_metrics::METRICS;
 
-/// The roots are derived, so a crate that starts emitting is in the walk the
-/// moment it exists.
+/// Derived, so a crate that starts emitting is in the walk at once.
 ///
-/// The crate that declares the table is the one exclusion: scanning it would
-/// find every name through the table's own literals, and the unused half
-/// would pass over nothing. Dropping it is asserted to remove exactly one
-/// root, so a move or a rename fails here rather than quietly making that
-/// half vacuous.
+/// The table's own crate is excluded: scanning it would find every name in the
+/// table's literals and the unused half would pass over nothing. Removing
+/// exactly one root is asserted, so a rename fails here rather than quietly
+/// making that half vacuous.
 #[test]
 fn every_emitted_name_is_in_the_table_and_every_entry_is_emitted() {
     let root = workspace_root();

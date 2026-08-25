@@ -1,26 +1,17 @@
 //! Guards on the repository rather than on a crate.
 //!
-//! Every guard beside this file reads the whole workspace source tree, so it
-//! is a test of the repository and not of whichever crate it once sat in.
-//! Holding them here keeps a guard from adding a dependency edge to a crate
-//! it only polices, and the `publish = false` member costs nothing because
-//! nothing depends on it.
-//!
-//! The library half is the enumeration the guards walk. The guards are the
-//! integration tests beside it.
+//! Each reads the whole source tree, so it belongs to no one crate. Holding
+//! them here keeps a guard from adding an edge to what it polices.
 
 #![forbid(unsafe_code)]
-// Guard support, so `allow-unwrap-in-tests` never sees it. A walk that cannot
-// read the tree it exists to check has nothing to recover from.
+// A walk that cannot read the tree it checks has nothing to recover from.
 #![allow(clippy::expect_used)]
 
 use std::path::{Path, PathBuf};
 
-/// The workspace root: the nearest ancestor of this crate whose `Cargo.toml`
-/// declares a `[workspace]`.
+/// The nearest ancestor whose `Cargo.toml` declares a `[workspace]`.
 ///
-/// Nearest rather than outermost, so a checkout nested inside an unrelated
-/// cargo workspace walks this tree and not the one around it.
+/// Nearest, so a checkout nested in an unrelated workspace walks this tree.
 pub fn workspace_root() -> PathBuf {
     let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
     manifest
@@ -33,13 +24,9 @@ pub fn workspace_root() -> PathBuf {
         .to_path_buf()
 }
 
-/// The `src` of every crate under `root`, found on disk rather than read from
-/// `workspace.members`.
-///
-/// Cargo adopts a path dependency as a member without a table entry, so the
-/// table under-enumerates. Enumerating nothing means the walk lost its root
-/// rather than that the tree holds no crate, so this refuses instead of
-/// handing a caller a vacuous pass.
+/// The `src` of every crate under `root`, found on disk: cargo adopts a path
+/// dependency as a member without a table entry, so `workspace.members`
+/// under-enumerates. Refuses on an empty result rather than passing vacuously.
 pub fn crate_source_roots(root: &Path) -> Vec<PathBuf> {
     let mut roots = Vec::new();
     collect(root, &mut roots);
@@ -66,8 +53,7 @@ fn collect(dir: &Path, roots: &mut Vec<PathBuf>) {
             .expect("directory entry name")
             .to_string_lossy()
             .into_owned();
-        // Build output and the dot directories host no crate of ours, and a
-        // caller walks `src` itself.
+        // A caller walks `src` itself; `target` and dot dirs hold no crate.
         if name == "src" || name == "target" || name.starts_with('.') {
             continue;
         }
@@ -79,9 +65,8 @@ fn collect(dir: &Path, roots: &mut Vec<PathBuf>) {
 mod tests {
     use super::*;
 
-    /// Asserts the distance, not the shape: any ancestor carrying a
-    /// `[workspace]` satisfies the search, so only the depth says the walk
-    /// starts at this repository.
+    /// Asserts the distance: any `[workspace]` ancestor satisfies the search,
+    /// so only depth says the walk starts here.
     #[test]
     fn the_root_is_the_workspace_and_not_this_crate() {
         assert_eq!(

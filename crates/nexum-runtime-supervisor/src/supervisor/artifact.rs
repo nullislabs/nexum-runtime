@@ -105,14 +105,11 @@ pub(super) fn read_verified_component(
     Ok((component, actual))
 }
 
-/// The workspace's one exemption from the compile-constructor ban in
-/// `clippy.toml`.
+/// The one exemption from the compile-constructor ban in `clippy.toml`.
 ///
-/// It is a function so the exemption covers one call and nothing else, and
-/// `#[expect]` rather than `#[allow]` so an exemption that stops covering a
-/// banned call fails CI rather than sitting here blessed. The token is the
-/// escape hatch the ban creates, so `nexum-runtime-guards` counts every
-/// occurrence in the tree and refuses a second one here.
+/// A function, so the exemption covers one call. `#[expect]`, so one that
+/// stops covering a banned call fails CI. `nexum-runtime-guards` counts every
+/// occurrence in the tree.
 #[expect(
     clippy::disallowed_methods,
     reason = "the compile call the ban exists to funnel here"

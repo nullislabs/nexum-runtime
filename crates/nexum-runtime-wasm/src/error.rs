@@ -2,11 +2,9 @@
 //! built.
 //!
 //! `clippy.toml` bans both types' string-carrying constructors by resolved
-//! path, so every other crate is refused at the call site rather than by a
-//! scan. The six functions below carry the workspace's only exemption from
-//! that ban, and the scan test at the end holds the two properties the lint
-//! cannot see: that each payload is a vocabulary projection, and that the two
-//! seam functions stay free functions.
+//! path; the six functions below carry the only exemption. The scan at the end
+//! holds what the lint cannot see: each payload is a vocabulary projection,
+//! and the two seam functions stay free functions.
 
 use alloy_primitives::Bytes;
 use alloy_transport::TransportError;
@@ -725,27 +723,22 @@ mod tests {
         out
     }
 
-    /// Where a fault may be built is clippy's now: `clippy.toml` bans both
-    /// types' string-carrying constructors by resolved path, which catches an
-    /// aliased import and leaves `nexum-sdk`'s own `Fault` alone, so this no
-    /// longer enumerates crates. Two properties survive because no lint
-    /// states either, and both are local to this crate.
+    /// Where a fault may be built is clippy's now. Two properties survive
+    /// because no lint states either, and both are local to this crate.
     ///
-    /// A payload must be a projection of the pinned vocabulary, so no runtime
-    /// string reaches a guest. And the two seam functions must stay free
-    /// functions: a `From` impl would let `?` build the fault and skip the
-    /// `tracing` call that keeps the quota value and the backend text
-    /// host-side.
+    /// A payload must project the pinned vocabulary, so no runtime string
+    /// reaches a guest. The two seam functions must stay free functions: a
+    /// `From` impl would let `?` skip the `tracing` call that keeps the quota
+    /// value host-side.
     ///
-    /// Every prefix must occur, so a scan that reads the wrong region fails
+    /// Every prefix must occur, so a scan reading the wrong region fails
     /// rather than passing over nothing.
     #[test]
     fn fault_payloads_project_the_vocabulary_and_the_seams_stay_free_functions() {
         let funnel = shipped_code("error.rs");
         let projections = shipped_code("fault.rs");
 
-        // `message:` is the `RpcError` field, which crosses the boundary as a
-        // string the same way a `Fault` payload does.
+        // `message:` is the `RpcError` field, a string crossing the boundary.
         for prefix in FAULT_PREFIXES.into_iter().chain(["message:"]) {
             let sites = occurrences(&funnel, prefix);
             assert!(
@@ -761,10 +754,9 @@ mod tests {
             }
         }
 
-        // The `message:` check above only reaches a payload built where it can
-        // see it, and clippy bans the wrapper rather than the record, so an
-        // `RpcError` assembled in another crate and wrapped here would carry
-        // node text past both. It has to be built inline.
+        // Clippy bans the wrapper, not the record, so an `RpcError` built in
+        // another crate and wrapped here would carry node text past both
+        // checks. It has to be built inline.
         let wrapped = occurrences(&funnel, "ChainError::Rpc(");
         assert!(
             !wrapped.is_empty(),
