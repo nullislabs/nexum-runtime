@@ -103,6 +103,11 @@ pub const METRICS: &[Metric] = &[
         help: "Module restarts after a trap.",
     },
     Metric {
+        name: "nexum_runtime_module_unverified",
+        kind: Kind::Gauge,
+        help: "Modules loaded with neither an operator nor an author digest pin.",
+    },
+    Metric {
         name: "nexum_runtime_source_reconnects_total",
         kind: Kind::Counter,
         help: "Source reconnects by source_kind and chain; source_kind \"chain-log\" also carries module.",

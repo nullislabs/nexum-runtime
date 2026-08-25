@@ -17,6 +17,8 @@ use nexum_primitives::digest::{ContentDigest, DigestMismatch, DigestPin};
 /// Digest expectations for one artifact. Both pins are independent and both
 /// are verified when present, so a disagreement between them refuses.
 pub(super) struct DigestPolicy<'a> {
+    /// The manifest namespace, for the unverified gauge's `module` label.
+    pub(super) module: &'a str,
     /// The `[[modules]].digest` pin, checked first so a disagreement reports
     /// the operator's expectation.
     pub(super) operator: Option<&'a ContentDigest>,
@@ -27,11 +29,20 @@ pub(super) struct DigestPolicy<'a> {
     pub(super) require_operator: bool,
 }
 
+impl DigestPolicy<'_> {
+    /// Nothing checked these bytes. Independent of `require_operator`,
+    /// which decides only whether that refuses.
+    pub(super) fn unpinned(&self) -> bool {
+        self.operator.is_none() && self.author.is_none()
+    }
+}
+
 #[cfg(test)]
 impl<'a> DigestPolicy<'a> {
     /// Only the author pin, with the operator requirement relaxed.
     pub(super) fn author(declared: Option<&'a ContentDigest>) -> Self {
         Self {
+            module: "test-module",
             operator: None,
             author: declared,
             require_operator: false,
@@ -87,12 +98,18 @@ pub(super) fn read_verified_component(
             }
             .into());
         }
-        if pins.author.is_none() {
+        if pins.unpinned() {
             warn!(
                 component = %path.display(),
                 digest = %actual,
                 "no [[modules]].digest and no [component].digest - loading unverified",
             );
+            // The warn does not survive log rotation (#344).
+            metrics::gauge!(
+                "nexum_runtime_module_unverified",
+                "module" => pins.module.to_owned(),
+            )
+            .set(1.0);
         }
     }
     let component = CodeBuilder::new(engine)
