@@ -2,10 +2,13 @@
 //!
 //! On each matching block fetches the allowlisted `[config].probe_url`
 //! over wasi:http and logs its status, then fetches `[config].denied_url`
-//! and asserts the `[capabilities.http].allow` gate denies it.
+//! and asserts the `[dependencies.http].hosts` gate denies it.
 //! Demonstrates the SDK `http::Fetch` seam and the allowlist denial
 //! path. Pure logic lives in `logic`; `lib.rs` is the
 //! `#[nexum_sdk::module]` glue.
+//!
+//! Egress is the one seam the synthesized world does not gate: the host
+//! enforces that list at call time, and the manifest check at load.
 
 // wit_bindgen::generate! expands to host-import shims whose arity matches
 // the WIT signatures, which can exceed clippy's too-many-arguments threshold.

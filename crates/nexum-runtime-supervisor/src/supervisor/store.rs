@@ -239,7 +239,10 @@ pub fn build_linker<T: RuntimeTypes<State = HostState<T>>>(
         .map_err(EngineRefusal::new)?;
     wasmtime_wasi::p2::add_to_linker_async(&mut linker).map_err(EngineRefusal::new)?;
     // wasi:http only; the p2 call above already covers the shared
-    // wasi:io/wasi:clocks interfaces.
+    // wasi:io/wasi:clocks interfaces. Linked for every component whatever its
+    // manifest declares, because http carries no synthesized world import:
+    // capability enforcement refuses an undeclared `wasi:http/` import at
+    // load, and the per-module host allowlist scopes it at call time.
     wasmtime_wasi_http::p2::add_only_http_to_linker_async(&mut linker)
         .map_err(EngineRefusal::new)?;
     for ext in extensions {

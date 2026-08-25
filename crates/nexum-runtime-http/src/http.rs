@@ -1,11 +1,15 @@
 //! wasi:http outgoing gate. [`HttpGate::send_request`] enforces the
-//! per-module `[capabilities.http].allow` list, clamps guest timeouts to the
+//! per-module `[dependencies.http].hosts` list, clamps guest timeouts to the
 //! `[limits.http]` maxima, and bounds the exchange with a total deadline and
 //! response-body cap. Redirects are not followed; each hop re-enters the gate.
 //! Before connecting, the target is refused if it is, or resolves onto, an
 //! address this host will not reach. Only `[limits.http].permit_destinations`
 //! admits one. That narrows DNS rebinding; it does not pin the connected
 //! address.
+//!
+//! Unlike the `nexum:host` seams, http carries no synthesized world import;
+//! the interface is linked for every component. This gate and the load time
+//! capability check are the whole restriction.
 
 use std::future::Future;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
