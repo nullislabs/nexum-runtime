@@ -1,7 +1,7 @@
 //! The single production compile path. Digest verification happens on the
 //! exact bytes handed to the compiler, so any refusal precedes compile and
-//! the verified bytes are the compiled bytes; a guard test pins every
-//! production compile call to this file.
+//! the verified bytes are the compiled bytes; `clippy.toml` bans every other
+//! route to a component, and this file holds the one exemption.
 
 use std::path::Path;
 
@@ -97,10 +97,23 @@ pub(super) fn read_verified_component(
     }
     let component = CodeBuilder::new(engine)
         .wasm_binary_or_text(&bytes, Some(path))
-        .and_then(|builder| builder.compile_component())
+        .and_then(compile)
         // wasmtime::Error is not StdError, so anyhow's with_context needs the bridge.
         .map_err(Error::from)
         .with_context(|| format!("compile {}", path.display()))
         .map_err(EngineRefusal::new)?;
     Ok((component, actual))
+}
+
+/// The one exemption from the compile-constructor ban in `clippy.toml`.
+///
+/// A function, so the exemption covers one call. `#[expect]`, so one that
+/// stops covering a banned call fails CI. `nexum-runtime-guards` counts every
+/// occurrence in the tree.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "the compile call the ban exists to funnel here"
+)]
+fn compile(builder: &mut CodeBuilder<'_>) -> Result<Component, wasmtime::Error> {
+    builder.compile_component()
 }

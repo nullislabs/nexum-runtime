@@ -38,7 +38,7 @@ use crate::supervisor::load::LoadRefusal;
 use crate::supervisor::prepass::BootRefusal;
 use crate::test_utils::{
     BootScenario, Entry, LocalTypes, ManifestInput, Refusal, TestManifest, example_wasm_or_skip,
-    limits_with, mock_components, module_wasm_or_skip, test_wasmtime_engine,
+    limits_with, mock_components, module_wasm_or_skip, test_wasmtime_engine, workspace_root,
 };
 use nexum_primitives::digest::{ContentDigest, DigestMismatch};
 use nexum_runtime_chain::ProviderPool;
@@ -54,7 +54,7 @@ fn scenario() -> BootScenario<LocalTypes> {
 
 /// Path to a manifest checked into the workspace tree.
 fn workspace_manifest(relative: &str) -> PathBuf {
-    crate::test_utils::workspace_root().join(relative)
+    workspace_root().join(relative)
 }
 
 fn core_extensions() -> Vec<Arc<dyn nexum_runtime_api::Extension<LocalTypes>>> {

@@ -152,3 +152,6 @@ Rejected because it draws one boundary and leaves the `host` and `supervisor` kn
 - The three reversed edges are corrected as part of the phase that moves the crate they block.
 - `test-utils` stays a feature on `nexum-runtime` for the harness, and it enables the supervisor crate's `test-utils` for the scenario and `nexum-runtime-testing` for everything seam-level; a downstream test crate that needs no facade harness depends on `nexum-runtime-testing` directly.
 - The workspace gains a crate-level dependency rule that a later reader can check mechanically: no crate depends on a crate in its own layer, except that layer 1 crates may depend on layer 0.
+- `nexum-runtime-guards` sits outside this stack and outside the rule above.
+It is a `publish = false` member that holds the guards which read the whole source tree, so each one is a test of the repository and not of the crate it polices.
+Nothing depends on it and it ships no runtime code, so its dev-dependency on `nexum-runtime-metrics` adds no edge to the published graph.

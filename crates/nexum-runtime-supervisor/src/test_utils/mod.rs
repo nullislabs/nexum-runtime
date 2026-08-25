@@ -47,19 +47,3 @@ pub(crate) fn limits_with(
     set(&mut limits);
     limits
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn engine_has_the_component_model_and_fuel_enabled() {
-        let engine = test_wasmtime_engine();
-        wasmtime::component::Component::new(&engine, "(component)")
-            .expect("a trivial component compiles, so the component model is on");
-        let mut store = wasmtime::Store::new(&engine, ());
-        store
-            .set_fuel(1)
-            .expect("fuel accounting is on, so setting fuel succeeds");
-    }
-}

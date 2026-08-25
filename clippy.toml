@@ -42,4 +42,27 @@ disallowed-methods = [
     { path = "tokio::task::spawn", reason = "raw spawning belongs to nexum-tasks: use TaskExecutor::spawn" },
     { path = "tokio::task::spawn_blocking", reason = "raw spawning belongs to nexum-tasks: use TaskExecutor::spawn_blocking" },
     { path = "tokio::task::spawn_local", reason = "raw spawning belongs to nexum-tasks: use TaskExecutor::spawn" },
+    # Every route in wasmtime that yields a `Component`, so the verified bytes
+    # are the compiled bytes (ADR-0025). Both bans below take suppressions;
+    # `nexum-runtime-guards` counts every occurrence in the tree.
+    { path = "wasmtime::component::Component::new", reason = "compiles bytes that nothing verified: use read_verified_component" },
+    { path = "wasmtime::component::Component::from_file", reason = "compiles a file that nothing verified: use read_verified_component" },
+    { path = "wasmtime::component::Component::from_binary", reason = "compiles bytes that nothing verified: use read_verified_component" },
+    { path = "wasmtime::component::Component::deserialize", reason = "loads a precompiled component that nothing verified: use read_verified_component" },
+    { path = "wasmtime::component::Component::deserialize_file", reason = "loads a precompiled component that nothing verified: use read_verified_component" },
+    { path = "wasmtime::component::Component::deserialize_raw", reason = "loads a precompiled component that nothing verified: use read_verified_component" },
+    { path = "wasmtime::CodeBuilder::compile_component", reason = "compiles bytes that nothing verified: use read_verified_component" },
+    # Every string-carrying route to a guest-visible fault: a payload crosses
+    # the WIT boundary verbatim. `nexum-sdk` declares its own `Fault` at a
+    # different resolved path, so guest crates are outside these by
+    # construction. `allow-invalid` because clippy reports a variant
+    # constructor unreachable while linting the crate that defines it, which
+    # fails under `-D warnings`; the ban still fires at every call site.
+    { path = "nexum_runtime_api::bindings::nexum::host::types::Fault::Unsupported", reason = "build it in the error.rs funnel, from the pinned vocabulary", allow-invalid = true },
+    { path = "nexum_runtime_api::bindings::nexum::host::types::Fault::Unavailable", reason = "build it in the error.rs funnel, from the pinned vocabulary", allow-invalid = true },
+    { path = "nexum_runtime_api::bindings::nexum::host::types::Fault::Denied", reason = "build it in the error.rs funnel, from the pinned vocabulary", allow-invalid = true },
+    { path = "nexum_runtime_api::bindings::nexum::host::types::Fault::InvalidInput", reason = "build it in the error.rs funnel, from the pinned vocabulary", allow-invalid = true },
+    { path = "nexum_runtime_api::bindings::nexum::host::types::Fault::Internal", reason = "build it in the error.rs funnel, from the pinned vocabulary", allow-invalid = true },
+    { path = "nexum_runtime_api::bindings::nexum::host::chain::ChainError::Fault", reason = "build it in the error.rs funnel", allow-invalid = true },
+    { path = "nexum_runtime_api::bindings::nexum::host::chain::ChainError::Rpc", reason = "build it in the error.rs funnel", allow-invalid = true },
 ]

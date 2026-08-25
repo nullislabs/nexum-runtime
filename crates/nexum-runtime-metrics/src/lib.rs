@@ -1,10 +1,11 @@
 //! The metric names the runtime emits, described once.
 //!
-//! [`METRICS`] is the single source: [`describe_all`] emits the HELP and
-//! TYPE text from it, and a test scans the emitting crates for
-//! `nexum_runtime_` literals and refuses any that the table does not
-//! carry. A metric name is an operator contract, so adding or renaming one
-//! is a deliberate diff here rather than an incidental string somewhere.
+//! [`METRICS`] is the single source, and [`describe_all`] emits the HELP
+//! and TYPE text from it. A metric name is an operator contract, so adding
+//! or renaming one is a deliberate diff here rather than an incidental
+//! string somewhere. `nexum-runtime-guards` holds the guard that scans the
+//! tree for a name this table does not carry, because that guard reads the
+//! whole workspace and not this crate.
 
 #![forbid(unsafe_code)]
 
@@ -137,69 +138,6 @@ mod tests {
             table_names().len(),
             METRICS.len(),
             "a duplicate name would describe one series twice and hide the other",
-        );
-    }
-
-    /// Scans every crate that emits under the `nexum_runtime_` prefix, the
-    /// same shape as the single-compile-path guard in the digest tests. A
-    /// name reaching an operator without passing through the table is the
-    /// failure mode.
-    #[test]
-    fn every_emitted_name_is_in_the_table_and_every_entry_is_emitted() {
-        let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-        let mut found: BTreeSet<String> = BTreeSet::new();
-        let mut scanned = 0usize;
-        let mut stack = vec![
-            manifest.join("../nexum-runtime/src"),
-            manifest.join("../nexum-runtime-supervisor/src"),
-            manifest.join("../nexum-runtime-wasm/src"),
-            manifest.join("../nexum-runtime-chain/src"),
-            manifest.join("../nexum-runtime-store/src"),
-            manifest.join("../nexum-runtime-logs/src"),
-            manifest.join("../nexum-runtime-http/src"),
-            manifest.join("../nexum-runtime-testing/src"),
-        ];
-        while let Some(dir) = stack.pop() {
-            for entry in std::fs::read_dir(&dir).expect("read the crate source tree") {
-                let path = entry.expect("dir entry").path();
-                if path.is_dir() {
-                    stack.push(path);
-                    continue;
-                }
-                if path.extension().is_none_or(|e| e != "rs") {
-                    continue;
-                }
-                scanned += 1;
-                let src = std::fs::read_to_string(&path).expect("read a source file");
-                for (idx, _) in src.match_indices("\"nexum_runtime_") {
-                    let rest = &src[idx + 1..];
-                    if let Some(end) = rest.find('"') {
-                        found.insert(rest[..end].to_owned());
-                    }
-                }
-            }
-        }
-        assert!(
-            scanned >= 68,
-            "the walk reached only {scanned} files; a shrunken walk loses the \
-             operator contract silently, so re-derive the roots before lowering \
-             this floor",
-        );
-
-        let table = table_names();
-        let missing: Vec<&String> = found
-            .iter()
-            .filter(|n| !table.contains(n.as_str()))
-            .collect();
-        assert!(
-            missing.is_empty(),
-            "emitted but undescribed, add to METRICS: {missing:?}",
-        );
-
-        let unused: Vec<&&str> = table.iter().filter(|n| !found.contains(**n)).collect();
-        assert!(
-            unused.is_empty(),
-            "described but never emitted, remove from METRICS: {unused:?}",
         );
     }
 }

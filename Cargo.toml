@@ -8,6 +8,7 @@ members = [
     "crates/nexum-runtime-api",
     "crates/nexum-runtime-chain",
     "crates/nexum-runtime-config",
+    "crates/nexum-runtime-guards",
     "crates/nexum-runtime-http",
     "crates/nexum-runtime-logs",
     "crates/nexum-runtime-manifest",

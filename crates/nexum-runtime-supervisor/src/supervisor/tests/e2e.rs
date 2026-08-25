@@ -25,7 +25,8 @@ fn e2e_example_component_imports_equal_declared_capabilities() {
         return;
     };
     let engine = test_wasmtime_engine();
-    let component = wasmtime::component::Component::from_file(&engine, &wasm).expect("compile");
+    let (component, _digest) =
+        read_verified_component(&engine, &wasm, DigestPolicy::author(None)).expect("compile");
     let imports: Vec<String> = component
         .component_type()
         .imports(&engine)

@@ -1,4 +1,4 @@
-//! Component digest pinning and verification, plus the compile-path guard.
+//! Component digest pinning and verification.
 
 use super::*;
 
@@ -181,112 +181,23 @@ fn read_verified_component_computes_a_digest_for_unpinned_loads() {
     assert_eq!(actual, ContentDigest::of_bytes(&bytes));
 }
 
-/// A stray `Component::from_file` would reopen the artifact-swap window,
-/// and a compile call outside artifact.rs would bypass digest verification.
-/// The walk covers every crate in the tree, because the compile path is
-/// reachable from `nexum-runtime-wasm` and `nexum-runtime` as well.
+/// The launch config turns on the component model and fuel accounting.
+///
+/// The first half goes through the production path, because that path is now
+/// the only route to a component that clippy leaves open.
 #[test]
-fn no_production_component_from_file_call_remains() {
-    let root = workspace_root();
-    let mut compile_sites = Vec::new();
-    for src in crate_source_roots(&root) {
-        collect_compile_sites(&root, &src, &mut compile_sites);
-    }
-    // Sorted so a second site fails with a stable message; `read_dir` order
-    // is filesystem-defined.
-    compile_sites.sort();
-    assert_eq!(
-        compile_sites,
-        ["crates/nexum-runtime-supervisor/src/supervisor/artifact.rs"],
-        "the only production compile call must live in artifact.rs",
-    );
-}
+fn the_test_engine_compiles_components_and_meters_fuel() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("trivial.wat");
+    std::fs::write(&path, b"(component)").expect("write a trivial component");
 
-/// The `src` of every crate in the tree, found on disk rather than read from
-/// `workspace.members`: cargo adopts a path dependency as a member without a
-/// table entry, so the table under-enumerates. Enumerating nothing means the
-/// walk lost its root rather than that the workspace is clean, so it refuses
-/// instead of passing vacuously; a walk that shrinks past the supervisor also
-/// drops `artifact.rs` and fails the equality above.
-fn crate_source_roots(root: &Path) -> Vec<PathBuf> {
-    let mut roots = Vec::new();
-    collect_source_roots(root, &mut roots);
-    assert!(
-        !roots.is_empty(),
-        "enumerated no crate sources under {}; the walk lost its root",
-        root.display(),
-    );
-    roots
-}
-
-fn collect_source_roots(dir: &Path, roots: &mut Vec<PathBuf>) {
-    let src = dir.join("src");
-    if dir.join("Cargo.toml").is_file() && src.is_dir() {
-        roots.push(src);
-    }
-    for entry in std::fs::read_dir(dir).expect("read a workspace directory") {
-        let path = entry.expect("directory entry").path();
-        if !path.is_dir() {
-            continue;
-        }
-        let name = path
-            .file_name()
-            .expect("directory entry name")
-            .to_string_lossy()
-            .into_owned();
-        // Build output and the dot directories host no crate of ours, and
-        // `src` is walked by the compile-site pass instead.
-        if name == "src" || name == "target" || name.starts_with('.') {
-            continue;
-        }
-        collect_source_roots(&path, roots);
-    }
-}
-
-/// The tree root, two levels above a `crates/<name>` manifest.
-fn workspace_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .ancestors()
-        .nth(2)
-        .expect("the workspace root is two levels above this crate manifest")
-        .to_path_buf()
-}
-
-/// Recurses so a nested module cannot host an unpinned compile path; test
-/// sources are skipped. Sites are workspace-relative, since a bare file name
-/// no longer says which crate it came from.
-fn collect_compile_sites(root: &Path, dir: &Path, sites: &mut Vec<String>) {
-    for entry in std::fs::read_dir(dir).expect("read a crate source directory") {
-        let path = entry.expect("directory entry").path();
-        let name = path
-            .file_name()
-            .expect("source entry name")
-            .to_string_lossy()
-            .into_owned();
-        if name == "tests" || name == "tests.rs" {
-            continue;
-        }
-        if path.is_dir() {
-            collect_compile_sites(root, &path, sites);
-            continue;
-        }
-        if path.extension().and_then(|e| e.to_str()) != Some("rs") {
-            continue;
-        }
-        let src = std::fs::read_to_string(&path).expect("read a crate source file");
-        let site = path
-            .strip_prefix(root)
-            .expect("a walked file lives under the workspace root")
-            .to_string_lossy()
-            .into_owned();
-        assert!(
-            !src.contains("Component::from_file("),
-            "{site} must compile components only via read_verified_component",
-        );
-        if src.contains("compile_component(") {
-            sites.push(site);
-        }
-    }
+    let engine = test_wasmtime_engine();
+    read_verified_component(&engine, &path, DigestPolicy::author(None))
+        .expect("a trivial component compiles, so the component model is on");
+    let mut store = wasmtime::Store::new(&engine, ());
+    store
+        .set_fuel(1)
+        .expect("fuel accounting is on, so setting fuel succeeds");
 }
 
 #[tokio::test]

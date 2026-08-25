@@ -1,5 +1,10 @@
 //! The only place a guest-visible `chain-error` or local-store [`Fault`] is
-//! built. The scan test below enforces that.
+//! built.
+//!
+//! `clippy.toml` bans both types' string-carrying constructors by resolved
+//! path; the six functions below carry the only exemption. The scan at the end
+//! holds what the lint cannot see: each payload is a vocabulary projection,
+//! and the two seam functions stay free functions.
 
 use alloy_primitives::Bytes;
 use alloy_transport::TransportError;
@@ -59,6 +64,10 @@ impl LocalStoreFaultMessage {
 /// The only route from a [`StoreError`] to a guest [`Fault`]. Deliberately
 /// not a `From` impl: `?` would skip the log below, and only that log keeps
 /// the quota value and the backend text for the operator.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "the funnel the fault ban points at"
+)]
 pub(crate) fn store_fault(
     module: impl std::fmt::Display,
     verb: &'static str,
@@ -107,12 +116,20 @@ pub(crate) fn store_fault(
     }
 }
 
+#[expect(
+    clippy::disallowed_methods,
+    reason = "the funnel the fault ban points at"
+)]
 pub(crate) fn method_denied() -> ChainError {
     ChainError::Fault(Fault::Denied(
         ChainFaultMessage::MethodNotPermitted.text().to_owned(),
     ))
 }
 
+#[expect(
+    clippy::disallowed_methods,
+    reason = "the funnel the fault ban points at"
+)]
 pub(crate) fn response_over_cap() -> ChainError {
     ChainError::Fault(Fault::InvalidInput(
         ChainFaultMessage::ResponseOverCap.text().to_owned(),
@@ -122,6 +139,10 @@ pub(crate) fn response_over_cap() -> ChainError {
 /// The only route from a [`PoolError`] to `chain-error`: a structured
 /// JSON-RPC `ErrorResp` becomes [`ChainError::Rpc`] with its code and revert
 /// bytes, everything else a shared [`Fault`].
+#[expect(
+    clippy::disallowed_methods,
+    reason = "the funnel the fault ban points at"
+)]
 pub(crate) fn pool_fault(err: PoolError) -> ChainError {
     match err {
         PoolError::UnknownChain(_) => ChainError::Fault(Fault::Unsupported(
@@ -142,6 +163,10 @@ pub(crate) fn pool_fault(err: PoolError) -> ChainError {
 /// decoded revert bytes, a malformed request is `invalid-input`, everything
 /// else a transport [`Fault`]. The node's message text stays host-side; the
 /// guest classifies on the code and the revert bytes.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "the funnel the fault ban points at"
+)]
 fn classify_rpc(source: &TransportError) -> ChainError {
     // A structured error response (typically an `eth_call` revert) keeps the
     // node's code and revert body so a guest can classify via `decode_revert`.
@@ -172,6 +197,10 @@ fn classify_rpc(source: &TransportError) -> ChainError {
 /// Classify a transport RPC failure: 429 to `rate-limited`, 503 or a dropped
 /// backend to `unavailable`, a timeout status or a typed timeout in the source
 /// chain to `timeout`, else `unavailable`.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "the funnel the fault ban points at"
+)]
 fn transport_fault(source: &TransportError) -> Fault {
     use alloy_transport::TransportErrorKind;
     let unavailable =
@@ -636,22 +665,6 @@ mod tests {
         assert_eq!(msg, ChainFaultMessage::InvalidParams.text());
     }
 
-    fn rust_sources(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
-        let mut out = Vec::new();
-        let mut stack = vec![dir.to_path_buf()];
-        while let Some(dir) = stack.pop() {
-            for entry in std::fs::read_dir(&dir).expect("source dir reads") {
-                let path = entry.expect("dir entry reads").path();
-                if path.is_dir() {
-                    stack.push(path);
-                } else if path.extension().is_some_and(|e| e == "rs") {
-                    out.push(path);
-                }
-            }
-        }
-        out
-    }
-
     /// Text before a `#[cfg(test)] mod`. A single gated item is kept, which
     /// only over-scans.
     fn shipped_region(text: &str) -> &str {
@@ -681,6 +694,15 @@ mod tests {
             .collect()
     }
 
+    /// The shipped half of a file in this crate, squashed.
+    fn shipped_code(name: &str) -> String {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("src")
+            .join(name);
+        let text = std::fs::read_to_string(&path).expect("a named source file of this crate reads");
+        squash(shipped_region(&text))
+    }
+
     const FAULT_PREFIXES: [&str; 5] = [
         "Fault::Unsupported(",
         "Fault::Unavailable(",
@@ -701,118 +723,70 @@ mod tests {
         out
     }
 
-    /// Returns how many sites were checked.
-    fn funnel_constructions(code: &str) -> usize {
-        let mut sites = 0;
+    /// Where a fault may be built is clippy's now. Two properties survive
+    /// because no lint states either, and both are local to this crate.
+    ///
+    /// A payload must project the pinned vocabulary, so no runtime string
+    /// reaches a guest. The two seam functions must stay free functions: a
+    /// `From` impl would let `?` skip the `tracing` call that keeps the quota
+    /// value host-side.
+    ///
+    /// Every prefix must occur, so a scan reading the wrong region fails
+    /// rather than passing over nothing.
+    #[test]
+    fn fault_payloads_project_the_vocabulary_and_the_seams_stay_free_functions() {
+        let funnel = shipped_code("error.rs");
+        let projections = shipped_code("fault.rs");
+
+        // `message:` is the `RpcError` field, a string crossing the boundary.
         for prefix in FAULT_PREFIXES.into_iter().chain(["message:"]) {
-            for rest in occurrences(code, prefix) {
+            let sites = occurrences(&funnel, prefix);
+            assert!(
+                !sites.is_empty(),
+                "the funnel builds no `{prefix}`, so this guard reads the wrong region",
+            );
+            for rest in sites {
                 assert!(
                     rest.starts_with("ChainFaultMessage::")
                         || rest.starts_with("LocalStoreFaultMessage::"),
                     "a fault payload at `{prefix}` is not a vocabulary projection",
                 );
-                sites += 1;
             }
         }
-        sites
-    }
 
-    /// Closes the set over construction sites, not just texts: the pinned
-    /// lists alone cannot see a payload built somewhere else. Outside the
-    /// funnel a string-carrying fault is banned outright, save the pure
-    /// destructures in `fault.rs`.
-    #[test]
-    fn guest_faults_are_constructed_only_in_the_funnel_and_only_from_the_vocabulary() {
-        let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-        let roots = [
-            manifest.join("src"),
-            manifest.join("../nexum-runtime/src"),
-            manifest.join("../nexum-runtime-api/src"),
-            manifest.join("../nexum-runtime-chain/src"),
-            manifest.join("../nexum-runtime-store/src"),
-            manifest.join("../nexum-runtime-logs/src"),
-            manifest.join("../nexum-runtime-http/src"),
-            manifest.join("../nexum-runtime-supervisor/src"),
-            manifest.join("../nexum-runtime-testing/src"),
-        ];
-        let funnel = manifest.join("src").join("error.rs");
-        let projections = manifest.join("src").join("fault.rs");
-        let mut scanned = 0_usize;
-        let mut sites = 0_usize;
-        for path in roots.iter().flat_map(|root| rust_sources(root)) {
-            let text = std::fs::read_to_string(&path).expect("source file reads");
-            let code = squash(shipped_region(&text));
-            scanned += 1;
-            if path == funnel {
-                sites = funnel_constructions(&code);
-                // A `From` impl would let `?` reach the guest while skipping
-                // the operator log in `store_fault`.
+        // Clippy bans the wrapper, not the record, so an `RpcError` built in
+        // another crate and wrapped here would carry node text past both
+        // checks. It has to be built inline.
+        let wrapped = occurrences(&funnel, "ChainError::Rpc(");
+        assert!(
+            !wrapped.is_empty(),
+            "the funnel builds no `ChainError::Rpc(`, so this guard reads the wrong region",
+        );
+        for rest in wrapped {
+            assert!(
+                rest.starts_with("RpcError{"),
+                "an rpc error must be built where its `message:` is checked",
+            );
+        }
+
+        for (seam, source) in [("store_fault", "StoreError"), ("pool_fault", "PoolError")] {
+            assert!(
+                funnel.contains(&format!("fn{seam}(")),
+                "the funnel no longer declares {seam}, so this guard scans nothing",
+            );
+            assert!(
+                !funnel.contains(&format!("From<{source}>")),
+                "{seam} must stay a free function that logs, not a From impl `?` can reach",
+            );
+        }
+
+        for prefix in FAULT_PREFIXES {
+            for rest in occurrences(&projections, prefix) {
                 assert!(
-                    code.contains("StoreError"),
-                    "the funnel no longer names the store seam error, so this guard scans nothing",
+                    rest.starts_with("_)") || rest.starts_with("m)"),
+                    "fault.rs must only destructure a fault, at `{prefix}`",
                 );
-                assert!(
-                    !code.contains("From<StoreError>"),
-                    "the store projection must stay a logging function, not a From impl",
-                );
-                assert!(
-                    code.contains("PoolError"),
-                    "the funnel no longer names the pool error, so this guard scans nothing",
-                );
-                assert!(
-                    !code.contains("From<PoolError>"),
-                    "the pool projection must stay a free function, not a From impl",
-                );
-                continue;
-            }
-            for token in [
-                "ChainError::Fault(",
-                "ChainError::Rpc(",
-                "RpcError{",
-                "Self::Fault(",
-                "Self::Rpc(",
-                "From<StoreError>",
-                "From<PoolError>",
-                "Self::Unsupported(",
-                "Self::Unavailable(",
-                "Self::Denied(",
-                "Self::InvalidInput(",
-                "Self::Internal(",
-            ] {
-                assert!(
-                    !code.contains(token),
-                    "{} builds a guest fault outside the funnel: `{token}`",
-                    path.display(),
-                );
-            }
-            if path == projections {
-                for prefix in FAULT_PREFIXES {
-                    for rest in occurrences(&code, prefix) {
-                        assert!(
-                            rest.starts_with("_)") || rest.starts_with("m)"),
-                            "{} must only destructure a fault, at `{prefix}`",
-                            path.display(),
-                        );
-                    }
-                }
-            } else {
-                for prefix in FAULT_PREFIXES {
-                    assert!(
-                        occurrences(&code, prefix).is_empty(),
-                        "{} builds a string-carrying fault outside the funnel: `{prefix}`",
-                        path.display(),
-                    );
-                }
             }
         }
-        // Above 76 minus the smallest root, so losing any one root fails.
-        assert!(
-            scanned >= 75,
-            "the walk must cover the embedding, the facade, the supervisor, the api crate, and the capability crates, saw {scanned} files"
-        );
-        assert!(
-            sites >= 10,
-            "the funnel holds the construction sites, saw {sites}"
-        );
     }
 }
