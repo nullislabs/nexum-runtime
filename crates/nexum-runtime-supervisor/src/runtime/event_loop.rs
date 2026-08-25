@@ -70,6 +70,15 @@ const TERMINAL_REPORT_GRACE: Duration = Duration::from_secs(1);
 pub(crate) const SOURCE_KIND_BLOCK: &str = "block";
 pub(crate) const SOURCE_KIND_CHAIN_LOG: &str = "chain-log";
 
+/// Pump tasks a stream end is charged to; `unknown` when none died, as when
+/// one ended by returning an exit rather than dying.
+fn dead_task_names(died: &[Arc<str>]) -> String {
+    match died {
+        [] => "unknown".to_owned(),
+        labels => labels.join(", "),
+    }
+}
+
 /// Open one reconnect-aware block-source task per chain, spawned via
 /// `executor` with handles pushed into `tasks` for graceful shutdown.
 pub fn open_block_streams(
@@ -1090,7 +1099,7 @@ pub async fn run<T: RuntimeTypes<State = HostState<T>>, G>(
                     drop(extension_deliveries);
                     // The grace loop above already discarded the dead handle,
                     // so read its label before `shutdown` consumes the set.
-                    let died = tasks.died().join(", ");
+                    let died = dead_task_names(tasks.died());
                     tasks.shutdown().await;
                     warn!(
                         source_kind = stream_kind,
@@ -3112,6 +3121,15 @@ mod tests {
         assert!(
             line.contains("chain-log:1:mod"),
             "the warning names the dead pump: {line}",
+        );
+    }
+
+    #[test]
+    fn dead_task_names_reads_unknown_when_nothing_died() {
+        assert_eq!(dead_task_names(&[]), "unknown");
+        assert_eq!(
+            dead_task_names(&["block:1".into(), "chain-log:1:mod".into()]),
+            "block:1, chain-log:1:mod",
         );
     }
 

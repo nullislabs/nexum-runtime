@@ -8,9 +8,6 @@ use std::task::Poll;
 
 use tracing::debug;
 
-/// Stands in for the label of a handle no [`TaskSet`] took ownership of.
-const UNLABELLED: &str = "unlabelled";
-
 /// A source task's report that its source cannot continue and must not be
 /// reopened.
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -33,32 +30,19 @@ pub enum TaskExit {
     SourceTerminal(SourceTermination),
 }
 
-/// Handle to one spawned task, carrying the name every report of that task
-/// is filed under.
+/// Handle to one spawned task.
 #[derive(Debug)]
-pub struct TaskHandle<T> {
-    inner: tokio::task::JoinHandle<T>,
-    label: Option<Arc<str>>,
-}
+pub struct TaskHandle<T>(pub(crate) tokio::task::JoinHandle<T>);
 
 impl<T> TaskHandle<T> {
-    pub(crate) fn new(inner: tokio::task::JoinHandle<T>) -> Self {
-        Self { inner, label: None }
-    }
-
-    /// Operator-facing name, set when a [`TaskSet`] takes the handle.
-    pub fn label(&self) -> &str {
-        self.label.as_deref().unwrap_or(UNLABELLED)
-    }
-
     /// Request cancellation; the task stops at its next await point.
     pub fn abort(&self) {
-        self.inner.abort();
+        self.0.abort();
     }
 
     /// Wait for the task to finish. `None` when it was aborted or panicked.
     pub async fn join(self) -> Option<T> {
-        self.inner.await.ok()
+        self.0.await.ok()
     }
 }
 
@@ -66,7 +50,7 @@ impl<T> TaskHandle<T> {
 /// a set so every task is observed to finish before the engine returns.
 #[derive(Debug, Default)]
 pub struct TaskSet {
-    handles: Vec<TaskHandle<TaskExit>>,
+    handles: Vec<(Arc<str>, TaskHandle<TaskExit>)>,
     died: Vec<Arc<str>>,
 }
 
@@ -78,9 +62,8 @@ impl TaskSet {
 
     /// Take ownership of a freshly spawned task's handle under `label`, the
     /// name every report of that task carries.
-    pub fn push(&mut self, label: impl Into<Arc<str>>, mut handle: TaskHandle<TaskExit>) {
-        handle.label = Some(label.into());
-        self.handles.push(handle);
+    pub fn push(&mut self, label: impl Into<Arc<str>>, handle: TaskHandle<TaskExit>) {
+        self.handles.push((label.into(), handle));
     }
 
     /// Labels of the tasks that ended without an exit, in the order the set
@@ -94,22 +77,23 @@ impl TaskSet {
     /// panicked or aborted task is discarded rather than yielded, its label
     /// recorded in [`died`](TaskSet::died). Cancel-safe.
     ///
-    /// A panic reaches that discard only under `cargo test`, which forces
-    /// unwind: `panic = "abort"` in both workspace profiles aborts the
-    /// process instead. An abort reaches it in any build.
+    /// Only `cargo test` forces the unwind a panic needs to reach that
+    /// discard; `panic = "abort"` takes the process down in every other
+    /// build. An abort reaches it in any build.
     pub async fn join_next(&mut self) -> TaskExit {
         std::future::poll_fn(|cx| {
             let mut i = 0;
             while i < self.handles.len() {
-                match Pin::new(&mut self.handles[i].inner).poll(cx) {
+                let (_, handle) = &mut self.handles[i];
+                match Pin::new(&mut handle.0).poll(cx) {
                     Poll::Ready(Ok(exit)) => {
                         self.handles.swap_remove(i);
                         return Poll::Ready(exit);
                     }
                     // The swapped-in handle re-polls at the same index.
                     Poll::Ready(Err(_)) => {
-                        let handle = self.handles.swap_remove(i);
-                        self.died.push(handle.label().into());
+                        let (label, _) = self.handles.swap_remove(i);
+                        self.died.push(label);
                     }
                     Poll::Pending => i += 1,
                 }
@@ -123,14 +107,13 @@ impl TaskSet {
     /// to finish. A `None` join (aborted or panicked) is named in the drain
     /// summary's aborted list.
     pub async fn shutdown(mut self) {
-        for handle in &self.handles {
+        for (_, handle) in &self.handles {
             handle.abort();
         }
         let total = self.handles.len();
         let mut clean = 0usize;
         let mut aborted: Vec<Arc<str>> = Vec::new();
-        for handle in self.handles.drain(..) {
-            let label: Arc<str> = handle.label().into();
+        for (label, handle) in self.handles.drain(..) {
             match handle.join().await {
                 Some(_) => clean += 1,
                 None => aborted.push(label),
@@ -151,7 +134,7 @@ impl Drop for TaskSet {
     /// the tasks do not detach and outlive the engine (a bare `JoinHandle`
     /// detaches on drop).
     fn drop(&mut self) {
-        for handle in &self.handles {
+        for (_, handle) in &self.handles {
             handle.abort();
         }
     }
