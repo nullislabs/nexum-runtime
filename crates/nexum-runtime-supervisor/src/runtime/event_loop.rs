@@ -65,6 +65,11 @@ const BULK_PROGRESS_LOG_INTERVAL: Duration = Duration::from_secs(10);
 /// Wait on the task set for a terminal report behind a stream end.
 const TERMINAL_REPORT_GRACE: Duration = Duration::from_secs(1);
 
+// Spelled once so the `source_kind` metric label and the `source_kind` log
+// field cannot drift; the value an alert reports has to find its log lines.
+pub(crate) const SOURCE_KIND_BLOCK: &str = "block";
+pub(crate) const SOURCE_KIND_CHAIN_LOG: &str = "chain-log";
+
 /// Open one reconnect-aware block-source task per chain, spawned via
 /// `executor` with handles pushed into `tasks` for graceful shutdown.
 pub fn open_block_streams(
@@ -152,12 +157,21 @@ async fn reconnecting_block_task(
         match pool.open_block_source(chain).await {
             Ok(mut inner) => {
                 if attempt == 0 {
-                    info!(chain_id, "block source open");
+                    info!(
+                        chain_id,
+                        source_kind = SOURCE_KIND_BLOCK,
+                        "block source open"
+                    );
                 } else {
-                    info!(chain_id, attempt, "block source reopened");
+                    info!(
+                        chain_id,
+                        source_kind = SOURCE_KIND_BLOCK,
+                        attempt,
+                        "block source reopened"
+                    );
                     metrics::counter!(
                         "nexum_runtime_source_reconnects_total",
-                        "source_kind" => "block",
+                        "source_kind" => SOURCE_KIND_BLOCK,
                         "chain_id" => chain_id.to_string(),
                     )
                     .increment(1);
@@ -167,7 +181,11 @@ async fn reconnecting_block_task(
                     if attempt > 0
                         && last_event.is_some_and(|t| now.duration_since(t) >= HEALTHY_WINDOW)
                     {
-                        info!(chain_id, "block source healthy - resetting backoff");
+                        info!(
+                            chain_id,
+                            source_kind = SOURCE_KIND_BLOCK,
+                            "block source healthy - resetting backoff"
+                        );
                         attempt = 0;
                     }
                     // Detect transport-layer reconnects that
@@ -185,8 +203,8 @@ async fn reconnecting_block_task(
                         let gap_s = gap.as_secs();
                         info!(
                             chain_id,
+                            source_kind = SOURCE_KIND_BLOCK,
                             gap_s,
-                            kind = "block",
                             "source gap closed - first event after silence \
                              (likely an alloy-internal transport reconnect)"
                         );
@@ -207,17 +225,30 @@ async fn reconnecting_block_task(
                         return TaskExit::ReceiverGone;
                     }
                 }
-                warn!(chain_id, "block source ended (WebSocket dropped?)");
+                warn!(
+                    chain_id,
+                    source_kind = SOURCE_KIND_BLOCK,
+                    "block source ended (WebSocket dropped?)"
+                );
             }
             Err(err) => {
                 let timed_out = matches!(err, PoolError::Timeout);
-                warn!(chain_id, error = %err, timed_out, "block source open failed");
+                warn!(
+                    chain_id,
+                    source_kind = SOURCE_KIND_BLOCK,
+                    error = %err,
+                    timed_out,
+                    "block source open failed"
+                );
             }
         }
         backoff_pause(&mut attempt, seed, |attempt, backoff_ms| {
             warn!(
                 chain_id,
-                attempt, backoff_ms, "reconnecting block source after backoff",
+                source_kind = SOURCE_KIND_BLOCK,
+                attempt,
+                backoff_ms,
+                "reconnecting block source after backoff",
             );
         })
         .await;
@@ -295,6 +326,7 @@ impl BulkSource<'_> {
                 warn!(
                     module = %self.module,
                     chain_id,
+                    source_kind = SOURCE_KIND_CHAIN_LOG,
                     error = %err,
                     "bulk backfill has no declared log range - falling back to the per-block poller",
                 );
@@ -304,6 +336,7 @@ impl BulkSource<'_> {
         info!(
             module = %self.module,
             chain_id,
+            source_kind = SOURCE_KIND_CHAIN_LOG,
             from,
             handoff,
             chunk_blocks,
@@ -359,6 +392,7 @@ impl BulkSource<'_> {
                         info!(
                             module = %self.module,
                             chain_id,
+                            source_kind = SOURCE_KIND_CHAIN_LOG,
                             chunk_blocks,
                             blocks_remaining = handoff - position,
                             blocks_per_sec = %blocks_per_sec,
@@ -372,6 +406,7 @@ impl BulkSource<'_> {
                         warn!(
                             module = %self.module,
                             chain_id,
+                            source_kind = SOURCE_KIND_CHAIN_LOG,
                             from = position,
                             to,
                             error = %err,
@@ -386,6 +421,7 @@ impl BulkSource<'_> {
                         warn!(
                             module = %self.module,
                             chain_id,
+                            source_kind = SOURCE_KIND_CHAIN_LOG,
                             from = position,
                             to,
                             error = %err,
@@ -402,6 +438,7 @@ impl BulkSource<'_> {
         info!(
             module = %self.module,
             chain_id,
+            source_kind = SOURCE_KIND_CHAIN_LOG,
             handoff,
             blocks = handoff - from,
             elapsed_s = started.elapsed().as_secs(),
@@ -446,6 +483,7 @@ async fn reconnecting_chain_log_task(
                     warn!(
                         module = %module,
                         chain_id,
+                        source_kind = SOURCE_KIND_CHAIN_LOG,
                         error = %err,
                         timed_out,
                         attempt,
@@ -470,6 +508,7 @@ async fn reconnecting_chain_log_task(
                         warn!(
                             module = %module,
                             chain_id,
+                            source_kind = SOURCE_KIND_CHAIN_LOG,
                             tail_block = t.number,
                             timed_out,
                             attempt,
@@ -499,6 +538,7 @@ async fn reconnecting_chain_log_task(
             warn!(
                 module = %module,
                 chain_id,
+                source_kind = SOURCE_KIND_CHAIN_LOG,
                 tail_block,
                 start_block,
                 "event source tail reorged deeper than the revalidation bound - terminal",
@@ -526,6 +566,7 @@ async fn reconnecting_chain_log_task(
             warn!(
                 module = %module,
                 chain_id,
+                source_kind = SOURCE_KIND_CHAIN_LOG,
                 skipped_from = start_block,
                 skipped_to = floor,
                 "event source gap exceeds max_lookback - skipping the oldest missed blocks",
@@ -538,6 +579,7 @@ async fn reconnecting_chain_log_task(
             info!(
                 module = %module,
                 chain_id,
+                source_kind = SOURCE_KIND_CHAIN_LOG,
                 from = start_block,
                 to = head,
                 blocks = head.saturating_sub(start_block),
@@ -587,18 +629,25 @@ async fn reconnecting_chain_log_task(
         match pool.open_event_source(chain, filter.clone(), start_block) {
             Ok(mut inner) => {
                 if attempt == 0 {
-                    info!(module = %module, chain_id, start_block, "event source open");
+                    info!(
+                        module = %module,
+                        chain_id,
+                        source_kind = SOURCE_KIND_CHAIN_LOG,
+                        start_block,
+                        "event source open"
+                    );
                 } else {
                     info!(
                         module = %module,
                         chain_id,
+                        source_kind = SOURCE_KIND_CHAIN_LOG,
                         attempt,
                         start_block,
                         "event source reopened"
                     );
                     metrics::counter!(
                         "nexum_runtime_source_reconnects_total",
-                        "source_kind" => "chain-log",
+                        "source_kind" => SOURCE_KIND_CHAIN_LOG,
                         "chain_id" => chain_id.to_string(),
                         "module" => module.clone(),
                     )
@@ -615,6 +664,7 @@ async fn reconnecting_chain_log_task(
                     warn!(
                         module = %module,
                         chain_id,
+                        source_kind = SOURCE_KIND_CHAIN_LOG,
                         tail_block = t.number,
                         "event source tail reorged while disconnected - retracting its logs",
                     );
@@ -639,6 +689,7 @@ async fn reconnecting_chain_log_task(
                         info!(
                             module = %module,
                             chain_id,
+                            source_kind = SOURCE_KIND_CHAIN_LOG,
                             "event source healthy - resetting backoff"
                         );
                         attempt = 0;
@@ -687,6 +738,7 @@ async fn reconnecting_chain_log_task(
                             warn!(
                                 module = %module,
                                 chain_id,
+                                source_kind = SOURCE_KIND_CHAIN_LOG,
                                 error = %err,
                                 "event source error - reopening"
                             );
@@ -694,12 +746,18 @@ async fn reconnecting_chain_log_task(
                         }
                     }
                 }
-                warn!(module = %module, chain_id, "event source ended - reopening");
+                warn!(
+                    module = %module,
+                    chain_id,
+                    source_kind = SOURCE_KIND_CHAIN_LOG,
+                    "event source ended - reopening"
+                );
             }
             Err(err) => {
                 warn!(
                     module = %module,
                     chain_id,
+                    source_kind = SOURCE_KIND_CHAIN_LOG,
                     error = %err,
                     "event source open failed"
                 );
@@ -709,6 +767,7 @@ async fn reconnecting_chain_log_task(
             warn!(
                 module = %module,
                 chain_id,
+                source_kind = SOURCE_KIND_CHAIN_LOG,
                 attempt,
                 backoff_ms,
                 "reconnecting event source after backoff",
@@ -854,10 +913,15 @@ pub async fn run<T: RuntimeTypes<State = HostState<T>>, G>(
                     timestamp: header.timestamp.saturating_mul(1000),
                 }),
                 Some(Err((chain, err))) => {
-                    warn!(chain_id = chain.id(), error = %err, "block source error - continuing");
+                    warn!(
+                        chain_id = chain.id(),
+                        source_kind = SOURCE_KIND_BLOCK,
+                        error = %err,
+                        "block source error - continuing"
+                    );
                     continue;
                 }
-                None => NextTrigger::StreamEnd("block"),
+                None => NextTrigger::StreamEnd(SOURCE_KIND_BLOCK),
             },
             next = chain_logs.next() => match next {
                 Some((module, chain, ChainLogItem::Log(log), cursor_key)) => {
@@ -868,7 +932,7 @@ pub async fn run<T: RuntimeTypes<State = HostState<T>>, G>(
                 }
                 // A frontier without a cursor key has nothing to commit.
                 Some((_, _, ChainLogItem::Frontier(_), None)) => continue,
-                None => NextTrigger::StreamEnd("chain-log"),
+                None => NextTrigger::StreamEnd(SOURCE_KIND_CHAIN_LOG),
             },
             next = extension_deliveries.next() => match next {
                 Some(delivery) => NextTrigger::Extension(delivery),
@@ -943,7 +1007,7 @@ pub async fn run<T: RuntimeTypes<State = HostState<T>>, G>(
                     end: RunEnd::Shutdown,
                 };
             }
-            NextTrigger::StreamEnd(kind) => {
+            NextTrigger::StreamEnd(stream_kind) => {
                 // A finishing task drops its stream sender before its join
                 // handle resolves, so this end can arrive ahead of the
                 // terminal report behind it: absorb the set's imminent exits
@@ -951,7 +1015,9 @@ pub async fn run<T: RuntimeTypes<State = HostState<T>>, G>(
                 let mut shared: Option<SourceTermination> = None;
                 let mut accounted = false;
                 loop {
-                    if kind == "chain-log" && terminal_chain_log_exits == chain_log_sources {
+                    if stream_kind == SOURCE_KIND_CHAIN_LOG
+                        && terminal_chain_log_exits == chain_log_sources
+                    {
                         accounted = true;
                         break;
                     }
@@ -1013,7 +1079,7 @@ pub async fn run<T: RuntimeTypes<State = HostState<T>>, G>(
                     drop(extension_deliveries);
                     tasks.shutdown().await;
                     warn!(
-                        kind,
+                        source_kind = stream_kind,
                         "reconnect task ended unexpectedly - shutting down for engine restart"
                     );
                     return RunOutcome {
@@ -3035,5 +3101,129 @@ mod tests {
         };
         assert_eq!(term.module, None);
         assert_eq!(term.reason, "endpoint no longer serves chain 1");
+    }
+
+    const TRACING_MACROS: &[&str] = &["info!(", "warn!(", "error!(", "debug!(", "trace!("];
+
+    /// Bodies whose every log line describes one source, so the scan below
+    /// covers a line added later without anyone remembering the field.
+    const SOURCE_TASK_SIGNATURES: &[&str] = &[
+        "async fn reconnecting_block_task(",
+        "async fn reconnecting_chain_log_task(",
+        "async fn backfill(",
+    ];
+
+    /// `src` with string literals and comments blanked to spaces, newlines
+    /// kept, so a search hits code and line numbers still count.
+    fn code_only(src: &str) -> String {
+        let bytes = src.as_bytes();
+        let mut out: Vec<u8> = bytes.to_vec();
+        let blank_to = |out: &mut Vec<u8>, from: usize, to: usize| {
+            for b in &mut out[from..to.min(bytes.len())] {
+                if *b != b'\n' {
+                    *b = b' ';
+                }
+            }
+        };
+        let mut i = 0;
+        while i < bytes.len() {
+            match bytes[i] {
+                b'"' => {
+                    let from = i;
+                    i += 1;
+                    while i < bytes.len() && bytes[i] != b'"' {
+                        i += if bytes[i] == b'\\' { 2 } else { 1 };
+                    }
+                    i = (i + 1).min(bytes.len());
+                    blank_to(&mut out, from, i);
+                }
+                b'/' if bytes.get(i + 1) == Some(&b'/') => {
+                    let from = i;
+                    while i < bytes.len() && bytes[i] != b'\n' {
+                        i += 1;
+                    }
+                    blank_to(&mut out, from, i);
+                }
+                _ => i += 1,
+            }
+        }
+        String::from_utf8(out).expect("blanking keeps the text valid utf-8")
+    }
+
+    /// Range of the first `open`..matching-`close` pair at or after `from`.
+    fn delimited(code: &str, from: usize, open: u8, close: u8) -> (usize, usize) {
+        let bytes = code.as_bytes();
+        let start = from
+            + bytes[from..]
+                .iter()
+                .position(|&b| b == open)
+                .expect("an opening delimiter after the match");
+        let mut depth = 0u32;
+        for (offset, &byte) in bytes[start..].iter().enumerate() {
+            depth += u32::from(byte == open);
+            if byte == close {
+                depth -= 1;
+                if depth == 0 {
+                    return (start, start + offset + 1);
+                }
+            }
+        }
+        panic!("unbalanced delimiter at byte {start}");
+    }
+
+    fn line_of(code: &str, at: usize) -> usize {
+        code[..at].matches('\n').count() + 1
+    }
+
+    #[test]
+    fn every_source_task_log_line_names_its_source_kind() {
+        let files = [
+            ("event_loop.rs", include_str!("event_loop.rs")),
+            ("cursors.rs", include_str!("../supervisor/cursors.rs")),
+        ];
+        for (file, src) in files {
+            let code = code_only(src);
+            let scopes: Vec<(usize, usize)> = if file == "event_loop.rs" {
+                SOURCE_TASK_SIGNATURES
+                    .iter()
+                    .map(|sig| {
+                        let at = code
+                            .find(sig)
+                            .unwrap_or_else(|| panic!("`{sig}` is gone; re-point the scan"));
+                        delimited(&code, at, b'{', b'}')
+                    })
+                    .collect()
+            } else {
+                vec![(0, code.len())]
+            };
+            for (start, end) in scopes {
+                let scope = &code[start..end];
+                let mut seen = 0;
+                for mac in TRACING_MACROS {
+                    for (at, _) in scope.match_indices(mac) {
+                        let (args_from, args_to) = delimited(scope, at, b'(', b')');
+                        assert!(
+                            scope[args_from..args_to].contains("source_kind"),
+                            "{file}:{} logs a source without `source_kind`, so the value \
+                             NexumReconnectStorm reports will not find it",
+                            line_of(&code, start + at),
+                        );
+                        seen += 1;
+                    }
+                }
+                assert!(seen > 0, "{file}: the scan matched no log line at all");
+            }
+            // The field is `source_kind` throughout, matching the metric label.
+            for pattern in ["kind = ", "kind,"] {
+                for (at, _) in code.match_indices(pattern) {
+                    assert_eq!(
+                        code[..at].chars().last(),
+                        Some('_'),
+                        "{file}:{} spells the field `kind`",
+                        line_of(&code, at),
+                    );
+                }
+            }
+        }
     }
 }
