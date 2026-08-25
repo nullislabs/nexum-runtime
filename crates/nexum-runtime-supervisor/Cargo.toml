@@ -65,5 +65,6 @@ serde_json = { workspace = true, features = ["std"] }
 toml.workspace = true
 # `start_paused` reconnect tests advance the backoff clock virtually.
 tokio = { workspace = true, features = ["rt-multi-thread", "test-util"] }
+tracing-subscriber.workspace = true
 wat.workspace = true
 wiremock.workspace = true

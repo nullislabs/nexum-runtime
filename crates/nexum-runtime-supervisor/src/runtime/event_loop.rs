@@ -70,6 +70,15 @@ const TERMINAL_REPORT_GRACE: Duration = Duration::from_secs(1);
 pub(crate) const SOURCE_KIND_BLOCK: &str = "block";
 pub(crate) const SOURCE_KIND_CHAIN_LOG: &str = "chain-log";
 
+/// Pump tasks a stream end is charged to; `unknown` when none died, as when
+/// one ended by returning an exit rather than dying.
+fn dead_task_names(died: &[Arc<str>]) -> String {
+    match died {
+        [] => "unknown".to_owned(),
+        labels => labels.join(", "),
+    }
+}
+
 /// Open one reconnect-aware block-source task per chain, spawned via
 /// `executor` with handles pushed into `tasks` for graceful shutdown.
 pub fn open_block_streams(
@@ -84,7 +93,10 @@ pub fn open_block_streams(
             Result<(Chain, alloy_rpc_types_eth::Header), (Chain, TransportError)>,
         >(RECONNECT_CHANNEL_BUF);
         let pool = pool.clone();
-        tasks.push(executor.spawn(reconnecting_block_task(pool, chain, tx)));
+        tasks.push(
+            format!("{SOURCE_KIND_BLOCK}:{}", chain.id()),
+            executor.spawn(reconnecting_block_task(pool, chain, tx)),
+        );
         let tagged: TaggedBlockStream = Box::pin(receiver_stream(rx));
         streams.push(tagged);
     }
@@ -110,14 +122,22 @@ pub fn open_chain_log_streams(
             initial_cursor: source.initial_cursor,
             max_lookback: source.max_lookback,
         };
-        tasks.push(executor.spawn(reconnecting_chain_log_task(
-            pool,
-            source.module,
-            source.chain,
-            source.filter,
-            resume,
-            tx,
-        )));
+        let label = format!(
+            "{SOURCE_KIND_CHAIN_LOG}:{}:{}",
+            source.chain.id(),
+            source.module
+        );
+        tasks.push(
+            label,
+            executor.spawn(reconnecting_chain_log_task(
+                pool,
+                source.module,
+                source.chain,
+                source.filter,
+                resume,
+                tx,
+            )),
+        );
         let tagged: TaggedChainLogStream = Box::pin(receiver_stream(rx));
         streams.push(tagged);
     }
@@ -1077,9 +1097,13 @@ pub async fn run<T: RuntimeTypes<State = HostState<T>>, G>(
                     drop(blocks);
                     drop(chain_logs);
                     drop(extension_deliveries);
+                    // The grace loop above already discarded the dead handle,
+                    // so read its label before `shutdown` consumes the set.
+                    let died = dead_task_names(tasks.died());
                     tasks.shutdown().await;
                     warn!(
                         source_kind = stream_kind,
+                        task = %died,
                         "reconnect task ended unexpectedly - shutting down for engine restart"
                     );
                     return RunOutcome {
@@ -1180,6 +1204,7 @@ mod tests {
     use alloy_rpc_types_eth::Log;
     use alloy_transport::mock::MockResponse;
     use nexum_tasks::TaskManager;
+    use tracing::instrument::WithSubscriber;
 
     use crate::test_utils::{BootScenario, Booted, MockTypes, mock_components};
     use crate::test_utils::{
@@ -2927,13 +2952,16 @@ mod tests {
         let manager = TaskManager::new();
         let executor = manager.executor();
         let mut tasks = TaskSet::new();
-        tasks.push(executor.spawn(async {
-            TaskExit::SourceTerminal(SourceTermination {
-                module: None,
-                chain_id: 1,
-                reason: "endpoint no longer serves chain 1".to_owned(),
-            })
-        }));
+        tasks.push(
+            "block:1",
+            executor.spawn(async {
+                TaskExit::SourceTerminal(SourceTermination {
+                    module: None,
+                    chain_id: 1,
+                    reason: "endpoint no longer serves chain 1".to_owned(),
+                })
+            }),
+        );
 
         let outcome = tokio::time::timeout(
             Duration::from_secs(10),
@@ -2963,14 +2991,17 @@ mod tests {
         let mut tasks = TaskSet::new();
         let module = module.map(str::to_owned);
         let reason = reason.to_owned();
-        tasks.push(manager.executor().spawn(async move {
-            tokio::time::sleep(Duration::from_millis(10)).await;
-            TaskExit::SourceTerminal(SourceTermination {
-                module,
-                chain_id: 1,
-                reason,
-            })
-        }));
+        tasks.push(
+            "chain-log:1:mod",
+            manager.executor().spawn(async move {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+                TaskExit::SourceTerminal(SourceTermination {
+                    module,
+                    chain_id: 1,
+                    reason,
+                })
+            }),
+        );
         (manager, tasks)
     }
 
@@ -2985,7 +3016,7 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(10)).await;
             TaskExit::ReceiverGone
         });
-        tasks.push(holder);
+        tasks.push("block:1", holder);
         let chain_log_streams: Vec<TaggedChainLogStream> = vec![Box::pin(receiver_stream(rx))];
         let block_streams: Vec<TaggedBlockStream> = vec![Box::pin(futures::stream::pending())];
 
@@ -3054,9 +3085,15 @@ mod tests {
             TaskExit::ReceiverGone
         });
         handle.abort();
-        tasks.push(handle);
+        tasks.push("chain-log:1:mod", handle);
         let chain_log_streams: Vec<TaggedChainLogStream> = vec![Box::pin(receiver_stream(rx))];
 
+        let sink = LogSink::default();
+        let collector = tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::WARN)
+            .with_ansi(false)
+            .with_writer(sink.clone())
+            .finish();
         let outcome = tokio::time::timeout(
             Duration::from_secs(600),
             run(
@@ -3066,7 +3103,8 @@ mod tests {
                 Vec::new(),
                 tasks,
                 std::future::pending::<()>(),
-            ),
+            )
+            .with_subscriber(collector),
         )
         .await
         .expect("run() classifies the end and returns");
@@ -3075,6 +3113,57 @@ mod tests {
             "a dead reconnect task is an unexpected end, not a clean stop: {:?}",
             outcome.end,
         );
+        let logged = sink.text();
+        let line = logged
+            .lines()
+            .find(|line| line.contains("reconnect task ended unexpectedly"))
+            .expect("the unaccounted end warns");
+        assert!(
+            line.contains("chain-log:1:mod"),
+            "the warning names the dead pump: {line}",
+        );
+    }
+
+    #[test]
+    fn dead_task_names_reads_unknown_when_nothing_died() {
+        assert_eq!(dead_task_names(&[]), "unknown");
+        assert_eq!(
+            dead_task_names(&["block:1".into(), "chain-log:1:mod".into()]),
+            "block:1, chain-log:1:mod",
+        );
+    }
+
+    /// Collects the console output of a `with_subscriber` future.
+    #[derive(Clone, Default)]
+    struct LogSink(Arc<std::sync::Mutex<Vec<u8>>>);
+
+    impl LogSink {
+        fn text(&self) -> String {
+            let bytes = self.0.lock().expect("sink is not poisoned").clone();
+            String::from_utf8(bytes).expect("log output is UTF-8")
+        }
+    }
+
+    impl std::io::Write for LogSink {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0
+                .lock()
+                .expect("sink is not poisoned")
+                .extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for LogSink {
+        type Writer = LogSink;
+
+        fn make_writer(&'a self) -> LogSink {
+            self.clone()
+        }
     }
 
     #[tokio::test(start_paused = true)]
