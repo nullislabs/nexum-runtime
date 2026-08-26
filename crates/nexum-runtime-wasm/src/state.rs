@@ -19,8 +19,9 @@ pub struct HostState<T: RuntimeTypes> {
     pub wasi: WasiCtx,
     /// Resource table backing the WASI and wasi:http handles.
     pub table: ResourceTable,
-    /// Wasmtime memory/table/instance resource limits for this store.
-    pub limits: wasmtime::StoreLimits,
+    /// Wasmtime memory/table/instance resource limits for this store, and
+    /// the memory reading taken on the way past them.
+    pub limits: crate::ObservedLimits,
     /// Per-store wasi:http context.
     pub http_ctx: WasiHttpCtx,
     /// Per-module allowlist gate every wasi:http outgoing request

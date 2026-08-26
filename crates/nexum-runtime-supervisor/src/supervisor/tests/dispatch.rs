@@ -343,6 +343,62 @@ fn an_older_delivery_does_not_lower_the_last_delivered_gauge() {
     );
 }
 
+/// Fuel is the spend, not the remainder, and the memory reading is the size
+/// the store reached rather than the ceiling it was allowed.
+#[test]
+fn a_dispatch_records_the_fuel_it_spent_and_the_memory_it_holds() {
+    use crate::test_utils::metrics_util::debugging::DebugValue;
+
+    let Some(wasm) = example_wasm_or_skip() else {
+        return;
+    };
+    let ceilings = PolicyCeilings::default();
+    let (dispatched, samples) = capture_metrics(|| {
+        block_on_current_thread(async {
+            let mut booted = scenario()
+                .wasm(wasm)
+                .module(
+                    TestManifest::new("module-a")
+                        .cap("logging")
+                        .block_trigger(1),
+                )
+                .boot()
+                .await
+                .expect("boot");
+            booted.dispatch_block_on(1).await
+        })
+    });
+    assert_eq!(dispatched, 1);
+
+    let fuel = ceilings.max_fuel_per_dispatch.get() as f64;
+    let hits = samples_named(&samples, "nexum_runtime_module_fuel_consumed");
+    assert_eq!(hits.len(), 1, "one series per module: {samples:?}");
+    assert!(
+        hits[0].has_label("module", "module-a"),
+        "{:?}",
+        hits[0].labels
+    );
+    assert!(
+        matches!(hits[0].value, DebugValue::Gauge(v) if v.0 > 0.0 && v.0 < fuel / 2.0),
+        "one dispatch of the example module spends a small part of {fuel}: {:?}",
+        hits[0].value,
+    );
+
+    let memory = ceilings.max_memory_bytes.get() as f64;
+    let hits = samples_named(&samples, "nexum_runtime_module_memory_bytes");
+    assert_eq!(hits.len(), 1, "one series per module: {samples:?}");
+    assert!(
+        hits[0].has_label("module", "module-a"),
+        "{:?}",
+        hits[0].labels
+    );
+    assert!(
+        matches!(hits[0].value, DebugValue::Gauge(v) if v.0 >= 65_536.0 && v.0 < memory),
+        "the guest holds at least its first page and less than the {memory} ceiling: {:?}",
+        hits[0].value,
+    );
+}
+
 /// A module on chain A receives nothing when a chain-B block arrives, and
 /// vice versa.
 #[tokio::test]

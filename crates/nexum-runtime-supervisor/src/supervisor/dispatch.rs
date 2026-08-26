@@ -12,6 +12,7 @@ use tracing_core::Level;
 use super::Supervisor;
 use super::cursors::{commit_chain_log_cursor, commit_chain_log_frontier};
 use super::lifecycle::{revive_one, sweep};
+use super::load::LoadedModule;
 use crate::bindings::nexum;
 use crate::manifest::Trigger;
 use nexum_primitives::module_id::ModuleId;
@@ -430,8 +431,29 @@ impl<T: RuntimeTypes<State = HostState<T>>> Supervisor<T> {
             "outcome" => <&str>::from(outcome),
         )
         .record(elapsed.as_secs_f64());
+        record_resource_use(module);
         outcome
     }
+}
+
+/// Fuel spent and memory held by the dispatch that just ended; both gauges
+/// hold the last dispatch, so a rarely triggered module reads stale.
+fn record_resource_use<T: RuntimeTypes>(module: &LoadedModule<T>) {
+    let ceiling = module.seed.spec.fuel;
+    // Fails only on an engine without fuel metering, where `refuel` already
+    // dropped the trigger before the guest.
+    if let Ok(remaining) = module.live.store.get_fuel() {
+        metrics::gauge!(
+            "nexum_runtime_module_fuel_consumed",
+            "module" => module.name.clone(),
+        )
+        .set(ceiling.saturating_sub(remaining) as f64);
+    }
+    metrics::gauge!(
+        "nexum_runtime_module_memory_bytes",
+        "module" => module.name.clone(),
+    )
+    .set(module.live.store.data().limits.memory_bytes() as f64);
 }
 
 /// Grants the dispatch its fuel budget; `false` means the trigger never

@@ -103,6 +103,16 @@ pub const METRICS: &[Metric] = &[
         help: "Module traps by fault label.",
     },
     Metric {
+        name: "nexum_runtime_module_fuel_consumed",
+        kind: Kind::Gauge,
+        help: "Fuel the module's last dispatch spent, out of its per-dispatch ceiling.",
+    },
+    Metric {
+        name: "nexum_runtime_module_memory_bytes",
+        kind: Kind::Gauge,
+        help: "Largest linear memory the module holds, as of its last dispatch.",
+    },
+    Metric {
         name: "nexum_runtime_module_poisoned",
         kind: Kind::Gauge,
         help: "Modules quarantined by the poison policy or an unrecoverable event source.",
