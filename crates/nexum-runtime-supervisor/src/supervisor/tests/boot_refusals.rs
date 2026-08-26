@@ -18,11 +18,7 @@ fn a_boot_refusal_increments_the_counter_under_its_parse_class() {
     // Raw TOML: the textual absence of [dependencies] is the fixture.
     let manifest = "[component]\nname = \"example\"\n";
     let (refusal, samples) = capture_metrics(|| {
-        tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .expect("current-thread runtime")
-            .block_on(scenario().module(manifest.to_owned()).expect_refusal())
+        block_on_current_thread(scenario().module(manifest.to_owned()).expect_refusal())
     });
     refusal.variant::<BootRefusal>(|e| {
         matches!(e, BootRefusal::Manifest(ParseError::MissingCapabilities))

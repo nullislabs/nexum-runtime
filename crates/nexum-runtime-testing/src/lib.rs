@@ -22,7 +22,7 @@ pub use alloy_transport::mock::MockResponse;
 pub use builders::Prebuilt;
 pub use clock::ManualClock;
 pub use manifest::{ManifestInput, TestManifest, manifest};
-pub use metrics_capture::{Sample, capture_metrics, samples_named};
+pub use metrics_capture::{Sample, block_on_current_thread, capture_metrics, samples_named};
 pub use rpc::{
     CapturedRpc, FakeNode, MockRpc, linked_block, mocked_pool, rpc_err, rpc_head, rpc_ok, test_hash,
 };
