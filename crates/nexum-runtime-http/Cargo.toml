@@ -26,6 +26,7 @@ wasmtime-wasi.workspace = true
 wasmtime-wasi-http.workspace = true
 
 [dev-dependencies]
-nexum-runtime-testing = { path = "../nexum-runtime-testing" }
+metrics-util.workspace = true
+nexum-runtime-metrics = { path = "../nexum-runtime-metrics", features = ["testing"] }
 nexum-tasks = { path = "../nexum-tasks" }
 tokio = { workspace = true, features = ["io-util", "macros", "rt-multi-thread", "sync"] }

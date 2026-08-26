@@ -30,6 +30,11 @@ pub struct Metric {
     pub help: &'static str,
 }
 
+#[cfg(feature = "testing")]
+mod capture;
+#[cfg(feature = "testing")]
+pub use capture::{Sample, block_on_current_thread, capture_metrics, samples_named};
+
 /// Every metric the runtime emits.
 pub const METRICS: &[Metric] = &[
     Metric {

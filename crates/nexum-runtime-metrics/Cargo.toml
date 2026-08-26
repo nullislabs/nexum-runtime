@@ -10,5 +10,13 @@ description = "The metric registry for the Nexum runtime: every emitted name, it
 [lints]
 workspace = true
 
+[features]
+# The capture harness, beside the table it captures. A crate that asserts on
+# an emitted metric takes this rather than the composed mocks, which reach the
+# whole engine.
+testing = ["dep:metrics-util", "dep:tokio"]
+
 [dependencies]
 metrics.workspace = true
+metrics-util = { workspace = true, optional = true }
+tokio = { workspace = true, features = ["rt"], optional = true }

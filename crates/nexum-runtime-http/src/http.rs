@@ -396,8 +396,8 @@ mod tests {
     use std::time::Duration;
 
     use http_body_util::{Empty, Full};
-    use nexum_runtime_testing::metrics_util::debugging::DebugValue;
-    use nexum_runtime_testing::{Sample, block_on_current_thread, capture_metrics, samples_named};
+    use metrics_util::debugging::DebugValue;
+    use nexum_runtime_metrics::{Sample, block_on_current_thread, capture_metrics, samples_named};
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use wasmtime_wasi_http::p2::types::IncomingResponse;
 

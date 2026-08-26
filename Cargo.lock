@@ -3503,9 +3503,10 @@ dependencies = [
  "http-body-util",
  "ipnet",
  "metrics",
+ "metrics-util",
  "nexum-primitives",
  "nexum-runtime-config",
- "nexum-runtime-testing",
+ "nexum-runtime-metrics",
  "nexum-tasks",
  "strum",
  "tokio",
@@ -3553,6 +3554,8 @@ name = "nexum-runtime-metrics"
 version = "0.1.0"
 dependencies = [
  "metrics",
+ "metrics-util",
+ "tokio",
 ]
 
 [[package]]
@@ -3626,7 +3629,6 @@ dependencies = [
  "alloy-transport",
  "derive_more",
  "futures",
- "metrics",
  "metrics-util",
  "nexum-primitives",
  "nexum-runtime-api",
@@ -3634,6 +3636,7 @@ dependencies = [
  "nexum-runtime-config",
  "nexum-runtime-logs",
  "nexum-runtime-manifest",
+ "nexum-runtime-metrics",
  "nexum-runtime-wasm",
  "nexum-world",
  "parking_lot",
