@@ -343,7 +343,7 @@ Tail one component:
 
 ```bash
 journalctl -u nexum -f --output=json \
-  | jq 'select(.MESSAGE | fromjson? | .fields.module == "twap-monitor")'
+  | jq 'select(.MESSAGE | fromjson? | .module == "twap-monitor")'
 ```
 
 Recover a poisoned component: fix the underlying bug, rebuild the artifact, update the `[component].digest` pin and the entry's `[[modules]].digest` pin, then `sudo systemctl restart nexum`.
