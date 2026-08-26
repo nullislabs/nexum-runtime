@@ -381,6 +381,14 @@ impl<T: RuntimeTypes<State = HostState<T>>> Supervisor<T> {
                 let died_at = start + elapsed;
                 let seed = crate::runtime::restart_policy::jitter_seed(module.name.as_str());
                 let verdict = module.health.record_trap(died_at, poison_policy, seed);
+                // One label for one event: the histogram's outcome and this
+                // counter's kind come from the same variant, so a deadline
+                // cannot read as a bug on one metric and a limit on the other.
+                let outcome = if deadline_hit {
+                    DispatchOutcome::Deadline
+                } else {
+                    DispatchOutcome::Trapped
+                };
                 error!(
                     module = %module.name,
                     chain_id,
@@ -395,7 +403,7 @@ impl<T: RuntimeTypes<State = HostState<T>>> Supervisor<T> {
                 metrics::counter!(
                     "nexum_runtime_module_errors_total",
                     "module" => module.name.clone(),
-                    "error_kind" => "trap",
+                    "error_kind" => <&str>::from(outcome),
                 )
                 .increment(1);
                 // Leave a retrievable panic record on the dead run; the full
@@ -409,11 +417,7 @@ impl<T: RuntimeTypes<State = HostState<T>>> Supervisor<T> {
                 if let Some(recent) = verdict.poisoned {
                     report_poison(&module.name, recent, poison_policy.window, trap.to_string());
                 }
-                if deadline_hit {
-                    DispatchOutcome::Deadline
-                } else {
-                    DispatchOutcome::Trapped
-                }
+                outcome
             }
         };
         // Every outcome that entered the guest contributes a sample: a

@@ -628,6 +628,15 @@ fn a_deadline_hit_records_a_latency_sample_labelled_deadline() {
         latency_outcomes(&samples).contains(&"deadline"),
         "{samples:?}",
     );
+    let errors = samples_named(&samples, "nexum_runtime_module_errors_total");
+    assert!(
+        errors.iter().any(|s| s.has_label("error_kind", "deadline")),
+        "{samples:?}",
+    );
+    assert!(
+        !errors.iter().any(|s| s.has_label("error_kind", "trap")),
+        "a deadline is a limit, not a trap: {samples:?}",
+    );
 }
 
 /// A zero state quota faults the fixture's first store write, which the

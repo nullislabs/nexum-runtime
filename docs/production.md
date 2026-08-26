@@ -190,7 +190,7 @@ With `enabled = false` the recorder is still installed, so call sites stay live,
 | `nexum_runtime_boot_refusals_total` | counter | `error_kind` | Boot refusals by error kind. |
 | `nexum_runtime_dispatch_latency_seconds` | histogram | `module`, `trigger_kind`, `outcome` | Wall-clock seconds to dispatch one trigger, sampled on every dispatch that reached the guest. `outcome` is one of `ok`, `fault`, `trap` and `deadline`, so a p95 read over the bare metric covers the failing dispatches too; sum `outcome` away to read one module's whole distribution, as `NexumDispatchLatency` below does. A trigger dropped before the guest runs records no latency and is counted in `nexum_runtime_dispatch_dropped_total` instead. `outcome` is bounded at those four values, so it multiplies the series count by at most four: each `module`, `trigger_kind` and `outcome` triple carries the eleven buckets plus `+Inf`, `_sum` and `_count`. |
 | `nexum_runtime_dispatch_dropped_total` | counter | `module`, `trigger_kind`, `reason` | Triggers dropped before dispatch. `reason = "rate_limited"` is the per-component dispatch rate limit (`[limits.dispatch]`, default `burst = 256` and `refill_per_sec = 128`). `reason = "shutdown"` is a stop landing mid fan-out: the fan-out follows `[[modules]]` order, so the same trailing modules are skipped at every stop. `reason = "fuel_set_failed"` is the per-dispatch fuel budget failing to apply: the module stays alive and the trigger is skipped. A block is not replayed; an event is, from its cursor. |
-| `nexum_runtime_module_errors_total` | counter | `module`, `error_kind` | Module faults and traps. `error_kind = "trap"` is a wasmtime trap; other values are fault labels. |
+| `nexum_runtime_module_errors_total` | counter | `module`, `error_kind` | Module faults and traps. `error_kind = "trap"` is a wasmtime trap and `"deadline"` is a dispatch cut off at `[limits.dispatch] deadline_secs`; other values are fault labels. The trap and deadline values are the same strings the latency histogram uses for `outcome`, so the two metrics agree about one event. |
 | `nexum_runtime_module_restarts_total` | counter | `module` | Module restart attempts. |
 | `nexum_runtime_module_poisoned` | gauge | `module` | `1` once a module crosses `[limits.poison]` (default 5 failures in 600 s) or its event source reports an unrecoverable condition. Stays `1` until the process restarts. |
 | `nexum_runtime_module_unverified` | gauge | `module` | `1` for a module loaded with neither a `[[modules]].digest` nor a `[component].digest`, so nothing checked its bytes. Set once at boot and never cleared; a pinned module emits no series, so `sum` is the fleet's unverified count. Reaching this state at all needs `require_component_digest = false`, or a single-wasm command-line override. |
@@ -237,6 +237,9 @@ groups:
         annotations:
           summary: "Nexum module {{ $labels.module }} is running unverified; pin its digest in engine.toml"
 
+      # A deadline is a limit doing its job, so it is deliberately not here.
+      # Alert on error_kind="deadline" separately if a module should never
+      # reach one.
       - alert: NexumModuleTraps
         expr: rate(nexum_runtime_module_errors_total{error_kind="trap"}[5m]) > 0
         for: 5m
