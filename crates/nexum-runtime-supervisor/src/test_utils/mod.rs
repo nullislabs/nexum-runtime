@@ -6,12 +6,8 @@
 // cannot build its own fixture has nothing to recover from.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-#[cfg(test)]
-mod json_logs;
 mod scenario;
 
-#[cfg(test)]
-pub(crate) use json_logs::{JsonLogs, json_collector};
 pub use scenario::{BootScenario, Booted, Entry, Refusal};
 
 pub(crate) use nexum_runtime_testing::{
@@ -20,10 +16,10 @@ pub(crate) use nexum_runtime_testing::{
 
 #[cfg(test)]
 pub(crate) use nexum_runtime_testing::{
-    FakeNode, ManualClock, MockRpc, MockStateStore, MockTypes, capture_metrics,
-    example_wasm_or_skip, linked_block, metrics_util, mock_components, mock_components_from,
-    mocked_pool, module_wasm_or_skip, rpc_err, rpc_head, rpc_ok, samples_named, test_hash,
-    workspace_root,
+    FakeNode, JsonLogs, ManualClock, MockRpc, MockStateStore, MockTypes, capture_metrics,
+    example_wasm_or_skip, json_collector, linked_block, metrics_util, mock_components,
+    mock_components_from, mocked_pool, module_wasm_or_skip, rpc_err, rpc_head, rpc_ok,
+    samples_named, test_hash, workspace_root,
 };
 
 #[cfg(test)]

@@ -123,55 +123,46 @@ where
 mod tests {
     use super::*;
 
-    use std::sync::{Arc, Mutex};
+    use nexum_runtime_testing::{JsonLogs, JsonValue, json_collector};
 
-    #[derive(Clone, Default)]
-    struct Sink(Arc<Mutex<Vec<u8>>>);
-
-    impl Sink {
-        fn line(&self) -> serde_json::Value {
-            let bytes = self.0.lock().expect("sink is not poisoned").clone();
-            let text = String::from_utf8(bytes).expect("log output is UTF-8");
-            serde_json::from_str(text.trim()).expect("each line is one JSON object")
-        }
+    /// One span, one event: enough shape for either subscriber to render.
+    fn emit() {
+        let span = tracing::info_span!("dispatch", module = "twap-monitor");
+        let _entered = span.enter();
+        info!(chain_id = 1, "dispatch ok");
     }
 
-    impl std::io::Write for Sink {
-        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-            self.0
-                .lock()
-                .expect("sink is not poisoned")
-                .extend_from_slice(buf);
-            Ok(buf.len())
-        }
-
-        fn flush(&mut self) -> std::io::Result<()> {
-            Ok(())
-        }
-    }
-
-    impl<'a> MakeWriter<'a> for Sink {
-        type Writer = Sink;
-
-        fn make_writer(&'a self) -> Sink {
-            self.clone()
-        }
-    }
-
-    fn render(f: impl FnOnce()) -> serde_json::Value {
-        let sink = Sink::default();
+    fn render(f: impl Fn()) -> JsonValue {
+        let sink = JsonLogs::default();
         let subscriber = json_subscriber(EnvFilter::new("info"), sink.clone());
-        tracing::subscriber::with_default(subscriber, f);
-        sink.line()
+        tracing::subscriber::with_default(subscriber, &f);
+        sink.line("")
+    }
+
+    fn without_timestamp(line: JsonValue) -> JsonValue {
+        let mut line = line;
+        line.as_object_mut()
+            .expect("a line is an object")
+            .remove("timestamp");
+        line
+    }
+
+    #[test]
+    fn the_shared_collector_still_renders_what_the_launcher_ships() {
+        let mirror = JsonLogs::default();
+        tracing::subscriber::with_default(
+            json_collector(mirror.clone(), tracing::Level::INFO),
+            emit,
+        );
+        assert_eq!(
+            without_timestamp(mirror.line("")),
+            without_timestamp(render(emit)),
+        );
     }
 
     #[test]
     fn a_json_line_renders_the_enclosing_span_and_its_fields() {
-        let line = render(|| {
-            let span = tracing::info_span!("dispatch", module = "twap-monitor");
-            let _entered = span.enter();
-            info!(chain_id = 1, "dispatch ok");
-        });
+        let line = render(emit);
         assert_eq!(line["span"]["module"], "twap-monitor");
         assert_eq!(line["span"]["name"], "dispatch");
         assert_eq!(line["chain_id"], 1);

@@ -7,6 +7,7 @@
 
 mod builders;
 mod clock;
+mod json_logs;
 mod manifest;
 mod metrics_capture;
 mod rpc;
@@ -21,6 +22,7 @@ pub use {alloy_json_rpc, metrics_util, tower};
 pub use alloy_transport::mock::MockResponse;
 pub use builders::Prebuilt;
 pub use clock::ManualClock;
+pub use json_logs::{JsonLogs, json_collector};
 pub use manifest::{ManifestInput, TestManifest, manifest};
 pub use metrics_capture::{Sample, capture_metrics, samples_named};
 pub use rpc::{

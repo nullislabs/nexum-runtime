@@ -574,4 +574,11 @@ async fn a_dispatch_renders_its_module_on_the_span() {
     let line = sink.line("dispatch ok");
     assert_eq!(line["span"]["module"], "module-a");
     assert_eq!(line["span"]["name"], "dispatch");
+
+    // The span earns its keep on the lines the guest provokes, which the
+    // dispatch site never sees and so cannot label itself.
+    let guest = sink.line("on chain 1");
+    assert_eq!(guest["channel"], "host_interface");
+    assert_eq!(guest["span"]["module"], "module-a");
+    assert_eq!(guest["span"]["name"], "dispatch");
 }

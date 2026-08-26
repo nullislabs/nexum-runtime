@@ -18,5 +18,5 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 
 [dev-dependencies]
-serde_json = { workspace = true, features = ["std"] }
+nexum-runtime-testing = { path = "../nexum-runtime-testing" }
 tempfile.workspace = true
