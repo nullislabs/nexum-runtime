@@ -75,9 +75,7 @@ enum Refusal {
     Destination,
 }
 
-/// Count one refusal under the shared capability-denial series.
-///
-/// Every label is operator-written or fixed: a host or a URL is guest-chosen,
+/// Every label is fixed or operator-written; a host or a URL is guest-chosen,
 /// so labelling with one would let a module mint series at will.
 fn count_refusal(module: &str, refusal: Refusal) {
     metrics::counter!(
@@ -100,7 +98,11 @@ impl WasiHttpHooks for HttpGate {
             &self.allowlist,
             self.operator_allow.as_deref(),
         ) {
-            count_refusal(&self.module, Refusal::Allowlist);
+            // A URI with no host never reached a policy decision, so it is
+            // not a denial.
+            if matches!(code, ErrorCode::HttpRequestDenied) {
+                count_refusal(&self.module, Refusal::Allowlist);
+            }
             // Log the host only: paths and query strings are
             // guest-supplied and may carry credentials.
             warn!(
@@ -394,6 +396,7 @@ mod tests {
     use std::time::Duration;
 
     use http_body_util::{Empty, Full};
+    use nexum_runtime_testing::metrics_util::debugging::DebugValue;
     use nexum_runtime_testing::{Sample, block_on_current_thread, capture_metrics, samples_named};
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use wasmtime_wasi_http::p2::types::IncomingResponse;
@@ -933,12 +936,17 @@ mod tests {
         );
     }
 
-    /// One denial carrying exactly these three labels: a fourth would be a new
-    /// dimension on an operator-facing series, and a guest-chosen value there
-    /// would let a module mint series at will.
+    /// Exactly these three labels, and exactly one increment: the recorder
+    /// collapses repeats of one key into a single sample, so the label check
+    /// alone would pass a double count.
     fn assert_one_denial(samples: &[Sample], reason: &str) {
         let hits = samples_named(samples, DENIALS);
-        assert_eq!(hits.len(), 1, "one denial recorded: {samples:?}");
+        assert_eq!(hits.len(), 1, "one series recorded: {samples:?}");
+        assert!(
+            matches!(hits[0].value, DebugValue::Counter(1)),
+            "{:?}",
+            hits[0],
+        );
         let mut keys: Vec<&str> = hits[0].labels.iter().map(|(k, _)| k.as_str()).collect();
         keys.sort_unstable();
         assert_eq!(keys, ["capability", "module", "reason"]);
@@ -1009,6 +1017,31 @@ mod tests {
                     .expect("listed and operator-permitted");
                 assert!(resolve(pending).await.is_err());
             });
+        });
+        assert!(samples_named(&samples, DENIALS).is_empty(), "{samples:?}");
+    }
+
+    #[test]
+    fn a_hostless_uri_is_not_counted_as_a_denial() {
+        // `HttpRequestUriInvalid`, not `HttpRequestDenied`: the request named
+        // no host for a policy to exclude, and the docs sell `allowlist` as
+        // a host the policy excludes.
+        let ((), samples) = capture_metrics(|| {
+            let mut gate = HttpGate::new(
+                "test-module",
+                allow(&["api.acme.example"]),
+                None,
+                limits(),
+                vec![],
+                vec![],
+            );
+            let Err(err) = gate.send_request(request("/relative/path"), config()) else {
+                panic!("a hostless URI is refused");
+            };
+            assert!(matches!(
+                err.downcast_ref(),
+                Some(ErrorCode::HttpRequestUriInvalid)
+            ));
         });
         assert!(samples_named(&samples, DENIALS).is_empty(), "{samples:?}");
     }
