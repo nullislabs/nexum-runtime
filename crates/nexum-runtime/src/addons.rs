@@ -111,10 +111,13 @@ fn prometheus_builder() -> Result<PrometheusBuilder, BuildError> {
     )
 }
 
-/// Bound synchronously so a taken port refuses the launch rather than
-/// surfacing as a dead endpoint on a running engine. The returned address is
-/// the bound one, which a `:0` port resolves.
-fn bind(bind_addr: &str) -> Result<(SocketAddr, std::net::TcpListener), PrometheusError> {
+/// Bound and handed to the reactor before the launch continues, so every way
+/// the port can be refused refuses the launch rather than surfacing as a dead
+/// endpoint on a running engine. The returned address is the bound one, which
+/// a `:0` port resolves.
+///
+/// Call from inside the tokio runtime the engine runs on.
+fn bind(bind_addr: &str) -> Result<(SocketAddr, tokio::net::TcpListener), PrometheusError> {
     let addr: SocketAddr = bind_addr
         .parse()
         .map_err(|cause| PrometheusError::BindAddr {
@@ -127,6 +130,8 @@ fn bind(bind_addr: &str) -> Result<(SocketAddr, std::net::TcpListener), Promethe
         .set_nonblocking(true)
         .map_err(|cause| PrometheusError::Listener { addr, cause })?;
     let bound = listener.local_addr().unwrap_or(addr);
+    let listener = tokio::net::TcpListener::from_std(listener)
+        .map_err(|cause| PrometheusError::Listener { addr, cause })?;
     Ok((bound, listener))
 }
 
@@ -189,13 +194,8 @@ impl RuntimeAddOn for PrometheusAddOn {
                 health: ctx.health.clone(),
             });
             ctx.executor.spawn(async move {
-                match tokio::net::TcpListener::from_std(listener) {
-                    Ok(listener) => {
-                        if let Err(err) = axum::serve(listener, app).await {
-                            error!(error = %err, "observability listener stopped");
-                        }
-                    }
-                    Err(err) => error!(error = %err, "observability listener never started"),
+                if let Err(err) = axum::serve(listener, app).await {
+                    error!(error = %err, "observability listener stopped");
                 }
             });
             info!(
@@ -268,6 +268,31 @@ mod tests {
         );
     }
 
+    /// The bind runs before the recorder install, so a taken port refuses the
+    /// launch instead of leaving a running engine with a dead endpoint.
+    #[tokio::test]
+    async fn prometheus_add_on_rejects_a_port_already_in_use() {
+        let (taken, _held) = bind("127.0.0.1:0").expect("an ephemeral loopback port");
+        let mut metrics = MetricsSection::default();
+        metrics.enabled = true;
+        metrics.bind_addr = taken.to_string();
+        let tasks = TaskManager::new();
+        let executor = tasks.executor();
+        let (_publisher, health) = health_channel();
+        let ctx = AddOnsContext {
+            metrics: &metrics,
+            health: &health,
+            executor: &executor,
+        };
+        let err = match PrometheusAddOn.install(&ctx) {
+            Ok(_) => panic!("a taken port must not install"),
+            Err(err) => err,
+        };
+        Refusal::from(crate::error::RuntimeError::AddOn(err)).variant::<PrometheusError>(
+            |e| matches!(e, PrometheusError::Listener { addr, .. } if *addr == taken),
+        );
+    }
+
     fn module(name: &str) -> ModuleId {
         ModuleId::parse(name).expect("a valid module name")
     }
@@ -283,8 +308,6 @@ mod tests {
         let app = probe(health);
         let tasks = TaskManager::new();
         tasks.executor().spawn(async move {
-            let listener =
-                tokio::net::TcpListener::from_std(listener).expect("the reactor takes it");
             axum::serve(listener, app).await.expect("serve");
         });
 
@@ -332,14 +355,30 @@ mod tests {
     }
 
     /// Every alert rule in `docs/production.md` reads this path; owning the
-    /// server must not change what it serves.
+    /// server must not change what it serves, HELP and TYPE included.
     #[tokio::test]
     async fn metrics_still_renders_the_prometheus_exposition() {
+        const NAME: &str = "nexum_runtime_module_restarts_total";
+        let recorder = prometheus_builder()
+            .expect("a non-empty bucket list builds")
+            .build_recorder();
+        let handle = recorder.handle();
+        metrics::with_local_recorder(&recorder, || {
+            nexum_runtime_metrics::describe_all();
+            metrics::counter!(NAME, "module" => "m").increment(2);
+        });
         let (_publisher, health) = health_channel();
-        let (status, body) = get_route(probe(health), "/metrics").await;
+        let app = routes(Probe {
+            metrics: handle,
+            health,
+        });
+
+        let (status, body) = get_route(app, "/metrics").await;
         assert_eq!(status, StatusCode::OK);
+        assert!(body.starts_with("# HELP"), "exposition:\n{body}");
         assert!(
-            body.starts_with("# HELP") || body.is_empty(),
+            body.contains(&format!("# TYPE {NAME} counter"))
+                && body.contains(&format!("{NAME}{{module=\"m\"}} 2")),
             "exposition:\n{body}",
         );
     }

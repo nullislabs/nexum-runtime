@@ -265,13 +265,13 @@ fn default_require_component_digest() -> bool {
     true
 }
 
-/// `[engine.metrics]`. When `enabled`, serves `/metrics` on `bind_addr`
-/// via a Prometheus HTTP exporter. Default disabled.
+/// `[engine.metrics]`. When `enabled`, serves `/metrics`, `/healthz` and
+/// `/readyz` on `bind_addr`. Default disabled.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 #[non_exhaustive]
 pub struct MetricsSection {
-    /// Bind the HTTP listener. False still installs the recorder.
+    /// Bind the observability listener. False still installs the recorder.
     #[serde(default)]
     pub enabled: bool,
     /// IPv4 / IPv6 socket address to bind. Default `127.0.0.1:9100`.

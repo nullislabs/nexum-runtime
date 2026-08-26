@@ -165,7 +165,7 @@ toml = "1"
 # the graph via the hyper stack.
 ipnet = "2"
 
-# Metrics facade + Prometheus exporter (engine `/metrics` listener).
+# Metrics facade + Prometheus recorder behind the engine's `/metrics` route.
 metrics = "0.24"
 # No listener feature: the engine serves the rendered exposition itself.
 metrics-exporter-prometheus = { version = "0.18", default-features = false }

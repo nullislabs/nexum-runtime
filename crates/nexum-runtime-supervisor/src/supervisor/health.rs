@@ -55,18 +55,23 @@ impl HealthWatch {
 impl HealthPublisher {
     /// Publish `states`, rewriting the per-state gauge only when something
     /// moved, so a quiet engine records nothing per trigger.
+    ///
+    /// The gauge writes stay outside the closure: it runs under the watch's
+    /// write lock, which every probe read waits on.
     pub fn publish(&self, states: impl IntoIterator<Item = (ModuleId, ModuleState)>) {
         let next = HealthSnapshot {
             modules: states.into_iter().collect(),
         };
-        self.0.send_if_modified(|current| {
+        let moved = self.0.send_if_modified(|current| {
             if *current == next {
                 return false;
             }
             *current = next;
-            report_states(current);
             true
         });
+        if moved {
+            report_states(&self.0.borrow());
+        }
     }
 }
 
@@ -142,6 +147,38 @@ mod tests {
         let snapshot = snapshot(&[("zulu", ModuleState::Alive), ("alpha", ModuleState::Dead)]);
         let names: Vec<&str> = snapshot.modules().map(|(name, _)| name.as_str()).collect();
         assert_eq!(names, ["zulu", "alpha"]);
+    }
+
+    /// A transition that left `alive` at `1` would show one module in two
+    /// states at once, which is what the operator reads the gauge for.
+    #[test]
+    fn a_transition_clears_the_state_it_left() {
+        use crate::test_utils::metrics_util::debugging::DebugValue;
+        use crate::test_utils::{capture_metrics, samples_named};
+
+        let ((), samples) = capture_metrics(|| {
+            let (publisher, _watch) = health_channel();
+            publisher.publish(std::iter::once((module("only"), ModuleState::Alive)));
+            publisher.publish(std::iter::once((module("only"), ModuleState::Poisoned)));
+        });
+        let series = samples_named(&samples, "nexum_runtime_module_state");
+        assert_eq!(series.len(), 4, "one series per state: {samples:?}");
+        for (state, expected) in [
+            ("alive", 0.0),
+            ("backoff", 0.0),
+            ("dead", 0.0),
+            ("poisoned", 1.0),
+        ] {
+            let hit = series
+                .iter()
+                .find(|s| s.has_label("state", state))
+                .unwrap_or_else(|| panic!("a {state} series: {samples:?}"));
+            assert!(
+                hit.has_label("module", "only")
+                    && matches!(hit.value, DebugValue::Gauge(v) if v.0 == expected),
+                "{state} is not {expected}: {hit:?}",
+            );
+        }
     }
 
     #[test]

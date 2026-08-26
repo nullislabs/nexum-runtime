@@ -182,6 +182,7 @@ A journald source that parses the JSON `message` field and routes on `level` is 
 
 `[engine.metrics] enabled = true` binds one listener on `bind_addr` serving `/metrics`, `/healthz` and `/readyz`.
 Always bind loopback and never `0.0.0.0`: Prometheus scrapes over the loopback or the container network.
+A Kubernetes `httpGet` probe is the one case that cannot, and Probes below says what it costs.
 The bare `nexum` binary registers the recorder itself, through the `CoreRuntime` preset.
 With `enabled = false` the recorder is still installed, so call sites stay live, but no listener binds and no sample or probe answer is readable.
 An address already in use refuses the launch rather than leaving a running engine with a dead endpoint.
@@ -216,6 +217,9 @@ An address already in use refuses the launch rather than leaving a running engin
 A module in backoff, a dead module and a quarantined one are all undispatchable, but one of them among several must not pull an engine still serving the rest out of rotation.
 Its body carries the per-module detail the aggregate flattens, one `name: state` line per module under a `ready:` line, so an operator sees which module is in backoff or quarantine without reading logs.
 Before the supervisor has booted, `/readyz` answers `503` with no module lines, which is how a probe tells starting apart from degraded.
+
+The kubelet dials the pod address, not the container's loopback, so the `httpGet` probes below need `bind_addr` on the pod interface and a `NetworkPolicy` holding the port to the scraper.
+An `exec` probe curling `127.0.0.1` keeps the loopback bind instead, at the cost of a shell and a client in the image.
 
 ```yaml
 livenessProbe:

@@ -1241,6 +1241,34 @@ mod tests {
     /// Virtual poll cadence; `start_paused` advances through it instantly.
     const POLL: Duration = Duration::from_millis(50);
 
+    /// The `reason` values are an alert expression, so a renamed variant
+    /// stops the alert firing rather than failing to compile.
+    #[test]
+    fn every_run_end_carries_its_snake_case_reason() {
+        let labels: Vec<&str> = [
+            RunEnd::Shutdown,
+            RunEnd::StreamEnded,
+            RunEnd::NothingLive,
+            RunEnd::SourceTerminal(SourceTermination {
+                module: None,
+                chain_id: 1,
+                reason: String::new(),
+            }),
+        ]
+        .iter()
+        .map(<&str>::from)
+        .collect();
+        assert_eq!(
+            labels,
+            [
+                "shutdown",
+                "stream_ended",
+                "nothing_live",
+                "source_terminal"
+            ],
+        );
+    }
+
     /// A zero-module supervisor booted through the real boot path.
     async fn boot_mock_supervisor() -> Booted<MockTypes> {
         BootScenario::over(mock_components())
