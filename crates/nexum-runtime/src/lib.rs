@@ -34,8 +34,9 @@ pub use nexum_runtime_supervisor::error;
 /// each, and routes triggers.
 pub mod supervisor {
     pub use nexum_runtime_supervisor::supervisor::{
-        BootEnv, ConfiguredChains, EventSource, SourcePlan, Supervisor, Viability,
-        WasiClockOverride, build_linker,
+        BootEnv, ConfiguredChains, EventSource, HealthPublisher, HealthSnapshot, HealthWatch,
+        ModuleState, SourcePlan, Supervisor, Viability, WasiClockOverride, build_linker,
+        health_channel,
     };
 }
 

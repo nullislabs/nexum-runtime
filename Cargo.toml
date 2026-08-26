@@ -167,7 +167,8 @@ ipnet = "2"
 
 # Metrics facade + Prometheus exporter (engine `/metrics` listener).
 metrics = "0.24"
-metrics-exporter-prometheus = { version = "0.18", default-features = false, features = ["http-listener"] }
+# No listener feature: the engine serves the rendered exposition itself.
+metrics-exporter-prometheus = { version = "0.18", default-features = false }
 # Recording recorder for the test harness: a scoped recorder lets a test
 # assert that a counter fired with the labels it claims, so a "counted"
 # done-condition is checkable rather than satisfied by an unreachable call.
@@ -185,7 +186,8 @@ redb = "4"
 # Misc engine host deps.
 url = "2"
 
-# HTTP server for test tooling.
+# The engine's observability listener: one server for /metrics, /healthz
+# and /readyz.
 axum = "0.8"
 
 # Must resolve with what `alloy-primitives` re-exports, or `const_hex::FromHexError` becomes two types.

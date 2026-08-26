@@ -17,9 +17,6 @@ fail() {
     status=1
 }
 
-# Reserved with no inheritor on purpose; #147 owns the decision.
-EXEMPT="axum"
-
 INHERITS='(\.workspace[[:space:]]*=[[:space:]]*true|=[[:space:]]*\{[^}]*workspace[[:space:]]*=[[:space:]]*true)'
 
 mapfile -t members < <(git ls-files '*Cargo.toml' | grep -vx 'Cargo.toml')
@@ -51,14 +48,9 @@ fi
 echo "workspace-deps-lint: ${#keys[@]} workspace dependencies, ${#members[@]} member manifests"
 for key in "${keys[@]}"; do
     mapfile -t inheritors < <(grep -lE "^[[:space:]]*${key}[[:space:]]*${INHERITS}" "${members[@]}" || true)
-    case " $EXEMPT " in
-    *" $key "*) ;;
-    *)
-        if [ "${#inheritors[@]}" -eq 0 ]; then
-            fail "no member inherits [workspace.dependencies] $key"
-        fi
-        ;;
-    esac
+    if [ "${#inheritors[@]}" -eq 0 ]; then
+        fail "no member inherits [workspace.dependencies] $key"
+    fi
     for member in "${inheritors[@]}"; do
         case "$member" in
         modules/*) fail "$member inherits $key from [workspace.dependencies]; a guest module declares its external dependencies literally" ;;

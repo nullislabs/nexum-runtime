@@ -180,10 +180,11 @@ A journald source that parses the JSON `message` field and routes on `level` is 
 
 ## 6. Metrics
 
-`/metrics` binds when `[engine.metrics] enabled = true`.
+`[engine.metrics] enabled = true` binds one listener on `bind_addr` serving `/metrics`, `/healthz` and `/readyz`.
 Always bind loopback and never `0.0.0.0`: Prometheus scrapes over the loopback or the container network.
-The bare `nexum` binary registers the exporter itself, through the `CoreRuntime` preset.
-With `enabled = false` the recorder is still installed, so call sites stay live, but no listener binds and no sample is readable.
+The bare `nexum` binary registers the recorder itself, through the `CoreRuntime` preset.
+With `enabled = false` the recorder is still installed, so call sites stay live, but no listener binds and no sample or probe answer is readable.
+An address already in use refuses the launch rather than leaving a running engine with a dead endpoint.
 
 | Metric | Type | Labels | Meaning |
 |---|---|---|---|
@@ -193,8 +194,10 @@ With `enabled = false` the recorder is still installed, so call sites stay live,
 | `nexum_runtime_module_errors_total` | counter | `module`, `error_kind` | Module faults and traps. `error_kind = "trap"` is a wasmtime trap and `"deadline"` is a dispatch cut off at `[limits.dispatch] deadline_secs`; other values are fault labels. The trap and deadline values are the same strings the latency histogram uses for `outcome`, so the two metrics agree about one event. |
 | `nexum_runtime_module_restarts_total` | counter | `module` | Module restart attempts. |
 | `nexum_runtime_module_poisoned` | gauge | `module` | `1` once a module crosses `[limits.poison]` (default 5 failures in 600 s) or its event source reports an unrecoverable condition. Stays `1` until the process restarts. |
+| `nexum_runtime_module_state` | gauge | `module`, `state` | The module's lifecycle state, `1` on the state it is in and `0` on the other three. `state` is one of `alive`, `backoff`, `dead` and `poisoned`, so each module costs four series. `alive` is the dispatchable one and the one `/readyz` counts; `backoff` is a module awaiting its scheduled restart, `dead` a module whose boot-time `init` failed, and `poisoned` a quarantined one. `nexum_runtime_module_poisoned` stays as its own series so the `NexumModulePoisoned` alert below keeps reading one metric. |
 | `nexum_runtime_module_unverified` | gauge | `module` | `1` for a module loaded with neither a `[[modules]].digest` nor a `[component].digest`, so nothing checked its bytes. Set once at boot and never cleared; a pinned module emits no series, so `sum` is the fleet's unverified count. Reaching this state at all needs `require_component_digest = false`, or a single-wasm command-line override. |
 | `nexum_runtime_capability_denials_total` | counter | `capability`, `reason`, `module` | Capability requests the host refused. `capability = "http"` is the outbound gate. `reason = "allowlist"` is a host outside the effective allowlist, which is the intersection of `[dependencies.http].hosts` and `[policy.component.<id>].http_allow`. `reason = "destination"` is a target that is, or resolves onto, an address the host will not reach: a default-refused range such as loopback, RFC 1918 or link-local, or a `[policy].http_deny` range. Every label is host-side, so a module cannot mint series by varying the host it asks for. A rate here is a module asking for what the manifest and the operator policy do not grant. |
+| `nexum_runtime_run_end_total` | counter | `reason` | Why the event loop returned, counted once per run. `shutdown` and `nothing_live` are clean stops. `source_terminal` is a shared source reporting an unrecoverable condition. `stream_ended` is a source pump that panicked or was aborted, which is the abnormal one: alert on it. |
 | `nexum_runtime_chain_request_total` | counter | `chain_id`, `method`, `outcome` | Every `chain::request`. A method outside the read surface is counted as `method="<denied>"` with `outcome="err"`. A request for a chain outside `[chains]` is counted as `chain_id="unconfigured"`, which bounds the series set to the configured chains plus one and shows that a module is requesting chains the operator has not configured. The `outcome="err"` rate is the RPC-degraded signal. |
 | `nexum_runtime_chain_response_capped_total` | counter | `chain_id`, `method` | Responses rejected for exceeding `[limits.chain] response_body_max_bytes` (default 1 MiB). |
 | `nexum_runtime_source_reconnects_total` | counter | `source_kind`, `chain_id`, `module` | Source reconnects. `source_kind="block"` is per chain; `source_kind="chain-log"` also carries `module`. Both source tasks carry the same value in a `source_kind` log field, so the value `NexumReconnectStorm` reports greps the logs. |
@@ -204,6 +207,22 @@ With `enabled = false` the recorder is still installed, so call sites stay live,
 | `nexum_runtime_log_records_filtered_total` | counter | `module`, `channel` | Module log records dropped by the `[policy]` log filter, which is an operator choice rather than a loss. A record kept out of the console but not out of retention is not counted here. |
 
 `crates/nexum-runtime-metrics/src/lib.rs` is the single source of the name set, and a test refuses any emitted name the table does not carry.
+
+### Probes
+
+`/healthz` answers `200` for as long as the process serves at all, so it is the liveness probe: a wedged process stops answering, and that is the condition a restart fixes.
+
+`/readyz` answers `200` when at least one module is dispatchable and `503` otherwise, so it is the readiness probe.
+A module in backoff, a dead module and a quarantined one are all undispatchable, but one of them among several must not pull an engine still serving the rest out of rotation.
+Its body carries the per-module detail the aggregate flattens, one `name: state` line per module under a `ready:` line, so an operator sees which module is in backoff or quarantine without reading logs.
+Before the supervisor has booted, `/readyz` answers `503` with no module lines, which is how a probe tells starting apart from degraded.
+
+```yaml
+livenessProbe:
+  httpGet: { path: /healthz, port: 9100 }
+readinessProbe:
+  httpGet: { path: /readyz, port: 9100 }
+```
 
 Prometheus scrape:
 
@@ -230,6 +249,14 @@ groups:
         labels: { severity: page }
         annotations:
           summary: "Nexum module {{ $labels.module }} is poisoned"
+
+      # A clean stop counts `shutdown` or `nothing_live`, and this end still
+      # exits zero, so the metric is the only signal.
+      - alert: NexumEventLoopDied
+        expr: increase(nexum_runtime_run_end_total{reason="stream_ended"}[10m]) > 0
+        labels: { severity: page }
+        annotations:
+          summary: "Nexum event loop ended on a dead source pump; restart the engine"
 
       - alert: NexumModuleUnverified
         expr: nexum_runtime_module_unverified > 0

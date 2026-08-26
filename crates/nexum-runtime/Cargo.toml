@@ -60,9 +60,11 @@ tracing.workspace = true
 # the two WIT edges are the only place a generated severity enum appears.
 tracing-core.workspace = true
 
-# Prometheus exporter add-on: installs the recorder + binds the
-# `/metrics` HTTP listener.
+# Prometheus recorder behind the observability add-on; the add-on renders
+# its handle rather than letting the exporter bind its own listener.
 metrics-exporter-prometheus.workspace = true
+# The observability listener: /metrics, /healthz and /readyz on one port.
+axum.workspace = true
 
 # Re-exported at the crate root; the event loop drives `Provider`.
 alloy-provider = { workspace = true, features = ["ws", "ipc", "pubsub", "reqwest"] }
@@ -107,4 +109,6 @@ tokio = { workspace = true, features = ["rt-multi-thread", "test-util"] }
 anyhow.workspace = true
 metrics.workspace = true
 tempfile.workspace = true
+# `oneshot` drives the observability routes without binding a port.
+tower = { workspace = true, features = ["util"] }
 tracing-subscriber.workspace = true

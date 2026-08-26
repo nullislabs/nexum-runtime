@@ -5,12 +5,15 @@ mod admission;
 mod artifact;
 mod cursors;
 mod dispatch;
+mod health;
 mod lifecycle;
 pub(crate) mod load;
 pub(crate) mod prepass;
 mod sources;
 mod store;
 
+pub use health::{HealthPublisher, HealthSnapshot, HealthWatch, health_channel};
+pub use lifecycle::ModuleState;
 pub use nexum_runtime_api::WasiClockOverride;
 pub use prepass::ConfiguredChains;
 pub use sources::{EventSource, SourcePlan, Viability};
@@ -53,6 +56,8 @@ pub struct Supervisor<T: RuntimeTypes> {
     /// Once fired, the dispatch fan-out halts between guest calls, so the
     /// shutdown drain covers at most one in-flight call.
     stop: Option<Shutdown>,
+    /// Absent for an embedder that never asked for a probe surface.
+    health: Option<HealthPublisher>,
 }
 
 /// Boot inputs derived from [`EngineConfig`], bundled once at the call site.
@@ -157,6 +162,7 @@ impl<T: RuntimeTypes> Supervisor<T> {
                 chain_log_cursors: ChainLogCursors::default(),
                 delivered_frontier: BTreeMap::new(),
                 stop: None,
+                health: None,
             })
         }
         .await;
@@ -168,6 +174,27 @@ impl<T: RuntimeTypes> Supervisor<T> {
     /// block does not.
     pub fn stop_on(&mut self, stop: Shutdown) {
         self.stop = Some(stop);
+    }
+
+    /// Bind the write side of a [`health_channel`], whose read side answers
+    /// the readiness probe.
+    pub fn publish_health_to(&mut self, publisher: HealthPublisher) {
+        self.health = Some(publisher);
+    }
+
+    /// Publish the current per-module state.
+    ///
+    /// Lifecycle transitions happen only inside a dispatch or a source exit,
+    /// so the event loop calling this once per iteration observes every one.
+    pub fn publish_health(&self) {
+        let Some(publisher) = &self.health else {
+            return;
+        };
+        publisher.publish(
+            self.modules
+                .iter()
+                .map(|m| (m.name.clone(), m.health.state())),
+        );
     }
 
     fn stop_requested(&self) -> bool {
@@ -265,6 +292,7 @@ fn assemble<T: RuntimeTypes>(
         chain_log_cursors: ChainLogCursors::default(),
         delivered_frontier: BTreeMap::new(),
         stop: None,
+        health: None,
     }
 }
 

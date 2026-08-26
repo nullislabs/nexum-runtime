@@ -164,11 +164,17 @@ impl<T: RuntimeTypes<State = HostState<T>>> AssembledRuntime<T> {
             config: engine_cfg,
         } = ctx;
 
+        let executor = tasks.executor();
+        // The read side reaches the probe before the supervisor exists, so a
+        // scrape during boot reads not-ready rather than failing to connect.
+        let (health_publisher, health_watch) = supervisor::health_channel();
         // Install cross-cutting add-ons before the engine boots so any metric
         // recorder is live for the whole run. The handles move into the
         // returned handle and drop once the event loop joins.
         let addons_ctx = AddOnsContext {
             metrics: &engine_cfg.engine.metrics,
+            health: &health_watch,
+            executor: &executor,
         };
         let add_on_handles = add_ons
             .iter()
@@ -273,7 +279,6 @@ impl<T: RuntimeTypes<State = HostState<T>>> AssembledRuntime<T> {
         // panic) fires shutdown via the critical-task path. It also awaits
         // shutdown itself so a programmatic shutdown or a handle drop winds
         // it down rather than leaking it.
-        let executor = tasks.executor();
         let mut listener_signal = tasks.subscribe();
         let mut fallback_signal = tasks.subscribe();
         executor.spawn_critical("os-signal-listener", async move {
@@ -352,6 +357,7 @@ impl<T: RuntimeTypes<State = HostState<T>>> AssembledRuntime<T> {
         let event_loop = executor.spawn_graceful(move |graceful| async move {
             let mut supervisor = supervisor; // rebind as mut: the dispatch calls below take &mut self
             supervisor.stop_on(stop);
+            supervisor.publish_health_to(health_publisher);
             let outcome = event_loop::run(
                 &mut supervisor,
                 block_streams,

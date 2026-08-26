@@ -19,6 +19,22 @@ use nexum_primitives::module_id::ModuleId;
 use nexum_runtime_api::RuntimeTypes;
 use nexum_runtime_wasm::HostState;
 
+/// A module's dispatch eligibility, narrowed for an operator probe: the
+/// backoff deadline the supervisor schedules against stays internal.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, strum::IntoStaticStr, strum::VariantArray)]
+#[strum(serialize_all = "snake_case")]
+#[non_exhaustive]
+pub enum ModuleState {
+    /// Dispatchable.
+    Alive,
+    /// Not dispatchable; a restart is scheduled.
+    Backoff,
+    /// Not dispatchable; no restart is scheduled.
+    Dead,
+    /// Not dispatchable until an operator restarts the engine.
+    Poisoned,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum LifecycleState {
     /// Callable; the failure count beside it may still be nonzero.
@@ -80,6 +96,15 @@ impl Health {
 
     pub(super) fn is_poisoned(&self) -> bool {
         matches!(self.state, LifecycleState::Poisoned)
+    }
+
+    pub(super) fn state(&self) -> ModuleState {
+        match self.state {
+            LifecycleState::Alive => ModuleState::Alive,
+            LifecycleState::Backoff { .. } => ModuleState::Backoff,
+            LifecycleState::Dead => ModuleState::Dead,
+            LifecycleState::Poisoned => ModuleState::Poisoned,
+        }
     }
 
     pub(super) fn due_restart(&self, now: Instant) -> bool {
@@ -309,6 +334,19 @@ mod health_tests {
         assert!(!health.is_poisoned());
         assert!(!health.due_restart(t0 + secs(3600)));
         assert_eq!(health.failure_count(), 0);
+    }
+
+    #[test]
+    fn every_lifecycle_state_narrows_to_its_probe_state() {
+        let t0 = Instant::now();
+        assert_eq!(Health::alive().state(), ModuleState::Alive);
+        assert_eq!(Health::dead().state(), ModuleState::Dead);
+        let mut backoff = Health::alive();
+        backoff.record_trap(t0, policy(9, 600), SEED);
+        assert_eq!(backoff.state(), ModuleState::Backoff);
+        let mut poisoned = Health::alive();
+        poisoned.poison();
+        assert_eq!(poisoned.state(), ModuleState::Poisoned);
     }
 
     #[test]
