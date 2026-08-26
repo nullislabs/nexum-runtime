@@ -113,9 +113,19 @@ pub const METRICS: &[Metric] = &[
         help: "Module restarts after a trap.",
     },
     Metric {
+        name: "nexum_runtime_module_state",
+        kind: Kind::Gauge,
+        help: "Per-module lifecycle state: 1 on the module's current state and 0 on the other three.",
+    },
+    Metric {
         name: "nexum_runtime_module_unverified",
         kind: Kind::Gauge,
         help: "Modules loaded with neither an operator nor an author digest pin.",
+    },
+    Metric {
+        name: "nexum_runtime_run_end_total",
+        kind: Kind::Counter,
+        help: "Event-loop exits by reason; \"stream_ended\" is a source pump that panicked or was aborted.",
     },
     Metric {
         name: "nexum_runtime_source_reconnects_total",

@@ -822,7 +822,8 @@ pub type TaggedChainLogStream =
     std::pin::Pin<Box<dyn futures::Stream<Item = TaggedChainLog> + Send>>;
 
 /// Why [`run`] returned.
-#[derive(Debug)]
+#[derive(Debug, strum::IntoStaticStr)]
+#[strum(serialize_all = "snake_case")]
 pub enum RunEnd {
     /// The `shutdown` future resolved; a clean stop.
     Shutdown,
@@ -846,6 +847,24 @@ pub struct RunOutcome {
     pub dispatched_events: u64,
     /// Why the loop returned.
     pub end: RunEnd,
+}
+
+/// Counts the end under its `reason` label, so an abnormal end is readable
+/// from a scrape and not only from a log line, and publishes the state the
+/// exit path reached after the loop's last top-of-iteration publication.
+fn outcome<T: RuntimeTypes>(
+    supervisor: &Supervisor<T>,
+    dispatched_blocks: u64,
+    dispatched_events: u64,
+    end: RunEnd,
+) -> RunOutcome {
+    supervisor.publish_health();
+    metrics::counter!("nexum_runtime_run_end_total", "reason" => <&str>::from(&end)).increment(1);
+    RunOutcome {
+        dispatched_blocks,
+        dispatched_events,
+        end,
+    }
 }
 
 /// Drive the supervisor with triggers until `shutdown` resolves, watching
@@ -900,6 +919,9 @@ pub async fn run<T: RuntimeTypes<State = HostState<T>>, G>(
     let mut terminal_chain_log_exits: usize = 0;
     let started = Instant::now();
     loop {
+        // Before the select, so the boot state is published at once and every
+        // later transition lands the iteration after the dispatch that made it.
+        supervisor.publish_health();
         // Phase 1: pick the next trigger OR observe shutdown. The
         // dispatch itself happens in phase 2 (outside the select)
         // so an in-flight wasmtime call never gets cancelled by a
@@ -994,11 +1016,12 @@ pub async fn run<T: RuntimeTypes<State = HostState<T>>, G>(
                         reason = %term.reason,
                         "shared source terminal - engine exiting",
                     );
-                    return RunOutcome {
+                    return outcome(
+                        supervisor,
                         dispatched_blocks,
                         dispatched_events,
-                        end: RunEnd::SourceTerminal(term),
-                    };
+                        RunEnd::SourceTerminal(term),
+                    );
                 }
             },
             // A pump reports `ReceiverGone` only once its receiver dropped,
@@ -1021,11 +1044,12 @@ pub async fn run<T: RuntimeTypes<State = HostState<T>>, G>(
                     "graceful shutdown complete",
                 );
                 drop(guard);
-                return RunOutcome {
+                return outcome(
+                    supervisor,
                     dispatched_blocks,
                     dispatched_events,
-                    end: RunEnd::Shutdown,
-                };
+                    RunEnd::Shutdown,
+                );
             }
             NextTrigger::StreamEnd(stream_kind) => {
                 // A finishing task drops its stream sender before its join
@@ -1066,11 +1090,12 @@ pub async fn run<T: RuntimeTypes<State = HostState<T>>, G>(
                         reason = %term.reason,
                         "shared source terminal - engine exiting",
                     );
-                    return RunOutcome {
+                    return outcome(
+                        supervisor,
                         dispatched_blocks,
                         dispatched_events,
-                        end: RunEnd::SourceTerminal(term),
-                    };
+                        RunEnd::SourceTerminal(term),
+                    );
                 }
                 if accounted && (has_blocks || has_extensions) {
                     // Park the exhausted merge so its `None` is not
@@ -1085,11 +1110,12 @@ pub async fn run<T: RuntimeTypes<State = HostState<T>>, G>(
                         "every event source is terminal and no other trigger kind \
                          is declared - engine has nothing left to run; exiting"
                     );
-                    return RunOutcome {
+                    return outcome(
+                        supervisor,
                         dispatched_blocks,
                         dispatched_events,
-                        end: RunEnd::NothingLive,
-                    };
+                        RunEnd::NothingLive,
+                    );
                 } else {
                     // Reconnect tasks should loop forever, so an end the set
                     // does not account for means one exited without a report
@@ -1106,11 +1132,12 @@ pub async fn run<T: RuntimeTypes<State = HostState<T>>, G>(
                         task = %died,
                         "reconnect task ended unexpectedly - shutting down for engine restart"
                     );
-                    return RunOutcome {
+                    return outcome(
+                        supervisor,
                         dispatched_blocks,
                         dispatched_events,
-                        end: RunEnd::StreamEnded,
-                    };
+                        RunEnd::StreamEnded,
+                    );
                 }
             }
         }
@@ -1213,6 +1240,34 @@ mod tests {
 
     /// Virtual poll cadence; `start_paused` advances through it instantly.
     const POLL: Duration = Duration::from_millis(50);
+
+    /// The `reason` values are an alert expression, so a renamed variant
+    /// stops the alert firing rather than failing to compile.
+    #[test]
+    fn every_run_end_carries_its_snake_case_reason() {
+        let labels: Vec<&str> = [
+            RunEnd::Shutdown,
+            RunEnd::StreamEnded,
+            RunEnd::NothingLive,
+            RunEnd::SourceTerminal(SourceTermination {
+                module: None,
+                chain_id: 1,
+                reason: String::new(),
+            }),
+        ]
+        .iter()
+        .map(<&str>::from)
+        .collect();
+        assert_eq!(
+            labels,
+            [
+                "shutdown",
+                "stream_ended",
+                "nothing_live",
+                "source_terminal"
+            ],
+        );
+    }
 
     /// A zero-module supervisor booted through the real boot path.
     async fn boot_mock_supervisor() -> Booted<MockTypes> {
@@ -2874,6 +2929,8 @@ mod tests {
             .boot()
             .await
             .expect("boot the example module");
+        let (publisher, health) = crate::supervisor::health_channel();
+        booted.supervisor.publish_health_to(publisher);
 
         let rpc = MockRpc::new();
         let empty: Vec<(u64, Vec<Log>)> = (91..=155).map(|n| (n, Vec::new())).collect();
@@ -2943,6 +3000,17 @@ mod tests {
             "the terminal report quarantined the source's module",
         );
         assert_eq!(booted.supervisor.alive_count(), 0);
+        // The loop publishes without a caller asking, so a probe reads the
+        // quarantine rather than the boot state.
+        let snapshot = health.snapshot();
+        assert!(!snapshot.ready());
+        assert_eq!(
+            snapshot
+                .modules()
+                .next()
+                .map(|(name, state)| (name.as_str(), state)),
+            Some(("example", crate::supervisor::ModuleState::Poisoned)),
+        );
     }
 
     /// A shared exit is one with no owning module.

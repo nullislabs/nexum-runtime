@@ -486,6 +486,48 @@ async fn poison_pill_quarantines_module_after_threshold() {
     assert_eq!(booted.supervisor.poisoned_count(), 1);
 }
 
+/// The probe reads the supervisor's own lifecycle state rather than a
+/// parallel tally that could drift from it.
+#[tokio::test(start_paused = true)]
+async fn the_readiness_snapshot_follows_the_supervisor_into_quarantine() {
+    let Some(wasm) = example_wasm_or_skip() else {
+        return;
+    };
+    let mut booted = scenario()
+        .wasm(wasm)
+        .module(TestManifest::new("example").cap("logging").block_trigger(1))
+        .boot()
+        .await
+        .expect("boot");
+    let (publisher, health) = crate::supervisor::health_channel();
+    booted.supervisor.publish_health_to(publisher);
+
+    booted.supervisor.publish_health();
+    let snapshot = health.snapshot();
+    assert!(snapshot.ready());
+    assert_eq!(
+        snapshot
+            .modules()
+            .map(|(_, state)| state)
+            .collect::<Vec<_>>(),
+        [crate::supervisor::ModuleState::Alive],
+    );
+
+    booted
+        .supervisor
+        .poison_source("example", 1, "unrecoverable");
+    booted.supervisor.publish_health();
+    let snapshot = health.snapshot();
+    assert!(!snapshot.ready());
+    assert_eq!(
+        snapshot
+            .modules()
+            .map(|(_, state)| state)
+            .collect::<Vec<_>>(),
+        [crate::supervisor::ModuleState::Poisoned],
+    );
+}
+
 /// A terminal source report quarantines its module exactly like repeated
 /// traps.
 #[tokio::test(start_paused = true)]
