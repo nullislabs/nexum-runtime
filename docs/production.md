@@ -194,6 +194,7 @@ With `enabled = false` the recorder is still installed, so call sites stay live,
 | `nexum_runtime_module_restarts_total` | counter | `module` | Module restart attempts. |
 | `nexum_runtime_module_poisoned` | gauge | `module` | `1` once a module crosses `[limits.poison]` (default 5 failures in 600 s) or its event source reports an unrecoverable condition. Stays `1` until the process restarts. |
 | `nexum_runtime_module_unverified` | gauge | `module` | `1` for a module loaded with neither a `[[modules]].digest` nor a `[component].digest`, so nothing checked its bytes. Set once at boot and never cleared; a pinned module emits no series, so `sum` is the fleet's unverified count. Reaching this state at all needs `require_component_digest = false`, or a single-wasm command-line override. |
+| `nexum_runtime_capability_denials_total` | counter | `capability`, `reason`, `module` | Capability requests the host refused. `capability = "http"` is the outbound gate. `reason = "allowlist"` is a host outside the effective allowlist, which is the intersection of `[dependencies.http].hosts` and `[policy.component.<id>].http_allow`. `reason = "destination"` is a target that is, or resolves onto, an address the host will not reach: a default-refused range such as loopback, RFC 1918 or link-local, or a `[policy].http_deny` range. Every label is host-side, so a module cannot mint series by varying the host it asks for. A rate here is a module asking for what the manifest and the operator policy do not grant. |
 | `nexum_runtime_chain_request_total` | counter | `chain_id`, `method`, `outcome` | Every `chain::request`. A method outside the read surface is counted as `method="<denied>"` with `outcome="err"`. A request for a chain outside `[chains]` is counted as `chain_id="unconfigured"`, which bounds the series set to the configured chains plus one and shows that a module is requesting chains the operator has not configured. The `outcome="err"` rate is the RPC-degraded signal. |
 | `nexum_runtime_chain_response_capped_total` | counter | `chain_id`, `method` | Responses rejected for exceeding `[limits.chain] response_body_max_bytes` (default 1 MiB). |
 | `nexum_runtime_source_reconnects_total` | counter | `source_kind`, `chain_id`, `module` | Source reconnects. `source_kind="block"` is per chain; `source_kind="chain-log"` also carries `module`. Both source tasks carry the same value in a `source_kind` log field, so the value `NexumReconnectStorm` reports greps the logs. |
@@ -272,6 +273,17 @@ groups:
         annotations:
           summary: "Nexum module {{ $labels.module }} p95 latency above 5s"
 
+      # A single refusal clears inside the rate window, so only a module
+      # that keeps asking holds this for 10m.
+      - alert: NexumCapabilityDenied
+        expr: |
+          sum by (module, capability, reason)
+            (rate(nexum_runtime_capability_denials_total[5m])) > 0
+        for: 10m
+        labels: { severity: ticket }
+        annotations:
+          summary: "Nexum module {{ $labels.module }} denied {{ $labels.capability }} ({{ $labels.reason }})"
+
       - alert: NexumDown
         expr: up{job="nexum"} == 0
         for: 2m
@@ -282,6 +294,8 @@ groups:
 
 `page` wakes on-call for a poisoned component or a down engine; `ticket` routes during business hours.
 A `NexumRpcErrorRate` alert on `chain_id="unconfigured"` points at a module that requests a chain outside `[chains]`, not at a node: every request under that label is an error by construction.
+A `NexumCapabilityDenied` alert is either a manifest that asks for more than the operator grants, or a module probing the gate.
+Read the `reason` label first: `allowlist` names a host the policy excludes, and `destination` names an address the host will not reach.
 
 ## 8. RPC selection
 
@@ -392,6 +406,8 @@ The spelling is `[policy.component.<id>]`, and `<id>` is the `[[modules]].id` of
 | `DuplicateComponentId`: two `[[modules]]` entries claim one `id` | Validation refusal, at load | A unique `id` per entry, or the policy join is ambiguous. |
 | `LogRetentionTooStrict`: a console level louder than what retention keeps | Validation refusal, at load | A `log_retain_level` at least as loud as every console level, or a quieter `log_print_level` and no `[policy.log_targets]` row above it. Both default to `trace`, so this needs a retention level you set and a console or target level above it. |
 | `InvalidLogLevel`: a value that is not one of the five level names | Validation refusal, at load | `trace`, `debug`, `info`, `warn` or `error`. |
+
+Each breach at the request is also counted: `HttpRequestDenied` under `nexum_runtime_capability_denials_total{reason="allowlist"}`, and `DestinationIpProhibited` under `reason="destination"`.
 
 The digest requirement is the one default that changed direction, so it fires on an `engine.toml` nobody edited.
 `[engine].require_component_digest` defaults to `true`, and what it requires is the operator's pin on `[[modules]].digest`, not the author's pin in the manifest beside the artifact ([ADR-0025](adr/0025-the-required-digest-is-the-operator-pin.md)).

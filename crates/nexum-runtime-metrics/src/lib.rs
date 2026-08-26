@@ -38,6 +38,11 @@ pub const METRICS: &[Metric] = &[
         help: "Boot refusals by error kind.",
     },
     Metric {
+        name: "nexum_runtime_capability_denials_total",
+        kind: Kind::Counter,
+        help: "Capability requests the host refused, by capability, reason, and module.",
+    },
+    Metric {
         name: "nexum_runtime_chain_head_height",
         kind: Kind::Gauge,
         help: "Chain head height the runtime last observed, by chain.",

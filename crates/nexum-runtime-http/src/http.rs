@@ -20,6 +20,7 @@ use bytes::Bytes;
 use http_body::{Body, Frame, SizeHint};
 use http_body_util::BodyExt;
 use ipnet::IpNet;
+use strum::IntoStaticStr;
 use tokio::net::lookup_host;
 use tracing::warn;
 use wasmtime_wasi_http::p2::bindings::http::types::ErrorCode;
@@ -66,6 +67,28 @@ impl HttpGate {
     }
 }
 
+/// Which rule refused an outbound request, as the denial counter's `reason`.
+#[derive(Clone, Copy, IntoStaticStr)]
+#[strum(serialize_all = "snake_case")]
+enum Refusal {
+    Allowlist,
+    Destination,
+}
+
+/// Count one refusal under the shared capability-denial series.
+///
+/// Every label is operator-written or fixed: a host or a URL is guest-chosen,
+/// so labelling with one would let a module mint series at will.
+fn count_refusal(module: &str, refusal: Refusal) {
+    metrics::counter!(
+        "nexum_runtime_capability_denials_total",
+        "capability" => "http",
+        "reason" => <&'static str>::from(refusal),
+        "module" => module.to_owned(),
+    )
+    .increment(1);
+}
+
 impl WasiHttpHooks for HttpGate {
     fn send_request(
         &mut self,
@@ -77,6 +100,7 @@ impl WasiHttpHooks for HttpGate {
             &self.allowlist,
             self.operator_allow.as_deref(),
         ) {
+            count_refusal(&self.module, Refusal::Allowlist);
             // Log the host only: paths and query strings are
             // guest-supplied and may carry credentials.
             warn!(
@@ -90,6 +114,7 @@ impl WasiHttpHooks for HttpGate {
             request,
             clamp(config, &self.limits),
             self.limits,
+            self.module.clone(),
             self.permitted.clone(),
             self.denied.clone(),
         ))
@@ -115,6 +140,7 @@ fn send_with_limits(
     request: http::Request<HyperOutgoingBody>,
     config: OutgoingRequestConfig,
     limits: OutboundHttpLimits,
+    module: String,
     permitted: Vec<IpAddr>,
     denied: Vec<IpNet>,
 ) -> HostFutureIncomingResponse {
@@ -122,7 +148,16 @@ fn send_with_limits(
         let deadline = tokio::time::Instant::now() + limits.total_deadline;
         let uri = request.uri().clone();
         let sent = tokio::time::timeout_at(deadline, async move {
-            reject_prohibited_destination(&uri, &permitted, &denied).await?;
+            if let Err(code) = reject_prohibited_destination(&uri, &permitted, &denied).await {
+                count_refusal(&module, Refusal::Destination);
+                // The host only, for the reason `send_request` gives.
+                warn!(
+                    module = %module,
+                    host = uri.host().unwrap_or("<none>"),
+                    "[http] outbound request denied by destination rules",
+                );
+                return Err(code);
+            }
             default_send_request_handler(request, config).await
         })
         .await;
@@ -359,10 +394,13 @@ mod tests {
     use std::time::Duration;
 
     use http_body_util::{Empty, Full};
+    use nexum_runtime_testing::{Sample, block_on_current_thread, capture_metrics, samples_named};
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use wasmtime_wasi_http::p2::types::IncomingResponse;
 
     use super::*;
+
+    const DENIALS: &str = "nexum_runtime_capability_denials_total";
 
     fn uri(s: &str) -> http::Uri {
         s.parse().expect("test URI parses")
@@ -893,6 +931,86 @@ mod tests {
             gate.send_request(request("http://127.0.0.1:1/x"), config())
                 .is_ok()
         );
+    }
+
+    /// One denial carrying exactly these three labels: a fourth would be a new
+    /// dimension on an operator-facing series, and a guest-chosen value there
+    /// would let a module mint series at will.
+    fn assert_one_denial(samples: &[Sample], reason: &str) {
+        let hits = samples_named(samples, DENIALS);
+        assert_eq!(hits.len(), 1, "one denial recorded: {samples:?}");
+        let mut keys: Vec<&str> = hits[0].labels.iter().map(|(k, _)| k.as_str()).collect();
+        keys.sort_unstable();
+        assert_eq!(keys, ["capability", "module", "reason"]);
+        assert!(hits[0].has_label("capability", "http"), "{:?}", hits[0]);
+        assert!(hits[0].has_label("reason", reason), "{:?}", hits[0]);
+        assert!(hits[0].has_label("module", "test-module"), "{:?}", hits[0]);
+    }
+
+    #[test]
+    fn an_allowlist_denial_is_counted_against_the_module() {
+        let ((), samples) = capture_metrics(|| {
+            let mut gate = HttpGate::new(
+                "test-module",
+                allow(&["api.acme.example"]),
+                None,
+                limits(),
+                vec![],
+                vec![],
+            );
+            assert!(
+                gate.send_request(request("http://evil.example/x"), config())
+                    .is_err()
+            );
+        });
+        assert_one_denial(&samples, "allowlist");
+    }
+
+    #[test]
+    fn a_destination_denial_is_counted_against_the_module() {
+        // The counter fires inside the spawned send task, so the capture has
+        // to drive that task on the thread holding the recorder.
+        let ((), samples) = capture_metrics(|| {
+            block_on_current_thread(async {
+                let mut gate = HttpGate::new(
+                    "test-module",
+                    allow(&["localhost"]),
+                    None,
+                    limits(),
+                    vec![],
+                    vec![],
+                );
+                let pending = gate
+                    .send_request(request("http://localhost:1/x"), config())
+                    .expect("the hostname is allowlisted");
+                let err = resolve(pending).await.expect_err("loopback is refused");
+                assert!(matches!(err, ErrorCode::DestinationIpProhibited));
+            });
+        });
+        assert_one_denial(&samples, "destination");
+    }
+
+    #[test]
+    fn a_transport_failure_is_not_counted_as_a_denial() {
+        // Nothing listens on port 1, so the send fails at connect. The gate
+        // admitted the request, and only a refusal counts.
+        let ((), samples) = capture_metrics(|| {
+            block_on_current_thread(async {
+                let mut gate = HttpGate::new(
+                    "test-module",
+                    allow(&["127.0.0.1"]),
+                    None,
+                    limits(),
+                    vec![IpAddr::V4(Ipv4Addr::LOCALHOST)],
+                    vec![],
+                );
+                let pending = gate
+                    .send_request(request("http://127.0.0.1:1/x"), config())
+                    .expect("listed and operator-permitted");
+                assert!(resolve(pending).await.is_err());
+            });
+        });
+        assert!(samples_named(&samples, DENIALS).is_empty(), "{samples:?}");
     }
 
     /// The effective host set is the intersection: the manifest list alone
