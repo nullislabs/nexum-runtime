@@ -280,29 +280,24 @@ async fn dispatch_deadline_cuts_off_a_blocked_host_call_and_recovers() {
 #[test]
 fn a_delivered_block_sets_the_last_delivered_gauge() {
     use crate::test_utils::metrics_util::debugging::DebugValue;
-    use crate::test_utils::{capture_metrics, samples_named};
 
     let Some(wasm) = example_wasm_or_skip() else {
         return;
     };
     let (dispatched, samples) = capture_metrics(|| {
-        tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .expect("current-thread runtime")
-            .block_on(async {
-                let mut booted = scenario()
-                    .wasm(wasm)
-                    .module(
-                        TestManifest::new("module-a")
-                            .cap("logging")
-                            .block_trigger(1),
-                    )
-                    .boot()
-                    .await
-                    .expect("boot");
-                booted.dispatch_block_on(1).await
-            })
+        block_on_current_thread(async {
+            let mut booted = scenario()
+                .wasm(wasm)
+                .module(
+                    TestManifest::new("module-a")
+                        .cap("logging")
+                        .block_trigger(1),
+                )
+                .boot()
+                .await
+                .expect("boot");
+            booted.dispatch_block_on(1).await
+        })
     });
     assert_eq!(dispatched, 1);
     let hits = samples_named(&samples, "nexum_runtime_chain_last_delivered_height");
@@ -319,39 +314,34 @@ fn a_delivered_block_sets_the_last_delivered_gauge() {
 #[test]
 fn an_older_delivery_does_not_lower_the_last_delivered_gauge() {
     use crate::test_utils::metrics_util::debugging::DebugValue;
-    use crate::test_utils::{capture_metrics, samples_named};
 
     let Some(wasm) = example_wasm_or_skip() else {
         return;
     };
     let (dispatched, samples) = capture_metrics(|| {
-        tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .expect("current-thread runtime")
-            .block_on(async {
-                let mut booted = scenario()
-                    .wasm(wasm)
-                    .module(
-                        TestManifest::new("module-a")
-                            .cap("logging")
-                            .block_trigger(1),
-                    )
-                    .boot()
-                    .await
-                    .expect("boot");
-                let newer = booted.dispatch_block_on(1).await;
-                let older = booted
-                    .supervisor
-                    .dispatch_block(nexum::host::types::Block {
-                        chain_id: 1,
-                        number: 18_000_000,
-                        hash: vec![0xcd; 32],
-                        timestamp: 1_700_000_000_000,
-                    })
-                    .await;
-                newer + older
-            })
+        block_on_current_thread(async {
+            let mut booted = scenario()
+                .wasm(wasm)
+                .module(
+                    TestManifest::new("module-a")
+                        .cap("logging")
+                        .block_trigger(1),
+                )
+                .boot()
+                .await
+                .expect("boot");
+            let newer = booted.dispatch_block_on(1).await;
+            let older = booted
+                .supervisor
+                .dispatch_block(nexum::host::types::Block {
+                    chain_id: 1,
+                    number: 18_000_000,
+                    hash: vec![0xcd; 32],
+                    timestamp: 1_700_000_000_000,
+                })
+                .await;
+            newer + older
+        })
     });
     assert_eq!(dispatched, 2, "both blocks reached the module");
     let hits = samples_named(&samples, "nexum_runtime_chain_last_delivered_height");

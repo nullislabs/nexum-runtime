@@ -125,9 +125,8 @@ mod tests {
     use crate::test_utils::Refusal;
 
     /// The `NexumDispatchLatency` alert reads `_bucket` series by `le`, so
-    /// the latency metric must render as a Prometheus histogram. The bucket
-    /// list is matched on the bare name, so the call site's labels, which
-    /// the dispatch path adds to, cannot cost it its bounds.
+    /// the latency metric must render as a Prometheus histogram. Bounds are
+    /// matched on the bare name, so call-site labels cannot cost them.
     #[test]
     fn the_latency_histogram_renders_bucket_series() {
         const NAME: &str = "nexum_runtime_dispatch_latency_seconds";

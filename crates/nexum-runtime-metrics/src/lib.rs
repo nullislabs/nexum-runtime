@@ -65,7 +65,7 @@ pub const METRICS: &[Metric] = &[
     Metric {
         name: "nexum_runtime_dispatch_latency_seconds",
         kind: Kind::Histogram,
-        help: "Wall-clock seconds to dispatch one trigger.",
+        help: "Wall-clock seconds to dispatch one trigger, by module and outcome.",
     },
     Metric {
         name: "nexum_runtime_log_fields_dropped_total",
