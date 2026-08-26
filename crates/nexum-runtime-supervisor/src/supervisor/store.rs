@@ -19,7 +19,7 @@ use nexum_runtime_api::Extension;
 use nexum_runtime_api::{RuntimeTypes, StateHandle, StateStore};
 use nexum_runtime_http::HttpGate;
 use nexum_runtime_logs::{LogChannel, RunId, SharedLogBounds, SharedLogFilter, StdioStream};
-use nexum_runtime_wasm::HostState;
+use nexum_runtime_wasm::{HostState, ObservedLimits};
 
 pub(super) type HostStore<T> = Store<HostState<T>>;
 
@@ -175,9 +175,11 @@ fn build<T: RuntimeTypes>(
         builder.monotonic_clock(SharedMonotonicClock(clocks.monotonic()));
     }
     let wasi = builder.build();
-    let limits = wasmtime::StoreLimitsBuilder::new()
-        .memory_size(spec.memory_limit)
-        .build();
+    let limits = ObservedLimits::new(
+        wasmtime::StoreLimitsBuilder::new()
+            .memory_size(spec.memory_limit)
+            .build(),
+    );
     let module_store = shared
         .components
         .store
