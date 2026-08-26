@@ -2,12 +2,33 @@
 
 use super::*;
 use crate::engine_config::DispatchLimitsSection;
+use crate::test_utils::{Sample, capture_metrics, samples_named};
 
 fn deadline_secs(secs: u64) -> DispatchLimitsSection {
     DispatchLimitsSection {
         deadline_secs: Some(secs),
         ..Default::default()
     }
+}
+
+/// The `outcome` label of every latency sample recorded.
+fn latency_outcomes(samples: &[Sample]) -> Vec<&str> {
+    samples_named(samples, "nexum_runtime_dispatch_latency_seconds")
+        .into_iter()
+        .flat_map(|sample| sample.labels.iter())
+        .filter(|(key, _)| key == "outcome")
+        .map(|(_, value)| value.as_str())
+        .collect()
+}
+
+/// The capture recorder is thread-local, so the dispatch has to run on the
+/// capturing thread rather than a spawned worker.
+fn block_on_current_thread<F: std::future::Future>(f: F) -> F::Output {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("current-thread runtime")
+        .block_on(f)
 }
 
 #[test]
@@ -542,4 +563,131 @@ async fn multi_chain_poisoned_module_does_not_affect_other_chains() {
     );
     assert_eq!(booted.supervisor.alive_count(), 1, "only example is alive");
     assert_eq!(booted.supervisor.poisoned_count(), 1);
+}
+
+/// fuel-bomb traps on chain 1; the example succeeds on chain 100.
+#[test]
+fn a_trap_and_a_success_each_record_a_labelled_latency_sample() {
+    let Some(bomb_wasm) = module_wasm_or_skip("fuel-bomb") else {
+        return;
+    };
+    let Some(example_wasm) = example_wasm_or_skip() else {
+        return;
+    };
+    let ((), samples) = capture_metrics(|| {
+        block_on_current_thread(async {
+            let mut booted = scenario()
+                .module(
+                    Entry::new(workspace_manifest(
+                        "modules/fixtures/fuel-bomb/component.toml",
+                    ))
+                    .wasm(bomb_wasm),
+                )
+                .module(
+                    Entry::new(
+                        TestManifest::new("example")
+                            .cap("logging")
+                            .block_trigger(100),
+                    )
+                    .wasm(example_wasm),
+                )
+                .boot()
+                .await
+                .expect("boot");
+            booted.dispatch_block_on(1).await;
+            assert_eq!(booted.dispatch_block_on(100).await, 1, "the example ran");
+        })
+    });
+    let outcomes = latency_outcomes(&samples);
+    assert!(outcomes.contains(&"trap"), "{samples:?}");
+    assert!(outcomes.contains(&"ok"), "{samples:?}");
+}
+
+/// slow-host parks its one host call an hour past the 1 s deadline, so
+/// the dispatch ends fatally like a trap and carries its own label.
+#[test]
+fn a_deadline_hit_records_a_latency_sample_labelled_deadline() {
+    let Some(wasm) = module_wasm_or_skip("slow-host") else {
+        return;
+    };
+    let node = crate::test_utils::FakeNode::new();
+    node.on_method(nexum_world::ChainMethod::EthBlockNumber, "\"0x1\"");
+    node.delay_next_request(Duration::from_secs(3600));
+    let (dispatched, samples) = capture_metrics(|| {
+        block_on_current_thread(async {
+            let mut booted = BootScenario::over(crate::test_utils::mock_components_from(
+                &node,
+                crate::test_utils::MockStateStore::new(),
+            ))
+            .limits(limits_with(|limits| limits.dispatch = deadline_secs(1)))
+            .wasm(wasm)
+            .module(workspace_manifest(
+                "modules/fixtures/slow-host/component.toml",
+            ))
+            .boot()
+            .await
+            .expect("slow-host boots");
+            // The park is an hour past the 1 s deadline; pausing here waits
+            // out neither.
+            tokio::time::pause();
+            booted.dispatch_block_on(1).await
+        })
+    });
+    assert_eq!(dispatched, 0, "the deadline cut the blocked host call off");
+    assert!(
+        latency_outcomes(&samples).contains(&"deadline"),
+        "{samples:?}",
+    );
+}
+
+/// A zero state quota faults the fixture's first store write, which the
+/// guest returns as a typed WIT fault rather than trapping.
+#[test]
+fn a_fault_records_a_latency_sample_labelled_fault() {
+    let Some(wasm) = module_wasm_or_skip("flaky-bomb") else {
+        return;
+    };
+    let ((dispatched, alive), samples) = capture_metrics(|| {
+        block_on_current_thread(async {
+            let mut booted = scenario()
+                .policy(PolicySection {
+                    ceilings: PolicyCeilings {
+                        max_state_bytes: 0,
+                        ..PolicyCeilings::default()
+                    },
+                    ..PolicySection::default()
+                })
+                .wasm(wasm)
+                .module(workspace_manifest(
+                    "modules/fixtures/flaky-bomb/component.toml",
+                ))
+                .boot()
+                .await
+                .expect("flaky-bomb boots");
+            let dispatched = booted.dispatch_block_on(1).await;
+            (dispatched, booted.supervisor.alive_count())
+        })
+    });
+    assert_eq!(dispatched, 0, "the quota refused the store write");
+    assert_eq!(alive, 1, "a fault leaves the module alive");
+    assert!(latency_outcomes(&samples).contains(&"fault"), "{samples:?}");
+}
+
+/// An engine without fuel metering is the only way `set_fuel` fails.
+#[test]
+fn a_failed_fuel_set_is_counted_as_a_drop() {
+    let engine = wasmtime::Engine::default();
+    let mut store = wasmtime::Store::new(&engine, ());
+    let module = nexum_primitives::module_id::ModuleId::parse("m").expect("a plain name parses");
+    let (granted, samples) = capture_metrics(|| refuel(&mut store, 1_000, &module, 1, "block"));
+    assert!(!granted, "an engine without fuel cannot be refuelled");
+    let hits = samples_named(&samples, "nexum_runtime_dispatch_dropped_total");
+    assert_eq!(hits.len(), 1, "one drop counted: {samples:?}");
+    assert!(
+        hits[0].has_label("reason", "fuel_set_failed")
+            && hits[0].has_label("module", "m")
+            && hits[0].has_label("trigger_kind", "block"),
+        "{:?}",
+        hits[0].labels,
+    );
 }

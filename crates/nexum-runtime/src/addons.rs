@@ -125,7 +125,9 @@ mod tests {
     use crate::test_utils::Refusal;
 
     /// The `NexumDispatchLatency` alert reads `_bucket` series by `le`, so
-    /// the latency metric must render as a Prometheus histogram.
+    /// the latency metric must render as a Prometheus histogram. The bucket
+    /// list is matched on the bare name, so the call site's labels, which
+    /// the dispatch path adds to, cannot cost it its bounds.
     #[test]
     fn the_latency_histogram_renders_bucket_series() {
         const NAME: &str = "nexum_runtime_dispatch_latency_seconds";
@@ -134,7 +136,8 @@ mod tests {
             .build_recorder();
         let handle = recorder.handle();
         metrics::with_local_recorder(&recorder, || {
-            metrics::histogram!(NAME, "module" => "m", "trigger_kind" => "block").record(0.5);
+            metrics::histogram!(NAME, "module" => "m", "trigger_kind" => "block", "outcome" => "trap")
+                .record(0.5);
         });
         let rendered = handle.render();
         assert!(

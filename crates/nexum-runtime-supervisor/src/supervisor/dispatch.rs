@@ -312,19 +312,18 @@ impl<T: RuntimeTypes<State = HostState<T>>> Supervisor<T> {
                 "nexum_runtime_dispatch_dropped_total",
                 "module" => module.name.to_string(),
                 "trigger_kind" => trigger_kind,
-                "reason" => "rate_limited",
+                "reason" => DispatchOutcome::RateLimited.label(),
             )
             .increment(1);
             return DispatchOutcome::RateLimited;
         }
-        if let Err(e) = module.live.store.set_fuel(module.seed.spec.fuel) {
-            error!(
-                module = %module.name,
-                chain_id,
-                trigger_kind,
-                error = %e,
-                "set_fuel failed - skipping"
-            );
+        if !refuel(
+            &mut module.live.store,
+            module.seed.spec.fuel,
+            &module.name,
+            chain_id,
+            trigger_kind,
+        ) {
             return DispatchOutcome::FuelSetFailed;
         }
         let start = Instant::now();
@@ -335,16 +334,16 @@ impl<T: RuntimeTypes<State = HostState<T>>> Supervisor<T> {
             .live
             .bindings
             .call_on_trigger(&mut module.live.store, trigger);
-        let outcome = with_dispatch_deadline(deadline, call)
-            .await
-            .unwrap_or_else(|exceeded| Err(wasmtime::Error::from(exceeded)));
+        let bounded = with_dispatch_deadline(deadline, call).await;
+        let deadline_hit = bounded.is_err();
+        let result = bounded.unwrap_or_else(|exceeded| Err(wasmtime::Error::from(exceeded)));
         // One post-call sample: the trap instant is start plus elapsed, not
         // the pre-dispatch `now`. This is the same clock the lifecycle
         // reads, so under `start_paused` the latency histogram records the
         // virtual elapsed time: do not assert on it from a paused test.
         let elapsed = start.elapsed();
         let latency_ms = elapsed.as_millis() as u64;
-        match outcome {
+        let outcome = match result {
             Ok(Ok(())) => {
                 debug!(
                     module = %module.name,
@@ -354,12 +353,6 @@ impl<T: RuntimeTypes<State = HostState<T>>> Supervisor<T> {
                     latency_ms,
                     "dispatch ok"
                 );
-                metrics::histogram!(
-                    "nexum_runtime_dispatch_latency_seconds",
-                    "module" => module.name.to_string(),
-                    "trigger_kind" => trigger_kind,
-                )
-                .record(elapsed.as_secs_f64());
                 module.health.dispatch_succeeded();
                 DispatchOutcome::Ok
             }
@@ -416,10 +409,54 @@ impl<T: RuntimeTypes<State = HostState<T>>> Supervisor<T> {
                 if let Some(recent) = verdict.poisoned {
                     report_poison(&module.name, recent, poison_policy.window, trap.to_string());
                 }
-                DispatchOutcome::Trapped
+                if deadline_hit {
+                    DispatchOutcome::Deadline
+                } else {
+                    DispatchOutcome::Trapped
+                }
             }
-        }
+        };
+        // Every outcome that entered the guest contributes a sample: a
+        // success-only histogram reads p95 low exactly when dispatch is
+        // failing.
+        metrics::histogram!(
+            "nexum_runtime_dispatch_latency_seconds",
+            "module" => module.name.to_string(),
+            "trigger_kind" => trigger_kind,
+            "outcome" => outcome.label(),
+        )
+        .record(elapsed.as_secs_f64());
+        outcome
     }
+}
+
+/// Grants the dispatch its fuel budget; `false` means the trigger never
+/// reached the guest and was counted as a drop.
+pub(super) fn refuel<S>(
+    store: &mut wasmtime::Store<S>,
+    fuel: u64,
+    module: &ModuleId,
+    chain_id: u64,
+    trigger_kind: &'static str,
+) -> bool {
+    let Err(e) = store.set_fuel(fuel) else {
+        return true;
+    };
+    error!(
+        module = %module,
+        chain_id,
+        trigger_kind,
+        error = %e,
+        "set_fuel failed - skipping"
+    );
+    metrics::counter!(
+        "nexum_runtime_dispatch_dropped_total",
+        "module" => module.clone(),
+        "trigger_kind" => trigger_kind,
+        "reason" => DispatchOutcome::FuelSetFailed.label(),
+    )
+    .increment(1);
+    false
 }
 
 /// The poison-transition trio: quarantine warn plus gauge, with the trap
@@ -459,15 +496,33 @@ pub(super) async fn with_dispatch_deadline<F: std::future::Future>(
         .map_err(|_elapsed| DeadlineExceeded(deadline))
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub(super) enum DispatchOutcome {
     Ok,
     /// Guest returned a typed `fault` via WIT, not a trap; the module stays alive.
     Fault,
     /// Marked dead, maybe quarantined per the poison policy.
     Trapped,
+    /// Cut off at the wall-clock deadline; handled like a trap.
+    Deadline,
     /// `set_fuel` failed before the call; the module stays alive, the trigger skips.
     FuelSetFailed,
     /// Dropped before the guest runs; liveness untouched.
     RateLimited,
+}
+
+impl DispatchOutcome {
+    /// The `outcome` label on the latency histogram; the two pre-guest
+    /// drops carry theirs as the `reason` on
+    /// `nexum_runtime_dispatch_dropped_total` instead.
+    pub(super) fn label(self) -> &'static str {
+        match self {
+            Self::Ok => "ok",
+            Self::Fault => "fault",
+            Self::Trapped => "trap",
+            Self::Deadline => "deadline",
+            Self::FuelSetFailed => "fuel_set_failed",
+            Self::RateLimited => "rate_limited",
+        }
+    }
 }
