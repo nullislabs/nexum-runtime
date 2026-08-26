@@ -312,7 +312,7 @@ impl<T: RuntimeTypes<State = HostState<T>>> Supervisor<T> {
                 "nexum_runtime_dispatch_dropped_total",
                 "module" => module.name.to_string(),
                 "trigger_kind" => trigger_kind,
-                "reason" => DispatchOutcome::RateLimited.label(),
+                "reason" => <&str>::from(DispatchOutcome::RateLimited),
             )
             .increment(1);
             return DispatchOutcome::RateLimited;
@@ -423,7 +423,7 @@ impl<T: RuntimeTypes<State = HostState<T>>> Supervisor<T> {
             "nexum_runtime_dispatch_latency_seconds",
             "module" => module.name.to_string(),
             "trigger_kind" => trigger_kind,
-            "outcome" => outcome.label(),
+            "outcome" => <&str>::from(outcome),
         )
         .record(elapsed.as_secs_f64());
         outcome
@@ -453,7 +453,7 @@ pub(super) fn refuel<S>(
         "nexum_runtime_dispatch_dropped_total",
         "module" => module.clone(),
         "trigger_kind" => trigger_kind,
-        "reason" => DispatchOutcome::FuelSetFailed.label(),
+        "reason" => <&str>::from(DispatchOutcome::FuelSetFailed),
     )
     .increment(1);
     false
@@ -496,12 +496,16 @@ pub(super) async fn with_dispatch_deadline<F: std::future::Future>(
         .map_err(|_elapsed| DeadlineExceeded(deadline))
 }
 
-#[derive(Debug, Clone, Copy)]
+/// The `outcome` label on the latency histogram; the two pre-guest drops carry
+/// theirs as the `reason` on `nexum_runtime_dispatch_dropped_total` instead.
+#[derive(Debug, Clone, Copy, strum::IntoStaticStr)]
+#[strum(serialize_all = "snake_case")]
 pub(super) enum DispatchOutcome {
     Ok,
     /// Guest returned a typed `fault` via WIT, not a trap; the module stays alive.
     Fault,
     /// Marked dead, maybe quarantined per the poison policy.
+    #[strum(serialize = "trap")]
     Trapped,
     /// Cut off at the wall-clock deadline; handled like a trap.
     Deadline,
@@ -509,20 +513,4 @@ pub(super) enum DispatchOutcome {
     FuelSetFailed,
     /// Dropped before the guest runs; liveness untouched.
     RateLimited,
-}
-
-impl DispatchOutcome {
-    /// The `outcome` label on the latency histogram; the two pre-guest
-    /// drops carry theirs as the `reason` on
-    /// `nexum_runtime_dispatch_dropped_total` instead.
-    pub(super) fn label(self) -> &'static str {
-        match self {
-            Self::Ok => "ok",
-            Self::Fault => "fault",
-            Self::Trapped => "trap",
-            Self::Deadline => "deadline",
-            Self::FuelSetFailed => "fuel_set_failed",
-            Self::RateLimited => "rate_limited",
-        }
-    }
 }
