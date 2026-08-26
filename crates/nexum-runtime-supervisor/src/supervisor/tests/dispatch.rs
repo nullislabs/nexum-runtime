@@ -21,16 +21,6 @@ fn latency_outcomes(samples: &[Sample]) -> Vec<&str> {
         .collect()
 }
 
-/// The capture recorder is thread-local, so the dispatch has to run on the
-/// capturing thread rather than a spawned worker.
-fn block_on_current_thread<F: std::future::Future>(f: F) -> F::Output {
-    tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .expect("current-thread runtime")
-        .block_on(f)
-}
-
 #[test]
 fn module_limits_default_to_policy_ceilings_when_unset() {
     let cfg = PolicyCeilings::default();

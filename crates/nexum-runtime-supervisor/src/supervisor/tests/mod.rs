@@ -37,8 +37,9 @@ use crate::manifest::{self, CapabilityRegistry, ParseError, ResourceSection};
 use crate::supervisor::load::LoadRefusal;
 use crate::supervisor::prepass::BootRefusal;
 use crate::test_utils::{
-    BootScenario, Entry, LocalTypes, ManifestInput, Refusal, TestManifest, example_wasm_or_skip,
-    limits_with, mock_components, module_wasm_or_skip, test_wasmtime_engine, workspace_root,
+    BootScenario, Entry, LocalTypes, ManifestInput, Refusal, TestManifest, block_on_current_thread,
+    example_wasm_or_skip, limits_with, mock_components, module_wasm_or_skip, test_wasmtime_engine,
+    workspace_root,
 };
 use nexum_primitives::digest::{ContentDigest, DigestMismatch};
 use nexum_runtime_chain::ProviderPool;

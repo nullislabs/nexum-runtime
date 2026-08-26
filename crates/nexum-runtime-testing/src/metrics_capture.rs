@@ -56,6 +56,19 @@ pub fn samples_named<'a>(samples: &'a [Sample], name: &str) -> Vec<&'a Sample> {
     samples.iter().filter(|s| s.name == name).collect()
 }
 
+/// Drive `f` to completion on the calling thread.
+///
+/// [`capture_metrics`] installs a thread-local recorder, so work spawned onto
+/// another runtime's worker records into a different one and the capture comes
+/// back empty.
+pub fn block_on_current_thread<F: std::future::Future>(f: F) -> F::Output {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("current-thread runtime")
+        .block_on(f)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
