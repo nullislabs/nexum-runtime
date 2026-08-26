@@ -499,7 +499,7 @@ mod tests {
                 ..LogSource::default()
             })
             .with_fields(vec![field("n", LogValue::Unsigned(9))]);
-        let out = test_support::Console::printed(|| {
+        let out = crate::capture_logs(Level::TRACE, || {
             emit_tracing(&bare);
             emit_tracing(&rich);
         });

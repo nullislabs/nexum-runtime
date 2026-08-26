@@ -407,34 +407,7 @@ mod tests {
     /// guest fault must not, and refusals sit below WARN.
     #[test]
     fn store_fault_logs_the_full_error_host_side_and_splits_levels() {
-        use parking_lot::Mutex;
-        use std::sync::Arc;
-
-        #[derive(Clone, Default)]
-        struct Sink(Arc<Mutex<Vec<u8>>>);
-        impl std::io::Write for Sink {
-            fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-                self.0.lock().extend_from_slice(buf);
-                Ok(buf.len())
-            }
-            fn flush(&mut self) -> std::io::Result<()> {
-                Ok(())
-            }
-        }
-        impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for Sink {
-            type Writer = Sink;
-            fn make_writer(&'a self) -> Sink {
-                self.clone()
-            }
-        }
-
-        let sink = Sink::default();
-        let collector = tracing_subscriber::fmt()
-            .with_max_level(tracing::Level::DEBUG)
-            .with_ansi(false)
-            .with_writer(sink.clone())
-            .finish();
-        tracing::subscriber::with_default(collector, || {
+        let out = nexum_runtime_logs::capture_logs(tracing::Level::DEBUG, || {
             let _ = store_fault(
                 "mod-a",
                 "set",
@@ -446,7 +419,6 @@ mod tests {
             let io = std::io::Error::other("I/O error: /var/lib/nexum/state/local-store.redb");
             let _ = store_fault("mod-a", "get", StoreError::Backend(io.into()));
         });
-        let out = String::from_utf8(sink.0.lock().clone()).expect("log output is UTF-8");
         let quota = out
             .lines()
             .find(|l| l.contains("123456789"))

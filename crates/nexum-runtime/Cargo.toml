@@ -104,6 +104,7 @@ test-utils = [
 # and example targets, so `cargo test -p nexum-runtime` sees the mocks
 # without every invocation passing `--features test-utils`.
 nexum-runtime = { path = ".", features = ["test-utils"] }
+nexum-runtime-logs = { path = "../nexum-runtime-logs", features = ["testing"] }
 # `start_paused` reconnect tests advance the backoff clock virtually.
 tokio = { workspace = true, features = ["rt-multi-thread", "test-util"] }
 anyhow.workspace = true
@@ -111,4 +112,5 @@ metrics.workspace = true
 tempfile.workspace = true
 # `oneshot` drives the observability routes without binding a port.
 tower = { workspace = true, features = ["util"] }
+# The `embed` example installs a subscriber, as an embedder does.
 tracing-subscriber.workspace = true

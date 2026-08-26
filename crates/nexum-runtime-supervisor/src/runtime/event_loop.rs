@@ -1230,6 +1230,7 @@ mod tests {
 
     use alloy_rpc_types_eth::Log;
     use alloy_transport::mock::MockResponse;
+    use nexum_runtime_logs::LogCapture;
     use nexum_tasks::TaskManager;
     use tracing::instrument::WithSubscriber;
 
@@ -3156,12 +3157,7 @@ mod tests {
         tasks.push("chain-log:1:mod", handle);
         let chain_log_streams: Vec<TaggedChainLogStream> = vec![Box::pin(receiver_stream(rx))];
 
-        let sink = LogSink::default();
-        let collector = tracing_subscriber::fmt()
-            .with_max_level(tracing::Level::WARN)
-            .with_ansi(false)
-            .with_writer(sink.clone())
-            .finish();
+        let sink = LogCapture::new();
         let outcome = tokio::time::timeout(
             Duration::from_secs(600),
             run(
@@ -3172,7 +3168,7 @@ mod tests {
                 tasks,
                 std::future::pending::<()>(),
             )
-            .with_subscriber(collector),
+            .with_subscriber(sink.subscriber(tracing::Level::WARN)),
         )
         .await
         .expect("run() classifies the end and returns");
@@ -3199,39 +3195,6 @@ mod tests {
             dead_task_names(&["block:1".into(), "chain-log:1:mod".into()]),
             "block:1, chain-log:1:mod",
         );
-    }
-
-    /// Collects the console output of a `with_subscriber` future.
-    #[derive(Clone, Default)]
-    struct LogSink(Arc<std::sync::Mutex<Vec<u8>>>);
-
-    impl LogSink {
-        fn text(&self) -> String {
-            let bytes = self.0.lock().expect("sink is not poisoned").clone();
-            String::from_utf8(bytes).expect("log output is UTF-8")
-        }
-    }
-
-    impl std::io::Write for LogSink {
-        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-            self.0
-                .lock()
-                .expect("sink is not poisoned")
-                .extend_from_slice(buf);
-            Ok(buf.len())
-        }
-
-        fn flush(&mut self) -> std::io::Result<()> {
-            Ok(())
-        }
-    }
-
-    impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for LogSink {
-        type Writer = LogSink;
-
-        fn make_writer(&'a self) -> LogSink {
-            self.clone()
-        }
     }
 
     #[tokio::test(start_paused = true)]

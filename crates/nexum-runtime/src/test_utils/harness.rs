@@ -326,7 +326,7 @@ mod tests {
         Refusal, TestManifest, example_wasm_or_skip, manifest, module_wasm_or_skip,
     };
     use nexum_runtime_api::Extension;
-    use nexum_runtime_logs::LogChannel;
+    use nexum_runtime_logs::{LogCapture, LogChannel};
 
     fn example_block_manifest() -> String {
         manifest("example")
@@ -359,49 +359,6 @@ mod tests {
             .config("threshold", "2500.00")
             .config("direction", "above")
             .to_toml()
-    }
-
-    /// Formatted `tracing` output from this thread while the install guard
-    /// is alive. A task spawned off the thread keeps the global default, so
-    /// only what `launch` emits inline is captured.
-    #[derive(Clone, Default)]
-    struct LogSink(Arc<std::sync::Mutex<Vec<u8>>>);
-
-    impl LogSink {
-        fn lock(&self) -> std::sync::MutexGuard<'_, Vec<u8>> {
-            self.0.lock().expect("the sink is only locked to append")
-        }
-
-        fn install(&self) -> tracing::subscriber::DefaultGuard {
-            tracing::subscriber::set_default(
-                tracing_subscriber::fmt()
-                    .with_ansi(false)
-                    .with_max_level(tracing::Level::INFO)
-                    .with_writer(self.clone())
-                    .finish(),
-            )
-        }
-
-        fn text(&self) -> String {
-            String::from_utf8(self.lock().clone()).expect("tracing output is UTF-8")
-        }
-    }
-
-    impl std::io::Write for LogSink {
-        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-            self.lock().extend_from_slice(buf);
-            Ok(buf.len())
-        }
-        fn flush(&mut self) -> std::io::Result<()> {
-            Ok(())
-        }
-    }
-
-    impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for LogSink {
-        type Writer = Self;
-        fn make_writer(&'a self) -> Self {
-            self.clone()
-        }
     }
 
     /// A header carrying just the block number.
@@ -446,8 +403,8 @@ mod tests {
         let Some(wasm) = example_wasm_or_skip() else {
             return;
         };
-        let sink = LogSink::default();
-        let guard = sink.install();
+        let sink = LogCapture::new();
+        let guard = sink.install(tracing::Level::INFO);
         let mut rt = TestRuntime::builder(&wasm)
             .module(pinned_block_manifest("pinned", 1, &wasm))
             .module(

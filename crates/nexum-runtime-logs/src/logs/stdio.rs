@@ -165,7 +165,8 @@ mod tests {
     use tokio::io::AsyncWriteExt;
 
     use super::*;
-    use crate::logs::test_support::{CaptureStore, Console, run_id};
+    use crate::capture_logs;
+    use crate::logs::test_support::{CaptureStore, run_id};
     use crate::logs::{LogChannel, LogPipeline};
 
     fn setup(channel: LogChannel) -> (LineWriter, Arc<CaptureStore>) {
@@ -320,7 +321,7 @@ mod tests {
         };
         let out = writer_filtered(&store, &bounds, LogChannel::Stdout, quiet.clone());
         let err = writer_filtered(&store, &bounds, LogChannel::Stderr, quiet);
-        let printed = Console::printed(|| {
+        let printed = capture_logs(Level::TRACE, || {
             out.route(b"println debugging");
             err.route(b"oops");
         });

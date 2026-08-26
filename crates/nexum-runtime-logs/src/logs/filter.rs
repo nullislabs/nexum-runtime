@@ -50,7 +50,8 @@ mod tests {
     use tracing_core::Level;
 
     use super::*;
-    use crate::logs::test_support::{CaptureStore, Console, run_id};
+    use crate::capture_logs;
+    use crate::logs::test_support::{CaptureStore, run_id};
     use crate::logs::{LogChannel, LogSource};
 
     fn unbounded() -> SharedLogBounds {
@@ -106,7 +107,7 @@ mod tests {
         let (store, router) = pipeline();
         let bounds = unbounded();
         let gate = filter(Level::WARN, Level::TRACE, &[]);
-        let out = Console::printed(|| {
+        let out = capture_logs(Level::TRACE, || {
             gate.route(&router, &bounds, record(Level::DEBUG, "wallet::keeper"));
             gate.route(&router, &bounds, record(Level::ERROR, "wallet::keeper"));
         });
@@ -126,7 +127,7 @@ mod tests {
         let (_store, router) = pipeline();
         let bounds = unbounded();
         let gate = filter(Level::WARN, Level::TRACE, &[("keeper", Level::DEBUG)]);
-        let out = Console::printed(|| {
+        let out = capture_logs(Level::TRACE, || {
             gate.route(&router, &bounds, record(Level::DEBUG, "keeper"));
             gate.route(&router, &bounds, record(Level::DEBUG, "signer"));
             gate.route(&router, &bounds, record(Level::DEBUG, ""));

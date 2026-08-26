@@ -36,8 +36,7 @@ alloy-json-rpc.workspace = true
 metrics-util.workspace = true
 nexum-runtime-chain = { path = "../nexum-runtime-chain", features = ["test-utils"] }
 nexum-runtime-config = { path = "../nexum-runtime-config" }
-parking_lot.workspace = true
+nexum-runtime-logs = { path = "../nexum-runtime-logs", features = ["testing"] }
 serde_json = { workspace = true, features = ["std"] }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
-tracing-subscriber.workspace = true
 wiremock.workspace = true
