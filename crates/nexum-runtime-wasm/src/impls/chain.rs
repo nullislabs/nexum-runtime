@@ -43,9 +43,11 @@ fn check_response_cap(
     cap: usize,
     chain_id: u64,
     method: &str,
+    module: &str,
 ) -> Result<(), ChainError> {
     if body.len() > cap {
         tracing::warn!(
+            module,
             chain_id,
             method,
             body_bytes = body.len(),
@@ -76,6 +78,7 @@ impl<T: RuntimeTypes> nexum::host::chain::Host for HostState<T> {
             Ok(method) => method,
             Err(err) => {
                 tracing::warn!(
+                    module = %self.run.module,
                     chain_id,
                     %method,
                     "chain::request rejected: method is not in the permitted read surface"
@@ -85,7 +88,7 @@ impl<T: RuntimeTypes> nexum::host::chain::Host for HostState<T> {
             }
         };
         let name = method.as_str();
-        tracing::debug!(chain_id, method = name, "chain::request");
+        tracing::debug!(module = %self.run.module, chain_id, method = name, "chain::request");
         let result = self.chain.request(chain, method, params).await;
         if let Err(err) = &result {
             // The one place the upstream error is recorded in full: the
@@ -111,10 +114,16 @@ impl<T: RuntimeTypes> nexum::host::chain::Host for HostState<T> {
             }
         }
         let result = result.map_err(pool_fault).and_then(|body| {
-            check_response_cap(&body, self.chain_response_max_bytes, chain_id, name)?;
+            check_response_cap(
+                &body,
+                self.chain_response_max_bytes,
+                chain_id,
+                name,
+                self.run.module.as_str(),
+            )?;
             Ok(body)
         });
-        tracing::trace!(elapsed_ms = ?start.elapsed(), "chain::request done");
+        tracing::trace!(module = %self.run.module, elapsed_ms = ?start.elapsed(), "chain::request done");
         let outcome = if result.is_ok() { "ok" } else { "err" };
         count_request(&self.chain, chain, name, outcome);
         result
@@ -165,7 +174,7 @@ mod tests {
     fn response_at_cap_is_accepted() {
         let body = "x".repeat(10);
         assert!(
-            check_response_cap(&body, 10, 1, "eth_call").is_ok(),
+            check_response_cap(&body, 10, 1, "eth_call", "m").is_ok(),
             "body exactly at cap should pass"
         );
     }
@@ -173,8 +182,8 @@ mod tests {
     #[test]
     fn response_over_cap_returns_invalid_input() {
         let body = "x".repeat(11);
-        let err =
-            check_response_cap(&body, 10, 1, "eth_call").expect_err("over-cap body should fail");
+        let err = check_response_cap(&body, 10, 1, "eth_call", "m")
+            .expect_err("over-cap body should fail");
         assert!(
             matches!(err, ChainError::Fault(Fault::InvalidInput(_))),
             "expected InvalidInput fault, got {err:?}"
