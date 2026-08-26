@@ -110,7 +110,7 @@ pub const METRICS: &[Metric] = &[
     Metric {
         name: "nexum_runtime_module_memory_bytes",
         kind: Kind::Gauge,
-        help: "Linear memory the module holds, as of its last dispatch.",
+        help: "Largest linear memory the module holds, as of its last dispatch.",
     },
     Metric {
         name: "nexum_runtime_module_poisoned",

@@ -393,8 +393,8 @@ fn a_dispatch_records_the_fuel_it_spent_and_the_memory_it_holds() {
         hits[0].labels
     );
     assert!(
-        matches!(hits[0].value, DebugValue::Gauge(v) if v.0 >= 65_536.0 && v.0 <= memory),
-        "the guest holds at least its first page and no more than {memory}: {:?}",
+        matches!(hits[0].value, DebugValue::Gauge(v) if v.0 >= 65_536.0 && v.0 < memory),
+        "the guest holds at least its first page and less than the {memory} ceiling: {:?}",
         hits[0].value,
     );
 }

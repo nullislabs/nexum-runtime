@@ -2,12 +2,12 @@
 
 use wasmtime::{Error, ResourceLimiter, Result, StoreLimits};
 
-/// A [`StoreLimits`] that also records the linear memory size it last allowed.
+/// A [`StoreLimits`] that also records the largest linear memory it allowed.
 ///
 /// Every method forwards; a trait default left in place would silently
 /// replace the wrapped instance, table and memory caps with wasmtime's own.
-/// Wasm linear memory never shrinks, so the last allowed `desired` is the
-/// current size.
+/// The wrapped ceiling is per memory and a store may hold several, so the
+/// largest allowed `desired` is what a reading compares against it.
 pub struct ObservedLimits {
     inner: StoreLimits,
     memory_bytes: usize,
@@ -22,7 +22,7 @@ impl ObservedLimits {
         }
     }
 
-    /// Linear memory this store has grown to, in bytes.
+    /// Largest linear memory this store has grown, in bytes.
     pub fn memory_bytes(&self) -> usize {
         self.memory_bytes
     }
@@ -37,7 +37,7 @@ impl ResourceLimiter for ObservedLimits {
     ) -> Result<bool> {
         let allow = self.inner.memory_growing(current, desired, maximum)?;
         if allow {
-            self.memory_bytes = desired;
+            self.memory_bytes = self.memory_bytes.max(desired);
         }
         Ok(allow)
     }
@@ -91,7 +91,7 @@ mod tests {
     }
 
     #[test]
-    fn the_last_allowed_growth_is_the_memory_reading() {
+    fn the_largest_allowed_growth_is_the_memory_reading() {
         let mut limits = observed();
         assert_eq!(limits.memory_bytes(), 0);
         assert!(limits.memory_growing(0, PAGE, None).expect("allowed"));
@@ -114,6 +114,16 @@ mod tests {
                 .expect("refused")
         );
         assert_eq!(limits.memory_bytes(), PAGE);
+    }
+
+    /// `current` counts one memory, so a store holding two of them
+    /// interleaves growth calls that start again from zero.
+    #[test]
+    fn a_second_memory_does_not_lower_the_reading() {
+        let mut limits = observed();
+        assert!(limits.memory_growing(0, 2 * PAGE, None).expect("allowed"));
+        assert!(limits.memory_growing(0, PAGE, None).expect("allowed"));
+        assert_eq!(limits.memory_bytes(), 2 * PAGE);
     }
 
     /// The wrapped ceiling, not this wrapper, is what refuses.
