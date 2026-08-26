@@ -10,6 +10,11 @@ description = "The module-log pipeline for the Nexum runtime: capture, routing, 
 [lints]
 workspace = true
 
+[features]
+# The log-capture sink, beside the pipeline whose output it reads. A crate
+# asserting on an emitted line takes this rather than rebuilding the writer.
+testing = ["dep:tracing-subscriber"]
+
 [dependencies]
 nexum-primitives = { path = "../nexum-primitives" }
 nexum-runtime-api = { path = "../nexum-runtime-api" }
@@ -21,11 +26,13 @@ strum.workspace = true
 tokio = { workspace = true, features = ["sync"] }
 tracing.workspace = true
 tracing-core.workspace = true
+tracing-subscriber = { workspace = true, optional = true }
 wasmtime-wasi.workspace = true
 
 [dev-dependencies]
 # Snapshots the emitted label sets, so the operator-facing `channel` label
 # is asserted and not just described.
 metrics-util.workspace = true
+# Self dev-dependency enabling `testing` for this crate's own test targets.
+nexum-runtime-logs = { path = ".", features = ["testing"] }
 tokio = { workspace = true, features = ["io-util", "macros", "rt-multi-thread"] }
-tracing-subscriber.workspace = true

@@ -281,6 +281,8 @@ mod tests {
         );
     }
 
+    // Local rather than the shared `LogCapture`: this crate is layer 0, and
+    // the shared sink sits in `nexum-runtime-logs`, well above it.
     #[derive(Clone, Default)]
     struct Sink(Arc<std::sync::Mutex<Vec<u8>>>);
 

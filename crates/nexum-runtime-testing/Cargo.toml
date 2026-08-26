@@ -5,7 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Seam-level test doubles for the Nexum runtime: mock RPC transports, the in-memory store, the manual clock, and scoped metric capture."
+description = "Seam-level test doubles for the Nexum runtime: mock RPC transports, the in-memory store, the manual clock, and scoped metric and log capture."
 
 [lints]
 workspace = true
@@ -23,7 +23,7 @@ metrics-util.workspace = true
 nexum-runtime-api = { path = "../nexum-runtime-api" }
 nexum-runtime-chain = { path = "../nexum-runtime-chain", features = ["test-utils"] }
 nexum-runtime-config = { path = "../nexum-runtime-config" }
-nexum-runtime-logs = { path = "../nexum-runtime-logs" }
+nexum-runtime-logs = { path = "../nexum-runtime-logs", features = ["testing"] }
 nexum-runtime-metrics = { path = "../nexum-runtime-metrics", features = ["testing"] }
 nexum-runtime-wasm = { path = "../nexum-runtime-wasm" }
 nexum-world = { path = "../nexum-world" }
