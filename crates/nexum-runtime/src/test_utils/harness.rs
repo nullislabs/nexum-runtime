@@ -403,8 +403,6 @@ mod tests {
         let Some(wasm) = example_wasm_or_skip() else {
             return;
         };
-        // Only what `launch` emits inline: a task spawned off this thread
-        // keeps the global default.
         let sink = LogCapture::new();
         let guard = sink.install(tracing::Level::INFO);
         let mut rt = TestRuntime::builder(&wasm)

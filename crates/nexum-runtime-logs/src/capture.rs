@@ -35,6 +35,7 @@ impl LogCapture {
 
     /// Makes [`Self::subscriber`] the calling thread's default until the guard
     /// drops. Work spawned onto another thread keeps the global default.
+    #[must_use = "dropping the guard uninstalls the subscriber, so nothing is captured"]
     pub fn install(&self, max_level: Level) -> tracing::subscriber::DefaultGuard {
         tracing::subscriber::set_default(self.subscriber(max_level))
     }
