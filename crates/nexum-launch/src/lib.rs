@@ -21,6 +21,8 @@ use nexum_runtime::{Runtime, RuntimeBuilder};
 use thiserror::Error;
 use tracing::info;
 use tracing_subscriber::EnvFilter;
+use tracing_subscriber::fmt::MakeWriter;
+use tracing_subscriber::util::SubscriberInitExt;
 
 /// Why [`run`] stopped: a subcommand's own failure, or the boot path's.
 #[derive(Debug, Error)]
@@ -96,12 +98,102 @@ fn init_tracing(pretty: bool, engine_cfg: &EngineConfig) {
             .with_target(true)
             .init();
     } else {
-        tracing_subscriber::fmt()
-            .with_env_filter(env_filter)
-            .with_target(true)
-            .json()
-            .flatten_event(true)
-            .with_current_span(false)
-            .init();
+        json_subscriber(env_filter, std::io::stdout).init();
+    }
+}
+
+/// The JSON line shape `docs/production.md` publishes: event fields flattened
+/// onto the object, plus a `span` object for the innermost span alone. The
+/// ancestor list stays off, so a nested span hides an ancestor's fields.
+fn json_subscriber<W>(env_filter: EnvFilter, writer: W) -> impl tracing::Subscriber + Send + Sync
+where
+    W: for<'w> MakeWriter<'w> + Send + Sync + 'static,
+{
+    tracing_subscriber::fmt()
+        .with_env_filter(env_filter)
+        .with_target(true)
+        .json()
+        .flatten_event(true)
+        .with_span_list(false)
+        .with_writer(writer)
+        .finish()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use std::sync::{Arc, Mutex};
+
+    #[derive(Clone, Default)]
+    struct Sink(Arc<Mutex<Vec<u8>>>);
+
+    impl Sink {
+        fn line(&self) -> serde_json::Value {
+            let bytes = self.0.lock().expect("sink is not poisoned").clone();
+            let text = String::from_utf8(bytes).expect("log output is UTF-8");
+            serde_json::from_str(text.trim()).expect("each line is one JSON object")
+        }
+    }
+
+    impl std::io::Write for Sink {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0
+                .lock()
+                .expect("sink is not poisoned")
+                .extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl<'a> MakeWriter<'a> for Sink {
+        type Writer = Sink;
+
+        fn make_writer(&'a self) -> Sink {
+            self.clone()
+        }
+    }
+
+    fn render(f: impl FnOnce()) -> serde_json::Value {
+        let sink = Sink::default();
+        let subscriber = json_subscriber(EnvFilter::new("info"), sink.clone());
+        tracing::subscriber::with_default(subscriber, f);
+        sink.line()
+    }
+
+    #[test]
+    fn a_json_line_renders_the_enclosing_span_and_its_fields() {
+        let line = render(|| {
+            let span = tracing::info_span!("dispatch", module = "twap-monitor");
+            let _entered = span.enter();
+            info!(chain_id = 1, "dispatch ok");
+        });
+        assert_eq!(line["span"]["module"], "twap-monitor");
+        assert_eq!(line["span"]["name"], "dispatch");
+        assert_eq!(line["chain_id"], 1);
+        assert_eq!(line["message"], "dispatch ok");
+    }
+
+    #[test]
+    fn a_json_line_carries_no_ancestor_span_list() {
+        let line = render(|| {
+            let span = tracing::info_span!("source", source_kind = "block");
+            let _entered = span.enter();
+            info!("block source open");
+        });
+        assert!(
+            line.get("spans").is_none(),
+            "the ancestor list stays off: {line}",
+        );
+    }
+
+    #[test]
+    fn a_spanless_json_line_carries_no_span_key() {
+        let line = render(|| info!("nexum starting"));
+        assert!(line.get("span").is_none(), "no span, no key: {line}");
     }
 }

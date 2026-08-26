@@ -6,7 +6,7 @@ use std::time::Duration;
 use tokio::time::Instant;
 
 use alloy_chains::Chain;
-use tracing::{debug, error, warn};
+use tracing::{debug, error, instrument, warn};
 use tracing_core::Level;
 
 use super::Supervisor;
@@ -284,6 +284,16 @@ impl<T: RuntimeTypes<State = HostState<T>>> Supervisor<T> {
     }
 
     /// `chain_id` is telemetry only; chain-less kinds pass 0.
+    ///
+    /// The span covers the guest call, so a host line that call provokes
+    /// names the module; it sits at `error` so no filter drops the span out
+    /// from under a line it survives.
+    #[instrument(
+        level = "error",
+        name = "dispatch",
+        skip_all,
+        fields(module = %self.modules[idx].name)
+    )]
     async fn dispatch_to(
         &mut self,
         idx: usize,

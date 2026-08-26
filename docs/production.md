@@ -166,11 +166,20 @@ See [ADR-0024](adr/0024-blocks-are-clocks-and-host-keys-leave-the-module-namespa
 
 ## 5. Logs
 
-The engine emits JSON `tracing` events on stdout, one flat object per line.
+The engine emits JSON `tracing` events on stdout, one object per line.
 `--pretty-logs` switches to the human format.
 Every event carries `timestamp`, `level`, `target` (the crate and module path), and `message`.
 A guest log line is mirrored into host tracing at the guest's own level with `module`, `run`, and `channel` fields, and guest stdout and stderr are captured line by line.
 Production should not see `ERROR` from `nexum_runtime::*`.
+
+An event's own fields sit at the top level of the object.
+A span's fields do not: an event emitted inside one carries them under a nested `span` object, alongside the span's `name`, and a line outside every span has no `span` key at all.
+Only the innermost span renders and the ancestor list is off, so a query reads exactly one level.
+There are two spans.
+`dispatch` carries `module` and wraps the guest call, so every host line that call provokes names the module that provoked it.
+`source` carries `source_kind` and wraps one chain event source's reconnect loop, bulk backfill included.
+Source-path lines the tasks do not emit, the event loop's `block source error` and the cursor commits, keep `source_kind` at the top level.
+Both spans are recorded at `error`, so a coarser `log_level` never strips a span field from a line it still prints.
 
 `RUST_LOG` wins over `[engine] log_level`, which is itself a full `EnvFilter` directive rather than a bare level.
 Leave `RUST_LOG` unset in the unit so the config file is the single auditable source.
@@ -196,7 +205,7 @@ With `enabled = false` the recorder is still installed, so call sites stay live,
 | `nexum_runtime_module_unverified` | gauge | `module` | `1` for a module loaded with neither a `[[modules]].digest` nor a `[component].digest`, so nothing checked its bytes. Set once at boot and never cleared; a pinned module emits no series, so `sum` is the fleet's unverified count. Reaching this state at all needs `require_component_digest = false`, or a single-wasm command-line override. |
 | `nexum_runtime_chain_request_total` | counter | `chain_id`, `method`, `outcome` | Every `chain::request`. A method outside the read surface is counted as `method="<denied>"` with `outcome="err"`. A request for a chain outside `[chains]` is counted as `chain_id="unconfigured"`, which bounds the series set to the configured chains plus one and shows that a module is requesting chains the operator has not configured. The `outcome="err"` rate is the RPC-degraded signal. |
 | `nexum_runtime_chain_response_capped_total` | counter | `chain_id`, `method` | Responses rejected for exceeding `[limits.chain] response_body_max_bytes` (default 1 MiB). |
-| `nexum_runtime_source_reconnects_total` | counter | `source_kind`, `chain_id`, `module` | Source reconnects. `source_kind="block"` is per chain; `source_kind="chain-log"` also carries `module`. Both source tasks carry the same value in a `source_kind` log field, so the value `NexumReconnectStorm` reports greps the logs. |
+| `nexum_runtime_source_reconnects_total` | counter | `source_kind`, `chain_id`, `module` | Source reconnects. `source_kind="block"` is per chain; `source_kind="chain-log"` also carries `module`. Both source tasks carry the same value on their `source` span, so the value `NexumReconnectStorm` reports greps the logs as `span.source_kind` (section 5). |
 | `nexum_runtime_log_records_dropped_total` | counter | `module`, `channel` | Module log records dropped whole by the per-component log rate limit (`[policy]`, default `max_log_burst = 256` and `max_log_records_per_sec = 128`). `channel` is the capture point the record entered by, one of `host_interface`, `stdout` or `stderr`; all of them spend one bucket per run. A sustained rate here is a module flooding the log sink. |
 | `nexum_runtime_log_records_truncated_total` | counter | `module`, `channel` | Module log records shortened to fit `[policy] max_log_record_bytes` (default 8 KiB). The message is kept and marked `...[truncated]`; the file is cut first, and the target holds a 128-byte allowance ahead of the message so an oversized record still names its subsystem. A captured stdout or stderr line past the cap is cut the same way. |
 | `nexum_runtime_log_fields_dropped_total` | counter | `module`, `channel` | Structured log fields dropped past the same per-record cap, last-recorded first, so the earliest context survives. |
@@ -336,11 +345,11 @@ A component that consistently traps on fuel exhaustion is a bug, not a tuning mi
 
 ## 9. Runbook
 
-Tail one component:
+Tail one component, its own lines and the host lines its dispatches provoke:
 
 ```bash
 journalctl -u nexum -f --output=json \
-  | jq 'select(.MESSAGE | fromjson? | .fields.module == "twap-monitor")'
+  | jq 'select(.MESSAGE | fromjson? | (.module // .span.module) == "twap-monitor")'
 ```
 
 Recover a poisoned component: fix the underlying bug, rebuild the artifact, update the `[component].digest` pin and the entry's `[[modules]].digest` pin, then `sudo systemctl restart nexum`.

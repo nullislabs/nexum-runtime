@@ -543,3 +543,35 @@ async fn multi_chain_poisoned_module_does_not_affect_other_chains() {
     assert_eq!(booted.supervisor.alive_count(), 1, "only example is alive");
     assert_eq!(booted.supervisor.poisoned_count(), 1);
 }
+
+#[tokio::test]
+async fn a_dispatch_renders_its_module_on_the_span() {
+    use tracing::instrument::WithSubscriber as _;
+
+    use crate::test_utils::{JsonLogs, json_collector};
+
+    let Some(wasm) = example_wasm_or_skip() else {
+        return;
+    };
+    let mut booted = scenario()
+        .wasm(wasm)
+        .module(
+            TestManifest::new("module-a")
+                .cap("logging")
+                .block_trigger(1),
+        )
+        .boot()
+        .await
+        .expect("boot");
+
+    let sink = JsonLogs::default();
+    let dispatched = booted
+        .dispatch_block_on(1)
+        .with_subscriber(json_collector(sink.clone(), Level::DEBUG))
+        .await;
+
+    assert_eq!(dispatched, 1);
+    let line = sink.line("dispatch ok");
+    assert_eq!(line["span"]["module"], "module-a");
+    assert_eq!(line["span"]["name"], "dispatch");
+}

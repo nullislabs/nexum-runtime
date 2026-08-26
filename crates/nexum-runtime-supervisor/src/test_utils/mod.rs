@@ -6,8 +6,12 @@
 // cannot build its own fixture has nothing to recover from.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+#[cfg(test)]
+mod json_logs;
 mod scenario;
 
+#[cfg(test)]
+pub(crate) use json_logs::{JsonLogs, json_collector};
 pub use scenario::{BootScenario, Booted, Entry, Refusal};
 
 pub(crate) use nexum_runtime_testing::{

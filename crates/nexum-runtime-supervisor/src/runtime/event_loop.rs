@@ -25,7 +25,7 @@ use alloy_transport::TransportError;
 use futures::StreamExt;
 use futures::stream::{BoxStream, select_all};
 use tokio::sync::mpsc;
-use tracing::{error, info, warn};
+use tracing::{error, info, instrument, warn};
 
 use crate::bindings::nexum;
 use crate::runtime::restart_policy::{backoff_for, jitter_seed};
@@ -65,7 +65,7 @@ const BULK_PROGRESS_LOG_INTERVAL: Duration = Duration::from_secs(10);
 /// Wait on the task set for a terminal report behind a stream end.
 const TERMINAL_REPORT_GRACE: Duration = Duration::from_secs(1);
 
-// One spelling for the `source_kind` metric label and the log field, so an
+// One spelling for the `source_kind` metric label and the span field, so an
 // operator carries the alert's value straight to a log query.
 pub(crate) const SOURCE_KIND_BLOCK: &str = "block";
 pub(crate) const SOURCE_KIND_CHAIN_LOG: &str = "chain-log";
@@ -164,6 +164,15 @@ async fn backoff_pause(attempt: &mut u32, seed: u64, log: impl FnOnce(u32, u64))
 
 /// Reconnect-aware loop for one chain's block source: re-opens the
 /// stream with exponential backoff after every drop or error.
+///
+/// The span is where every line this task emits gets its `source_kind`, at
+/// `error` so no filter drops the span out from under a line it survives.
+#[instrument(
+    level = "error",
+    name = "source",
+    skip_all,
+    fields(source_kind = SOURCE_KIND_BLOCK)
+)]
 async fn reconnecting_block_task(
     pool: ProviderPool,
     chain: Chain,
@@ -177,18 +186,9 @@ async fn reconnecting_block_task(
         match pool.open_block_source(chain).await {
             Ok(mut inner) => {
                 if attempt == 0 {
-                    info!(
-                        chain_id,
-                        source_kind = SOURCE_KIND_BLOCK,
-                        "block source open"
-                    );
+                    info!(chain_id, "block source open");
                 } else {
-                    info!(
-                        chain_id,
-                        source_kind = SOURCE_KIND_BLOCK,
-                        attempt,
-                        "block source reopened"
-                    );
+                    info!(chain_id, attempt, "block source reopened");
                     metrics::counter!(
                         "nexum_runtime_source_reconnects_total",
                         "source_kind" => SOURCE_KIND_BLOCK,
@@ -201,11 +201,7 @@ async fn reconnecting_block_task(
                     if attempt > 0
                         && last_event.is_some_and(|t| now.duration_since(t) >= HEALTHY_WINDOW)
                     {
-                        info!(
-                            chain_id,
-                            source_kind = SOURCE_KIND_BLOCK,
-                            "block source healthy - resetting backoff"
-                        );
+                        info!(chain_id, "block source healthy - resetting backoff");
                         attempt = 0;
                     }
                     // Detect transport-layer reconnects that
@@ -223,7 +219,6 @@ async fn reconnecting_block_task(
                         let gap_s = gap.as_secs();
                         info!(
                             chain_id,
-                            source_kind = SOURCE_KIND_BLOCK,
                             gap_s,
                             "source gap closed - first event after silence \
                              (likely an alloy-internal transport reconnect)"
@@ -245,17 +240,12 @@ async fn reconnecting_block_task(
                         return TaskExit::ReceiverGone;
                     }
                 }
-                warn!(
-                    chain_id,
-                    source_kind = SOURCE_KIND_BLOCK,
-                    "block source ended (WebSocket dropped?)"
-                );
+                warn!(chain_id, "block source ended (WebSocket dropped?)");
             }
             Err(err) => {
                 let timed_out = matches!(err, PoolError::Timeout);
                 warn!(
                     chain_id,
-                    source_kind = SOURCE_KIND_BLOCK,
                     error = %err,
                     timed_out,
                     "block source open failed"
@@ -265,10 +255,7 @@ async fn reconnecting_block_task(
         backoff_pause(&mut attempt, seed, |attempt, backoff_ms| {
             warn!(
                 chain_id,
-                source_kind = SOURCE_KIND_BLOCK,
-                attempt,
-                backoff_ms,
-                "reconnecting block source after backoff",
+                attempt, backoff_ms, "reconnecting block source after backoff",
             );
         })
         .await;
@@ -346,7 +333,6 @@ impl BulkSource<'_> {
                 warn!(
                     module = %self.module,
                     chain_id,
-                    source_kind = SOURCE_KIND_CHAIN_LOG,
                     error = %err,
                     "bulk backfill has no declared log range - falling back to the per-block poller",
                 );
@@ -356,7 +342,6 @@ impl BulkSource<'_> {
         info!(
             module = %self.module,
             chain_id,
-            source_kind = SOURCE_KIND_CHAIN_LOG,
             from,
             handoff,
             chunk_blocks,
@@ -412,7 +397,6 @@ impl BulkSource<'_> {
                         info!(
                             module = %self.module,
                             chain_id,
-                            source_kind = SOURCE_KIND_CHAIN_LOG,
                             chunk_blocks,
                             blocks_remaining = handoff - position,
                             blocks_per_sec = %blocks_per_sec,
@@ -426,7 +410,6 @@ impl BulkSource<'_> {
                         warn!(
                             module = %self.module,
                             chain_id,
-                            source_kind = SOURCE_KIND_CHAIN_LOG,
                             from = position,
                             to,
                             error = %err,
@@ -441,7 +424,6 @@ impl BulkSource<'_> {
                         warn!(
                             module = %self.module,
                             chain_id,
-                            source_kind = SOURCE_KIND_CHAIN_LOG,
                             from = position,
                             to,
                             error = %err,
@@ -458,7 +440,6 @@ impl BulkSource<'_> {
         info!(
             module = %self.module,
             chain_id,
-            source_kind = SOURCE_KIND_CHAIN_LOG,
             handoff,
             blocks = handoff - from,
             elapsed_s = started.elapsed().as_secs(),
@@ -471,6 +452,15 @@ impl BulkSource<'_> {
 /// Poller-backed loop for one (module, chain) event source; a
 /// re-open resumes past the scanned range and retracts a reorged tail
 /// within the revalidation depth.
+///
+/// The span covers the bulk-backfill phase too, so both carry `source_kind`;
+/// see [`reconnecting_block_task`] for why it sits at `error`.
+#[instrument(
+    level = "error",
+    name = "source",
+    skip_all,
+    fields(source_kind = SOURCE_KIND_CHAIN_LOG)
+)]
 async fn reconnecting_chain_log_task(
     pool: ProviderPool,
     module: ModuleId,
@@ -503,7 +493,6 @@ async fn reconnecting_chain_log_task(
                     warn!(
                         module = %module,
                         chain_id,
-                        source_kind = SOURCE_KIND_CHAIN_LOG,
                         error = %err,
                         timed_out,
                         attempt,
@@ -528,7 +517,6 @@ async fn reconnecting_chain_log_task(
                         warn!(
                             module = %module,
                             chain_id,
-                            source_kind = SOURCE_KIND_CHAIN_LOG,
                             tail_block = t.number,
                             timed_out,
                             attempt,
@@ -558,7 +546,6 @@ async fn reconnecting_chain_log_task(
             warn!(
                 module = %module,
                 chain_id,
-                source_kind = SOURCE_KIND_CHAIN_LOG,
                 tail_block,
                 start_block,
                 "event source tail reorged deeper than the revalidation bound - terminal",
@@ -586,7 +573,6 @@ async fn reconnecting_chain_log_task(
             warn!(
                 module = %module,
                 chain_id,
-                source_kind = SOURCE_KIND_CHAIN_LOG,
                 skipped_from = start_block,
                 skipped_to = floor,
                 "event source gap exceeds max_lookback - skipping the oldest missed blocks",
@@ -599,7 +585,6 @@ async fn reconnecting_chain_log_task(
             info!(
                 module = %module,
                 chain_id,
-                source_kind = SOURCE_KIND_CHAIN_LOG,
                 from = start_block,
                 to = head,
                 blocks = head.saturating_sub(start_block),
@@ -652,7 +637,6 @@ async fn reconnecting_chain_log_task(
                     info!(
                         module = %module,
                         chain_id,
-                        source_kind = SOURCE_KIND_CHAIN_LOG,
                         start_block,
                         "event source open"
                     );
@@ -660,7 +644,6 @@ async fn reconnecting_chain_log_task(
                     info!(
                         module = %module,
                         chain_id,
-                        source_kind = SOURCE_KIND_CHAIN_LOG,
                         attempt,
                         start_block,
                         "event source reopened"
@@ -684,7 +667,6 @@ async fn reconnecting_chain_log_task(
                     warn!(
                         module = %module,
                         chain_id,
-                        source_kind = SOURCE_KIND_CHAIN_LOG,
                         tail_block = t.number,
                         "event source tail reorged while disconnected - retracting its logs",
                     );
@@ -709,7 +691,6 @@ async fn reconnecting_chain_log_task(
                         info!(
                             module = %module,
                             chain_id,
-                            source_kind = SOURCE_KIND_CHAIN_LOG,
                             "event source healthy - resetting backoff"
                         );
                         attempt = 0;
@@ -758,7 +739,6 @@ async fn reconnecting_chain_log_task(
                             warn!(
                                 module = %module,
                                 chain_id,
-                                source_kind = SOURCE_KIND_CHAIN_LOG,
                                 error = %err,
                                 "event source error - reopening"
                             );
@@ -769,7 +749,6 @@ async fn reconnecting_chain_log_task(
                 warn!(
                     module = %module,
                     chain_id,
-                    source_kind = SOURCE_KIND_CHAIN_LOG,
                     "event source ended - reopening"
                 );
             }
@@ -777,7 +756,6 @@ async fn reconnecting_chain_log_task(
                 warn!(
                     module = %module,
                     chain_id,
-                    source_kind = SOURCE_KIND_CHAIN_LOG,
                     error = %err,
                     "event source open failed"
                 );
@@ -787,7 +765,6 @@ async fn reconnecting_chain_log_task(
             warn!(
                 module = %module,
                 chain_id,
-                source_kind = SOURCE_KIND_CHAIN_LOG,
                 attempt,
                 backoff_ms,
                 "reconnecting event source after backoff",
@@ -1208,7 +1185,8 @@ mod tests {
 
     use crate::test_utils::{BootScenario, Booted, MockTypes, mock_components};
     use crate::test_utils::{
-        MockRpc, linked_block, mocked_pool, rpc_err, rpc_head, rpc_ok, test_hash,
+        JsonLogs, MockRpc, json_collector, linked_block, mocked_pool, rpc_err, rpc_head, rpc_ok,
+        test_hash,
     };
 
     /// Virtual poll cadence; `start_paused` advances through it instantly.
@@ -2375,6 +2353,71 @@ mod tests {
             Some(TaskExit::ReceiverGone),
             "the task must exit naturally, not via abort (abort yields None)",
         );
+    }
+
+    /// Long enough for one failed open and its backoff line, short of the
+    /// half-second minimum backoff that would start a second attempt.
+    const ONE_ATTEMPT: Duration = Duration::from_millis(400);
+
+    #[tokio::test(start_paused = true)]
+    async fn a_block_source_line_names_its_kind_on_the_span_alone() {
+        let pool = pool_for(&MockRpc::new());
+        let (tx, _rx) = mpsc::channel(1);
+        let sink = JsonLogs::default();
+
+        // The task builds its own span, so it must be called under the
+        // collector rather than wrapped after the fact.
+        let _ = tokio::time::timeout(
+            ONE_ATTEMPT,
+            async { reconnecting_block_task(pool, alloy_chains::Chain::mainnet(), tx).await }
+                .with_subscriber(json_collector(sink.clone(), tracing::Level::WARN)),
+        )
+        .await;
+
+        let line = sink.line("block source open failed");
+        assert_eq!(line["span"]["source_kind"], SOURCE_KIND_BLOCK);
+        assert_eq!(line["span"]["name"], "source");
+        assert!(
+            line.get("source_kind").is_none(),
+            "the kind lives on the span, never per site: {line}",
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_chain_log_line_names_its_kind_on_the_span_alone() {
+        let pool = pool_for(&MockRpc::new());
+        let (tx, _rx) = mpsc::channel(1);
+        let sink = JsonLogs::default();
+
+        let _ = tokio::time::timeout(
+            ONE_ATTEMPT,
+            async {
+                reconnecting_chain_log_task(
+                    pool,
+                    ModuleId::parse("mod-a").expect("valid module name"),
+                    alloy_chains::Chain::mainnet(),
+                    alloy_rpc_types_eth::Filter::default(),
+                    ChainLogResume {
+                        cursor_key: None,
+                        initial_cursor: None,
+                        max_lookback: None,
+                    },
+                    tx,
+                )
+                .await
+            }
+            .with_subscriber(json_collector(sink.clone(), tracing::Level::WARN)),
+        )
+        .await;
+
+        let line = sink.line("event source head fetch failed");
+        assert_eq!(line["span"]["source_kind"], SOURCE_KIND_CHAIN_LOG);
+        assert_eq!(line["span"]["name"], "source");
+        assert!(
+            line.get("source_kind").is_none(),
+            "the kind lives on the span, never per site: {line}",
+        );
+        assert_eq!(line["module"], "mod-a");
     }
 
     #[tokio::test(start_paused = true)]
