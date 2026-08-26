@@ -5,6 +5,9 @@
 //! way. [`capture_metrics`] installs a recorder for the closure only, so a
 //! test can assert the increment and the labels it claims.
 
+// A harness that cannot install its own recorder has nothing to recover from.
+#![allow(clippy::expect_used)]
+
 use metrics_util::debugging::{DebugValue, DebuggingRecorder, Snapshotter};
 
 /// One captured sample: the metric name, its labels, and its value.

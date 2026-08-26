@@ -30,12 +30,22 @@ pub struct Metric {
     pub help: &'static str,
 }
 
+#[cfg(feature = "testing")]
+mod capture;
+#[cfg(feature = "testing")]
+pub use capture::{Sample, block_on_current_thread, capture_metrics, samples_named};
+
 /// Every metric the runtime emits.
 pub const METRICS: &[Metric] = &[
     Metric {
         name: "nexum_runtime_boot_refusals_total",
         kind: Kind::Counter,
         help: "Boot refusals by error kind.",
+    },
+    Metric {
+        name: "nexum_runtime_capability_denials_total",
+        kind: Kind::Counter,
+        help: "Capability requests the host refused, by capability, reason, and module.",
     },
     Metric {
         name: "nexum_runtime_chain_head_height",

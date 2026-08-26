@@ -19,12 +19,12 @@ alloy-rpc-client.workspace = true
 alloy-rpc-types-eth.workspace = true
 alloy-transport.workspace = true
 derive_more.workspace = true
-metrics.workspace = true
 metrics-util.workspace = true
 nexum-runtime-api = { path = "../nexum-runtime-api" }
 nexum-runtime-chain = { path = "../nexum-runtime-chain", features = ["test-utils"] }
 nexum-runtime-config = { path = "../nexum-runtime-config" }
 nexum-runtime-logs = { path = "../nexum-runtime-logs" }
+nexum-runtime-metrics = { path = "../nexum-runtime-metrics", features = ["testing"] }
 nexum-runtime-wasm = { path = "../nexum-runtime-wasm" }
 nexum-world = { path = "../nexum-world" }
 parking_lot.workspace = true
