@@ -36,18 +36,29 @@ impl<T: RuntimeTypes> Supervisor<T> {
                         event_signature,
                         resume,
                         max_lookback,
+                        start_block,
                     } => {
                         let filter = build_alloy_filter(*address, *event_signature);
                         let chain = Chain::from_id(*chain_id);
                         // A `resume` trigger reads its durable cursor
                         // once here at boot; others start at head.
+                        // `start_block` seeds only the first boot, when
+                        // no cursor is stored yet: a module whose whole
+                        // state derives from logs cannot start at head,
+                        // because history it never saw is history it can
+                        // never rebuild. The stored cursor wins after
+                        // that, so the seed is not a floor and does not
+                        // re-apply on restart. The manifest rejects
+                        // `start_block` without `resume`, which would
+                        // otherwise rescan from it on every open.
                         let (cursor_key, initial_cursor) = if *resume {
                             let key = chainlog_cursor_key(chain, *address, *event_signature);
                             let seed = read_chain_log_cursor(
                                 &self.shared.components.store,
                                 module.name.as_str(),
                                 &key,
-                            );
+                            )
+                            .or(*start_block);
                             (Some(key), seed)
                         } else {
                             (None, None)

@@ -366,3 +366,79 @@ fn host_cursor_bytes_never_charge_the_author_quota() {
         .set("b", &[0u8; 3])
         .expect("the cursor commits leave the author's quota headroom intact");
 }
+
+/// `start_block` seeds the first boot only. A module whose whole state
+/// derives from logs cannot start at head, because history it never saw is
+/// history it can never rebuild: a conditional order created before the
+/// daemon first ran would otherwise never be polled. Once a cursor exists
+/// the store wins, so the seed is a one-time floor and not a rescan point.
+#[tokio::test]
+async fn start_block_seeds_the_first_boot_and_then_yields_to_the_stored_cursor() {
+    let Some(wasm) = example_wasm_or_skip() else {
+        return;
+    };
+    const SEED: u64 = 17_883_049;
+    const ADVANCED: u64 = SEED + 5_000;
+
+    let booted = scenario()
+        .wasm(wasm)
+        .module(
+            TestManifest::new("example")
+                .cap("logging")
+                .event_trigger_resuming(1, Some(SEED)),
+        )
+        .boot()
+        .await
+        .expect("the example boots alive");
+
+    let sources = booted.supervisor.source_plan().event_sources;
+    assert_eq!(sources.len(), 1);
+    let key = sources[0]
+        .cursor_key
+        .clone()
+        .expect("a resuming trigger carries a cursor key");
+    assert_eq!(
+        sources[0].initial_cursor,
+        Some(SEED),
+        "an empty store falls back to the declared start block",
+    );
+
+    let store = booted.supervisor.shared.components.store.clone();
+    let mut cursors = ChainLogCursors::default();
+    commit_chain_log_cursor(&store, &mut cursors, "example", &key, ADVANCED, false);
+
+    assert_eq!(
+        booted.supervisor.source_plan().event_sources[0].initial_cursor,
+        Some(ADVANCED),
+        "a stored cursor outranks the seed, so a restart never rescans from it",
+    );
+}
+
+/// A resuming trigger without a seed keeps the historical behaviour: an
+/// empty store starts at head rather than replaying any history.
+#[tokio::test]
+async fn a_resuming_trigger_without_a_start_block_still_starts_at_head() {
+    let Some(wasm) = example_wasm_or_skip() else {
+        return;
+    };
+    let booted = scenario()
+        .wasm(wasm)
+        .module(
+            TestManifest::new("example")
+                .cap("logging")
+                .event_trigger_resuming(1, None),
+        )
+        .boot()
+        .await
+        .expect("the example boots alive");
+
+    let sources = booted.supervisor.source_plan().event_sources;
+    assert!(
+        sources[0].cursor_key.is_some(),
+        "resume is on, so the cursor is durable",
+    );
+    assert_eq!(
+        sources[0].initial_cursor, None,
+        "no seed and no stored cursor means head, as before",
+    );
+}

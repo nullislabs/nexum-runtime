@@ -312,6 +312,7 @@ mod tests {
         "invalid_event_address",
         "invalid_event_topic",
         "non_string_trigger_filter",
+        "start_block_without_resume",
         // LoadRefusal.
         "section_unclaimed",
         "extension_namespace_claimed",

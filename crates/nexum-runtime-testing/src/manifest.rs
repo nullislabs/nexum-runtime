@@ -127,6 +127,24 @@ impl TestManifest {
         self
     }
 
+    /// Append an event trigger carrying a durable cursor, optionally seeded
+    /// with a first-boot `start_block`.
+    #[must_use]
+    pub fn event_trigger_resuming(mut self, chain_id: u64, start_block: Option<u64>) -> Self {
+        let mut table = trigger("event", chain_id);
+        table.insert("resume".into(), true.into());
+        if let Some(height) = start_block {
+            table.insert(
+                "start_block".into(),
+                i64::try_from(height)
+                    .expect("test start_block fits an i64")
+                    .into(),
+            );
+        }
+        self.triggers.push(table);
+        self
+    }
+
     /// Append an extension trigger; no filters admits every delivery of the kind.
     #[must_use]
     pub fn extension_trigger(mut self, kind: &str, filters: &[(&str, &str)]) -> Self {
@@ -257,6 +275,7 @@ mod tests {
                 event_signature: None,
                 resume: false,
                 max_lookback: None,
+                start_block: None,
             }
         ));
     }
