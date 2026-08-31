@@ -69,6 +69,12 @@ pub enum Trigger {
         /// Backfill cap in blocks for a `resume` trigger; `None`
         /// backfills the whole gap, a cap drops the oldest missed blocks.
         max_lookback: Option<u64>,
+        /// Height a first boot backfills from, for a module whose state
+        /// is built only from logs and so cannot start at head. Usually
+        /// the contract's deployment block. Applies once: a stored
+        /// cursor always wins, so this seeds nothing after the first
+        /// completed chunk. Requires `resume`.
+        start_block: Option<u64>,
     },
     /// A cron expression's time arriving; parsed but not dispatched (the
     /// supervisor warns).
@@ -106,6 +112,8 @@ enum CoreTrigger {
         resume: bool,
         #[serde(default)]
         max_lookback: Option<u64>,
+        #[serde(default)]
+        start_block: Option<u64>,
     },
     Schedule {
         cron: String,
@@ -125,8 +133,17 @@ impl TryFrom<CoreTrigger> for Trigger {
                 event_signature,
                 resume,
                 max_lookback,
+                start_block,
             } => Self::Event {
                 chain_id,
+                start_block: match start_block {
+                    Some(height) if !resume => {
+                        return Err(ParseError::StartBlockWithoutResume {
+                            start_block: height,
+                        });
+                    }
+                    other => other,
+                },
                 address: address
                     .map(|raw| {
                         raw.parse::<Address>()

@@ -103,6 +103,18 @@ pub enum ParseError {
         /// The filter key.
         key: String,
     },
+    /// An event trigger declaring `start_block` without `resume`. The seed
+    /// only applies while no stored cursor exists, so without a durable
+    /// cursor the trigger would rescan from `start_block` on every
+    /// restart rather than backfilling once.
+    #[error(
+        "manifest: event trigger `start_block` ({start_block}) requires `resume = true`, \
+         else every restart rescans from it"
+    )]
+    StartBlockWithoutResume {
+        /// The declared start height.
+        start_block: u64,
+    },
 }
 
 impl From<InvalidModuleName> for ParseError {

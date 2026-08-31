@@ -100,6 +100,65 @@ event_signature = "0x00000000000000000000000000000000000000000000000000000000dea
         }
     }
 
+    /// `start_block` reaches the trigger, and is refused without `resume`:
+    /// with no durable cursor the seed would apply on every open, turning a
+    /// one-time backfill into a rescan from that height on each restart.
+    #[test]
+    fn load_accepts_start_block_only_alongside_resume() {
+        fn event_trigger(extra: &str) -> String {
+            format!(
+                "[component]\nname = \"seeded\"\n\n[dependencies]\nchain = {{}}\n\n\
+                 [[trigger]]\non       = \"event\"\nchain_id = 1\n{extra}\n"
+            )
+        }
+
+        let loaded = validate(&event_trigger("resume = true\nstart_block = 17883049"))
+            .expect("a resuming trigger carries its seed");
+        assert!(
+            matches!(
+                &loaded.triggers[0],
+                Trigger::Event {
+                    resume: true,
+                    start_block: Some(17_883_049),
+                    ..
+                }
+            ),
+            "{:?}",
+            loaded.triggers[0],
+        );
+
+        let err = validate(&event_trigger("start_block = 17883049"))
+            .expect_err("a seed without a cursor is refused");
+        assert!(
+            matches!(
+                err,
+                ParseError::StartBlockWithoutResume {
+                    start_block: 17_883_049
+                }
+            ),
+            "{err:?}",
+        );
+        // Operator wording pin.
+        assert!(
+            err.to_string().contains("requires `resume = true`"),
+            "{err}"
+        );
+
+        let loaded = validate(&event_trigger("resume = true"))
+            .expect("the seed stays optional under resume");
+        assert!(
+            matches!(
+                &loaded.triggers[0],
+                Trigger::Event {
+                    start_block: None,
+                    ..
+                }
+            ),
+            "{:?}",
+            loaded.triggers[0],
+        );
+    }
+
     /// Malformed event trigger hex refuses the manifest at load, not at
     /// first dispatch, with a typed variant carrying the value and the
     /// operator wording pinned verbatim.
