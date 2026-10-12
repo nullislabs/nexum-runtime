@@ -29,7 +29,7 @@ use tracing::{error, info, warn};
 
 use crate::bindings::nexum;
 use crate::runtime::restart_policy::{backoff_for, jitter_seed};
-use crate::supervisor::{EventSource, Supervisor};
+use crate::supervisor::{EventSource, ReceivedAt, Supervisor};
 use nexum_primitives::module_id::ModuleId;
 use nexum_runtime_api::RuntimeTypes;
 use nexum_runtime_api::{ExtensionDelivery, ExtensionSource};
@@ -89,9 +89,7 @@ pub fn open_block_streams(
 ) -> Vec<TaggedBlockStream> {
     let mut streams = Vec::new();
     for &chain in chains {
-        let (tx, rx) = mpsc::channel::<
-            Result<(Chain, alloy_rpc_types_eth::Header), (Chain, TransportError)>,
-        >(RECONNECT_CHANNEL_BUF);
+        let (tx, rx) = mpsc::channel::<TaggedBlock>(RECONNECT_CHANNEL_BUF);
         let pool = pool.clone();
         tasks.push(
             format!("{SOURCE_KIND_BLOCK}:{}", chain.id()),
@@ -167,7 +165,7 @@ async fn backoff_pause(attempt: &mut u32, seed: u64, log: impl FnOnce(u32, u64))
 async fn reconnecting_block_task(
     pool: ProviderPool,
     chain: Chain,
-    tx: mpsc::Sender<Result<(Chain, alloy_rpc_types_eth::Header), (Chain, TransportError)>>,
+    tx: mpsc::Sender<TaggedBlock>,
 ) -> TaskExit {
     let chain_id = chain.id();
     let seed = jitter_seed(&format!("block-{chain_id}"));
@@ -197,6 +195,7 @@ async fn reconnecting_block_task(
                     .increment(1);
                 }
                 while let Some(item) = inner.next().await {
+                    let received = ReceivedAt::now();
                     let now = Instant::now();
                     if attempt > 0
                         && last_event.is_some_and(|t| now.duration_since(t) >= HEALTHY_WINDOW)
@@ -238,7 +237,7 @@ async fn reconnecting_block_task(
                         .set(header.number as f64);
                     }
                     let tagged = item
-                        .map(|header| (chain, header))
+                        .map(|header| (chain, header, received))
                         .map_err(|err| (chain, err));
                     if tx.send(tagged).await.is_err() {
                         // Receiver dropped -> engine shutting down.
@@ -375,12 +374,13 @@ impl BulkSource<'_> {
                 .await
             {
                 Ok(logs) => {
+                    let received = ReceivedAt::now();
                     attempt = 0;
                     for log in logs {
                         let tagged = (
                             self.module.clone(),
                             self.chain,
-                            ChainLogItem::Log(Box::new(log)),
+                            ChainLogItem::Log(Box::new(log), received),
                             self.cursor_key.cloned(),
                         );
                         if self.tx.send(tagged).await.is_err() {
@@ -688,12 +688,13 @@ async fn reconnecting_chain_log_task(
                         tail_block = t.number,
                         "event source tail reorged while disconnected - retracting its logs",
                     );
+                    let received = ReceivedAt::now();
                     for mut log in t.logs {
                         log.removed = true;
                         let tagged = (
                             module.clone(),
                             chain,
-                            ChainLogItem::Log(Box::new(log)),
+                            ChainLogItem::Log(Box::new(log), received),
                             cursor_key.clone(),
                         );
                         if tx.send(tagged).await.is_err() {
@@ -702,6 +703,7 @@ async fn reconnecting_chain_log_task(
                     }
                 }
                 while let Some(item) = inner.next().await {
+                    let received = ReceivedAt::now();
                     let now = Instant::now();
                     if attempt > 0
                         && last_event.is_some_and(|t| now.duration_since(t) >= HEALTHY_WINDOW)
@@ -723,7 +725,7 @@ async fn reconnecting_chain_log_task(
                                 let tagged = (
                                     module.clone(),
                                     chain,
-                                    ChainLogItem::Log(Box::new(log.clone())),
+                                    ChainLogItem::Log(Box::new(log.clone()), received),
                                     cursor_key.clone(),
                                 );
                                 if tx.send(tagged).await.is_err() {
@@ -797,19 +799,18 @@ async fn reconnecting_chain_log_task(
     }
 }
 
-/// Block headers tagged with the chain they came from. The error side
-/// carries the chain too, so a failing stream names itself.
-pub type TaggedBlockStream = std::pin::Pin<
-    Box<
-        dyn futures::Stream<
-                Item = Result<(Chain, alloy_rpc_types_eth::Header), (Chain, TransportError)>,
-            > + Send,
-    >,
->;
+/// `(chain, header, received)`. The error side carries the chain too, so a
+/// failing stream names itself.
+pub type TaggedBlock =
+    Result<(Chain, alloy_rpc_types_eth::Header, ReceivedAt), (Chain, TransportError)>;
+/// Block headers tagged with the chain they came from and when the host
+/// received them.
+pub type TaggedBlockStream = std::pin::Pin<Box<dyn futures::Stream<Item = TaggedBlock> + Send>>;
 /// One chain-log channel item.
 pub enum ChainLogItem {
-    /// A log to dispatch, `removed` already stamped.
-    Log(Box<alloy_rpc_types_eth::Log>),
+    /// A log to dispatch, `removed` already stamped, and when its batch
+    /// reached the host.
+    Log(Box<alloy_rpc_types_eth::Log>, ReceivedAt),
     /// First block past a completed bulk chunk; commits the resume cursor
     /// without a dispatch.
     Frontier(u64),
@@ -935,7 +936,7 @@ pub async fn run<T: RuntimeTypes<State = HostState<T>>, G>(
         // so an in-flight wasmtime call never gets cancelled by a
         // shutdown signal arriving mid-dispatch.
         enum NextTrigger<G> {
-            Block(nexum::host::types::Block),
+            Block(nexum::host::types::Block, ReceivedAt),
             // The alloy `Log` is boxed so the `Chain` tag does not push
             // the enum past the large-variant lint threshold.
             Event(
@@ -943,9 +944,12 @@ pub async fn run<T: RuntimeTypes<State = HostState<T>>, G>(
                 Chain,
                 Box<alloy_rpc_types_eth::Log>,
                 Option<Arc<str>>,
+                ReceivedAt,
             ),
             CursorFrontier(ModuleId, Arc<str>, u64),
-            Extension(ExtensionDelivery),
+            // An extension stream is polled only here, so this is the first
+            // instant the host holds the delivery.
+            Extension(ExtensionDelivery, ReceivedAt),
             Schedule(super::schedule::ScheduleTick),
             // Carries the drain guard `shutdown` yielded.
             Shutdown(G),
@@ -964,12 +968,15 @@ pub async fn run<T: RuntimeTypes<State = HostState<T>>, G>(
                 None => NextTrigger::StreamEnd(super::schedule::SOURCE_KIND_SCHEDULE),
             },
             next = blocks.next() => match next {
-                Some(Ok((chain, header))) => NextTrigger::Block(nexum::host::types::Block {
-                    chain_id: chain.id(),
-                    number: header.number,
-                    hash: header.hash.as_slice().to_vec(),
-                    timestamp: header.timestamp.saturating_mul(1000),
-                }),
+                Some(Ok((chain, header, received))) => NextTrigger::Block(
+                    nexum::host::types::Block {
+                        chain_id: chain.id(),
+                        number: header.number,
+                        hash: header.hash.as_slice().to_vec(),
+                        timestamp: header.timestamp.saturating_mul(1000),
+                    },
+                    received,
+                ),
                 Some(Err((chain, err))) => {
                     warn!(
                         chain_id = chain.id(),
@@ -982,8 +989,8 @@ pub async fn run<T: RuntimeTypes<State = HostState<T>>, G>(
                 None => NextTrigger::StreamEnd(SOURCE_KIND_BLOCK),
             },
             next = chain_logs.next() => match next {
-                Some((module, chain, ChainLogItem::Log(log), cursor_key)) => {
-                    NextTrigger::Event(module, chain, log, cursor_key)
+                Some((module, chain, ChainLogItem::Log(log, received), cursor_key)) => {
+                    NextTrigger::Event(module, chain, log, cursor_key, received)
                 }
                 Some((module, _, ChainLogItem::Frontier(frontier), Some(key))) => {
                     NextTrigger::CursorFrontier(module, key, frontier)
@@ -993,33 +1000,35 @@ pub async fn run<T: RuntimeTypes<State = HostState<T>>, G>(
                 None => NextTrigger::StreamEnd(SOURCE_KIND_CHAIN_LOG),
             },
             next = extension_deliveries.next() => match next {
-                Some(delivery) => NextTrigger::Extension(delivery),
+                Some(delivery) => NextTrigger::Extension(delivery, ReceivedAt::now()),
                 // Extension source tasks loop forever; `None` means one exited.
                 None => NextTrigger::StreamEnd("extension"),
             },
         };
 
         match next {
-            NextTrigger::Block(block) => {
-                supervisor.dispatch_block(block).await;
+            NextTrigger::Block(block, received) => {
+                supervisor.dispatch_block_received(block, received).await;
                 dispatched_blocks += 1;
             }
-            NextTrigger::Event(module, chain, log, cursor_key) => {
+            NextTrigger::Event(module, chain, log, cursor_key, received) => {
                 supervisor
-                    .dispatch_event(&module, chain, *log, cursor_key.as_deref())
+                    .dispatch_event_received(&module, chain, *log, cursor_key.as_deref(), received)
                     .await;
                 dispatched_events += 1;
             }
             NextTrigger::CursorFrontier(module, key, frontier) => {
                 supervisor.commit_chain_log_frontier(&module, &key, frontier);
             }
-            NextTrigger::Extension(delivery) => {
-                supervisor.dispatch_extension_trigger(delivery).await;
+            NextTrigger::Extension(delivery, received) => {
+                supervisor
+                    .dispatch_extension_trigger_received(delivery, received)
+                    .await;
                 dispatched_extension_triggers += 1;
             }
             NextTrigger::Schedule(tick) => {
                 supervisor
-                    .dispatch_schedule(&tick.module, tick.fired_at)
+                    .dispatch_schedule_received(&tick.module, tick.fired_at, tick.received)
                     .await;
                 dispatched_schedule_ticks += 1;
             }
@@ -1397,7 +1406,7 @@ mod tests {
 
     async fn recv(stream: &mut TaggedChainLogStream) -> Log {
         match recv_item(stream).await {
-            ChainLogItem::Log(log) => *log,
+            ChainLogItem::Log(log, _) => *log,
             ChainLogItem::Frontier(block) => panic!("expected a log, got the frontier {block}"),
         }
     }
@@ -1863,7 +1872,7 @@ mod tests {
 
         assert!(matches!(
             recv_item(&mut stream).await,
-            ChainLogItem::Log(log) if log.block_number == Some(10),
+            ChainLogItem::Log(log, _) if log.block_number == Some(10),
         ));
         assert!(
             matches!(recv_item(&mut stream).await, ChainLogItem::Frontier(800)),
@@ -1875,7 +1884,7 @@ mod tests {
         );
         assert!(matches!(
             recv_item(&mut stream).await,
-            ChainLogItem::Log(log) if log.block_number == Some(1_900),
+            ChainLogItem::Log(log, _) if log.block_number == Some(1_900),
         ));
         assert!(
             matches!(recv_item(&mut stream).await, ChainLogItem::Frontier(2_000)),
@@ -1883,7 +1892,7 @@ mod tests {
         );
         assert!(matches!(
             recv_item(&mut stream).await,
-            ChainLogItem::Log(log) if log.block_number == Some(2_000),
+            ChainLogItem::Log(log, _) if log.block_number == Some(2_000),
         ));
         tasks.shutdown().await;
     }
@@ -2482,7 +2491,7 @@ mod tests {
         let header = tokio::time::timeout(Duration::from_secs(600), async {
             loop {
                 match stream.next().await.expect("stream alive") {
-                    Ok((_, header)) => return header,
+                    Ok((_, header, _)) => return header,
                     Err(_) => continue,
                 }
             }
@@ -2522,7 +2531,7 @@ mod tests {
                     .expect("one stream");
                     let header = loop {
                         match stream.next().await.expect("stream alive") {
-                            Ok((_, header)) => break header,
+                            Ok((_, header, _)) => break header,
                             Err(_) => continue,
                         }
                     };

@@ -11,6 +11,7 @@ use tracing_core::Level;
 
 use super::Supervisor;
 use super::cursors::{commit_chain_log_cursor, commit_chain_log_frontier};
+use super::delivery::{Arrival, ReceivedAt};
 use super::lifecycle::{revive_one, sweep};
 use super::load::LoadedModule;
 use crate::bindings::nexum;
@@ -24,10 +25,21 @@ use nexum_runtime_wasm::HostState;
 impl<T: RuntimeTypes<State = HostState<T>>> Supervisor<T> {
     /// The restart sweep runs first; returns the number of modules invoked.
     pub async fn dispatch_block(&mut self, block: nexum::host::types::Block) -> usize {
+        self.dispatch_block_received(block, ReceivedAt::now()).await
+    }
+
+    /// [`dispatch_block`](Self::dispatch_block) for a block the host took
+    /// from its source at `received`.
+    pub async fn dispatch_block_received(
+        &mut self,
+        block: nexum::host::types::Block,
+        received: ReceivedAt,
+    ) -> usize {
         let chain = Chain::from_id(block.chain_id);
         let chain_id = chain.id();
         let block_number = block.number;
         let trigger = nexum::host::types::Trigger::Block(block);
+        let arrival = Arrival::new(&trigger, received);
         let now = Instant::now();
         sweep(&self.shared, &mut self.modules, now, self.stop.as_ref()).await;
 
@@ -73,7 +85,7 @@ impl<T: RuntimeTypes<State = HostState<T>>> Supervisor<T> {
                 break;
             }
             if matches!(
-                self.dispatch_to(idx, chain_id, "block", block_number, &trigger, now)
+                self.dispatch_to(idx, chain_id, "block", block_number, &arrival, now)
                     .await,
                 DispatchOutcome::Ok,
             ) {
@@ -113,8 +125,22 @@ impl<T: RuntimeTypes<State = HostState<T>>> Supervisor<T> {
         log: alloy_rpc_types_eth::Log,
         cursor_key: Option<&str>,
     ) -> bool {
+        self.dispatch_event_received(module_name, chain, log, cursor_key, ReceivedAt::now())
+            .await
+    }
+
+    /// [`dispatch_event`](Self::dispatch_event) for a log the host took from
+    /// its source at `received`.
+    pub async fn dispatch_event_received(
+        &mut self,
+        module_name: &ModuleId,
+        chain: Chain,
+        log: alloy_rpc_types_eth::Log,
+        cursor_key: Option<&str>,
+        received: ReceivedAt,
+    ) -> bool {
         let ok = self
-            .dispatch_event_inner(module_name, chain, log, cursor_key)
+            .dispatch_event_inner(module_name, chain, log, cursor_key, received)
             .await;
         if !ok && let Some(key) = cursor_key {
             self.chain_log_cursors.hold(module_name.as_str(), key);
@@ -140,6 +166,7 @@ impl<T: RuntimeTypes<State = HostState<T>>> Supervisor<T> {
         chain: Chain,
         log: alloy_rpc_types_eth::Log,
         cursor_key: Option<&str>,
+        received: ReceivedAt,
     ) -> bool {
         let now = Instant::now();
         // Skipped: the cursor stays put, so `resume = true` replays the
@@ -179,13 +206,14 @@ impl<T: RuntimeTypes<State = HostState<T>>> Supervisor<T> {
         let block_number = log.block_number;
         let removed = log.removed;
         let trigger = nexum::host::types::Trigger::Event(super::sources::wit_log(&log, chain));
+        let arrival = Arrival::new(&trigger, received);
         let ok = matches!(
             self.dispatch_to(
                 idx,
                 chain.id(),
                 "event",
                 block_number.unwrap_or_default(),
-                &trigger,
+                &arrival,
                 now,
             )
             .await,
@@ -237,6 +265,18 @@ impl<T: RuntimeTypes<State = HostState<T>>> Supervisor<T> {
 
     /// The restart sweep runs first; returns the number of modules invoked.
     pub async fn dispatch_extension_trigger(&mut self, delivery: ExtensionDelivery) -> usize {
+        self.dispatch_extension_trigger_received(delivery, ReceivedAt::now())
+            .await
+    }
+
+    /// [`dispatch_extension_trigger`](Self::dispatch_extension_trigger) for a
+    /// delivery the host took from its source at `received`.
+    pub async fn dispatch_extension_trigger_received(
+        &mut self,
+        delivery: ExtensionDelivery,
+        received: ReceivedAt,
+    ) -> usize {
+        let arrival = Arrival::new(&delivery.trigger, received);
         let now = Instant::now();
         sweep(&self.shared, &mut self.modules, now, self.stop.as_ref()).await;
 
@@ -274,7 +314,7 @@ impl<T: RuntimeTypes<State = HostState<T>>> Supervisor<T> {
             }
             // Extension deliveries are not chain-scoped; telemetry carries the 0 sentinel.
             if matches!(
-                self.dispatch_to(idx, 0, delivery.extension_kind, 0, &delivery.trigger, now)
+                self.dispatch_to(idx, 0, delivery.extension_kind, 0, &arrival, now)
                     .await,
                 DispatchOutcome::Ok,
             ) {
@@ -291,7 +331,7 @@ impl<T: RuntimeTypes<State = HostState<T>>> Supervisor<T> {
         chain_id: u64,
         trigger_kind: &'static str,
         block_number: u64,
-        trigger: &nexum::host::types::Trigger,
+        arrival: &Arrival<'_>,
         now: Instant,
     ) -> DispatchOutcome {
         let poison_policy = self.policy;
@@ -328,13 +368,20 @@ impl<T: RuntimeTypes<State = HostState<T>>> Supervisor<T> {
             return DispatchOutcome::FuelSetFailed;
         }
         let start = Instant::now();
+        arrival.observe(
+            &module.name,
+            chain_id,
+            trigger_kind,
+            start,
+            self.shared.clocks.as_ref(),
+        );
         // A deadline hit is fatal like a trap: cancellation leaves the store
         // unusable, so the trap arm must mark the module dead.
         let deadline = module.seed.dispatch_deadline;
         let call = module
             .live
             .bindings
-            .call_on_trigger(&mut module.live.store, trigger);
+            .call_on_trigger(&mut module.live.store, arrival.trigger);
         let bounded = with_dispatch_deadline(deadline, call).await;
         let deadline_hit = bounded.is_err();
         let result = bounded.unwrap_or_else(|exceeded| Err(wasmtime::Error::from(exceeded)));
@@ -441,6 +488,18 @@ impl<T: RuntimeTypes<State = HostState<T>>> Supervisor<T> {
     /// module accepted it. A tick that does not reach the guest is dropped,
     /// never queued or replayed: the next one comes from the source.
     pub async fn dispatch_schedule(&mut self, module_name: &ModuleId, fired_at: u64) -> bool {
+        self.dispatch_schedule_received(module_name, fired_at, ReceivedAt::now())
+            .await
+    }
+
+    /// [`dispatch_schedule`](Self::dispatch_schedule) for a tick its source
+    /// generated at `received`.
+    pub async fn dispatch_schedule_received(
+        &mut self,
+        module_name: &ModuleId,
+        fired_at: u64,
+        received: ReceivedAt,
+    ) -> bool {
         let now = Instant::now();
         if self.stop_requested() {
             metrics::counter!(
@@ -475,9 +534,10 @@ impl<T: RuntimeTypes<State = HostState<T>>> Supervisor<T> {
 
         let trigger =
             nexum::host::types::Trigger::Schedule(nexum::host::types::ScheduleTick { fired_at });
+        let arrival = Arrival::new(&trigger, received);
         // A schedule is not chain-scoped; telemetry carries the 0 sentinel.
         matches!(
-            self.dispatch_to(idx, 0, "schedule", 0, &trigger, now).await,
+            self.dispatch_to(idx, 0, "schedule", 0, &arrival, now).await,
             DispatchOutcome::Ok,
         )
     }

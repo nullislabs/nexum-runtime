@@ -68,6 +68,16 @@ pub const METRICS: &[Metric] = &[
         help: "Chain responses truncated at the configured size cap.",
     },
     Metric {
+        name: "nexum_runtime_delivery_latency_seconds",
+        kind: Kind::Histogram,
+        help: "Seconds from the host receiving a trigger from its source to the handler starting, by module and trigger kind.",
+    },
+    Metric {
+        name: "nexum_runtime_dispatch_block_age_seconds",
+        kind: Kind::Histogram,
+        help: "Wall-clock seconds from a block's own timestamp to the handler starting, by module, trigger kind and chain. Not the engine's latency: it includes propagation and any polling interval.",
+    },
+    Metric {
         name: "nexum_runtime_dispatch_dropped_total",
         kind: Kind::Counter,
         help: "Triggers dropped before dispatch, by reason.",
@@ -141,6 +151,11 @@ pub const METRICS: &[Metric] = &[
         name: "nexum_runtime_source_reconnects_total",
         kind: Kind::Counter,
         help: "Source reconnects by source_kind and chain; source_kind \"chain-log\" also carries module.",
+    },
+    Metric {
+        name: "nexum_runtime_start_time_seconds",
+        kind: Kind::Gauge,
+        help: "Unix time the engine started, in seconds; time() minus this is the uptime.",
     },
 ];
 
