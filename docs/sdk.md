@@ -151,17 +151,11 @@ A module that needs one raw call uses `host.request(chain_id, method, params)`, 
 
 `ProviderHost::provider(chain)` gives an alloy `RootProvider` over the host, and `block_on` drives its futures.
 It needs a host that is `Clone + Send + Sync + 'static`.
-The generated `WitBindgenHost` is a unit struct with no `Clone` impl, so add one in your crate before you call `provider` on it:
+The generated `WitBindgenHost` is `Copy`, so a module calls `provider` on it directly:
 
 ```rust
 use alloy_provider::Provider as _;
 use nexum_sdk::chain::{Chain, ProviderHost, block_on};
-
-impl Clone for WitBindgenHost {
-    fn clone(&self) -> Self {
-        Self
-    }
-}
 
 // In a handler:
 let provider = WitBindgenHost.provider(Chain::sepolia());

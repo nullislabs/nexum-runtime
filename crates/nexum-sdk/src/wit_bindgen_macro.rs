@@ -37,7 +37,9 @@ macro_rules! bind_host_via_wit_bindgen {
     (caps: [$($cap:ident),* $(,)?]) => {
         /// Wraps the module's per-cdylib wit-bindgen imports. Carries a
         /// trait impl for each declared capability, so a module binds the
-        /// seams it uses and not the composed `Host`.
+        /// seams it uses and not the composed `Host`. `Copy`, because
+        /// `ProviderHost::provider` takes a cloneable host.
+        #[derive(::core::clone::Clone, ::core::marker::Copy)]
         struct WitBindgenHost;
 
         /// Lift the wit-bindgen `types.fault` into the SDK's `Fault`.
@@ -115,6 +117,13 @@ macro_rules! __bind_host_cap_via_wit_bindgen {
                 nexum::host::chain::request(chain_id, method, params).map_err(convert_chain_err)
             }
         }
+
+        // Every module that declares `chain` checks this at compile time,
+        // so the adapter cannot lose a bound `host.provider(chain)` needs.
+        const _: fn() = || {
+            fn provider_host<H: $crate::chain::ProviderHost>() {}
+            provider_host::<WitBindgenHost>();
+        };
 
         /// Lift the wit-bindgen `chain.chain-error` into the SDK's
         /// host-neutral `ChainError`.
