@@ -4,6 +4,9 @@ status: accepted
 
 # `local-store` namespaces each module by a deterministic hash prefix
 
+> Amendment: [ADR-0026](0026-the-local-store-carries-a-format-version.md) added a second table, `nexum:store-meta`, which holds the engine's store format version.
+> The shared table below is unchanged, and it is still the only table a module reaches.
+
 ## Context
 
 `nexum:host/local-store` is one key-value store shared by every module the runtime runs.

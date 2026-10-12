@@ -17,6 +17,7 @@ nexum-runtime-api = { path = "../nexum-runtime-api" }
 parking_lot.workspace = true
 redb.workspace = true
 thiserror.workspace = true
+tracing.workspace = true
 
 [dev-dependencies]
 nexum-tasks = { path = "../nexum-tasks" }
