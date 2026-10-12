@@ -436,6 +436,53 @@ impl<T: RuntimeTypes<State = HostState<T>>> Supervisor<T> {
     }
 }
 
+impl<T: RuntimeTypes<State = HostState<T>>> Supervisor<T> {
+    /// Deliver one schedule tick to `module_name`; `true` only when the
+    /// module accepted it. A tick that does not reach the guest is dropped,
+    /// never queued or replayed: the next one comes from the source.
+    pub async fn dispatch_schedule(&mut self, module_name: &ModuleId, fired_at: u64) -> bool {
+        let now = Instant::now();
+        if self.stop_requested() {
+            metrics::counter!(
+                "nexum_runtime_dispatch_dropped_total",
+                "module" => module_name.to_string(),
+                "trigger_kind" => "schedule",
+                "reason" => "shutdown",
+            )
+            .increment(1);
+            return false;
+        }
+        let Some(idx) = self.modules.iter().position(|m| m.name == *module_name) else {
+            warn!(module = %module_name, "no such module - dropping schedule tick");
+            return false;
+        };
+
+        // Poison check first: a poisoned module never triggers a restart attempt.
+        if self.modules[idx].health.is_poisoned() {
+            return false;
+        }
+
+        // A tick revives only its own module, as an event does.
+        if self.modules[idx].health.due_restart(now) {
+            revive_one(&self.shared, &mut self.modules[idx], now).await;
+        }
+
+        // The revive above is deadline-bounded; re-probe so a stop during it
+        // does not start a second bounded call.
+        if self.stop_requested() || !self.modules[idx].health.dispatchable() {
+            return false;
+        }
+
+        let trigger =
+            nexum::host::types::Trigger::Schedule(nexum::host::types::ScheduleTick { fired_at });
+        // A schedule is not chain-scoped; telemetry carries the 0 sentinel.
+        matches!(
+            self.dispatch_to(idx, 0, "schedule", 0, &trigger, now).await,
+            DispatchOutcome::Ok,
+        )
+    }
+}
+
 /// Fuel spent and memory held by the dispatch that just ended; both gauges
 /// hold the last dispatch, so a rarely triggered module reads stale.
 fn record_resource_use<T: RuntimeTypes>(module: &LoadedModule<T>) {

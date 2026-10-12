@@ -2,15 +2,16 @@
 //! dead modules are excluded so no stream opens for an unreachable module.
 
 use std::collections::BTreeSet;
+use std::sync::Arc;
 
 use alloy_chains::Chain;
 
 use super::Supervisor;
 use super::cursors::{chainlog_cursor_key, read_chain_log_cursor};
 use crate::bindings::nexum;
-use crate::manifest::Trigger;
+use crate::manifest::{CronSchedule, Trigger};
 use nexum_primitives::module_id::ModuleId;
-use nexum_runtime_api::RuntimeTypes;
+use nexum_runtime_api::{HostWallClock, RuntimeTypes, WasiClockOverride};
 
 impl<T: RuntimeTypes> Supervisor<T> {
     /// One pass, one health filter: a dead module contributes to no field,
@@ -18,6 +19,7 @@ impl<T: RuntimeTypes> Supervisor<T> {
     pub fn source_plan(&self) -> SourcePlan {
         let mut block_chains: Vec<Chain> = Vec::new();
         let mut event_sources = Vec::new();
+        let mut schedule_sources = Vec::new();
         let mut demanded_extension_kinds = BTreeSet::new();
         let mut dead_hold_triggers = false;
         for module in &self.modules {
@@ -75,7 +77,10 @@ impl<T: RuntimeTypes> Supervisor<T> {
                     Trigger::Extension { extension_kind, .. } => {
                         demanded_extension_kinds.insert(extension_kind.clone());
                     }
-                    Trigger::Schedule { .. } => {}
+                    Trigger::Schedule { cron } => schedule_sources.push(ScheduleSource {
+                        module: module.name.clone(),
+                        cron: cron.clone(),
+                    }),
                 }
             }
         }
@@ -84,9 +89,17 @@ impl<T: RuntimeTypes> Supervisor<T> {
         SourcePlan {
             block_chains,
             event_sources,
+            schedule_sources,
             demanded_extension_kinds,
             dead_hold_triggers,
         }
+    }
+
+    /// The host wall clock a schedule source reads: the WASI override's
+    /// when one is set, so a tick and the guest that receives it agree on
+    /// the time.
+    pub fn wall_clock(&self) -> Arc<dyn HostWallClock + Send + Sync> {
+        WasiClockOverride::effective_wall(self.shared.clocks.as_ref())
     }
 }
 
@@ -96,6 +109,9 @@ pub struct SourcePlan {
     pub block_chains: Vec<Chain>,
     /// The stream tags every log with the owning module for routing.
     pub event_sources: Vec<EventSource>,
+    /// One per schedule trigger; a chain-less source, so it needs no
+    /// `[chains]` entry.
+    pub schedule_sources: Vec<ScheduleSource>,
     /// An extension opens a source only for kinds appearing here.
     pub demanded_extension_kinds: BTreeSet<String>,
     /// A dead module declares at least one trigger.
@@ -108,6 +124,7 @@ impl SourcePlan {
     pub fn viability(&self, open_extension_sources: usize) -> Viability {
         if !self.block_chains.is_empty()
             || !self.event_sources.is_empty()
+            || !self.schedule_sources.is_empty()
             || open_extension_sources > 0
         {
             Viability::Live
@@ -146,6 +163,14 @@ pub struct EventSource {
     /// gap; `Some(cap)` bounds the start to `head - cap`, undershot by up to
     /// the revalidation depth while a tail retraction is pending.
     pub max_lookback: Option<u64>,
+}
+
+/// One schedule source to open, resolved from a module's schedule trigger.
+pub struct ScheduleSource {
+    /// Module whose trigger opened this source.
+    pub module: ModuleId,
+    /// When the source fires, in UTC on the host wall clock.
+    pub cron: CronSchedule,
 }
 
 /// The chain id is not on the alloy log; the batch level supplies it.

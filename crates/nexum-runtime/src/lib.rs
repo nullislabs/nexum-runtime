@@ -35,8 +35,8 @@ pub use nexum_runtime_supervisor::error;
 pub mod supervisor {
     pub use nexum_runtime_supervisor::supervisor::{
         BootEnv, ConfiguredChains, EventSource, HealthPublisher, HealthSnapshot, HealthWatch,
-        ModuleState, SourcePlan, Supervisor, Viability, WasiClockOverride, build_linker,
-        health_channel,
+        ModuleState, ScheduleSource, SourcePlan, Supervisor, Viability, WasiClockOverride,
+        build_linker, health_channel,
     };
 }
 
@@ -113,6 +113,9 @@ pub mod event_loop {
     pub use nexum_runtime_supervisor::event_loop::{
         ChainLogItem, RunEnd, RunOutcome, TaggedBlockStream, TaggedChainLog, TaggedChainLogStream,
         open_block_streams, open_chain_log_streams, run, wait_for_os_signal,
+    };
+    pub use nexum_runtime_supervisor::schedule::{
+        ScheduleStream, ScheduleTick, open_schedule_streams,
     };
     pub use nexum_tasks::SourceTermination;
 }

@@ -3,6 +3,7 @@
 use strum::{IntoStaticStr, VariantNames};
 use thiserror::Error;
 
+use super::cron::CronError;
 use nexum_primitives::module_id::InvalidModuleName;
 
 /// Errors from loading or validating a manifest.
@@ -114,6 +115,17 @@ pub enum ParseError {
     StartBlockWithoutResume {
         /// The declared start height.
         start_block: u64,
+    },
+    /// A schedule trigger `cron` that is not a supported five-field
+    /// expression. Refused at load, so a typo or an unsupported extension
+    /// never becomes a schedule that fires at the wrong time or not at all.
+    #[error("manifest: invalid schedule cron {value:?}: {source}")]
+    InvalidScheduleCron {
+        /// The expression as written.
+        value: String,
+        /// Why it was refused.
+        #[source]
+        source: CronError,
     },
 }
 

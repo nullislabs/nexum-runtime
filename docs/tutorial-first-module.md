@@ -139,7 +139,8 @@ every_n_blocks = "1"
 - Each `[[trigger]]` table declares one thing the engine sends to the module.
   `on = "block"` sends each new block on `chain_id`.
   `on = "event"` sends each log that matches `address` and `event_signature` on `chain_id`.
-  `on = "schedule"` parses but the engine does not dispatch it, so do not build on it.
+  `on = "schedule"` sends a tick each time its five-field `cron` expression matches, in UTC.
+  A tick the engine was not running for is not replayed: see [Schedule triggers](02-modules-triggers-packaging.md#schedule-triggers).
 - `[config]` is opaque to the engine.
   The module receives it in `init` as a list of string pairs.
 
@@ -246,7 +247,7 @@ The macro recognizes five handler names.
 | `init` | `Vec<(String, String)>` | Once after each instantiation, with the `[config]` pairs. |
 | `on_block` | `types::Block` | For each block of a `block` trigger. |
 | `on_event` | `types::Log` | For each log of an `event` trigger. |
-| `on_schedule` | `types::ScheduleTick` | Never today: the engine does not dispatch `schedule` triggers. |
+| `on_schedule` | `types::ScheduleTick` | Each time a `schedule` trigger's `cron` expression matches. |
 | `on_extension` | `types::ExtensionTrigger` | For each delivery of an extension trigger kind. |
 
 Each handler returns `Result<(), Fault>`.

@@ -881,12 +881,14 @@ pub async fn run<T: RuntimeTypes<State = HostState<T>>, G>(
     block_streams: Vec<TaggedBlockStream>,
     chain_log_streams: Vec<TaggedChainLogStream>,
     extension_streams: Vec<ExtensionSource>,
+    schedule_streams: Vec<super::schedule::ScheduleStream>,
     mut tasks: TaskSet,
     shutdown: impl std::future::Future<Output = G> + Send,
 ) -> RunOutcome {
     let chain_log_sources = chain_log_streams.len();
     let has_blocks = !block_streams.is_empty();
     let has_extensions = !extension_streams.is_empty();
+    let has_schedules = !schedule_streams.is_empty();
     // `select_all` over an empty Vec yields `None` immediately, which
     // would trip the "stream ended -> shut down" arm below before the
     // first block / chain-log ever flows. Engine configs that declare
@@ -910,10 +912,16 @@ pub async fn run<T: RuntimeTypes<State = HostState<T>>, G>(
     } else {
         select_all(extension_streams).boxed()
     };
+    let mut schedules: BoxStream<'_, _> = if schedule_streams.is_empty() {
+        futures::stream::pending().boxed()
+    } else {
+        select_all(schedule_streams).boxed()
+    };
     let mut shutdown = Box::pin(shutdown);
     let mut dispatched_blocks: u64 = 0;
     let mut dispatched_events: u64 = 0;
     let mut dispatched_extension_triggers: u64 = 0;
+    let mut dispatched_schedule_ticks: u64 = 0;
     // Chain-log sources are the module-owned ones; once every one of them
     // has reported terminally, the merged stream's end is expected.
     let mut terminal_chain_log_exits: usize = 0;
@@ -938,6 +946,7 @@ pub async fn run<T: RuntimeTypes<State = HostState<T>>, G>(
             ),
             CursorFrontier(ModuleId, Arc<str>, u64),
             Extension(ExtensionDelivery),
+            Schedule(super::schedule::ScheduleTick),
             // Carries the drain guard `shutdown` yielded.
             Shutdown(G),
             SourceExit(TaskExit),
@@ -947,6 +956,13 @@ pub async fn run<T: RuntimeTypes<State = HostState<T>>, G>(
             biased;
             guard = &mut shutdown => NextTrigger::Shutdown(guard),
             exit = tasks.join_next() => NextTrigger::SourceExit(exit),
+            // Ahead of the chain arms: a schedule holds one pending tick at
+            // most, so it cannot starve them, and a backfill cannot hold it.
+            next = schedules.next() => match next {
+                Some(tick) => NextTrigger::Schedule(tick),
+                // Schedule source tasks loop forever; `None` means one exited.
+                None => NextTrigger::StreamEnd(super::schedule::SOURCE_KIND_SCHEDULE),
+            },
             next = blocks.next() => match next {
                 Some(Ok((chain, header))) => NextTrigger::Block(nexum::host::types::Block {
                     chain_id: chain.id(),
@@ -1001,6 +1017,12 @@ pub async fn run<T: RuntimeTypes<State = HostState<T>>, G>(
                 supervisor.dispatch_extension_trigger(delivery).await;
                 dispatched_extension_triggers += 1;
             }
+            NextTrigger::Schedule(tick) => {
+                supervisor
+                    .dispatch_schedule(&tick.module, tick.fired_at)
+                    .await;
+                dispatched_schedule_ticks += 1;
+            }
             NextTrigger::SourceExit(TaskExit::SourceTerminal(term)) => match term.module {
                 Some(ref name) => {
                     terminal_chain_log_exits += 1;
@@ -1010,6 +1032,7 @@ pub async fn run<T: RuntimeTypes<State = HostState<T>>, G>(
                     drop(blocks);
                     drop(chain_logs);
                     drop(extension_deliveries);
+                    drop(schedules);
                     tasks.shutdown().await;
                     error!(
                         chain_id = term.chain_id,
@@ -1035,11 +1058,13 @@ pub async fn run<T: RuntimeTypes<State = HostState<T>>, G>(
                 drop(blocks);
                 drop(chain_logs);
                 drop(extension_deliveries);
+                drop(schedules);
                 tasks.shutdown().await;
                 info!(
                     dispatched_blocks,
                     dispatched_events,
                     dispatched_extension_triggers,
+                    dispatched_schedule_ticks,
                     uptime_secs = started.elapsed().as_secs(),
                     "graceful shutdown complete",
                 );
@@ -1084,6 +1109,7 @@ pub async fn run<T: RuntimeTypes<State = HostState<T>>, G>(
                     drop(blocks);
                     drop(chain_logs);
                     drop(extension_deliveries);
+                    drop(schedules);
                     tasks.shutdown().await;
                     error!(
                         chain_id = term.chain_id,
@@ -1097,7 +1123,7 @@ pub async fn run<T: RuntimeTypes<State = HostState<T>>, G>(
                         RunEnd::SourceTerminal(term),
                     );
                 }
-                if accounted && (has_blocks || has_extensions) {
+                if accounted && (has_blocks || has_extensions || has_schedules) {
                     // Park the exhausted merge so its `None` is not
                     // re-selected.
                     chain_logs = futures::stream::pending().boxed();
@@ -1105,6 +1131,7 @@ pub async fn run<T: RuntimeTypes<State = HostState<T>>, G>(
                     drop(blocks);
                     drop(chain_logs);
                     drop(extension_deliveries);
+                    drop(schedules);
                     tasks.shutdown().await;
                     warn!(
                         "every event source is terminal and no other trigger kind \
@@ -1123,6 +1150,7 @@ pub async fn run<T: RuntimeTypes<State = HostState<T>>, G>(
                     drop(blocks);
                     drop(chain_logs);
                     drop(extension_deliveries);
+                    drop(schedules);
                     // The grace loop above already discarded the dead handle,
                     // so read its label before `shutdown` consumes the set.
                     let died = dead_task_names(tasks.died());
@@ -2785,6 +2813,7 @@ mod tests {
             Vec::new(),
             Vec::new(),
             Vec::new(),
+            Vec::new(),
             nexum_tasks::TaskSet::new(),
             shutdown,
         )
@@ -2852,6 +2881,7 @@ mod tests {
                 block_streams,
                 chain_log_streams,
                 Vec::new(),
+                Vec::new(),
                 tasks,
                 shutdown,
             ),
@@ -2907,6 +2937,7 @@ mod tests {
                 &mut booted.supervisor,
                 block_streams,
                 vec![],
+                Vec::new(),
                 Vec::new(),
                 tasks,
                 shutdown,
@@ -2979,6 +3010,7 @@ mod tests {
                 Vec::new(),
                 chain_log_streams,
                 Vec::new(),
+                Vec::new(),
                 tasks,
                 std::future::pending::<()>(),
             ),
@@ -3036,6 +3068,7 @@ mod tests {
             Duration::from_secs(10),
             run(
                 &mut booted.supervisor,
+                Vec::new(),
                 Vec::new(),
                 Vec::new(),
                 Vec::new(),
@@ -3097,6 +3130,7 @@ mod tests {
                 block_streams,
                 chain_log_streams,
                 Vec::new(),
+                Vec::new(),
                 tasks,
                 shutdown,
             ),
@@ -3126,6 +3160,7 @@ mod tests {
                 &mut booted.supervisor,
                 Vec::new(),
                 chain_log_streams,
+                Vec::new(),
                 Vec::new(),
                 tasks,
                 std::future::pending::<()>(),
@@ -3164,6 +3199,7 @@ mod tests {
                 &mut booted.supervisor,
                 Vec::new(),
                 chain_log_streams,
+                Vec::new(),
                 Vec::new(),
                 tasks,
                 std::future::pending::<()>(),
@@ -3208,6 +3244,7 @@ mod tests {
             run(
                 &mut booted.supervisor,
                 block_streams,
+                Vec::new(),
                 Vec::new(),
                 Vec::new(),
                 tasks,

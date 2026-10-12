@@ -79,6 +79,7 @@ Key design points:
 - **Chain ids are declared per trigger**, not in a top-level `[chains]` table.
   Each `[[trigger]]` names its own `chain_id`.
   If `engine.toml` carries no `[chains.<id>]` entry for a chain a trigger names, the engine refuses the boot in the prepass, before any component is compiled.
+  A `schedule` trigger names no chain, so a component that declares only schedule triggers needs no `[chains]` entry.
 - **`[config]` is opaque to the runtime.**
   The guest receives `list<tuple<string, string>>`.
   The host flattens each TOML scalar to its text form on the way through, and renders an array or a table as its TOML representation.
@@ -180,6 +181,7 @@ flowchart TD
     subgraph SRC["Sources"]
         BS["Block streams (per chain)"]
         LW["Log streams (per event trigger)"]
+        SC["Schedule sources (per schedule trigger)"]
         EX["Extension streams"]
     end
 
@@ -193,6 +195,7 @@ flowchart TD
 
     BS --> EL
     LW --> EL
+    SC --> EL
     EX --> EL
     EL --> SUP
     SUP --> MA
@@ -205,14 +208,110 @@ flowchart TD
 |---|---|---|
 | `block` | A new block on a chain | `eth_subscribe("newHeads")` over an alloy provider, or polling on an HTTP URL |
 | `event` | A log matching the filters | An `eth_getLogs` block-range poller, alloy's `watch_canonical_logs_from`, reorg-aware and backfilling from the start block on open |
-| `schedule` | Not dispatched | Parsed and inert. The supervisor warns at load. |
+| `schedule` | A minute that matches a cron expression, in UTC | A timer on the host wall clock. It reads no chain. |
 | extension kinds | Whatever the extension delivers | `Extension::open_sources` |
 
 Block streams are shared per chain.
 If two components declare block triggers on chain 42161, the runtime opens one block stream and fans it out to both.
 A log stream is opened per event trigger and tagged with the owning component.
+A schedule source is opened per schedule trigger and tagged with the owning component.
 
 Only a dispatchable component contributes to the plan, so no stream opens for a dead or poisoned one.
+
+### Schedule triggers
+
+A `schedule` trigger fires on a cron expression.
+The host evaluates the expression in UTC against its own wall clock.
+[ADR-0027](adr/0027-schedule-triggers-follow-the-wall-clock-and-replay-nothing.md) records the decisions in this section.
+
+```toml
+[[trigger]]
+on = "schedule"
+cron = "*/5 * * * *"
+```
+
+#### Expression syntax
+
+An expression has exactly five fields, with spaces between them.
+
+| Field | Values |
+|---|---|
+| minute | `0` to `59` |
+| hour | `0` to `23` |
+| day of month | `1` to `31` |
+| month | `1` to `12` |
+| day of week | `0` to `7`. `0` and `7` are Sunday. |
+
+A field is one of these forms, or a list of these forms with commas between them.
+
+| Form | Example | Meaning |
+|---|---|---|
+| `*` | `*` | Each value of the field. |
+| A number | `15` | One value. |
+| A range | `9-17` | Each value from the first number to the second number. The first number must not be larger than the second: a range does not wrap. |
+| A step on `*` | `*/15` | The lowest value of the field, then each value at that interval. |
+| A step on a range | `10-40/15` | The first number of the range, then each value at that interval in the range. |
+
+A step starts again in each hour, day, month, or week.
+`*/40` in the minute field fires at minute 0 and at minute 40 of each hour.
+A step must be between 1 and the highest value of its field.
+
+The two day fields obey the rule that Vixie cron uses.
+When the day-of-month field and the day-of-week field are both restricted, the trigger fires on a day that matches one of them.
+`0 0 13 * 5` fires at midnight on day 13 of each month and at midnight on each Friday.
+When one of the two fields is not restricted, the trigger fires only on a day that matches both fields.
+A field is not restricted when it starts with `*`, so `*/2` is not restricted.
+`0 0 */2 * 1` fires at midnight on a Monday that is also an odd day of the month.
+
+#### What is not supported
+
+The engine refuses each of these expressions at load, before it compiles a component.
+The refusal has the `error_kind` label `invalid_schedule_cron` and it shows the expression.
+The engine does not guess a meaning for one of them.
+
+- A seconds field or a year field, thus an expression that has six or seven fields.
+- A macro, for example `@daily`, `@hourly`, or `@reboot`.
+- A timezone, for example a `TZ=` or `CRON_TZ=` prefix.
+  The time is always UTC.
+- The `L`, `W`, `#`, and `?` extensions.
+- A month name or a weekday name, for example `JAN` or `MON`.
+  Use the number.
+- A step on one number, for example `5/15`.
+- A range that wraps, for example `22-2` in the hour field.
+- A value outside the range of its field.
+- A date that occurs in no year, for example `0 0 30 2 *`.
+
+#### Delivery
+
+- **One source for each trigger.**
+  A component that declares two schedule triggers gets the ticks of the two triggers.
+  A tick carries only `fired-at`, so the component cannot tell which trigger sent it.
+- **`fired-at` is the time the host generated the tick.**
+  It is the host wall-clock time in milliseconds since the Unix epoch.
+  It is usually a few milliseconds after the matching minute.
+  It is not rounded to the minute.
+- **No catch-up.**
+  The engine writes no schedule state to disk.
+  The engine does not replay the ticks that came due while it was down.
+  The first tick after a boot is for the first matching minute after the boot.
+- **Pending ticks coalesce to one.**
+  The event loop is serial, so a tick can come due while the engine dispatches a different trigger.
+  Each schedule trigger holds a maximum of one tick that is not yet dispatched.
+  That tick keeps the `fired-at` it was generated with.
+  While that tick waits, the engine drops each later tick of the same trigger and counts it in `nexum_runtime_dispatch_dropped_total` with `reason = "coalesced"`.
+  A slow component thus gets one late tick and not a backlog.
+- **A tick goes before a block or a log.**
+  When a tick, a block, and a log wait at the same time, the event loop dispatches the tick first.
+  A log backfill thus delays a tick by one dispatch and not by the full backfill.
+- **The schedule follows the wall clock.**
+  The source reads the wall clock again at intervals of one second or less.
+  After a forward step of the clock, the trigger fires one time for all the minutes that the step skipped, and then continues from the new time.
+  After a backward step, the trigger fires again when the clock reaches a matching minute, also for a minute that it fired for before the step.
+- **A tick obeys the same limits as each other trigger.**
+  The dispatch rate limit, the fuel budget, the dispatch deadline, the restart backoff, and the poison policy apply to it.
+  The engine drops a tick for a component that is in backoff, and the first tick after the backoff restarts the component.
+  A dead or poisoned component gets no tick.
+  The engine does not send a dropped tick again.
 
 ### Dispatch
 
@@ -339,6 +438,8 @@ An operator deploys a module:
    - one block stream per triggered chain
    - one log stream per event trigger, seeded from its
      durable cursor when resume = true
+   - one schedule source per schedule trigger, started from
+     the present wall-clock time
 
 7. Triggers flow:
    block 19_000_001 on Arbitrum

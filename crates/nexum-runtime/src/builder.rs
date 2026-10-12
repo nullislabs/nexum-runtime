@@ -260,6 +260,7 @@ impl<T: RuntimeTypes<State = HostState<T>>> AssembledRuntime<T> {
             // The shortfall is per-module on `nexum_runtime_module_unverified`.
             verified = supervisor.verified_count(),
             chains = plan.block_chains.len(),
+            schedules = plan.schedule_sources.len(),
             // The drain default tracks `deadline_secs`, so a systemd
             // `TimeoutStopSec` sized against an older deadline is silently
             // too small. Emit the resolved value so it can be compared.
@@ -349,6 +350,13 @@ impl<T: RuntimeTypes<State = HostState<T>>> AssembledRuntime<T> {
             &executor,
             &mut reconnect_tasks,
         );
+        // Schedule sources read the wall clock the guests read, and no chain.
+        let schedule_streams = nexum_runtime_supervisor::schedule::open_schedule_streams(
+            plan.schedule_sources,
+            supervisor.wall_clock(),
+            &executor,
+            &mut reconnect_tasks,
+        );
         // The event-loop task holds the graceful guard until `run` returns
         // (after its final dispatch and cursor commit); shutdown ends the
         // loop between guest calls rather than cancelling it, so the drain
@@ -363,6 +371,7 @@ impl<T: RuntimeTypes<State = HostState<T>>> AssembledRuntime<T> {
                 block_streams,
                 chain_log_streams,
                 extension_streams,
+                schedule_streams,
                 reconnect_tasks,
                 graceful.into_future(),
             )

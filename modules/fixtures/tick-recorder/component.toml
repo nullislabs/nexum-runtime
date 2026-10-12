@@ -1,0 +1,17 @@
+# tick-recorder test fixture. Declares a schedule trigger and no chain, so
+# an engine that runs it alone needs no `[chains]` entry. `on_schedule`
+# logs the tick's `fired-at`, which a test under a manual clock reads back
+# to assert when the trigger fired. A test overrides the manifest inline
+# to change the expression, to add an event trigger, or to set `hold_ms`,
+# which keeps a dispatch open and makes the handler slow.
+
+[component]
+name = "tick-recorder"
+version = "0.1.0"
+
+[dependencies]
+logging = {}
+
+[[trigger]]
+on = "schedule"
+cron = "* * * * *"

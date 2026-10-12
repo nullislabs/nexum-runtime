@@ -8,6 +8,7 @@ use std::collections::BTreeMap;
 use alloy_primitives::{Address, B256};
 use serde::Deserialize;
 
+use super::cron::CronSchedule;
 use super::error::ParseError;
 use nexum_primitives::host_pattern::HostPattern;
 
@@ -76,12 +77,12 @@ pub enum Trigger {
         /// completed chunk. Requires `resume`.
         start_block: Option<u64>,
     },
-    /// A cron expression's time arriving; parsed but not dispatched (the
-    /// supervisor warns).
+    /// A cron expression's time arriving on the host wall clock, in UTC;
+    /// one source per entry, tagged with the owning module. Missed ticks
+    /// are not replayed, and ticks pending for one entry coalesce to one.
     Schedule {
-        /// Standard 5-field cron expression.
-        #[allow(dead_code)]
-        cron: String,
+        /// The validated five-field expression.
+        cron: CronSchedule,
     },
     /// An extension-owned kind. Delivered when the kind matches and
     /// every filter pair is present in the delivery's attributes.
@@ -123,7 +124,8 @@ enum CoreTrigger {
 impl TryFrom<CoreTrigger> for Trigger {
     type Error = ParseError;
 
-    /// Validates the hex filters; the wording is operator-pinned.
+    /// Validates the hex filters and the cron expression; the wording is
+    /// operator-pinned.
     fn try_from(trigger: CoreTrigger) -> Result<Self, ParseError> {
         Ok(match trigger {
             CoreTrigger::Block { chain_id } => Self::Block { chain_id },
@@ -162,7 +164,14 @@ impl TryFrom<CoreTrigger> for Trigger {
                 resume,
                 max_lookback,
             },
-            CoreTrigger::Schedule { cron } => Self::Schedule { cron },
+            CoreTrigger::Schedule { cron } => Self::Schedule {
+                cron: cron
+                    .parse()
+                    .map_err(|source| ParseError::InvalidScheduleCron {
+                        value: cron,
+                        source,
+                    })?,
+            },
         })
     }
 }

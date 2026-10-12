@@ -33,6 +33,7 @@ members = [
     "modules/fixtures/memory-bomb",
     "modules/fixtures/panic-bomb",
     "modules/fixtures/slow-host",
+    "modules/fixtures/tick-recorder",
     "modules/fixtures/topic-parity",
 ]
 # A virtual manifest has no edition, so an absent key means resolver 1.
