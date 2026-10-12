@@ -10,6 +10,13 @@ version = "0.1.0"
 [dependencies]
 logging = {}
 
+# One dispatch per new Sepolia block. The engine refuses to boot unless
+# engine.toml carries a matching `[chains.11155111]` entry, which the
+# committed engine.dev.toml does.
+[[trigger]]
+on = "block"
+chain_id = 11155111
+
 [config]
 # Stringly-typed in 0.2 (typed variant on 0.3 roadmap). Numbers and
 # booleans are flattened to their text form by the host on the way through.

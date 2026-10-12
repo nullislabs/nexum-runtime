@@ -710,7 +710,6 @@ mod tests {
     use crate::manifest::NamespaceCaps;
     use crate::preset::{CoreRuntime, Runtime as RuntimePreset};
     use crate::test_utils::ManualClock;
-    use crate::test_utils::workspace_root;
     use crate::test_utils::{
         Prebuilt, Refusal, TestManifest, example_wasm_or_skip, module_wasm_or_skip,
     };
@@ -720,6 +719,14 @@ mod tests {
     use nexum_runtime_store::LocalStoreBuilder;
     use nexum_runtime_wasm::HostState;
     use wasmtime::component::Linker;
+
+    /// A manifest for the example component that declares no trigger, so a
+    /// launch over a config with no `[chains]` passes the chain gate and
+    /// opens no source. The shipped `modules/example/component.toml`
+    /// declares a block trigger, which needs a configured chain.
+    fn trigger_free_example_manifest(dir: &std::path::Path) -> PathBuf {
+        TestManifest::new("example").cap("logging").write_to(dir)
+    }
 
     /// The preset shortcut reaches the supervisor boot, which bails on the
     /// default config's empty module set.
@@ -1093,9 +1100,9 @@ mod tests {
         let Some(wasm) = example_wasm_or_skip() else {
             return;
         };
-        let manifest = workspace_root().join("modules/example/component.toml");
 
         let dir = tempfile::tempdir().expect("tempdir");
+        let manifest = trigger_free_example_manifest(dir.path());
         let mut config = EngineConfig::default();
         config.engine.state_dir = dir.path().join("state");
 
@@ -1120,8 +1127,8 @@ mod tests {
     /// A `[policy.component]` row keyed to an id equal to the override's
     /// file stem must not bind: the stem is author-controlled, so the
     /// override gets the `[policy]` defaults (ADR-0018). The row here
-    /// excludes `logging`, which the example manifest declares, so the
-    /// launch only succeeds when the row goes unapplied.
+    /// excludes `logging`, which the manifest declares, so the launch only
+    /// succeeds when the row goes unapplied.
     #[tokio::test]
     async fn a_module_source_override_never_binds_a_policy_component_row() {
         let Some(wasm) = example_wasm_or_skip() else {
@@ -1132,9 +1139,9 @@ mod tests {
             .expect("fixture has a file stem")
             .to_string_lossy()
             .into_owned();
-        let manifest = workspace_root().join("modules/example/component.toml");
 
         let dir = tempfile::tempdir().expect("tempdir");
+        let manifest = trigger_free_example_manifest(dir.path());
         let mut config = EngineConfig::default();
         config.engine.state_dir = dir.path().join("state");
         config.modules.push(ModuleEntry::new(
@@ -1380,9 +1387,9 @@ mod tests {
         let Some(wasm) = example_wasm_or_skip() else {
             return;
         };
-        let manifest = workspace_root().join("modules/example/component.toml");
 
         let dir = tempfile::tempdir().expect("tempdir");
+        let manifest = trigger_free_example_manifest(dir.path());
         let mut config = EngineConfig::default();
         config.engine.state_dir = dir.path().join("state");
         // Non-default, so a launch path regressing to a constant fails here.

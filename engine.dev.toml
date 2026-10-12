@@ -12,11 +12,23 @@
 # A deployment does the opposite: it keeps the default and writes the line
 # `nexum digest target/wasm32-wasip2/release/example.wasm` prints into the
 # `digest` key below. See docs/production.md.
+#
+# The example declares a block trigger on Sepolia, so the chain gate needs
+# the `[chains.11155111]` entry below. Its URL comes from the SEPOLIA_RPC_URL
+# environment variable, which keeps a provider key out of this file, and a
+# missing variable is a fatal boot error that names it. The engine substitutes
+# a dollar-brace placeholder anywhere in this file, comments included, so this
+# comment does not spell one out.
 
 [engine]
 state_dir = "./data"
 log_level = "info"
 require_component_digest = false
+
+# An http(s) URL polls for new blocks and is not dialled at boot. A ws(s) URL
+# subscribes to `newHeads` and is dialled at boot.
+[chains.11155111]
+rpc_url = "${SEPOLIA_RPC_URL}"
 
 [[modules]]
 id = "example"
