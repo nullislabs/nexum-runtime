@@ -41,10 +41,10 @@ pub use nexum_runtime_supervisor::test_utils::{
 pub use nexum_runtime_testing::{
     ALLOW_MISSING_WASM, CapturedRpc, FakeNode, JsonValue, ManifestInput, ManualClock, MockResponse,
     MockRpc, MockStateHandle, MockStateStore, MockTypes, Prebuilt, Sample, Serialize, TestManifest,
-    alloy_json_rpc, capture_metrics, example_wasm_or_skip, linked_block, manifest, metrics_util,
-    mock_components, mock_components_from, mocked_pool, module_wasm, module_wasm_or_skip, rpc_err,
-    rpc_head, rpc_ok, samples_named, target_dir, test_chain_configs, test_hash, tower,
-    workspace_root,
+    alloy_json_rpc, block_on_current_thread, capture_metrics, example_wasm_or_skip, linked_block,
+    manifest, metrics_util, mock_components, mock_components_from, mocked_pool, module_wasm,
+    module_wasm_or_skip, rpc_err, rpc_head, rpc_ok, samples_named, target_dir, test_chain_configs,
+    test_hash, tower, workspace_root,
 };
 
 pub(crate) use nexum_runtime_testing::{HARNESS_POLL_INTERVAL, in_memory_logs};

@@ -1,10 +1,25 @@
-use nexum_runtime_api::{BoxError, BuilderContext, ComponentBuilder};
+use std::path::PathBuf;
 
-use crate::local_store_redb::LocalStore;
+use nexum_runtime_api::{BoxError, BuilderContext, ComponentBuilder};
+use tracing::info;
+
+use crate::local_store_redb::{LocalStore, StorageError};
 
 /// Builds the [`LocalStore`] at `data_dir/local-store.redb`, creating the
 /// data directory if it does not exist.
 pub struct LocalStoreBuilder;
+
+/// The local store did not open. The typed cause stays in the chain, so
+/// the boot path can tell a format refusal from an I/O failure.
+#[derive(Debug, thiserror::Error)]
+#[error("open local-store at {}: {source}", path.display())]
+pub struct StoreOpenError {
+    /// The database file.
+    pub path: PathBuf,
+    /// Why it did not open.
+    #[source]
+    pub source: StorageError,
+}
 
 impl ComponentBuilder for LocalStoreBuilder {
     type Output = LocalStore;
@@ -19,9 +34,17 @@ impl ComponentBuilder for LocalStoreBuilder {
                     BoxError::from(format!("create data directory {}: {e}", data_dir.display()))
                 })?;
                 let path = data_dir.join("local-store.redb");
-                LocalStore::open(&path).map_err(|e| {
-                    BoxError::from(format!("open local-store at {}: {e}", path.display()))
-                })
+                let store = match LocalStore::open(&path) {
+                    Ok(store) => store,
+                    Err(source) => return Err(StoreOpenError { path, source }.into()),
+                };
+                info!(
+                    path = %path.display(),
+                    format_version = store.format_version(),
+                    found = ?store.format_found(),
+                    "local store open"
+                );
+                Ok(store)
             })
             .join()
             .await

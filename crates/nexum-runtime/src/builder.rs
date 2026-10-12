@@ -408,7 +408,13 @@ where
         data_dir: &data_dir,
         executor: &executor,
     };
-    let components = components.build::<T>(&build_ctx).await?;
+    // The supervisor counts its own refusals; one a backend raises while it
+    // opens precedes the supervisor, so it is counted here.
+    let components = components
+        .build::<T>(&build_ctx)
+        .await
+        .map_err(RuntimeError::from)
+        .inspect_err(count_boot_refusal)?;
 
     let runtime = AssembledRuntime {
         components,
@@ -800,6 +806,77 @@ mod tests {
         assert!(
             samples_named(&samples, "nexum_runtime_boot_refusals_total").is_empty(),
             "a wait-time failure is not a boot refusal: {samples:?}",
+        );
+    }
+
+    /// A state file stamped by a newer engine refuses the launch at the
+    /// store open, counts under its own label, and stays byte-identical.
+    #[test]
+    fn a_store_from_a_newer_engine_refuses_the_launch_untouched() {
+        use crate::test_utils::metrics_util::debugging::DebugValue;
+        use crate::test_utils::{block_on_current_thread, capture_metrics, samples_named};
+        use nexum_runtime_store::{FORMAT_VERSION, StorageError};
+
+        // Raw redb on purpose: the stamp is an on-disk contract, so its
+        // table, key and encoding are pinned from outside the store crate.
+        const META: redb::TableDefinition<'static, &str, &[u8]> =
+            redb::TableDefinition::new("nexum:store-meta");
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let state_dir = dir.path().join("state");
+        std::fs::create_dir_all(&state_dir).expect("state dir");
+        let path = state_dir.join("local-store.redb");
+        {
+            let db = redb::Database::create(&path).expect("create");
+            let txn = db.begin_write().expect("write txn");
+            txn.open_table(META)
+                .expect("metadata table")
+                .insert(
+                    "format_version",
+                    (FORMAT_VERSION + 1).to_le_bytes().as_slice(),
+                )
+                .expect("stamp");
+            txn.commit().expect("commit");
+        }
+        let before = std::fs::read(&path).expect("read the state file");
+
+        let mut config = EngineConfig::default();
+        config.engine.state_dir = state_dir;
+        let (launched, samples) = capture_metrics(|| {
+            block_on_current_thread(
+                RuntimeBuilder::new(&config)
+                    .runtime::<CoreRuntime>()
+                    .launch(),
+            )
+        });
+        let err = match launched {
+            Ok(_) => panic!("a store from a newer engine must refuse the launch"),
+            Err(err) => err,
+        };
+        assert_eq!(err.error_kind(), Some("store_format_too_new"), "{err}");
+        Refusal::from(err)
+            .variant::<StorageError>(|e| {
+                matches!(e, StorageError::FormatTooNew { found, supported }
+                    if *found == FORMAT_VERSION + 1 && *supported == FORMAT_VERSION)
+            })
+            .names("local-store.redb")
+            .names("restore a backup");
+
+        let hits = samples_named(&samples, "nexum_runtime_boot_refusals_total");
+        assert_eq!(hits.len(), 1, "one series: {samples:?}");
+        assert!(
+            hits[0].has_label("error_kind", "store_format_too_new"),
+            "{:?}",
+            hits[0].labels,
+        );
+        assert!(
+            matches!(hits[0].value, DebugValue::Counter(1)),
+            "{:?}",
+            hits[0].value,
+        );
+        assert!(
+            std::fs::read(&path).expect("read the state file") == before,
+            "the refused launch changed the state file",
         );
     }
 

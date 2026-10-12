@@ -16,7 +16,7 @@ pub use nexum_runtime_api::BoxError;
 pub use nexum_runtime_api::ExtensionError;
 pub use nexum_runtime_api::StoreError;
 pub use nexum_runtime_chain::PoolError;
-pub use nexum_runtime_store::StorageError;
+pub use nexum_runtime_store::{StorageError, StoreOpenError};
 pub use nexum_runtime_wasm::BuildError;
 pub use semver::Error as SemverError;
 pub use url::ParseError as UrlParseError;
@@ -160,7 +160,8 @@ impl RuntimeError {
             Self::Launch(refusal) => launch_kind(refusal),
             Self::Capability(violation) => Some(violation.into()),
             Self::Digest(_) => Some("digest_mismatch"),
-            Self::Config(_) | Self::Pool(_) | Self::Backend(_) | Self::AddOn(_) => None,
+            Self::Backend(err) => backend_kind(err),
+            Self::Config(_) | Self::Pool(_) | Self::AddOn(_) => None,
             Self::Extension(err) => chained_kind(std::error::Error::source(err)),
             Self::Engine(engine) => engine.0.chain().find_map(untyped_kind),
         }
@@ -232,6 +233,19 @@ fn launch_kind(refusal: &LaunchRefusal) -> Option<&'static str> {
         LaunchRefusal::EventLoopGone | LaunchRefusal::SourceTerminal { .. } => None,
         refusal => Some(refusal.into()),
     }
+}
+
+/// A store a newer engine wrote is the one slot failure the engine decides
+/// on; every other one is I/O and goes uncounted.
+fn backend_kind(err: &BuildError) -> Option<&'static str> {
+    let mut cause = std::error::Error::source(err);
+    while let Some(current) = cause {
+        if let Some(StorageError::FormatTooNew { .. }) = current.downcast_ref() {
+            return Some("store_format_too_new");
+        }
+        cause = current.source();
+    }
+    None
 }
 
 fn chained_kind(mut cause: Option<&(dyn std::error::Error + 'static)>) -> Option<&'static str> {
@@ -334,6 +348,8 @@ mod tests {
         "unknown_wasi",
         // DigestMismatch.
         "digest_mismatch",
+        // BuildError, for the store slot's format refusal alone.
+        "store_format_too_new",
     ];
 
     /// Keyed by arm name from `RuntimeError::VARIANTS`, so a new arm
@@ -358,12 +374,13 @@ mod tests {
                 .collect(),
             "Capability" => CapabilityError::VARIANTS.to_vec(),
             "Digest" => vec!["digest_mismatch"],
+            // `backend_kind` labels the store format refusal and no other
+            // slot failure.
+            "Backend" => vec!["store_format_too_new"],
             // Context delegates to its source; the arms outside the
             // refusal vocabulary recover a label from another arm's table
             // or none at all.
-            "Context" | "Config" | "Pool" | "Backend" | "AddOn" | "Extension" | "Engine" => {
-                Vec::new()
-            }
+            "Context" | "Config" | "Pool" | "AddOn" | "Extension" | "Engine" => Vec::new(),
             arm => panic!("arm {arm} has no label table; add it here and extend PINNED_LABELS"),
         }
     }
@@ -516,6 +533,41 @@ mod tests {
         assert!(
             matches!(foreign, RuntimeError::Backend(BuildError::Chain(_))),
             "a foreign slot failure keeps its Backend wrap, got {foreign:?}",
+        );
+    }
+
+    /// The store builder boxes its typed cause into the store slot, and
+    /// the label is read back through that box.
+    #[test]
+    fn a_store_from_a_newer_engine_is_a_labelled_refusal() {
+        let open_error = |source| -> BoxError {
+            Box::new(StoreOpenError {
+                path: PathBuf::from("state/local-store.redb"),
+                source,
+            })
+        };
+        let too_new =
+            RuntimeError::from(BuildError::Store(open_error(StorageError::FormatTooNew {
+                found: 2,
+                supported: 1,
+            })));
+        assert!(
+            matches!(too_new, RuntimeError::Backend(BuildError::Store(_))),
+            "{too_new:?}",
+        );
+        assert_eq!(too_new.error_kind(), Some("store_format_too_new"));
+        assert_eq!(
+            too_new.context("open the backends".to_owned()).error_kind(),
+            Some("store_format_too_new"),
+        );
+
+        let unreadable = RuntimeError::from(BuildError::Store(open_error(
+            StorageError::FormatStampUnreadable,
+        )));
+        assert_eq!(
+            unreadable.error_kind(),
+            None,
+            "a store failure the engine did not decide on stays uncounted",
         );
     }
 

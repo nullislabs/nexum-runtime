@@ -146,6 +146,36 @@ The pause window is sub-second on a small store, and the WS connections survive 
 Restore by stopping the engine, copying the snapshot back, and restarting.
 If a restored file does not open, roll forward from the previous snapshot, or start with an empty `state_dir` and accept the resync.
 
+### State format version
+
+The engine records a format version inside `local-store.redb`, in a metadata table that no component can read, write, or be charged quota for.
+The version names the engine's own layout of that file, and the current version is 1.
+It is not a version of a component's data: a component keeps its own marker in its own payload.
+
+The engine logs the version once at boot, at INFO, in the `local store open` event.
+`format_version` is the version the file now carries, and `found` is what the engine met on disk: `Fresh`, `Unstamped`, or `Stamped(n)`.
+
+At boot the engine does one of these:
+
+- A new file gets the current version.
+- A file with data and no version comes from a release before the version existed.
+  The engine adopts it as version 1 and does not change its data.
+- A file at the current version opens with no write.
+- A file at an older version migrates to the current version in one transaction.
+  If the migration fails or the process stops part-way, the file keeps the old version and the old data, and the next boot tries again.
+- A file at a newer version is refused.
+  The engine does not open the file and does not change it.
+
+A downgrade is refused because an older engine cannot know the layout that a newer engine wrote, and a write on a layout it misreads destroys state without an error.
+The refusal names both versions, and the engine exits non-zero.
+It carries `error_kind="store_format_too_new"` on `nexum_runtime_boot_refusals_total`, but the engine exits at once, so read the refusal from the journal and not from a scrape.
+
+Migrations go forward only, so no binary takes a migrated file back.
+The cold backup you took before the upgrade is the rollback path: stop the engine, restore that file, and start the older binary.
+The trial boot in section 10 already migrates the file, so take the backup before the trial boot.
+The other way out of a refusal is to run the engine version that wrote the file.
+See [ADR-0026](adr/0026-the-local-store-carries-a-format-version.md).
+
 ## 4. Cursors the runtime writes
 
 The runtime writes one kind of key, best-effort after a successful dispatch and after each completed bulk chunk, under a host-owned `host/<name>` namespace beside each component's own:
@@ -465,4 +495,5 @@ Write it deliberately or not at all: the relaxation is then auditable in the con
 - [ADR-0016](adr/0016-component-vocabulary.md): the `[component]` and `[dependencies]` vocabulary.
 - [ADR-0024](adr/0024-blocks-are-clocks-and-host-keys-leave-the-module-namespace.md): logs replay, blocks do not, and host keys live outside a component's namespace.
 - [ADR-0025](adr/0025-the-required-digest-is-the-operator-pin.md): the required digest is the operator pin.
+- [ADR-0026](adr/0026-the-local-store-carries-a-format-version.md): the local-store format version.
 - [Component lifecycle, trigger system, and packaging](02-modules-triggers-packaging.md).

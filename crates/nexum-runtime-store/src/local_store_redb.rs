@@ -21,11 +21,14 @@ use redb::{Database, ReadableDatabase, ReadableTable, TableDefinition};
 use thiserror::Error;
 
 use nexum_runtime_api::{
-    EntryPage, ListQuery, MAX_APPLY_OPS, MAX_APPLY_VALUE_BYTES, MAX_LIST_LIMIT,
+    BoxError, EntryPage, ListQuery, MAX_APPLY_OPS, MAX_APPLY_VALUE_BYTES, MAX_LIST_LIMIT,
     MAX_LIST_RESPONSE_BYTES, MAX_LIST_SCAN_LIMIT, StateHandle, StateStore, StoreError, WriteOp,
 };
 
-const TABLE: TableDefinition<'static, &[u8], &[u8]> = TableDefinition::new("nexum:local-store");
+use crate::format::{Format, FormatFound};
+
+pub(crate) const TABLE: TableDefinition<'static, &[u8], &[u8]> =
+    TableDefinition::new("nexum:local-store");
 #[cfg(test)]
 const PREFIX_LEN: usize = 32;
 
@@ -39,6 +42,8 @@ pub struct LocalStore {
     db: Arc<Database>,
     /// Per-namespace live-byte counter, lazily seeded, keeping writes O(1).
     counters: Arc<Mutex<HashMap<Vec<u8>, u64>>>,
+    format_version: u32,
+    format_found: FormatFound,
 }
 
 /// Per-module handle carrying the pre-computed keccak256 namespace prefix.
@@ -52,18 +57,34 @@ pub struct ModuleStore {
 }
 
 impl LocalStore {
-    /// Open or create the redb file at `path`, initializing the shared table.
+    /// Open or create the redb file at `path` at the engine's store format.
+    ///
+    /// A new file is stamped with [`FORMAT_VERSION`](crate::FORMAT_VERSION),
+    /// an unstamped one is adopted as version 1, and an older one is
+    /// migrated in one transaction. A file stamped by a newer engine is
+    /// refused with [`StorageError::FormatTooNew`] and left unmodified.
     pub fn open(path: impl AsRef<Path>) -> Result<Self, StorageError> {
-        let db = Database::create(path).map_err(StorageError::Open)?;
-        {
-            let txn = db.begin_write().map_err(StorageError::Txn)?;
-            txn.open_table(TABLE).map_err(StorageError::Table)?;
-            txn.commit().map_err(StorageError::Commit)?;
-        }
+        Self::open_as(path.as_ref(), &Format::ENGINE)
+    }
+
+    pub(crate) fn open_as(path: &Path, format: &Format<'_>) -> Result<Self, StorageError> {
+        let (db, format_found) = format.open(path)?;
         Ok(Self {
             db: Arc::new(db),
             counters: Arc::new(Mutex::new(HashMap::new())),
+            format_version: format.version,
+            format_found,
         })
+    }
+
+    /// The store format version the open file now carries.
+    pub fn format_version(&self) -> u32 {
+        self.format_version
+    }
+
+    /// What `open` found on disk before it stamped or migrated.
+    pub fn format_found(&self) -> FormatFound {
+        self.format_found
     }
 
     /// [`ModuleStore`] for `namespace`; rejects the empty string.
@@ -528,6 +549,35 @@ pub enum StorageError {
         /// Per-page scan cap.
         cap: u32,
     },
+    /// A newer engine wrote the store. This engine cannot know that
+    /// layout, so it refuses to open the file and does not modify it.
+    #[error(
+        "local-store format version {found} is newer than version {supported}, the newest \
+         this engine supports: run the engine that wrote it, or restore a backup taken \
+         before the upgrade"
+    )]
+    FormatTooNew {
+        /// The version stamped in the file.
+        found: u32,
+        /// The newest version this engine reads.
+        supported: u32,
+    },
+    /// The metadata table holds no version stamp the engine could have
+    /// written, so the layout is unknown and nothing is guessed.
+    #[error("local-store format stamp is missing or malformed: restore a backup")]
+    FormatStampUnreadable,
+    /// A migration step failed. Its transaction is abandoned, so the store
+    /// keeps the version and the data it had.
+    #[error("local-store migration from format version {from} to {to} failed: {source}")]
+    Migration {
+        /// The version the failed step started from.
+        from: u32,
+        /// The version it would have produced.
+        to: u32,
+        /// The step's failure.
+        #[source]
+        source: BoxError,
+    },
 }
 
 fn store_error(err: StorageError) -> StoreError {
@@ -553,7 +603,10 @@ fn store_error(err: StorageError) -> StoreError {
         | StorageError::Txn(_)
         | StorageError::Table(_)
         | StorageError::Storage(_)
-        | StorageError::Commit(_)) => StoreError::Backend(Box::new(err)),
+        | StorageError::Commit(_)
+        | StorageError::FormatTooNew { .. }
+        | StorageError::FormatStampUnreadable
+        | StorageError::Migration { .. }) => StoreError::Backend(Box::new(err)),
     }
 }
 

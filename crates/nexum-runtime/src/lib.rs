@@ -78,7 +78,10 @@ pub mod component {
         ProviderPoolBuilder,
     };
     pub use nexum_runtime_logs::LogPipelineBuilder;
-    pub use nexum_runtime_store::{LocalStore, LocalStoreBuilder, ModuleStore, StorageError};
+    pub use nexum_runtime_store::{
+        FORMAT_VERSION as STORE_FORMAT_VERSION, FormatFound, LocalStore, LocalStoreBuilder,
+        ModuleStore, StorageError, StoreOpenError,
+    };
     pub use nexum_runtime_wasm::{BuildError, Components, ComponentsBuilder};
     pub use nexum_world::ChainMethod;
     pub use redb::{
