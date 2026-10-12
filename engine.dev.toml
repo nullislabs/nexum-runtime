@@ -17,8 +17,8 @@
 # the `[chains.11155111]` entry below. Its URL comes from the SEPOLIA_RPC_URL
 # environment variable, which keeps a provider key out of this file, and a
 # missing variable is a fatal boot error that names it. The engine substitutes
-# a dollar-brace placeholder anywhere in this file, comments included, so this
-# comment does not spell one out.
+# a `${NAME}` token in a value before it parses the file, and leaves one in a
+# comment like this alone.
 
 [engine]
 state_dir = "./data"

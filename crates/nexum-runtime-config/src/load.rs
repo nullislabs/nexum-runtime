@@ -51,12 +51,17 @@ pub fn load_or_default(path: Option<&Path>) -> Result<EngineConfig, EngineConfig
 /// Replace every `${VAR_NAME}` token in `raw` with its environment value,
 /// erroring on any missing variable. Recognized names match
 /// `[A-Z_][A-Z0-9_]*`; anything else inside `${...}` is rejected.
+///
+/// A TOML comment is copied through untouched, so a token spelled out there
+/// as an example is never looked up. Comments are found in the file as
+/// written: a substituted value is opaque and cannot open or close one.
 fn substitute_env_vars(raw: &str) -> Result<String, EnvVarError> {
     let mut out = String::with_capacity(raw.len());
     let bytes = raw.as_bytes();
+    let mut lex = Lex::Bare;
     let mut i = 0;
     while i < bytes.len() {
-        if bytes[i] == b'$' && i + 1 < bytes.len() && bytes[i + 1] == b'{' {
+        if lex != Lex::Comment && bytes[i..].starts_with(b"${") {
             // Find the closing `}`.
             let start = i + 2;
             let Some(end_offset) = raw[start..].find('}') else {
@@ -79,20 +84,77 @@ fn substitute_env_vars(raw: &str) -> Result<String, EnvVarError> {
             }
             i = end + 1;
         } else {
-            // Push one UTF-8 char (find the next char boundary).
-            #[expect(
-                clippy::expect_used,
-                reason = "i only ever advances by ch.len_utf8() or past an ASCII '}', so raw[i..] starts on a char boundary and is non-empty inside the loop"
-            )]
-            let ch = raw[i..]
-                .chars()
-                .next()
-                .expect("byte index is on char boundary");
-            out.push(ch);
-            i += ch.len_utf8();
+            // Every unit is whole chars and a token ends on an ASCII `}`,
+            // so `i` stays on a char boundary.
+            let (len, next) = lex.step(&raw[i..]);
+            out.push_str(&raw[i..i + len]);
+            i += len;
+            lex = next;
         }
     }
     Ok(out)
+}
+
+/// Where the scanner stands in the TOML text. Only [`Lex::Comment`] turns
+/// substitution off: a `#` inside any string form is data.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Lex {
+    /// Outside every string and comment.
+    Bare,
+    /// After a `#`, up to the end of the line.
+    Comment,
+    /// Inside `"..."`.
+    Basic,
+    /// Inside `'...'`.
+    Literal,
+    /// Inside `"""..."""`.
+    MultiBasic,
+    /// Inside `'''...'''`.
+    MultiLiteral,
+}
+
+impl Lex {
+    /// Length of the unit at the head of `rest` (a quote run, an escape
+    /// pair, or one char) and the state after it. `rest` is not empty.
+    fn step(self, rest: &str) -> (usize, Self) {
+        let bytes = rest.as_bytes();
+        let run = |quote: u8| bytes.iter().take_while(|&&b| b == quote).count();
+        match (self, bytes[0]) {
+            (Self::Bare, b'#') => (1, Self::Comment),
+            (Self::Bare, b'"') if run(b'"') >= 3 => (3, Self::MultiBasic),
+            (Self::Bare, b'"') => (1, Self::Basic),
+            (Self::Bare, b'\'') if run(b'\'') >= 3 => (3, Self::MultiLiteral),
+            (Self::Bare, b'\'') => (1, Self::Literal),
+            (Self::Comment, b'\n') => (1, Self::Bare),
+            (Self::Basic, b'"') | (Self::Literal, b'\'') => (1, Self::Bare),
+            // A single-line string cannot span lines. Ending it here keeps
+            // one unbalanced quote from turning every later comment into
+            // string data.
+            (Self::Basic | Self::Literal, b'\n') => (1, Self::Bare),
+            // An escaped quote does not close the string, and an escaped
+            // backslash does not escape the quote after it. Any other
+            // escape is left to the next step, so `\${VAR}` still
+            // substitutes.
+            (Self::Basic | Self::MultiBasic, b'\\')
+                if matches!(bytes.get(1), Some(b'"' | b'\\')) =>
+            {
+                (2, self)
+            }
+            (Self::MultiBasic, b'"') => self.multi_line_quotes(run(b'"')),
+            (Self::MultiLiteral, b'\'') => self.multi_line_quotes(run(b'\'')),
+            _ => (rest.chars().next().map_or(1, char::len_utf8), self),
+        }
+    }
+
+    /// A run of three quotes closes a multi-line string, and TOML allows up
+    /// to two more directly before them as content.
+    fn multi_line_quotes(self, run: usize) -> (usize, Self) {
+        if run >= 3 {
+            (run.min(5), Self::Bare)
+        } else {
+            (run, self)
+        }
+    }
 }
 
 fn is_valid_env_name(s: &str) -> bool {
@@ -207,9 +269,207 @@ mod tests {
     fn substitute_preserves_utf8_around_placeholder() {
         // The hand-rolled byte loop must respect multi-byte UTF-8.
         with_env("NEXUM_TEST_U", "X", || {
-            let raw = "# 河 ${NEXUM_TEST_U} ⚙️\n";
+            let raw = "k = \"河 ${NEXUM_TEST_U} ⚙️\"\n";
             let out = substitute_env_vars(raw).unwrap();
-            assert_eq!(out, "# 河 X ⚙️\n");
+            assert_eq!(out, "k = \"河 X ⚙️\"\n");
         });
+    }
+
+    /// Unset in every environment, so a lookup of it is a `Missing` error.
+    const UNSET: &str = "${NEXUM_TEST_COMMENT_ONLY_UNSET_VAR}";
+
+    #[test]
+    fn a_token_in_a_full_line_comment_is_left_alone() {
+        // Set, so the assertion fails on a substitution and not only on an
+        // error.
+        with_env("NEXUM_TEST_FULL_LINE", "leaked", || {
+            let raw = "# export ${NEXUM_TEST_FULL_LINE} first\n  # 河 ${NEXUM_TEST_FULL_LINE} ⚙️\r\nk = 1\n";
+            assert_eq!(substitute_env_vars(raw).unwrap(), raw);
+        });
+    }
+
+    #[test]
+    fn a_token_in_a_trailing_comment_is_left_alone() {
+        with_env("NEXUM_TEST_TRAILING", "alpha", || {
+            let raw = "k = \"${NEXUM_TEST_TRAILING}\" # from ${NEXUM_TEST_TRAILING}\nn = 1 # ${NEXUM_TEST_TRAILING}\n";
+            let out = substitute_env_vars(raw).unwrap();
+            assert_eq!(
+                out,
+                "k = \"alpha\" # from ${NEXUM_TEST_TRAILING}\nn = 1 # ${NEXUM_TEST_TRAILING}\n"
+            );
+        });
+    }
+
+    #[test]
+    fn a_missing_variable_in_a_comment_is_not_an_error() {
+        let raw = format!("# set {UNSET}\nk = \"v\" # or {UNSET}\n");
+        assert_eq!(substitute_env_vars(&raw).unwrap(), raw);
+    }
+
+    #[test]
+    fn a_malformed_token_in_a_comment_is_not_an_error() {
+        let raw = "# ${lowercase} and ${} and ${UNCLOSED\nk = 1\n";
+        assert_eq!(substitute_env_vars(raw).unwrap(), raw);
+    }
+
+    #[test]
+    fn a_missing_variable_in_a_value_after_a_comment_is_still_fatal() {
+        let raw = format!("# example {UNSET}\nk = \"{UNSET}\"\n");
+        let err = substitute_env_vars(&raw).unwrap_err();
+        assert!(
+            matches!(&err, EnvVarError::Missing { name }
+                if name == "NEXUM_TEST_COMMENT_ONLY_UNSET_VAR"),
+            "{err}"
+        );
+        assert!(
+            err.to_string()
+                .contains("NEXUM_TEST_COMMENT_ONLY_UNSET_VAR"),
+            "{err}"
+        );
+    }
+
+    /// Runs each `(raw, expected)` pair with an unset token appended as a
+    /// trailing comment. The TOML parser must accept the output, so the
+    /// appended text is a comment to it too and not the tail of a string.
+    fn assert_substitutes(cases: &[(&str, &str)]) {
+        for (raw, expected) in cases {
+            let raw = format!("{raw} # {UNSET}\n");
+            let out = substitute_env_vars(&raw).unwrap();
+            assert_eq!(out, format!("{expected} # {UNSET}\n"), "{raw}");
+            if let Err(err) = toml::from_str::<toml::Table>(&out) {
+                panic!("{raw}: {err}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_hash_inside_each_string_form_does_not_start_a_comment() {
+        with_env("NEXUM_TEST_HASH", "X", || {
+            // The token after the in-string `#` substitutes.
+            let cases = [
+                (r#"k = "a # ${NEXUM_TEST_HASH}""#, r#"k = "a # X""#),
+                (r"k = 'a # ${NEXUM_TEST_HASH}'", r"k = 'a # X'"),
+                (
+                    "k = \"\"\"\na # ${NEXUM_TEST_HASH}\n# ${NEXUM_TEST_HASH}\n\"\"\"",
+                    "k = \"\"\"\na # X\n# X\n\"\"\"",
+                ),
+                (
+                    "k = '''\na # ${NEXUM_TEST_HASH}\n# ${NEXUM_TEST_HASH}\n'''",
+                    "k = '''\na # X\n# X\n'''",
+                ),
+                // A quoted key and an inline table are strings too.
+                (
+                    r##""a#b" = { c = "# ${NEXUM_TEST_HASH}" }"##,
+                    r##""a#b" = { c = "# X" }"##,
+                ),
+            ];
+            assert_substitutes(&cases);
+        });
+    }
+
+    #[test]
+    fn an_escaped_quote_does_not_close_a_basic_string() {
+        with_env("NEXUM_TEST_ESC", "X", || {
+            let cases = [
+                // `\"` stays inside the string.
+                (r#"k = "a\" # ${NEXUM_TEST_ESC}""#, r#"k = "a\" # X""#),
+                // `\\` is an escaped backslash, so the next quote closes.
+                (r#"k = "a\\""#, r#"k = "a\\""#),
+                (r#"k = "a\\\" # ${NEXUM_TEST_ESC}""#, r#"k = "a\\\" # X""#),
+                (
+                    "k = \"\"\"a\\\"\"\" # ${NEXUM_TEST_ESC}\"\"\"",
+                    "k = \"\"\"a\\\"\"\" # X\"\"\"",
+                ),
+            ];
+            assert_substitutes(&cases);
+        });
+    }
+
+    #[test]
+    fn quotes_inside_a_multi_line_string_do_not_close_it() {
+        with_env("NEXUM_TEST_MULTI", "X", || {
+            let cases = [
+                // One or two quotes are content.
+                (
+                    "k = \"\"\"a \"b\" \"\"c # ${NEXUM_TEST_MULTI}\"\"\"",
+                    "k = \"\"\"a \"b\" \"\"c # X\"\"\"",
+                ),
+                (
+                    "k = '''a 'b' ''c # ${NEXUM_TEST_MULTI}'''",
+                    "k = '''a 'b' ''c # X'''",
+                ),
+                // Up to two quotes directly before the delimiter are content,
+                // and the string still ends there.
+                ("k = \"\"\"a\"\"\"\"\"", "k = \"\"\"a\"\"\"\"\""),
+                ("k = '''a''''", "k = '''a''''"),
+                // The other quote character is plain data in each form.
+                (r#"k = "it's # ${NEXUM_TEST_MULTI}""#, r#"k = "it's # X""#),
+                (
+                    r#"k = 'say "hi" # ${NEXUM_TEST_MULTI}'"#,
+                    r#"k = 'say "hi" # X'"#,
+                ),
+                // Empty strings open and close at once.
+                (r#"a = "" "#, r#"a = "" "#),
+                ("a = '' ", "a = '' "),
+                (r#"a = """""" "#, r#"a = """""" "#),
+            ];
+            assert_substitutes(&cases);
+        });
+    }
+
+    #[test]
+    fn an_unterminated_string_ends_at_its_line() {
+        // The TOML parser reports the stray quote; the scanner must not
+        // read the comment on the next line as string data first.
+        for stray in ["k = \"abc", "k = 'abc"] {
+            let raw = format!("{stray}\n# {UNSET}\n");
+            assert_eq!(substitute_env_vars(&raw).unwrap(), raw);
+        }
+    }
+
+    #[test]
+    fn substitute_replaces_an_unquoted_token_and_a_key() {
+        with_env("NEXUM_TEST_BARE", "11155111", || {
+            let raw = "[chains.${NEXUM_TEST_BARE}]\nrequest_timeout_secs = ${NEXUM_TEST_BARE}\n";
+            let out = substitute_env_vars(raw).unwrap();
+            assert_eq!(out, "[chains.11155111]\nrequest_timeout_secs = 11155111\n");
+        });
+    }
+
+    #[test]
+    fn a_config_with_a_token_in_a_comment_loads() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("engine.toml");
+        std::fs::write(
+            &path,
+            format!(
+                "# rpc_url = \"{UNSET}\"\n[chains.1]\nrpc_url = \"http://localhost:8545\" # or {UNSET}\n"
+            ),
+        )
+        .expect("write engine.toml");
+        let cfg = load_or_default(Some(&path)).expect("a comment token must not refuse the boot");
+        assert_eq!(cfg.chains.len(), 1);
+    }
+
+    #[test]
+    fn a_config_with_a_missing_variable_in_a_value_refuses_naming_it() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("engine.toml");
+        std::fs::write(
+            &path,
+            format!("# a comment\n[chains.1]\nrpc_url = \"{UNSET}\"\n"),
+        )
+        .expect("write engine.toml");
+        let err = load_or_default(Some(&path)).expect_err("a missing variable is fatal");
+        assert!(
+            matches!(&err, EngineConfigError::Substitute(EnvVarError::Missing { name })
+                if name == "NEXUM_TEST_COMMENT_ONLY_UNSET_VAR"),
+            "{err}"
+        );
+        assert!(
+            err.to_string()
+                .contains("NEXUM_TEST_COMMENT_ONLY_UNSET_VAR"),
+            "{err}"
+        );
     }
 }
