@@ -1,6 +1,6 @@
 //! The [`HostState`] side of the outbound gate in `nexum-runtime-http`.
 
-use wasmtime_wasi_http::p2::{WasiHttpCtxView, WasiHttpView};
+use wasmtime_wasi_http::{WasiHttpCtxView, WasiHttpView};
 
 use nexum_runtime_api::RuntimeTypes;
 

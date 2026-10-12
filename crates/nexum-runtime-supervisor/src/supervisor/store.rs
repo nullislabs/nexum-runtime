@@ -216,6 +216,9 @@ fn build<T: RuntimeTypes>(
 }
 
 /// The wasmtime config every engine, launch and test alike, is built from.
+///
+/// Wasm proposals are left at wasmtime's defaults, which is the
+/// configuration upstream tests and fuzzes.
 pub(crate) fn wasmtime_config() -> wasmtime::Config {
     let mut config = wasmtime::Config::new();
     config.wasm_component_model(true);

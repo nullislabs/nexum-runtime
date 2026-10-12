@@ -3,8 +3,9 @@
 # - `Handle::spawn`, which is the path `nexum-tasks` itself uses. Banning it
 #   would need an `#[allow]` there, and an `#[allow]` gets copied.
 # - `wasmtime_wasi::runtime::spawn`, which is `tokio::task::spawn` inside the
-#   dependency, so clippy never sees it. `send_with_limits` in
-#   `crates/nexum-runtime/src/host/http.rs` spawns two tasks that way.
+#   dependency, so clippy never sees it. The linked `wasi:http` outgoing
+#   handler spawns two tasks that way for each request the gate in
+#   `crates/nexum-runtime-http/src/http.rs` admits.
 
 # `unwrap_used` / `expect_used` are workspace lints. A test asserting on a
 # value it just constructed has nothing to recover from, and threading a

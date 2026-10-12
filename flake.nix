@@ -21,7 +21,7 @@
         # scripts/msrv-lint.sh holds this, Cargo.toml and the rust-setup
         # action on one version.
         # Develop with `nix develop` so the local toolchain matches CI/CD.
-        rustToolchain = pkgs.rust-bin.stable."1.94.0".default.override {
+        rustToolchain = pkgs.rust-bin.stable."1.96.0".default.override {
           extensions = [ "rust-src" "rust-analyzer" "clippy" "rustfmt" ];
           targets = [
             # WASM host/guest targets: the runtime's primary output.

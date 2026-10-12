@@ -3,7 +3,7 @@
 //! Nothing else resolves those literals at host-build time, so a rename
 //! on either side would otherwise surface only in a guest build.
 //!
-//! Pinned to the `wit-parser` wasmtime v46 embeds, so the check cannot
+//! Pinned to the `wit-parser` wasmtime v49 embeds, so the check cannot
 //! disagree with the parser the runtime runs.
 
 use std::collections::BTreeSet;
