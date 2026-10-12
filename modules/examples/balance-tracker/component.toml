@@ -26,7 +26,7 @@ chain_id = 11155111
 # E2E pinning: the test EOA + Safe co-located on Sepolia.
 # Both fund themselves during the runbook's prep step (EOA via
 # faucet, Safe via EOA send), so balance-tracker writes
-# `last:0x7bf1...` and `last:0x1499...` on the first dispatch and
+# `balance:0x7bf1...` and `balance:0x1499...` on the first dispatch and
 # logs a Warn diff if the Safe later receives the TWAP order's
 # gas-side transfer (or any subsequent move >= change_threshold).
 addresses = "0x7bF140727D27ea64b607E042f1225680B40ECa6A,0x14995a1118Caf95833e923faf8Dd155721cd53c2"

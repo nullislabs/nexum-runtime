@@ -2,11 +2,14 @@
 //! and a [`Runtime`] preset, then launch and run until shutdown.
 //!
 //! Build the example module first (`just build-module`), then run
-//! `cargo run -p nexum-runtime --example embed` from the repo root.
+//! `SEPOLIA_RPC_URL=<url> cargo run -p nexum-runtime --example embed` from
+//! the repo root.
 //!
 //! [`Runtime`]: nexum_runtime::Runtime
 
-use nexum_runtime::config::{EngineConfig, ModuleEntry};
+use alloy_chains::Chain;
+use anyhow::Context as _;
+use nexum_runtime::config::{ChainConfig, EngineConfig, ModuleEntry, RpcEndpoint};
 use nexum_runtime::{CoreRuntime, RuntimeBuilder};
 
 #[tokio::main]
@@ -23,6 +26,21 @@ async fn main() -> anyhow::Result<()> {
     // and leaves the requirement on.
     cfg.engine.require_component_digest = false;
     cfg.modules.push(entry);
+
+    // The example manifest declares a block trigger on Sepolia, and chain
+    // access is an operator grant, so the config names the chain. This is
+    // what a `[chains.11155111]` entry in `engine.toml` resolves to, with
+    // the two limits at their defaults.
+    let rpc_url = std::env::var("SEPOLIA_RPC_URL")
+        .context("set SEPOLIA_RPC_URL to a Sepolia JSON-RPC endpoint")?;
+    cfg.chains.insert(
+        Chain::sepolia(),
+        ChainConfig {
+            rpc_url: RpcEndpoint::try_from(rpc_url)?,
+            request_timeout_secs: 30,
+            max_log_range_blocks: 1000,
+        },
+    );
 
     // Bind the default preset and launch: the component builders open the
     // backends, the add-ons install, and the event loop runs until shutdown.

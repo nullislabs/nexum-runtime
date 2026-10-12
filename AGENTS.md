@@ -11,7 +11,7 @@ A downstream layer adds its own capabilities through the extension seam in `crat
 A composition root declares `[extensions.<name>]` rows in an `extensions.toml`, and `synthesize` emits those rows after the core capability rows in the module's WIT world.
 
 This repository is the leaf of the Nullis runtime stack and carries no cross-repo dependencies.
-The videre and shepherd repositories build on the SDK and the runtime published here.
+The videre and shepherd repositories build on the SDK and the runtime in this repository, as git dependencies pinned to a commit.
 
 ## Layout
 

@@ -24,6 +24,8 @@ build: build-engine build-module build-examples build-fixtures
 # engine.dev.toml declares the example as a [[modules]] entry, which is the
 # path a deployment uses, so the dev loop does not depend on the absence of a
 # config file. A manifest stays mandatory: the entry names one.
+# engine.dev.toml reads the chain RPC URL from SEPOLIA_RPC_URL, so export it
+# first.
 run: build-module build-engine
     cargo run -p nexum-cli -- --engine-config engine.dev.toml
 
