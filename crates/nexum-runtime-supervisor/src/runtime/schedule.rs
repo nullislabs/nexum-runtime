@@ -23,7 +23,7 @@ use tokio::sync::mpsc::error::TrySendError;
 use tracing::{debug, error, info};
 
 use crate::manifest::CronSchedule;
-use crate::supervisor::ScheduleSource;
+use crate::supervisor::{ReceivedAt, ScheduleSource};
 use nexum_primitives::module_id::ModuleId;
 use nexum_runtime_api::HostWallClock;
 use nexum_tasks::{TaskExecutor, TaskExit, TaskSet};
@@ -47,6 +47,8 @@ pub struct ScheduleTick {
     /// Host wall-clock time the tick was generated at, in milliseconds
     /// since the Unix epoch.
     pub fired_at: u64,
+    /// The instant the source generated the tick, for the delivery measure.
+    pub received: ReceivedAt,
 }
 
 /// Stream of [`ScheduleTick`] from one schedule source.
@@ -115,6 +117,7 @@ async fn schedule_task(
         let tick = ScheduleTick {
             module: module.clone(),
             fired_at: u64::try_from(now.as_millis()).unwrap_or(u64::MAX),
+            received: ReceivedAt::now(),
         };
         match tx.try_send(tick) {
             Ok(()) => {}
@@ -601,7 +604,7 @@ mod tests {
             "chain-log:1:tick-recorder",
             manager.executor().spawn(async move {
                 let module = ModuleId::parse("tick-recorder").expect("a plain name parses");
-                let log = || ChainLogItem::Log(Box::default());
+                let log = || ChainLogItem::Log(Box::default(), ReceivedAt::now());
                 while flood_tx
                     .send((module.clone(), Chain::mainnet(), log(), None))
                     .await

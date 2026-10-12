@@ -4,6 +4,7 @@
 mod admission;
 mod artifact;
 mod cursors;
+mod delivery;
 mod dispatch;
 mod health;
 mod lifecycle;
@@ -12,6 +13,7 @@ pub(crate) mod prepass;
 mod sources;
 mod store;
 
+pub use delivery::ReceivedAt;
 pub use health::{HealthPublisher, HealthSnapshot, HealthWatch, health_channel};
 pub use lifecycle::ModuleState;
 pub use nexum_runtime_api::WasiClockOverride;

@@ -3,6 +3,7 @@
 mod boot_refusals;
 mod chain_gate;
 mod cursors;
+mod delivery;
 mod digest;
 mod dispatch;
 mod e2e;

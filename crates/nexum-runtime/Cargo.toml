@@ -60,6 +60,8 @@ tracing.workspace = true
 # the two WIT edges are the only place a generated severity enum appears.
 tracing-core.workspace = true
 
+# The launcher emits the start-time gauge once the add-ons are installed.
+metrics.workspace = true
 # Prometheus recorder behind the observability add-on; the add-on renders
 # its handle rather than letting the exporter bind its own listener.
 metrics-exporter-prometheus.workspace = true
@@ -108,7 +110,6 @@ nexum-runtime-logs = { path = "../nexum-runtime-logs", features = ["testing"] }
 # `start_paused` reconnect tests advance the backoff clock virtually.
 tokio = { workspace = true, features = ["rt-multi-thread", "test-util"] }
 anyhow.workspace = true
-metrics.workspace = true
 tempfile.workspace = true
 # `oneshot` drives the observability routes without binding a port.
 tower = { workspace = true, features = ["util"] }

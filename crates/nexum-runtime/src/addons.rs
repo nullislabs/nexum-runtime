@@ -102,13 +102,46 @@ const DISPATCH_LATENCY_BUCKETS: &[f64] = &[
     0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0,
 ];
 
+/// Bucket bounds for the host delivery latency. An idle host delivers in
+/// tens of microseconds, so the bounds are fine from 25 microseconds to
+/// 2.5 ms, then step by decades to the 1 s event-to-callback target, with
+/// 5 s for a trigger queued behind a slow handler.
+const DELIVERY_LATENCY_BUCKETS: &[f64] = &[
+    0.000025, 0.00005, 0.0001, 0.00025, 0.0005, 0.001, 0.0025, 0.01, 0.1, 0.5, 1.0, 5.0,
+];
+
+/// Bucket bounds for the block age at dispatch. A block timestamp has
+/// one-second resolution, so the bounds step in seconds: below one for a
+/// sub-second chain, then through a 12 s slot and its multiples to a minute.
+/// An age past that is a backfill or a stalled source.
+const BLOCK_AGE_BUCKETS: &[f64] = &[
+    0.25, 0.5, 1.0, 2.0, 4.0, 6.0, 8.0, 12.0, 16.0, 24.0, 36.0, 60.0,
+];
+
+/// Every histogram in `METRICS` and its bounds.
+const HISTOGRAM_BUCKETS: &[(&str, &[f64])] = &[
+    (
+        "nexum_runtime_dispatch_latency_seconds",
+        DISPATCH_LATENCY_BUCKETS,
+    ),
+    (
+        "nexum_runtime_delivery_latency_seconds",
+        DELIVERY_LATENCY_BUCKETS,
+    ),
+    (
+        "nexum_runtime_dispatch_block_age_seconds",
+        BLOCK_AGE_BUCKETS,
+    ),
+];
+
 // Without explicit buckets the exporter renders a histogram as a quantile
 // summary, and the `_bucket` series the latency alert reads never exists.
 fn prometheus_builder() -> Result<PrometheusBuilder, BuildError> {
-    PrometheusBuilder::new().set_buckets_for_metric(
-        Matcher::Full("nexum_runtime_dispatch_latency_seconds".to_owned()),
-        DISPATCH_LATENCY_BUCKETS,
-    )
+    HISTOGRAM_BUCKETS
+        .iter()
+        .try_fold(PrometheusBuilder::new(), |builder, (name, buckets)| {
+            builder.set_buckets_for_metric(Matcher::Full((*name).to_owned()), buckets)
+        })
 }
 
 /// Bound and handed to the reactor before the launch continues, so every way
@@ -243,6 +276,86 @@ mod tests {
             rendered.contains(&format!("{NAME}_bucket{{")) && rendered.contains("le=\"5\""),
             "exposition:\n{rendered}",
         );
+    }
+
+    /// A histogram added to the table without bounds would render as a
+    /// summary, with no `_bucket` series and no way to aggregate it.
+    #[test]
+    fn every_histogram_in_the_table_renders_bucket_series() {
+        let recorder = prometheus_builder()
+            .expect("non-empty bucket lists build")
+            .build_recorder();
+        let handle = recorder.handle();
+        let histograms: Vec<&str> = METRICS
+            .iter()
+            .filter(|metric| metric.kind == Kind::Histogram)
+            .map(|metric| metric.name)
+            .collect();
+        metrics::with_local_recorder(&recorder, || {
+            for name in &histograms {
+                metrics::histogram!(*name, "module" => "m").record(0.5);
+            }
+        });
+        let rendered = handle.render();
+        assert!(histograms.len() >= 3, "{histograms:?}");
+        for name in histograms {
+            assert!(
+                rendered.contains(&format!("# TYPE {name} histogram"))
+                    && rendered.contains(&format!("{name}_bucket{{")),
+                "{name} has no bounds in HISTOGRAM_BUCKETS:\n{rendered}",
+            );
+        }
+    }
+
+    /// The bounds each histogram is documented with in `docs/production.md`.
+    #[test]
+    fn the_delivery_histograms_render_their_documented_bounds() {
+        let recorder = prometheus_builder()
+            .expect("non-empty bucket lists build")
+            .build_recorder();
+        let handle = recorder.handle();
+        metrics::with_local_recorder(&recorder, || {
+            metrics::histogram!(
+                "nexum_runtime_delivery_latency_seconds",
+                "module" => "m",
+                "trigger_kind" => "block",
+            )
+            .record(0.0002);
+            metrics::histogram!(
+                "nexum_runtime_dispatch_block_age_seconds",
+                "module" => "m",
+                "trigger_kind" => "block",
+                "chain_id" => "1",
+            )
+            .record(13.0);
+        });
+        let rendered = handle.render();
+        let bucket = |name: &str, le: &str| {
+            rendered
+                .lines()
+                .find(|line| {
+                    line.starts_with(&format!("{name}_bucket{{"))
+                        && line.contains(&format!("le=\"{le}\""))
+                })
+                .and_then(|line| line.rsplit(' ').next())
+                .map(str::to_owned)
+        };
+        const DELIVERY: &str = "nexum_runtime_delivery_latency_seconds";
+        assert_eq!(
+            bucket(DELIVERY, "0.0001").as_deref(),
+            Some("0"),
+            "{rendered}"
+        );
+        assert_eq!(
+            bucket(DELIVERY, "0.00025").as_deref(),
+            Some("1"),
+            "{rendered}"
+        );
+        assert_eq!(bucket(DELIVERY, "1").as_deref(), Some("1"), "{rendered}");
+        const AGE: &str = "nexum_runtime_dispatch_block_age_seconds";
+        assert_eq!(bucket(AGE, "12").as_deref(), Some("0"), "{rendered}");
+        assert_eq!(bucket(AGE, "16").as_deref(), Some("1"), "{rendered}");
+        assert_eq!(bucket(AGE, "60").as_deref(), Some("1"), "{rendered}");
     }
 
     /// An enabled exporter with an unparseable bind address fails at install.

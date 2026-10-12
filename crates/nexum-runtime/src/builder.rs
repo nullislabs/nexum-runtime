@@ -12,7 +12,7 @@ use std::future::IntoFuture;
 use std::marker::PhantomData;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use nexum_tasks::{DrainOutcome, TaskHandle, TaskManager, TaskSet};
 use tracing::{error, info, warn};
@@ -130,6 +130,15 @@ fn refuse_launch(refusal: LaunchRefusal) -> RuntimeError {
     refusal
 }
 
+/// Publishes the launch time, so `time()` minus the gauge is the uptime and a
+/// change in it is a restart.
+fn record_start_time() {
+    let started = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default();
+    metrics::gauge!("nexum_runtime_start_time_seconds").set(started.as_secs_f64());
+}
+
 /// A fully-assembled runtime: concrete backends, extensions, add-ons, and the
 /// optional module-source override. [`launch`](Self::launch) runs it.
 pub struct AssembledRuntime<T: RuntimeTypes> {
@@ -181,6 +190,9 @@ impl<T: RuntimeTypes<State = HostState<T>>> AssembledRuntime<T> {
             .map(|add_on| add_on.install(&addons_ctx))
             .collect::<Result<Vec<_>, _>>()
             .map_err(RuntimeError::AddOn)?;
+        // After the add-ons: a sample recorded before a recorder installs is
+        // lost.
+        record_start_time();
 
         // wasmtime engine + linker - one of each, shared across modules.
         let engine = nexum_runtime_supervisor::supervisor::engine()?;
@@ -1463,6 +1475,120 @@ mod tests {
             calls.load(Ordering::SeqCst),
             1,
             "add-on installed once, before the boot that bails",
+        );
+    }
+
+    /// A sample recorded before a recorder installs lands nowhere, so the
+    /// gauge must follow the add-ons: the add-on below, standing where the
+    /// Prometheus one installs its recorder, sees no gauge yet.
+    #[test]
+    fn the_start_time_gauge_is_set_once_the_add_ons_are_installed() {
+        use crate::test_utils::metrics_util::debugging::{
+            DebugValue, DebuggingRecorder, Snapshotter,
+        };
+
+        const NAME: &str = "nexum_runtime_start_time_seconds";
+
+        fn start_times(snapshotter: &Snapshotter) -> Vec<(usize, f64)> {
+            snapshotter
+                .snapshot()
+                .into_vec()
+                .into_iter()
+                .filter(|(key, ..)| key.key().name() == NAME)
+                .map(|(key, _, _, value)| match value {
+                    DebugValue::Gauge(v) => (key.key().labels().count(), v.into_inner()),
+                    other => panic!("{NAME} is not a gauge: {other:?}"),
+                })
+                .collect()
+        }
+
+        struct RecorderProbe {
+            snapshotter: Snapshotter,
+            set_at_install: Arc<AtomicUsize>,
+        }
+        impl RuntimeAddOn for RecorderProbe {
+            fn install(
+                &self,
+                _ctx: &AddOnsContext<'_>,
+            ) -> Result<AddOnHandle, crate::error::BoxError> {
+                self.set_at_install
+                    .store(start_times(&self.snapshotter).len(), Ordering::SeqCst);
+                Ok(AddOnHandle::named("recorder-probe"))
+            }
+        }
+
+        fn unix_now() -> f64 {
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("host time is past the epoch")
+                .as_secs_f64()
+        }
+
+        let recorder = DebuggingRecorder::new();
+        let snapshotter = recorder.snapshotter();
+        let set_at_install = Arc::new(AtomicUsize::new(usize::MAX));
+        let probe = RecorderProbe {
+            snapshotter: recorder.snapshotter(),
+            set_at_install: set_at_install.clone(),
+        };
+
+        // The local recorder is per thread, so the launch runs on this one.
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("current-thread runtime");
+        let before = unix_now();
+        metrics::with_local_recorder(&recorder, || {
+            runtime.block_on(async {
+                let dir = tempfile::tempdir().expect("tempdir");
+                let data_dir = dir.path().join("state");
+                let mut config = EngineConfig::default();
+                config.engine.state_dir = data_dir.clone();
+                let tasks = TaskManager::new();
+                let executor = tasks.executor();
+                let build_ctx = BuilderContext {
+                    config: &config,
+                    data_dir: &data_dir,
+                    executor: &executor,
+                };
+                let components = ComponentsBuilder::new(ProviderPoolBuilder, LocalStoreBuilder)
+                    .build::<CoreRuntime>(&build_ctx)
+                    .await
+                    .expect("build core components");
+                let assembled = AssembledRuntime {
+                    components,
+                    extensions: Vec::new(),
+                    add_ons: vec![Box::new(probe)],
+                    wasm: None,
+                    manifest: None,
+                    clocks: None,
+                };
+                let ctx = LaunchContext {
+                    tasks,
+                    config: &config,
+                };
+                let err = match assembled.launch(ctx).await {
+                    Ok(_) => panic!("no modules configured; launch must bail"),
+                    Err(err) => err,
+                };
+                Refusal::from(err)
+                    .variant::<LaunchRefusal>(|e| matches!(e, LaunchRefusal::NothingToRun));
+            });
+        });
+        let after = unix_now();
+
+        assert_eq!(
+            set_at_install.load(Ordering::SeqCst),
+            0,
+            "the add-on ran, and before the gauge was set",
+        );
+        let set = start_times(&snapshotter);
+        assert_eq!(set.len(), 1, "one unlabelled series: {set:?}");
+        let (labels, started) = set[0];
+        assert_eq!(labels, 0, "the gauge carries no labels");
+        assert!(
+            (before..=after).contains(&started),
+            "{started} is the Unix time of this launch, between {before} and {after}",
         );
     }
 

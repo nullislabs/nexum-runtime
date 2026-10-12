@@ -227,7 +227,10 @@ An address already in use refuses the launch rather than leaving a running engin
 | Metric | Type | Labels | Meaning |
 |---|---|---|---|
 | `nexum_runtime_boot_refusals_total` | counter | `error_kind` | Boot refusals by error kind. |
+| `nexum_runtime_start_time_seconds` | gauge | none | Unix time at which the engine started, in seconds. `time() - nexum_runtime_start_time_seconds` is the uptime, and `changes(nexum_runtime_start_time_seconds[1h])` counts the restarts in the last hour. The engine sets it once for each launch, after it opens the backends and installs the recorder, so it follows the process start by that boot work. |
 | `nexum_runtime_dispatch_latency_seconds` | histogram | `module`, `trigger_kind`, `outcome` | Wall-clock seconds to dispatch one trigger, sampled on every dispatch that reached the guest. `outcome` is one of `ok`, `fault`, `trap` and `deadline`, so a p95 read over the bare metric covers the failing dispatches too; sum `outcome` away to read one module's whole distribution, as `NexumDispatchLatency` below does. A trigger dropped before the guest runs records no latency and is counted in `nexum_runtime_dispatch_dropped_total` instead. `outcome` is bounded at those four values, so it multiplies the series count by at most four: each `module`, `trigger_kind` and `outcome` triple carries the eleven buckets plus `+Inf`, `_sum` and `_count`. |
+| `nexum_runtime_delivery_latency_seconds` | histogram | `module`, `trigger_kind` | Host delivery latency: seconds from the engine receiving a trigger from its source to the module's handler starting, on a monotonic clock. Sampled on every dispatch that reached the guest, at the same instant `nexum_runtime_dispatch_latency_seconds` starts. Twelve buckets from 25 microseconds to 5 s, with one at 1 s. See Latency measures below. |
+| `nexum_runtime_dispatch_block_age_seconds` | histogram | `module`, `trigger_kind`, `chain_id` | Block age at dispatch: wall-clock seconds from the block's own timestamp to the module's handler starting. Recorded for a block trigger, and for an event trigger whose log carries a block timestamp. This is not the engine's latency: it includes network propagation and any polling interval. An age below zero is recorded as zero. Twelve buckets from 250 ms to 60 s. See Latency measures below. |
 | `nexum_runtime_dispatch_dropped_total` | counter | `module`, `trigger_kind`, `reason` | Triggers dropped before dispatch. `reason = "rate_limited"` is the per-component dispatch rate limit (`[limits.dispatch]`, default `burst = 256` and `refill_per_sec = 128`). `reason = "shutdown"` is a stop landing mid fan-out: the fan-out follows `[[modules]]` order, so the same trailing modules are skipped at every stop. `reason = "fuel_set_failed"` is the per-dispatch fuel budget failing to apply: the module stays alive and the trigger is skipped. `reason = "coalesced"` is a schedule tick that came due while an earlier tick of the same trigger still waited for dispatch: a count that climbs means the module, or the engine around it, is slower than its schedule. A block is not replayed and neither is a schedule tick; an event is, from its cursor. |
 | `nexum_runtime_module_errors_total` | counter | `module`, `error_kind` | Module faults and traps. `error_kind = "trap"` is a wasmtime trap and `"deadline"` is a dispatch cut off at `[limits.dispatch] deadline_secs`; other values are fault labels. The trap and deadline values are the same strings the latency histogram uses for `outcome`, so the two metrics agree about one event. |
 | `nexum_runtime_module_restarts_total` | counter | `module` | Module restart attempts. |
@@ -240,6 +243,8 @@ An address already in use refuses the launch rather than leaving a running engin
 | `nexum_runtime_run_end_total` | counter | `reason` | Why the event loop returned, counted once per run. `shutdown` and `nothing_live` are clean stops. `source_terminal` is a shared source reporting an unrecoverable condition. `stream_ended` is a source pump that panicked or was aborted, which is the abnormal one: alert on it. |
 | `nexum_runtime_chain_request_total` | counter | `chain_id`, `method`, `outcome` | Every `chain::request`. A method outside the read surface is counted as `method="<denied>"` with `outcome="err"`. A request for a chain outside `[chains]` is counted as `chain_id="unconfigured"`, which bounds the series set to the configured chains plus one and shows that a module is requesting chains the operator has not configured. The `outcome="err"` rate is the RPC-degraded signal. |
 | `nexum_runtime_chain_response_capped_total` | counter | `chain_id`, `method` | Responses rejected for exceeding `[limits.chain] response_body_max_bytes` (default 1 MiB). |
+| `nexum_runtime_chain_head_height` | gauge | `chain_id` | The chain head height the engine last observed, from the block source and from each event source on that chain. |
+| `nexum_runtime_chain_last_delivered_height` | gauge | `chain_id` | The highest block height a module accepted, from a block dispatch or an event dispatch. It only advances. The head gauge minus this gauge is the delivery lag in blocks. |
 | `nexum_runtime_source_reconnects_total` | counter | `source_kind`, `chain_id`, `module` | Source reconnects. `source_kind="block"` is per chain; `source_kind="chain-log"` also carries `module`. Both source tasks carry the same value in a `source_kind` log field, so the value `NexumReconnectStorm` reports greps the logs. |
 | `nexum_runtime_log_records_dropped_total` | counter | `module`, `channel` | Module log records dropped whole by the per-component log rate limit (`[policy]`, default `max_log_burst = 256` and `max_log_records_per_sec = 128`). `channel` is the capture point the record entered by, one of `host_interface`, `stdout` or `stderr`; all of them spend one bucket per run. A sustained rate here is a module flooding the log sink. |
 | `nexum_runtime_log_records_truncated_total` | counter | `module`, `channel` | Module log records shortened to fit `[policy] max_log_record_bytes` (default 8 KiB). The message is kept and marked `...[truncated]`; the file is cut first, and the target holds a 128-byte allowance ahead of the message so an oversized record still names its subsystem. A captured stdout or stderr line past the cap is cut the same way. |
@@ -247,6 +252,56 @@ An address already in use refuses the launch rather than leaving a running engin
 | `nexum_runtime_log_records_filtered_total` | counter | `module`, `channel` | Module log records dropped by the `[policy]` log filter, which is an operator choice rather than a loss. A record kept out of the console but not out of retention is not counted here. |
 
 `crates/nexum-runtime-metrics/src/lib.rs` is the single source of the name set, and a test refuses any emitted name the table does not carry.
+
+### Latency measures
+
+Three histograms measure delay, and each one answers a different question.
+
+- Handler latency is `nexum_runtime_dispatch_latency_seconds`.
+  It is the time the module's handler ran, from its invocation to its return.
+- Host delivery latency is `nexum_runtime_delivery_latency_seconds`.
+  It is the time a trigger spent inside the engine, from the moment the engine received it from its source to the moment the engine invoked the handler.
+  It is the engine's own contribution, and it is the measure that answers "event to callback".
+  For a `schedule` trigger the source is the engine's own timer, so the measure starts when the tick comes due and includes any time the tick waited behind a slow handler.
+- Block age is `nexum_runtime_dispatch_block_age_seconds`.
+  It is the wall-clock time from the block's own timestamp to the moment the engine invoked the handler.
+  It contains the host delivery latency, and also the time the block took to reach the engine.
+
+Host delivery latency ends where handler latency starts, so the two do not overlap for one module.
+This query gives the p95 time from event to callback for each module:
+
+```promql
+histogram_quantile(0.95,
+  sum by (module, le) (rate(nexum_runtime_delivery_latency_seconds_bucket[10m])))
+```
+
+The engine stamps the receipt when the item leaves its source: a header from the block source, a batch of logs from the event source, or a delivery from an extension's stream.
+All logs of one batch share one stamp.
+An extension can hold a delivery before it yields it, and the engine cannot see that time.
+
+The engine dispatches one trigger at a time.
+A block that several modules subscribe to goes to them in `[[modules]]` order.
+The host delivery latency of the second module therefore includes the handler latency of the first module, because that is the delay the second module had.
+A trigger that arrives while a handler runs waits in a queue, and that wait is also in its host delivery latency.
+A slow handler thus shows as handler latency on its own module, and as host delivery latency on every trigger behind it.
+The block source and each event source queue 64 items.
+When a queue is full, its source stops reading, and a later item waits without a stamp until the queue has room.
+Block age still shows that wait.
+
+Block age is not the engine's latency.
+It includes the time the network took to propagate the block to the node, and the time the node took to report it.
+Over a `ws(s)://` endpoint the engine subscribes to new heads, so the node pushes each block.
+Over an `http(s)://` endpoint the engine polls for new blocks at the chain's block time, or every 2 s for a chain with no known block time.
+A block then waits before the engine sees it, for up to one poll interval.
+The poll interval equals the block time, so that wait stays almost constant while the engine runs, and it can be any part of the interval.
+Over HTTP, block age therefore has a floor that the engine cannot lower, and that floor can be as large as one poll interval.
+An event source polls on every transport, so the same floor applies to an event trigger over `ws(s)://` as well.
+
+A block timestamp has a resolution of one second, and the node's clock can differ from the host's clock.
+Do not read a difference of less than one second in block age as a change.
+A block timestamp ahead of the host's clock gives an age of zero.
+A node that does not report `blockTimestamp` on a log gives no block age for that event.
+A backfill delivers old blocks, so its block ages fall in the `+Inf` bucket.
 
 ### Probes
 
