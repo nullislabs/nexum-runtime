@@ -28,6 +28,8 @@ A downstream composition root that registers extensions runs the same way, under
 
 `engine.toml` substitutes `${VAR_NAME}` from the environment before it parses the TOML, so an RPC URL with a key in it stays out of the file.
 A missing variable is a fatal boot error that names the variable.
+The engine does not substitute a token in a TOML comment, so a comment can show `${VAR_NAME}` as an example and the variable does not need to exist.
+A `#` inside a quoted string is not a comment, and the engine substitutes a token that follows it.
 
 ## 2. systemd unit
 
