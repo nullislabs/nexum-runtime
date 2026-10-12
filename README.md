@@ -22,7 +22,7 @@ This repository is the leaf of the Nullis runtime stack: it carries no cross-rep
 
 ## Development
 
-The repository pins its toolchain via a Nix flake (Rust 1.94.0, matching CI):
+The repository pins its toolchain via a Nix flake (Rust 1.96.0, matching CI):
 
 ```sh
 nix develop        # or `direnv allow` once
@@ -31,7 +31,7 @@ just test          # host engine unit tests
 just ci            # full CI series locally (fmt, clippy, doc, wasms, nextest, doctests)
 ```
 
-Without Nix, any Rust 1.94+ toolchain with the `wasm32-wasip2` target, `cargo-nextest`, and `just` works.
+Without Nix, any Rust 1.96+ toolchain with the `wasm32-wasip2` target, `cargo-nextest`, and `just` works.
 
 ## Running a module
 

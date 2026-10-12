@@ -46,8 +46,7 @@ fn read_verified_component_rejects_a_mismatched_digest() {
     let engine = test_wasmtime_engine();
     let declared = wrong_digest();
     let err = read_verified_component(&engine, &path, DigestPolicy::author(Some(&declared)))
-        .err()
-        .expect("a mismatched digest must refuse the component");
+        .expect_err("a mismatched digest must refuse the component");
     let crate::error::RuntimeError::Digest(mismatch) = &err else {
         panic!("the refusal is the typed mismatch arm: {err}");
     };
@@ -77,8 +76,7 @@ fn read_verified_component_rejects_a_mismatched_operator_pin() {
         require_operator: false,
     };
     let err = read_verified_component(&engine, &path, pins)
-        .err()
-        .expect("a mismatched operator pin must refuse the component");
+        .expect_err("a mismatched operator pin must refuse the component");
     Refusal::from(err)
         .variant::<DigestMismatch>(|e| {
             e.pin == nexum_primitives::digest::DigestPin::Operator && e.declared == declared
@@ -103,8 +101,7 @@ fn read_verified_component_requires_an_operator_pin_and_reports_the_digest() {
         require_operator: true,
     };
     let err = read_verified_component(&engine, &path, pins)
-        .err()
-        .expect("an unpinned entry must refuse under the requirement");
+        .expect_err("an unpinned entry must refuse under the requirement");
     Refusal::from(err)
         .variant::<LoadRefusal>(
             |e| matches!(e, LoadRefusal::DigestUnpinned { actual, .. } if *actual == expected),
@@ -131,8 +128,7 @@ fn read_verified_component_requires_an_operator_pin_despite_an_author_pin() {
         require_operator: true,
     };
     let err = read_verified_component(&engine, &path, pins)
-        .err()
-        .expect("a matching author pin must not satisfy the operator requirement");
+        .expect_err("a matching author pin must not satisfy the operator requirement");
     Refusal::from(err)
         .variant::<LoadRefusal>(|e| matches!(e, LoadRefusal::DigestUnpinned { .. }))
         .lacks("compile");
@@ -155,8 +151,7 @@ fn read_verified_component_reports_an_author_mismatch_before_the_missing_operato
         require_operator: true,
     };
     let err = read_verified_component(&engine, &path, pins)
-        .err()
-        .expect("a mismatched author pin must refuse the component");
+        .expect_err("a mismatched author pin must refuse the component");
     Refusal::from(err)
         .variant::<DigestMismatch>(|e| {
             e.pin == nexum_primitives::digest::DigestPin::Author && e.declared == declared
@@ -221,8 +216,7 @@ fn read_verified_component_refuses_a_text_artifact() {
 
     let engine = test_wasmtime_engine();
     let err = read_verified_component(&engine, &path, DigestPolicy::author(None))
-        .err()
-        .expect("the compile path takes binary components only");
+        .expect_err("the compile path takes binary components only");
     Refusal::from(err).names("compile");
 }
 

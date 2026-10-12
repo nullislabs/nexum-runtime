@@ -39,7 +39,7 @@ impl WasiClockOverride {
     pub fn effective_wall(clocks: Option<&Self>) -> Arc<dyn HostWallClock + Send + Sync> {
         match clocks {
             Some(clocks) => clocks.wall.clone(),
-            None => Arc::new(wasmtime_wasi::clocks::WallClock::default()),
+            None => Arc::new(wasmtime_wasi::clocks::WallClock),
         }
     }
 }

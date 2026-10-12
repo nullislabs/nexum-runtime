@@ -22,7 +22,6 @@ nexum-runtime-config = { path = "../nexum-runtime-config" }
 strum.workspace = true
 tokio = { workspace = true, features = ["net", "time"] }
 tracing.workspace = true
-wasmtime-wasi.workspace = true
 wasmtime-wasi-http.workspace = true
 
 [dev-dependencies]
@@ -30,3 +29,5 @@ metrics-util.workspace = true
 nexum-runtime-metrics = { path = "../nexum-runtime-metrics", features = ["testing"] }
 nexum-tasks = { path = "../nexum-tasks" }
 tokio = { workspace = true, features = ["io-util", "macros", "rt-multi-thread", "sync"] }
+# The tests drive a send the way the linked outgoing handler does.
+wasmtime-wasi.workspace = true

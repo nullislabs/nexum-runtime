@@ -2,6 +2,7 @@
 //! per-module `[dependencies.http].hosts` list, clamps guest timeouts to the
 //! `[limits.http]` maxima, and bounds the exchange with a total deadline and
 //! response-body cap. Redirects are not followed; each hop re-enters the gate.
+//! The `Host` header is written from the URI authority the gate judged.
 //! Before connecting, the target is refused if it is, or resolves onto, an
 //! address this host will not reach. Only `[limits.http].permit_destinations`
 //! admits one. That narrows DNS rebinding; it does not pin the connected
@@ -15,6 +16,7 @@ use std::future::Future;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::pin::Pin;
 use std::task::{Context, Poll};
+use std::time::Duration;
 
 use bytes::Bytes;
 use http_body::{Body, Frame, SizeHint};
@@ -23,10 +25,7 @@ use ipnet::IpNet;
 use strum::IntoStaticStr;
 use tokio::net::lookup_host;
 use tracing::warn;
-use wasmtime_wasi_http::p2::bindings::http::types::ErrorCode;
-use wasmtime_wasi_http::p2::body::{HyperIncomingBody, HyperOutgoingBody};
-use wasmtime_wasi_http::p2::types::{HostFutureIncomingResponse, OutgoingRequestConfig};
-use wasmtime_wasi_http::p2::{HttpResult, WasiHttpHooks, default_send_request_handler};
+use wasmtime_wasi_http::{Error, RequestOptions, WasiBody, WasiHttpHooks, default_send_request};
 
 use nexum_primitives::host_pattern::{HostPattern, host_allowed};
 use nexum_runtime_config::OutboundHttpLimits;
@@ -87,12 +86,23 @@ fn count_refusal(module: &str, refusal: Refusal) {
     .increment(1);
 }
 
+/// The connection driver the wasi:http implementation spawns once the
+/// response head is in.
+type Driver = Box<dyn Future<Output = Result<(), Error>> + Send>;
+
+/// What one admitted or refused send resolves to.
+type Sent = Result<(http::Response<WasiBody>, Driver), Error>;
+
 impl WasiHttpHooks for HttpGate {
+    // The hook has no synchronous error, so a refusal is decided, counted and
+    // logged here and reaches the guest when it resolves the response future.
+    // See [`refuse`] for why that is not immediate.
     fn send_request(
         &mut self,
-        request: http::Request<HyperOutgoingBody>,
-        config: OutgoingRequestConfig,
-    ) -> HttpResult<HostFutureIncomingResponse> {
+        mut request: http::Request<WasiBody>,
+        options: Option<RequestOptions>,
+        _response_outcome: Box<dyn Future<Output = Result<(), Error>> + Send>,
+    ) -> Box<dyn Future<Output = Sent> + Send> {
         if let Err(code) = admit(
             request.uri(),
             &self.allowlist,
@@ -100,7 +110,7 @@ impl WasiHttpHooks for HttpGate {
         ) {
             // A URI with no host never reached a policy decision, so it is
             // not a denial.
-            if matches!(code, ErrorCode::HttpRequestDenied) {
+            if matches!(code, Error::HttpRequestDenied) {
                 count_refusal(&self.module, Refusal::Allowlist);
             }
             // Log the host only: paths and query strings are
@@ -110,11 +120,14 @@ impl WasiHttpHooks for HttpGate {
                 host = request.uri().host().unwrap_or("<none>"),
                 "[http] outbound request denied by allowlist",
             );
-            return Err(code.into());
+            return Box::new(refuse(request, code, self.limits.total_deadline));
         }
-        Ok(send_with_limits(
+        if let Err(code) = pin_host_header(&mut request) {
+            return Box::new(refuse(request, code, self.limits.total_deadline));
+        }
+        Box::new(send_with_limits(
             request,
-            clamp(config, &self.limits),
+            clamp(options, &self.limits),
             self.limits,
             self.module.clone(),
             self.permitted.clone(),
@@ -123,77 +136,108 @@ impl WasiHttpHooks for HttpGate {
     }
 }
 
+/// Deliver a refusal for a request that is never sent. The guest writes the
+/// request body while it waits for the response, and a body cut off under it
+/// reads as a transport failure that hides the refusal. So the body is taken
+/// to its end and discarded first, for no longer than the total deadline.
+async fn refuse(request: http::Request<WasiBody>, code: Error, total_deadline: Duration) -> Sent {
+    let mut body = request.into_body();
+    let discarded = async { while let Some(Ok(_)) = body.frame().await {} };
+    let _ = tokio::time::timeout(total_deadline, discarded).await;
+    Err(code)
+}
+
+/// Write `Host` from the URI authority, replacing whatever the request
+/// carried. The backend connects to that authority and `admit` judged its
+/// host, so the header on the wire can name no other destination. Userinfo
+/// is left out: it is not part of `Host`, and a name before an `@` there
+/// would be one more place to spell a host `admit` never judged.
+fn pin_host_header(request: &mut http::Request<WasiBody>) -> Result<(), Error> {
+    let authority = request
+        .uri()
+        .authority()
+        .ok_or(Error::HttpRequestUriInvalid)?;
+    // `host()` keeps the brackets of an IPv6 literal.
+    let value = match authority.port() {
+        Some(port) => format!("{}:{port}", authority.host()),
+        None => authority.host().to_owned(),
+    };
+    let host = http::HeaderValue::from_str(&value).map_err(|_| Error::HttpRequestUriInvalid)?;
+    request.headers_mut().insert(http::header::HOST, host);
+    Ok(())
+}
+
 /// Clamp guest timeouts to the engine maxima, lowering never rejecting; each
-/// maximum doubles as the effective default for an unset timeout.
-fn clamp(mut config: OutgoingRequestConfig, limits: &OutboundHttpLimits) -> OutgoingRequestConfig {
-    config.connect_timeout = config.connect_timeout.min(limits.connect_timeout_max);
-    config.first_byte_timeout = config.first_byte_timeout.min(limits.first_byte_timeout_max);
-    config.between_bytes_timeout = config
-        .between_bytes_timeout
-        .min(limits.between_bytes_timeout_max);
-    config
+/// maximum doubles as the effective default for an unset timeout, so every
+/// field leaves here set and the backend's own default never applies.
+fn clamp(options: Option<RequestOptions>, limits: &OutboundHttpLimits) -> RequestOptions {
+    let options = options.unwrap_or_default();
+    let cap = |guest: Option<Duration>, max: Duration| Some(guest.map_or(max, |t| t.min(max)));
+    RequestOptions {
+        connect_timeout: cap(options.connect_timeout, limits.connect_timeout_max),
+        first_byte_timeout: cap(options.first_byte_timeout, limits.first_byte_timeout_max),
+        between_bytes_timeout: cap(
+            options.between_bytes_timeout,
+            limits.between_bytes_timeout_max,
+        ),
+    }
 }
 
 /// Dispatch through the default backend under the total deadline and body
 /// cap. The deadline is unconditional: it covers headers and, via
-/// [`CappedBody`], the body, and the raced connection driver is aborted when
+/// [`CappedBody`], the body, and the raced connection driver is dropped when
 /// it fires even if the guest never reads the response.
-fn send_with_limits(
-    request: http::Request<HyperOutgoingBody>,
-    config: OutgoingRequestConfig,
+async fn send_with_limits(
+    request: http::Request<WasiBody>,
+    options: RequestOptions,
     limits: OutboundHttpLimits,
     module: String,
     permitted: Vec<IpAddr>,
     denied: Vec<IpNet>,
-) -> HostFutureIncomingResponse {
-    let handle = wasmtime_wasi::runtime::spawn(async move {
-        let deadline = tokio::time::Instant::now() + limits.total_deadline;
-        let uri = request.uri().clone();
-        let sent = tokio::time::timeout_at(deadline, async move {
-            if let Err(code) = reject_prohibited_destination(&uri, &permitted, &denied).await {
-                count_refusal(&module, Refusal::Destination);
-                // The host only, for the reason `send_request` gives.
-                warn!(
-                    module = %module,
-                    host = uri.host().unwrap_or("<none>"),
-                    "[http] outbound request denied by destination rules",
-                );
-                return Err(code);
-            }
-            default_send_request_handler(request, config).await
-        })
-        .await;
-        let result = match sent {
-            Ok(Ok(mut incoming)) => {
-                // Dropping the inner worker handle aborts the hyper
-                // connection driver, closing the socket at the
-                // deadline regardless of guest polling. A guest drop
-                // of the response still cascades: it drops this
-                // wrapper handle, which aborts the race, which drops
-                // the worker.
-                incoming.worker = incoming.worker.map(|worker| {
-                    wasmtime_wasi::runtime::spawn(async move {
-                        let _ = tokio::time::timeout_at(deadline, worker).await;
-                    })
-                });
-                incoming.resp = incoming.resp.map(|body| {
-                    CappedBody::new(body, limits.response_body_max_bytes, deadline).boxed_unsync()
-                });
-                Ok(incoming)
-            }
-            Ok(Err(code)) => Err(code),
-            Err(_) => Err(ErrorCode::ConnectionTimeout),
-        };
-        Ok(result)
-    });
-    HostFutureIncomingResponse::pending(handle)
+) -> Sent {
+    let deadline = tokio::time::Instant::now() + limits.total_deadline;
+    let uri = request.uri().clone();
+    let sent = tokio::time::timeout_at(deadline, async move {
+        if let Err(code) = reject_prohibited_destination(&uri, &permitted, &denied).await {
+            count_refusal(&module, Refusal::Destination);
+            // The host only, for the reason `send_request` gives.
+            warn!(
+                module = %module,
+                host = uri.host().unwrap_or("<none>"),
+                "[http] outbound request denied by destination rules",
+            );
+            return Err(code);
+        }
+        let (response, driver) = default_send_request(request, Some(options)).await?;
+        Ok((response.map(BodyExt::boxed_unsync), Box::pin(driver)))
+    })
+    .await;
+    match sent {
+        Ok(Ok((response, driver))) => {
+            // Dropping the hyper connection driver closes the socket at the
+            // deadline regardless of guest polling. A guest drop of the
+            // response still closes it sooner: the handler keeps the driver
+            // task with the response body and aborts the two together.
+            let driver: Driver = Box::new(async move {
+                tokio::time::timeout_at(deadline, driver)
+                    .await
+                    .unwrap_or(Ok(()))
+            });
+            let response = response.map(|body| {
+                CappedBody::new(body, limits.response_body_max_bytes, deadline).boxed_unsync()
+            });
+            Ok((response, driver))
+        }
+        Ok(Err(code)) => Err(code),
+        Err(_) => Err(Error::ConnectionTimeout),
+    }
 }
 
 /// Response-body wrapper enforcing the size cap and total deadline. Over-cap
 /// yields `HttpResponseBodySize(cap)`; the deadline firing yields
 /// `ConnectionReadTimeout`.
 struct CappedBody {
-    inner: HyperIncomingBody,
+    inner: WasiBody,
     /// Bytes still admissible under the cap.
     remaining: u64,
     /// Configured cap, echoed in the error payload.
@@ -203,7 +247,7 @@ struct CappedBody {
 }
 
 impl CappedBody {
-    fn new(inner: HyperIncomingBody, cap: u64, deadline: tokio::time::Instant) -> Self {
+    fn new(inner: WasiBody, cap: u64, deadline: tokio::time::Instant) -> Self {
         Self {
             inner,
             remaining: cap,
@@ -215,24 +259,22 @@ impl CappedBody {
 
 impl Body for CappedBody {
     type Data = Bytes;
-    type Error = ErrorCode;
+    type Error = Error;
 
     fn poll_frame(
         self: Pin<&mut Self>,
         cx: &mut Context<'_>,
-    ) -> Poll<Option<Result<Frame<Bytes>, ErrorCode>>> {
+    ) -> Poll<Option<Result<Frame<Bytes>, Error>>> {
         let me = Pin::into_inner(self);
         if let Poll::Ready(()) = me.deadline.as_mut().poll(cx) {
-            return Poll::Ready(Some(Err(ErrorCode::ConnectionReadTimeout)));
+            return Poll::Ready(Some(Err(Error::ConnectionReadTimeout)));
         }
         match Pin::new(&mut me.inner).poll_frame(cx) {
             Poll::Ready(Some(Ok(frame))) => {
                 if let Some(data) = frame.data_ref() {
                     let len = data.len() as u64;
                     if len > me.remaining {
-                        return Poll::Ready(Some(Err(ErrorCode::HttpResponseBodySize(Some(
-                            me.cap,
-                        )))));
+                        return Poll::Ready(Some(Err(Error::HttpResponseBodySize(Some(me.cap)))));
                     }
                     me.remaining -= len;
                 }
@@ -263,16 +305,16 @@ fn admit(
     uri: &http::Uri,
     allowlist: &[HostPattern],
     operator_allow: Option<&[HostPattern]>,
-) -> Result<(), ErrorCode> {
+) -> Result<(), Error> {
     let Some(host) = uri.host() else {
-        return Err(ErrorCode::HttpRequestUriInvalid);
+        return Err(Error::HttpRequestUriInvalid);
     };
     let admitted = host_allowed(host, allowlist)
         && operator_allow.is_none_or(|allow| host_allowed(host, allow));
     if admitted {
         Ok(())
     } else {
-        Err(ErrorCode::HttpRequestDenied)
+        Err(Error::HttpRequestDenied)
     }
 }
 
@@ -283,7 +325,7 @@ fn admit(
 /// Two gaps remain. The connection performs its own lookup, so an answer can
 /// change between the two. Closing that needs a pre-resolved connect address
 /// with the original hostname kept for TLS, and
-/// `default_send_request_handler` has no seam for it.
+/// `default_send_request` has no seam for it.
 ///
 /// A literal is checked the same way. The allowlist naming it is
 /// author-supplied (ADR-0001), so a module cannot reach a refused address by
@@ -294,7 +336,7 @@ async fn reject_prohibited_destination(
     uri: &http::Uri,
     permitted: &[IpAddr],
     denied: &[IpNet],
-) -> Result<(), ErrorCode> {
+) -> Result<(), Error> {
     let refused =
         |ip: &IpAddr| in_denied(denied, *ip) || (is_prohibited(*ip) && !permitted.contains(ip));
     let Some(host) = uri.host() else {
@@ -302,7 +344,7 @@ async fn reject_prohibited_destination(
     };
     if let Some(ip) = parse_ip_literal(host) {
         return if refused(&ip) {
-            Err(ErrorCode::DestinationIpProhibited)
+            Err(Error::DestinationIpProhibited)
         } else {
             Ok(())
         };
@@ -311,7 +353,7 @@ async fn reject_prohibited_destination(
         return Ok(());
     };
     if addrs.map(|addr| addr.ip()).any(|ip| refused(&ip)) {
-        return Err(ErrorCode::DestinationIpProhibited);
+        return Err(Error::DestinationIpProhibited);
     }
     Ok(())
 }
@@ -393,13 +435,11 @@ fn is_unicast_link_local_v6(ip: Ipv6Addr) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
-
     use http_body_util::{Empty, Full};
     use metrics_util::debugging::DebugValue;
     use nexum_runtime_metrics::{Sample, block_on_current_thread, capture_metrics, samples_named};
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
-    use wasmtime_wasi_http::p2::types::IncomingResponse;
+    use wasmtime_wasi::runtime::AbortOnDropJoinHandle;
 
     use super::*;
 
@@ -414,7 +454,7 @@ mod tests {
     }
 
     /// The author-list-only form; the intersection cases call the real one.
-    fn admit(uri: &http::Uri, allowlist: &[HostPattern]) -> Result<(), ErrorCode> {
+    fn admit(uri: &http::Uri, allowlist: &[HostPattern]) -> Result<(), Error> {
         super::admit(uri, allowlist, None)
     }
 
@@ -422,7 +462,7 @@ mod tests {
     async fn reject_prohibited_destination(
         uri: &http::Uri,
         permitted: &[IpAddr],
-    ) -> Result<(), ErrorCode> {
+    ) -> Result<(), Error> {
         super::reject_prohibited_destination(uri, permitted, &[]).await
     }
 
@@ -440,7 +480,7 @@ mod tests {
     fn denied(u: &str, entries: &[&str]) -> bool {
         matches!(
             admit(&uri(u), &allow(entries)),
-            Err(ErrorCode::HttpRequestDenied)
+            Err(Error::HttpRequestDenied)
         )
     }
 
@@ -675,7 +715,7 @@ mod tests {
     fn uri_without_authority_is_invalid_not_denied() {
         assert!(matches!(
             admit(&uri("/relative/path"), &allow(&["api.acme.example"])),
-            Err(ErrorCode::HttpRequestUriInvalid)
+            Err(Error::HttpRequestUriInvalid)
         ));
     }
 
@@ -783,11 +823,11 @@ mod tests {
         // naming it is a request and not a grant.
         assert!(matches!(
             reject_prohibited_destination(&uri("http://169.254.169.254:1/x"), &[]).await,
-            Err(ErrorCode::DestinationIpProhibited)
+            Err(Error::DestinationIpProhibited)
         ));
         assert!(matches!(
             reject_prohibited_destination(&uri("http://127.0.0.1:1/x"), &[]).await,
-            Err(ErrorCode::DestinationIpProhibited)
+            Err(Error::DestinationIpProhibited)
         ));
     }
 
@@ -802,7 +842,7 @@ mod tests {
         // Permitting one address does not permit its neighbours.
         assert!(matches!(
             reject_prohibited_destination(&uri("http://127.0.0.2:1/x"), &permitted).await,
-            Err(ErrorCode::DestinationIpProhibited)
+            Err(Error::DestinationIpProhibited)
         ));
     }
 
@@ -827,7 +867,7 @@ mod tests {
                 &[IpAddr::V6(Ipv6Addr::LOCALHOST)]
             )
             .await,
-            Err(ErrorCode::DestinationIpProhibited)
+            Err(Error::DestinationIpProhibited)
         ));
     }
 
@@ -839,7 +879,7 @@ mod tests {
         // below rely on implicitly.
         assert!(matches!(
             reject_prohibited_destination(&uri("http://localhost:1/x"), &[]).await,
-            Err(ErrorCode::DestinationIpProhibited)
+            Err(Error::DestinationIpProhibited)
         ));
     }
 
@@ -870,16 +910,13 @@ mod tests {
             vec![IpAddr::V4(Ipv4Addr::LOCALHOST)],
             vec![],
         );
-        let pending = gate
-            .send_request(request("http://localhost:1/x"), config())
-            .expect("hostname is allowlisted, so admit() alone passes it");
-        let err = resolve(pending)
+        let err = send(&mut gate, request("http://localhost:1/x"), options())
             .await
             .expect_err("resolving to loopback must still be rejected");
-        assert!(matches!(err, ErrorCode::DestinationIpProhibited));
+        assert!(matches!(err, Error::DestinationIpProhibited));
     }
 
-    fn request(u: &str) -> http::Request<HyperOutgoingBody> {
+    fn request(u: &str) -> http::Request<WasiBody> {
         let body = Empty::<Bytes>::new()
             .map_err(|_| unreachable!("infallible body error"))
             .boxed_unsync();
@@ -890,13 +927,8 @@ mod tests {
             .expect("test request builds")
     }
 
-    fn config() -> OutgoingRequestConfig {
-        OutgoingRequestConfig {
-            use_tls: false,
-            connect_timeout: Duration::from_secs(1),
-            first_byte_timeout: Duration::from_secs(1),
-            between_bytes_timeout: Duration::from_secs(1),
-        }
+    fn options() -> Option<RequestOptions> {
+        options_with(Duration::from_secs(1))
     }
 
     #[tokio::test]
@@ -909,19 +941,16 @@ mod tests {
             vec![IpAddr::V4(Ipv4Addr::LOCALHOST)],
             vec![],
         );
-        let Err(err) = gate.send_request(request("http://evil.example/x"), config()) else {
-            panic!("off-list host must be denied");
-        };
-        assert!(matches!(
-            err.downcast_ref(),
-            Some(ErrorCode::HttpRequestDenied)
-        ));
+        let err = send(&mut gate, request("http://evil.example/x"), options())
+            .await
+            .expect_err("off-list host must be denied");
+        assert!(matches!(err, Error::HttpRequestDenied));
     }
 
     #[tokio::test]
     async fn send_request_admits_listed_host() {
-        // Nothing listens on 127.0.0.1:1; admission only hands the
-        // request to the backend, so the returned future is pending.
+        // Nothing listens on 127.0.0.1:1, so the only way to a connect
+        // error is through both the allowlist and the destination rules.
         let mut gate = HttpGate::new(
             "test-module",
             allow(&["127.0.0.1"]),
@@ -930,10 +959,10 @@ mod tests {
             vec![IpAddr::V4(Ipv4Addr::LOCALHOST)],
             vec![],
         );
-        assert!(
-            gate.send_request(request("http://127.0.0.1:1/x"), config())
-                .is_ok()
-        );
+        let err = send(&mut gate, request("http://127.0.0.1:1/x"), options())
+            .await
+            .expect_err("nothing listens on port 1");
+        assert!(matches!(err, Error::Connect(_)), "{err:?}");
     }
 
     /// Exactly these three labels, and exactly one increment: the recorder
@@ -958,18 +987,20 @@ mod tests {
     #[test]
     fn an_allowlist_denial_is_counted_against_the_module() {
         let ((), samples) = capture_metrics(|| {
-            let mut gate = HttpGate::new(
-                "test-module",
-                allow(&["api.acme.example"]),
-                None,
-                limits(),
-                vec![],
-                vec![],
-            );
-            assert!(
-                gate.send_request(request("http://evil.example/x"), config())
-                    .is_err()
-            );
+            block_on_current_thread(async {
+                let mut gate = HttpGate::new(
+                    "test-module",
+                    allow(&["api.acme.example"]),
+                    None,
+                    limits(),
+                    vec![],
+                    vec![],
+                );
+                let err = send(&mut gate, request("http://evil.example/x"), options())
+                    .await
+                    .expect_err("off-list host is refused");
+                assert!(matches!(err, Error::HttpRequestDenied));
+            });
         });
         assert_one_denial(&samples, "allowlist");
     }
@@ -988,11 +1019,10 @@ mod tests {
                     vec![],
                     vec![],
                 );
-                let pending = gate
-                    .send_request(request("http://localhost:1/x"), config())
-                    .expect("the hostname is allowlisted");
-                let err = resolve(pending).await.expect_err("loopback is refused");
-                assert!(matches!(err, ErrorCode::DestinationIpProhibited));
+                let err = send(&mut gate, request("http://localhost:1/x"), options())
+                    .await
+                    .expect_err("loopback is refused");
+                assert!(matches!(err, Error::DestinationIpProhibited));
             });
         });
         assert_one_denial(&samples, "destination");
@@ -1012,10 +1042,8 @@ mod tests {
                     vec![IpAddr::V4(Ipv4Addr::LOCALHOST)],
                     vec![],
                 );
-                let pending = gate
-                    .send_request(request("http://127.0.0.1:1/x"), config())
-                    .expect("listed and operator-permitted");
-                assert!(resolve(pending).await.is_err());
+                let sent = send(&mut gate, request("http://127.0.0.1:1/x"), options()).await;
+                assert!(sent.is_err());
             });
         });
         assert!(samples_named(&samples, DENIALS).is_empty(), "{samples:?}");
@@ -1027,23 +1055,106 @@ mod tests {
         // no host for a policy to exclude, and the docs sell `allowlist` as
         // a host the policy excludes.
         let ((), samples) = capture_metrics(|| {
-            let mut gate = HttpGate::new(
-                "test-module",
-                allow(&["api.acme.example"]),
-                None,
-                limits(),
-                vec![],
-                vec![],
-            );
-            let Err(err) = gate.send_request(request("/relative/path"), config()) else {
-                panic!("a hostless URI is refused");
-            };
-            assert!(matches!(
-                err.downcast_ref(),
-                Some(ErrorCode::HttpRequestUriInvalid)
-            ));
+            block_on_current_thread(async {
+                let mut gate = HttpGate::new(
+                    "test-module",
+                    allow(&["api.acme.example"]),
+                    None,
+                    limits(),
+                    vec![],
+                    vec![],
+                );
+                let err = send(&mut gate, request("/relative/path"), options())
+                    .await
+                    .expect_err("a hostless URI is refused");
+                assert!(matches!(err, Error::HttpRequestUriInvalid));
+            });
         });
         assert!(samples_named(&samples, DENIALS).is_empty(), "{samples:?}");
+    }
+
+    /// A request body fed one frame at a time by the test.
+    struct FedBody(tokio::sync::mpsc::UnboundedReceiver<Bytes>);
+
+    impl Body for FedBody {
+        type Data = Bytes;
+        type Error = Error;
+
+        fn poll_frame(
+            mut self: Pin<&mut Self>,
+            cx: &mut Context<'_>,
+        ) -> Poll<Option<Result<Frame<Bytes>, Error>>> {
+            self.0
+                .poll_recv(cx)
+                .map(|data| data.map(|d| Ok(Frame::data(d))))
+        }
+    }
+
+    fn fed_request(
+        u: &str,
+    ) -> (
+        tokio::sync::mpsc::UnboundedSender<Bytes>,
+        http::Request<WasiBody>,
+    ) {
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        let request = http::Request::builder()
+            .method(http::Method::POST)
+            .uri(u)
+            .body(FedBody(rx).boxed_unsync())
+            .expect("test request builds");
+        (tx, request)
+    }
+
+    #[tokio::test]
+    async fn a_refusal_waits_for_the_request_body_to_end() {
+        // The guest is still writing. Closing the body under it would surface
+        // as a failed write, and the guest would never read the refusal.
+        let mut gate = HttpGate::new(
+            "test-module",
+            allow(&["api.acme.example"]),
+            None,
+            limits(),
+            vec![],
+            vec![],
+        );
+        let (tx, request) = fed_request("http://evil.example/x");
+        let mut sent =
+            Box::into_pin(gate.send_request(request, options(), Box::new(async { Ok(()) })));
+        tx.send(Bytes::from_static(b"first")).expect("body is open");
+        assert!(
+            tokio::time::timeout(Duration::from_millis(50), sent.as_mut())
+                .await
+                .is_err(),
+            "the refusal must not land while the body is open"
+        );
+        assert!(!tx.is_closed(), "the body must stay writable");
+        tx.send(Bytes::from_static(b"last")).expect("body is open");
+        drop(tx);
+        let err = sent.await.err().expect("the request is refused");
+        assert!(matches!(err, Error::HttpRequestDenied));
+    }
+
+    #[tokio::test]
+    async fn a_refusal_is_not_held_past_the_total_deadline() {
+        let mut l = limits();
+        l.total_deadline = Duration::from_millis(100);
+        let mut gate = HttpGate::new(
+            "test-module",
+            allow(&["api.acme.example"]),
+            None,
+            l,
+            vec![],
+            vec![],
+        );
+        let (tx, request) = fed_request("http://evil.example/x");
+        let sent = Box::into_pin(gate.send_request(request, options(), Box::new(async { Ok(()) })));
+        let err = tokio::time::timeout(Duration::from_secs(5), sent)
+            .await
+            .expect("the deadline ends the wait")
+            .err()
+            .expect("the request is refused");
+        assert!(matches!(err, Error::HttpRequestDenied));
+        drop(tx);
     }
 
     /// The effective host set is the intersection: the manifest list alone
@@ -1057,16 +1168,16 @@ mod tests {
         assert!(both("https://api.cow.fi/x").is_ok());
         assert!(matches!(
             both("https://evil.example/x"),
-            Err(ErrorCode::HttpRequestDenied)
+            Err(Error::HttpRequestDenied)
         ));
         assert!(matches!(
             both("https://unrequested.example/x"),
-            Err(ErrorCode::HttpRequestDenied)
+            Err(Error::HttpRequestDenied)
         ));
         // An empty operator row denies everything: narrowing to nothing.
         assert!(matches!(
             super::admit(&uri("https://api.cow.fi/x"), &author, Some(&[])),
-            Err(ErrorCode::HttpRequestDenied)
+            Err(Error::HttpRequestDenied)
         ));
     }
 
@@ -1076,7 +1187,7 @@ mod tests {
         assert!(matches!(
             super::reject_prohibited_destination(&uri("http://203.0.113.9:1/x"), &[], &denied)
                 .await,
-            Err(ErrorCode::DestinationIpProhibited)
+            Err(Error::DestinationIpProhibited)
         ));
         // Outside the denied range the public address stays reachable.
         assert!(
@@ -1094,7 +1205,7 @@ mod tests {
                 &deny_loopback
             )
             .await,
-            Err(ErrorCode::DestinationIpProhibited)
+            Err(Error::DestinationIpProhibited)
         ));
     }
 
@@ -1108,7 +1219,7 @@ mod tests {
                 &denied
             )
             .await,
-            Err(ErrorCode::DestinationIpProhibited)
+            Err(Error::DestinationIpProhibited)
         ));
         assert!(
             super::reject_prohibited_destination(
@@ -1125,54 +1236,64 @@ mod tests {
         assert!(matches!(
             super::reject_prohibited_destination(&uri("http://203.0.113.9:1/x"), &[], &mapped)
                 .await,
-            Err(ErrorCode::DestinationIpProhibited)
+            Err(Error::DestinationIpProhibited)
         ));
     }
 
-    fn config_with(timeout: Duration) -> OutgoingRequestConfig {
-        OutgoingRequestConfig {
-            use_tls: false,
-            connect_timeout: timeout,
-            first_byte_timeout: timeout,
-            between_bytes_timeout: timeout,
-        }
+    fn options_with(timeout: Duration) -> Option<RequestOptions> {
+        Some(RequestOptions {
+            connect_timeout: Some(timeout),
+            first_byte_timeout: Some(timeout),
+            between_bytes_timeout: Some(timeout),
+        })
     }
 
     #[test]
     fn clamp_lowers_each_timeout_above_its_maximum() {
-        // 600 s is also what the linked handler substitutes for unset
-        // request-options, so this doubles as the unset case: unset
-        // resolves to the engine maximum.
-        let clamped = clamp(config_with(Duration::from_secs(600)), &limits());
-        assert_eq!(clamped.connect_timeout, Duration::from_secs(10));
-        assert_eq!(clamped.first_byte_timeout, Duration::from_secs(10));
-        assert_eq!(clamped.between_bytes_timeout, Duration::from_secs(10));
+        let clamped = clamp(options_with(Duration::from_secs(600)), &limits());
+        assert_eq!(clamped.connect_timeout, Some(Duration::from_secs(10)));
+        assert_eq!(clamped.first_byte_timeout, Some(Duration::from_secs(10)));
+        assert_eq!(clamped.between_bytes_timeout, Some(Duration::from_secs(10)));
+    }
+
+    #[test]
+    fn clamp_fills_an_unset_timeout_with_its_maximum() {
+        // A `None` left in place would fall through to the backend's own
+        // 600 s default, past the engine maximum.
+        let mut l = limits();
+        l.first_byte_timeout_max = Duration::from_millis(50);
+        for unset in [None, Some(RequestOptions::default())] {
+            let clamped = clamp(unset, &l);
+            assert_eq!(clamped.connect_timeout, Some(Duration::from_secs(10)));
+            assert_eq!(clamped.first_byte_timeout, Some(Duration::from_millis(50)));
+            assert_eq!(clamped.between_bytes_timeout, Some(Duration::from_secs(10)));
+        }
     }
 
     #[test]
     fn clamp_keeps_timeouts_below_the_maximum() {
-        let clamped = clamp(config_with(Duration::from_secs(1)), &limits());
-        assert_eq!(clamped.connect_timeout, Duration::from_secs(1));
-        assert_eq!(clamped.first_byte_timeout, Duration::from_secs(1));
-        assert_eq!(clamped.between_bytes_timeout, Duration::from_secs(1));
+        let clamped = clamp(options_with(Duration::from_secs(1)), &limits());
+        assert_eq!(clamped.connect_timeout, Some(Duration::from_secs(1)));
+        assert_eq!(clamped.first_byte_timeout, Some(Duration::from_secs(1)));
+        assert_eq!(clamped.between_bytes_timeout, Some(Duration::from_secs(1)));
     }
 
     #[test]
     fn clamp_keeps_timeouts_at_the_maximum() {
-        let clamped = clamp(config_with(Duration::from_secs(10)), &limits());
-        assert_eq!(clamped.connect_timeout, Duration::from_secs(10));
-        assert_eq!(clamped.first_byte_timeout, Duration::from_secs(10));
-        assert_eq!(clamped.between_bytes_timeout, Duration::from_secs(10));
+        let clamped = clamp(options_with(Duration::from_secs(10)), &limits());
+        assert_eq!(clamped.connect_timeout, Some(Duration::from_secs(10)));
+        assert_eq!(clamped.first_byte_timeout, Some(Duration::from_secs(10)));
+        assert_eq!(clamped.between_bytes_timeout, Some(Duration::from_secs(10)));
     }
 
     #[test]
     fn clamp_applies_each_maximum_independently() {
         let mut l = limits();
         l.first_byte_timeout_max = Duration::from_millis(50);
-        let clamped = clamp(config_with(Duration::from_secs(5)), &l);
-        assert_eq!(clamped.connect_timeout, Duration::from_secs(5));
-        assert_eq!(clamped.first_byte_timeout, Duration::from_millis(50));
-        assert_eq!(clamped.between_bytes_timeout, Duration::from_secs(5));
+        let clamped = clamp(options_with(Duration::from_secs(5)), &l);
+        assert_eq!(clamped.connect_timeout, Some(Duration::from_secs(5)));
+        assert_eq!(clamped.first_byte_timeout, Some(Duration::from_millis(50)));
+        assert_eq!(clamped.between_bytes_timeout, Some(Duration::from_secs(5)));
     }
 
     /// A detached executor for test-server tasks.
@@ -1202,19 +1323,33 @@ mod tests {
         addr
     }
 
-    async fn resolve(pending: HostFutureIncomingResponse) -> Result<IncomingResponse, ErrorCode> {
-        match pending {
-            HostFutureIncomingResponse::Pending(handle) => {
-                handle.await.expect("send task never traps")
-            }
-            _ => panic!("send_request returns a pending response"),
-        }
+    /// A response head with its connection driver running.
+    #[derive(Debug)]
+    struct Incoming {
+        resp: http::Response<WasiBody>,
+        _driver: AbortOnDropJoinHandle<()>,
+    }
+
+    /// Drive one send the way the linked `outgoing-handler` does: await the
+    /// head, then run the connection driver as its own task, so it advances
+    /// whether or not the body is read.
+    async fn send(
+        gate: &mut HttpGate,
+        request: http::Request<WasiBody>,
+        options: Option<RequestOptions>,
+    ) -> Result<Incoming, Error> {
+        let sent = gate.send_request(request, options, Box::new(async { Ok(()) }));
+        let (resp, driver) = Box::into_pin(sent).await?;
+        let _driver = wasmtime_wasi::runtime::spawn(async move {
+            let _ = Box::into_pin(driver).await;
+        });
+        Ok(Incoming { resp, _driver })
     }
 
     async fn send_to(
         addr: std::net::SocketAddr,
         limits: OutboundHttpLimits,
-    ) -> Result<IncomingResponse, ErrorCode> {
+    ) -> Result<Incoming, Error> {
         let mut gate = HttpGate::new(
             "test-module",
             allow(&["127.0.0.1"]),
@@ -1223,14 +1358,186 @@ mod tests {
             vec![IpAddr::V4(Ipv4Addr::LOCALHOST)],
             vec![],
         );
-        let pending = gate
-            .send_request(request(&format!("http://{addr}/x")), config_10s())
-            .expect("listed host admitted");
-        resolve(pending).await
+        send(
+            &mut gate,
+            request(&format!("http://{addr}/x")),
+            options_with(Duration::from_secs(10)),
+        )
+        .await
     }
 
-    fn config_10s() -> OutgoingRequestConfig {
-        config_with(Duration::from_secs(10))
+    /// One-connection loopback server that hands back the request head it
+    /// was sent, lowercased, and answers 200 with an empty body.
+    async fn spawn_capturing_server()
+    -> (std::net::SocketAddr, tokio::sync::oneshot::Receiver<String>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind loopback listener");
+        let addr = listener.local_addr().expect("listener has a local addr");
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        test_executor().spawn(async move {
+            let Ok((mut sock, _)) = listener.accept().await else {
+                return;
+            };
+            let mut head = Vec::new();
+            let mut buf = [0u8; 1024];
+            while !head.windows(4).any(|w| w == b"\r\n\r\n") {
+                match sock.read(&mut buf).await {
+                    Ok(0) | Err(_) => break,
+                    Ok(n) => head.extend_from_slice(&buf[..n]),
+                }
+            }
+            let _ = tx.send(String::from_utf8_lossy(&head).to_ascii_lowercase());
+            let _ = sock
+                .write_all(b"HTTP/1.1 200 OK\r\ncontent-length: 0\r\n\r\n")
+                .await;
+            let _ = sock.flush().await;
+        });
+        (addr, rx)
+    }
+
+    fn loopback_gate() -> HttpGate {
+        HttpGate::new(
+            "test-module",
+            allow(&["127.0.0.1"]),
+            None,
+            limits(),
+            vec![IpAddr::V4(Ipv4Addr::LOCALHOST)],
+            vec![],
+        )
+    }
+
+    #[tokio::test]
+    async fn a_host_header_naming_a_listed_host_admits_no_other_destination() {
+        // The URI authority is where the backend connects, so it alone is
+        // judged. A `Host` header is only what the far end is told.
+        let mut gate = loopback_gate();
+        let mut smuggled = request("http://evil.example/x");
+        smuggled
+            .headers_mut()
+            .insert(http::header::HOST, "127.0.0.1".parse().expect("header"));
+        let err = send(&mut gate, smuggled, options())
+            .await
+            .expect_err("the destination is off-list whatever Host says");
+        assert!(matches!(err, Error::HttpRequestDenied));
+    }
+
+    #[tokio::test]
+    async fn the_host_header_on_the_wire_is_the_admitted_authority() {
+        // Fronting: connect to a listed host and name another in `Host`, so
+        // a shared front end routes the request somewhere the allowlist
+        // never admitted.
+        let (addr, head) = spawn_capturing_server().await;
+        let mut gate = loopback_gate();
+        let mut fronted = request(&format!("http://{addr}/x"));
+        fronted
+            .headers_mut()
+            .append(http::header::HOST, "evil.example".parse().expect("header"));
+        fronted
+            .headers_mut()
+            .append(http::header::HOST, "other.example".parse().expect("header"));
+        send(&mut gate, fronted, options())
+            .await
+            .expect("the listed destination answers");
+        let head = head.await.expect("server saw the request");
+        let hosts: Vec<&str> = head
+            .lines()
+            .filter(|line| line.starts_with("host:"))
+            .collect();
+        assert_eq!(hosts, [format!("host: {addr}")], "{head}");
+    }
+
+    #[test]
+    fn userinfo_in_the_authority_never_reaches_the_host_header() {
+        // The backend resolves the whole authority, so a request carrying
+        // userinfo fails to connect today. The header is still written
+        // without it, so that does not rest on the backend.
+        for (url, host) in [
+            ("http://evil.example@allowed.example/x", "allowed.example"),
+            (
+                "http://evil.example:pw@allowed.example:8443/x",
+                "allowed.example:8443",
+            ),
+            ("http://evil.example@[::1]:8080/x", "[::1]:8080"),
+            ("http://allowed.example/x", "allowed.example"),
+        ] {
+            let mut pinned = request(url);
+            pin_host_header(&mut pinned).expect("the URI has an authority");
+            assert_eq!(pinned.headers()[http::header::HOST], host, "{url}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_request_without_a_host_header_still_names_its_authority() {
+        let (addr, head) = spawn_capturing_server().await;
+        let mut gate = loopback_gate();
+        send(&mut gate, request(&format!("http://{addr}/x")), options())
+            .await
+            .expect("the listed destination answers");
+        let head = head.await.expect("server saw the request");
+        assert!(head.contains(&format!("\r\nhost: {addr}\r\n")), "{head}");
+    }
+
+    #[test]
+    fn the_gate_keeps_host_a_forbidden_guest_header() {
+        // The linked implementation consults this hook for every header a
+        // guest writes, so a guest cannot put `Host` on a request at all.
+        let mut gate = loopback_gate();
+        for name in [
+            "host",
+            "connection",
+            "keep-alive",
+            "proxy-authenticate",
+            "proxy-authorization",
+            "proxy-connection",
+            "transfer-encoding",
+            "upgrade",
+            "http2-settings",
+        ] {
+            let name = http::HeaderName::from_static(name);
+            assert!(gate.is_forbidden_header(&name), "{name}");
+        }
+        assert!(!gate.is_forbidden_header(&http::header::ACCEPT));
+    }
+
+    #[test]
+    fn the_gate_keeps_the_request_body_buffer_at_one_mebibyte_chunk() {
+        // What the host holds of a body the guest writes faster than the
+        // far end reads.
+        let mut gate = loopback_gate();
+        assert_eq!(gate.p2_outgoing_body_buffer_chunks(), 1);
+        assert_eq!(gate.p2_outgoing_body_chunk_size(), 1 << 20);
+    }
+
+    #[test]
+    fn the_gate_accepts_only_http_and_https() {
+        let mut gate = loopback_gate();
+        assert!(gate.is_supported_scheme(&http::uri::Scheme::HTTP));
+        assert!(gate.is_supported_scheme(&http::uri::Scheme::HTTPS));
+        let other = http::uri::Scheme::try_from("ftp").expect("scheme parses");
+        assert!(!gate.is_supported_scheme(&other));
+        assert_eq!(gate.default_scheme(), Some(http::uri::Scheme::HTTPS));
+        assert!(gate.set_host_header());
+    }
+
+    #[test]
+    fn a_malformed_port_never_moves_the_host_the_allowlist_judges() {
+        // The linked implementation refuses these at `set-authority`. Should
+        // one reach the gate, the decision is still on the host alone, and
+        // an entry spelling the same junk still matches nothing.
+        for port in ["", "abc", "65536"] {
+            let listed = uri(&format!("http://api.acme.example:{port}/"));
+            assert_eq!(listed.host(), Some("api.acme.example"), "{port:?}");
+            assert!(admit(&listed, &allow(&["api.acme.example"])).is_ok());
+            assert!(denied(
+                &format!("http://evil.example:{port}/"),
+                &["api.acme.example"]
+            ));
+            assert!(denied(
+                &format!("http://api.acme.example:{port}/"),
+                &[&format!("api.acme.example:{port}")]
+            ));
+        }
     }
 
     #[tokio::test]
@@ -1259,7 +1566,7 @@ mod tests {
         let mut l = limits();
         l.total_deadline = Duration::from_millis(250);
         let err = send_to(addr, l).await.expect_err("deadline fires");
-        assert!(matches!(err, ErrorCode::ConnectionTimeout));
+        assert!(matches!(err, Error::ConnectionTimeout));
     }
 
     #[tokio::test]
@@ -1278,7 +1585,7 @@ mod tests {
             .collect()
             .await
             .expect_err("deadline fires mid-body");
-        assert!(matches!(err, ErrorCode::ConnectionReadTimeout));
+        assert!(matches!(err, Error::ConnectionReadTimeout));
     }
 
     #[tokio::test]
@@ -1335,12 +1642,12 @@ mod tests {
             .collect()
             .await
             .expect_err("body exceeds the cap");
-        assert!(matches!(err, ErrorCode::HttpResponseBodySize(Some(1024))));
+        assert!(matches!(err, Error::HttpResponseBodySize(Some(1024))));
     }
 
     #[tokio::test]
     async fn body_at_exactly_the_cap_passes() {
-        let inner: HyperIncomingBody = Full::new(Bytes::from(vec![b'a'; 64]))
+        let inner: WasiBody = Full::new(Bytes::from(vec![b'a'; 64]))
             .map_err(|_| unreachable!("infallible body error"))
             .boxed_unsync();
         let deadline = tokio::time::Instant::now() + Duration::from_secs(5);

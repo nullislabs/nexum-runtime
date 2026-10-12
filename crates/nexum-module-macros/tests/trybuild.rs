@@ -5,7 +5,7 @@
 //! scaffolding. Accepted inputs are covered by the unit tests in `src/lib.rs`.
 //!
 //! `.stderr` is toolchain-sensitive, and the two pins differ: the flake
-//! pins 1.94.0 exactly, CI pins the floating "1.94" line, so a patch
+//! pins 1.96.0 exactly, CI pins the floating "1.96" line, so a patch
 //! release can redden CI first. Regenerate with `TRYBUILD=overwrite`.
 
 #[test]

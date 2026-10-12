@@ -6,6 +6,7 @@ mod cursors;
 mod digest;
 mod dispatch;
 mod e2e;
+mod engine;
 mod ledger;
 mod lifecycle;
 

@@ -42,7 +42,7 @@ resolver = "3"
 version = "0.1.0"
 edition = "2024"
 license = "AGPL-3.0-or-later"
-rust-version = "1.94.0"
+rust-version = "1.96.0"
 repository = "https://github.com/nullislabs/nexum-runtime"
 
 # Shared dependency table. Every external dependency is hoisted here.
@@ -145,15 +145,15 @@ syn = { version = "2", features = ["full"] }
 wstd = { version = "0.6", default-features = false }
 
 # WASM Component Model runtime (engine host).
-wasmtime = { version = "46", features = ["component-model"] }
-wasmtime-wasi = "46"
+wasmtime = { version = "49", features = ["component-model"] }
+wasmtime-wasi = "49"
 # Host implementation of wasi:http; default features keep the hyper +
 # rustls outgoing backend (`default-send-request`) the engine fronts
 # with its per-module allowlist gate.
-wasmtime-wasi-http = "46"
-# Pinned to the exact wit-parser version wasmtime v46.0.3 embeds, so the
+wasmtime-wasi-http = "49"
+# Pinned to the exact wit-parser version wasmtime v49.0.2 embeds, so the
 # WIT cross-check test parses with the same parser the runtime does.
-wit-parser = "=0.251.0"
+wit-parser = "=0.258.3"
 # Test-only: the compile path takes binary components, so a `.wat` fixture
 # stays readable in the tree and is assembled before a test loads it (#356).
 wat = "1"
