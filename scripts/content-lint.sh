@@ -59,9 +59,7 @@ if [ -n "$hits" ]; then
     printf '%s\n' "$hits" | sed 's/^/    /' >&2
 fi
 
-# CONTRIBUTING.md is exempt: stating the rule means quoting the spelling it
-# rejects.
-hits=$(git grep --untracked -nIPi "$ISE" -- . ':!CONTRIBUTING.md' || true)
+hits=$(git grep --untracked -nIPi "$ISE" -- . || true)
 if [ -n "$hits" ]; then
     fail "Oxford spelling takes -ize, not -ise:"
     printf '%s\n' "$hits" | sed 's/^/    /' >&2

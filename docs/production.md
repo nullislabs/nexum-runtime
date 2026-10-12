@@ -38,7 +38,7 @@ A `#` inside a quoted string is not a comment, and the engine substitutes a toke
 ```ini
 [Unit]
 Description=Nexum WASM component runtime
-Documentation=https://github.com/nullislabs/nexum-runtime
+Documentation=https://github.com/nxm-rs/nexum-runtime
 After=network-online.target
 Wants=network-online.target
 
