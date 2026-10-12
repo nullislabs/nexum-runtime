@@ -85,7 +85,7 @@ It is not a migration log or a design discussion.
 
 ## House rules
 
-`CONTRIBUTING.md` carries the organization-wide standard and takes precedence; the rules below are additions to it.
+The [nxm-rs contributing guide](https://github.com/nxm-rs/.github/blob/main/CONTRIBUTING.md) carries the organization-wide standard and takes precedence; the rules below are additions to it.
 
 Write in Oxford English, which takes -ize endings: organize, recognize, serialize.
 `.claude/hooks/content-lint.sh` and the CI content job refuse an -ise spelling of a word that takes -ize.

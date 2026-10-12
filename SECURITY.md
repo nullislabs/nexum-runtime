@@ -2,7 +2,7 @@
 
 ## Report a vulnerability
 
-Report a vulnerability through GitHub private vulnerability reporting: [open a draft advisory](https://github.com/nullislabs/nexum-runtime/security/advisories/new).
+Report a vulnerability through GitHub private vulnerability reporting: [open a draft advisory](https://github.com/nxm-rs/nexum-runtime/security/advisories/new).
 The report stays private until an advisory is published, so there is no public disclosure before a fix exists.
 
 Do not open a public issue for a vulnerability.
@@ -16,14 +16,15 @@ Keep the report private until the advisory is published.
 
 ## Supported versions
 
-nexum-runtime is before its 1.0 release and has no tagged release.
-Security fixes land on `main` only.
-There is no backport to an earlier commit and no patch release of an older version.
+nexum-runtime is before its 1.0 release.
+Security fixes land on `main` and ship in the next tagged release.
+There is no backport to an earlier release and no patch release of an older version.
 
 | Version | Supported |
 | --- | --- |
 | `main` | Yes |
-| Any earlier commit | No |
+| The latest tagged release | Until the next release, which carries the fix |
+| Any earlier release or commit | No |
 
 ## What is in scope
 

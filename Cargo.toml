@@ -44,7 +44,7 @@ version = "0.1.0"
 edition = "2024"
 license = "AGPL-3.0-or-later"
 rust-version = "1.96.0"
-repository = "https://github.com/nullislabs/nexum-runtime"
+repository = "https://github.com/nxm-rs/nexum-runtime"
 
 # Shared dependency table. Every external dependency is hoisted here.
 # Core workspace crates (the engine, SDK, tooling) inherit with

@@ -29,10 +29,10 @@ A module in another repository uses a `git` dependency pinned to a commit:
 
 ```toml
 [dependencies]
-nexum-sdk = { git = "https://github.com/nullislabs/nexum-runtime", rev = "<commit>" }
+nexum-sdk = { git = "https://github.com/nxm-rs/nexum-runtime", rev = "<commit>" }
 
 [dev-dependencies]
-nexum-sdk-test = { git = "https://github.com/nullislabs/nexum-runtime", rev = "<commit>" }
+nexum-sdk-test = { git = "https://github.com/nxm-rs/nexum-runtime", rev = "<commit>" }
 ```
 
 That module also carries a copy of `wit/nexum-host` from the same commit.

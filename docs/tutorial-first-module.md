@@ -22,7 +22,7 @@ You need two things.
 ## Step 1: run the example module
 
 ```sh
-git clone https://github.com/nullislabs/nexum-runtime
+git clone https://github.com/nxm-rs/nexum-runtime
 cd nexum-runtime
 nix develop
 export SEPOLIA_RPC_URL=https://ethereum-sepolia-rpc.publicnode.com
@@ -439,12 +439,12 @@ rust-version = "1.96.0"
 crate-type = ["cdylib"]
 
 [dependencies]
-nexum-sdk = { git = "https://github.com/nullislabs/nexum-runtime", rev = "<commit>" }
+nexum-sdk = { git = "https://github.com/nxm-rs/nexum-runtime", rev = "<commit>" }
 tracing = { version = "0.1", default-features = false }
 wit-bindgen = { version = "0.59", default-features = false, features = ["macros", "realloc"] }
 
 [dev-dependencies]
-nexum-sdk-test = { git = "https://github.com/nullislabs/nexum-runtime", rev = "<commit>" }
+nexum-sdk-test = { git = "https://github.com/nxm-rs/nexum-runtime", rev = "<commit>" }
 ```
 
 Use the same `rev` for both crates.
