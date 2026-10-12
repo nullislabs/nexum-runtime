@@ -330,7 +330,7 @@ rpc_url = "wss://example.test/sepolia"
             .get(&Chain::sepolia())
             .expect("sepolia entry")
             .rpc_url;
-        assert_eq!(endpoint.url().as_str(), "wss://example.test/sepolia");
+        assert_eq!(endpoint.expose_url().as_str(), "wss://example.test/sepolia");
         assert!(
             endpoint.supports_pubsub(),
             "wss selects the pubsub transport"
@@ -339,18 +339,29 @@ rpc_url = "wss://example.test/sepolia"
     }
 
     #[test]
-    fn a_credentialed_endpoint_keeps_full_fidelity_host_side() {
-        // The secrecy boundary is the WIT edge, not the operator log:
-        // host-side `Debug` and the dial path carry the URL as configured.
-        const URL: &str = "https://user:hunter2secret@rpc.example.com\
+    fn a_credentialed_endpoint_dials_in_full_and_debug_prints_none_of_it() {
+        // The dial path keeps the URL as configured. `Debug` carries none
+        // of it: operators publish the engine's output as evidence.
+        const URL: &str = "https://usermarker:hunter2secret@rpc.example.com\
              /AnOfyGnZ0nWpSOOwQzqAnFjNaa0sR8ZxkVjewFaCJ?apikey=querysecret#fragsecret";
         let cfg = toml::from_str::<EngineConfig>(&format!("[chains.1]\nrpc_url = \"{URL}\"\n"))
             .expect("credentialed URL parses");
         let endpoint = &cfg.chains.get(&Chain::from_id(1)).expect("entry").rpc_url;
-        assert_eq!(endpoint.url().as_str(), URL);
+        assert_eq!(endpoint.expose_url().as_str(), URL);
+        let debug = format!("{cfg:?}");
+        for secret in [
+            "usermarker",
+            "hunter2secret",
+            "rpc.example.com",
+            "AnOfyGnZ0nWpSOOwQzqAnFjNaa0sR8ZxkVjewFaCJ",
+            "querysecret",
+            "fragsecret",
+        ] {
+            assert!(!debug.contains(secret), "Debug prints {secret}: {debug}");
+        }
         assert!(
-            format!("{cfg:?}").contains("hunter2secret"),
-            "Debug keeps the credential for host diagnostics",
+            debug.contains(endpoint.fingerprint()) && debug.contains("https"),
+            "Debug keeps the scheme and the fingerprint: {debug}",
         );
     }
 

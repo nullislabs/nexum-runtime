@@ -4,6 +4,7 @@
 
 mod builder;
 mod provider_pool;
+mod redact;
 
 pub use builder::ProviderPoolBuilder;
 pub use provider_pool::{

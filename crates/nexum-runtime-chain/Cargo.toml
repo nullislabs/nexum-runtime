@@ -16,6 +16,8 @@ test-utils = []
 
 [dependencies]
 alloy-chains.workspace = true
+# The packet types the redaction layer rewrites.
+alloy-json-rpc.workspace = true
 alloy-primitives.workspace = true
 alloy-provider = { workspace = true, features = ["ws", "ipc", "pubsub", "reqwest"] }
 alloy-rpc-client.workspace = true
@@ -30,8 +32,12 @@ reqwest.workspace = true
 serde_json = { workspace = true, features = ["std"] }
 thiserror.workspace = true
 tokio = { workspace = true, features = ["time"] }
+# The layer seam alloy's client builder composes transports through.
+tower.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
+# The log capture the redaction tests read the operator's lines from.
+nexum-runtime-logs = { path = "../nexum-runtime-logs", features = ["testing"] }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 wiremock.workspace = true

@@ -370,6 +370,15 @@ Prefer `wss://` where it is offered: a WebSocket pushes new heads through `eth_s
 Both work; push is lower latency.
 An `http(s)://` URL is not dialled at boot, so a bad HTTP endpoint surfaces on first use rather than at start.
 
+The engine does not write an RPC URL to a log line, an error, a metric label, or a probe body, so you can publish its output.
+The boot line `opening chain RPC provider` carries `chain_id`, `scheme`, and `endpoint`.
+`endpoint` is a fingerprint: the first 8 hex characters of the SHA-256 of the URL as configured, which `printf %s "$URL" | sha256sum | cut -c1-8` reproduces.
+Use it to tell two endpoints apart.
+It hides a provider key, but a guess at a URL that carries no key can be checked against it.
+A transport error shows `[redacted]` in place of the URL and of each part of it that an upstream echoes.
+A refusal of an `engine.toml` that does not parse gives the line and the column and not the text of the line, because a substituted line can hold the URL.
+The engine also drops every line from the `hyper_util::client` log target at every level, whatever `RUST_LOG` names, because that HTTP client logs each address it dials.
+
 Every provider carries a retry layer (10 attempts, 300 ms base backoff).
 A `request_timeout_secs` under `[chains.<id>]` bounds one request and defaults to 30 s.
 The same value bounds each open of a block or event source: the head fetch, the `eth_subscribe(newHeads)` handshake, and the tail-hash probe on reconnect.

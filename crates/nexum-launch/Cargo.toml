@@ -18,4 +18,6 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 
 [dev-dependencies]
+# The log capture the filter test reads the admitted lines from.
+nexum-runtime-logs = { path = "../nexum-runtime-logs", features = ["testing"] }
 tempfile.workspace = true

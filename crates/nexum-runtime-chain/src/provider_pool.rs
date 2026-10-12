@@ -29,6 +29,8 @@ use tracing::info;
 use nexum_runtime_config::EngineConfig;
 use nexum_world::ChainMethod;
 
+use crate::redact::{RedactLayer, redact_error};
+
 /// Head re-poll cadence for chains without a block-time hint; known chains
 /// derive it from [`Chain::average_blocktime_hint`].
 const DEFAULT_POLL_INTERVAL: Duration = Duration::from_secs(2);
@@ -96,23 +98,29 @@ impl ProviderPool {
         entries.sort_by_key(|(c, _)| c.id());
         for (chain, chain_cfg) in entries {
             let endpoint = &chain_cfg.rpc_url;
+            // The fingerprint stands in for the URL, which carries the
+            // provider key and must not reach a log line.
             info!(
                 chain_id = chain.id(),
-                url = %endpoint.url(),
+                scheme = endpoint.scheme(),
+                endpoint = endpoint.fingerprint(),
                 "opening chain RPC provider",
             );
             let timeout = Duration::from_secs(chain_cfg.request_timeout_secs);
             let supports_pubsub = endpoint.supports_pubsub();
+            // Innermost, so the retry layer logs and returns redacted errors.
+            let layers = ClientBuilder::default()
+                .layer(retry_layer())
+                .layer(RedactLayer(endpoint.clone()));
             let provider = if supports_pubsub {
                 // WS has no client-level timeout; the pool deadline is the
-                // only bound.
-                let client = ClientBuilder::default()
-                    .layer(retry_layer())
-                    .ws(WsConnect::new(endpoint.url().as_str()))
+                // only bound. A refused connect does not pass the layers.
+                let client = layers
+                    .ws(WsConnect::new(endpoint.expose_url().as_str()))
                     .await
                     .map_err(|source| PoolError::Connect {
                         chain: *chain,
-                        source,
+                        source: redact_error(endpoint, source),
                     })?;
                 ProviderBuilder::new().connect_client(client).erased()
             } else {
@@ -123,9 +131,7 @@ impl ProviderPool {
                         chain: *chain,
                         source: TransportErrorKind::custom(e),
                     })?;
-                let client = ClientBuilder::default()
-                    .layer(retry_layer())
-                    .http_with_client(http, endpoint.url().clone());
+                let client = layers.http_with_client(http, endpoint.expose_url().clone());
                 ProviderBuilder::new().connect_client(client).erased()
             };
             providers.insert(
@@ -674,7 +680,7 @@ mod tests {
             .await;
 
         let endpoint = RpcEndpoint::try_from(server.uri().as_str()).expect("test rpc url parses");
-        let client = ClientBuilder::default().http(endpoint.url().clone());
+        let client = ClientBuilder::default().http(endpoint.expose_url().clone());
         let provider = ProviderBuilder::new().connect_client(client).erased();
         let mut providers = HashMap::new();
         providers.insert(

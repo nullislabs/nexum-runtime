@@ -3374,6 +3374,7 @@ version = "0.1.0"
 dependencies = [
  "clap",
  "nexum-runtime",
+ "nexum-runtime-logs",
  "tempfile",
  "thiserror 2.0.18",
  "tracing",
@@ -3470,6 +3471,7 @@ name = "nexum-runtime-chain"
 version = "0.1.0"
 dependencies = [
  "alloy-chains",
+ "alloy-json-rpc",
  "alloy-primitives",
  "alloy-provider",
  "alloy-rpc-client",
@@ -3478,11 +3480,13 @@ dependencies = [
  "futures",
  "nexum-runtime-api",
  "nexum-runtime-config",
+ "nexum-runtime-logs",
  "nexum-world",
  "reqwest",
  "serde_json",
  "thiserror 2.0.18",
  "tokio",
+ "tower",
  "tracing",
  "wiremock",
 ]

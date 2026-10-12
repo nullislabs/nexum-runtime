@@ -38,7 +38,18 @@ pub fn load_or_default(path: Option<&Path>) -> Result<EngineConfig, EngineConfig
     // Parse the raw shape, then convert, so a bad `[chains]` key surfaces
     // as the typed `InvalidChainKey` rather than erased into a serde
     // string by the derived `Deserialize`.
-    let cfg = EngineConfig::try_from(toml::from_str::<RawEngineConfig>(&substituted)?)?;
+    let parsed = toml::from_str::<RawEngineConfig>(&substituted).map_err(|mut err| {
+        // toml prints the line it refuses, and after substitution that line
+        // can hold an RPC URL: an unquoted `${VAR}` is enough. Blanked
+        // text keeps the line and column and prints none of the content.
+        let blank: String = substituted
+            .bytes()
+            .map(|b| if b == b'\n' { '\n' } else { ' ' })
+            .collect();
+        err.set_input(Some(&blank));
+        err
+    })?;
+    let cfg = EngineConfig::try_from(parsed)?;
     info!(
         path = %path.display(),
         chains = cfg.chains.len(),
@@ -195,6 +206,31 @@ mod tests {
         let cfg = load_or_default(Some(&path)).expect("the file parses");
         assert!(!cfg.defaulted, "a loaded engine.toml is not defaulted");
         assert_eq!(cfg.chains.len(), 1);
+    }
+
+    #[test]
+    fn a_refused_line_is_located_and_not_printed() {
+        // Two slips that put the URL on the line the parser refuses: a
+        // repeated key, and a URL with no quotes round it.
+        const URL: &str = "https://host-marker.example/v2/key-marker";
+        for body in [
+            format!("[chains.1]\nrpc_url = \"{URL}\"\nrpc_url = \"{URL}\"\n"),
+            format!("[chains.1]\n\nrpc_url = {URL}\n"),
+        ] {
+            let dir = tempfile::tempdir().expect("tempdir");
+            let path = dir.path().join("engine.toml");
+            std::fs::write(&path, body).expect("write engine.toml");
+            let err = load_or_default(Some(&path)).expect_err("the parser refuses");
+            assert!(matches!(err, EngineConfigError::Toml(_)), "{err:?}");
+            let text = format!("{err}\n{err:?}");
+            for marker in ["host-marker", "key-marker"] {
+                assert!(
+                    !text.contains(marker),
+                    "the refusal prints {marker}: {text}"
+                );
+            }
+            assert!(err.to_string().contains("at line 3, column "), "{err}");
+        }
     }
 
     //
