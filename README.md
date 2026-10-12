@@ -2,7 +2,19 @@
 
 Nexum is a WASM Component Model host runtime for web3 modules. It supervises guest components built against the `nexum:host` WIT world, giving each module a capability-gated view of the host: chain access over JSON-RPC, an allowlisted `wasi:http` outbound gate, a local key-value store, clocks, and structured logging, with fuel and memory limits enforced per module.
 
-This repository is the leaf of the Nullis runtime stack: it carries no cross-repo dependencies. Downstream repositories (videre, shepherd) build on the SDK and runtime published here.
+This repository is the leaf of the Nullis runtime stack: it carries no cross-repo dependencies. Downstream repositories (videre, shepherd) build on the SDK and the runtime in this repository.
+The crates are not published to crates.io.
+A consumer takes them as `git` dependencies pinned to a commit: see [docs/sdk.md](docs/sdk.md#how-to-depend-on-it).
+
+## Documentation
+
+- [Build your first module](docs/tutorial-first-module.md) - from a clone to a running module of your own, in this repository or in yours.
+- [The module SDK](docs/sdk.md) - the module macro, the host traits, `Fault`, and each helper module.
+- [Testing](docs/testing.md) - the module mocks in `nexum-sdk-test` and the engine-side harness.
+- [Component lifecycle, trigger system, and packaging](docs/02-modules-triggers-packaging.md) - the manifest reference.
+- [RPC namespace design](docs/07-rpc-namespace-design.md) - the `chain` interface and the permitted JSON-RPC methods.
+- [Production deployment](docs/production.md) - the operator handbook.
+- [`docs/adr`](docs/adr) and [`docs/design`](docs/design) - the decision records and the design notes.
 
 ## Layout
 
@@ -36,8 +48,13 @@ Without Nix, any Rust 1.96+ toolchain with the `wasm32-wasip2` target, `cargo-ne
 ## Running a module
 
 ```sh
+export SEPOLIA_RPC_URL=https://ethereum-sepolia-rpc.publicnode.com   # any Sepolia JSON-RPC URL
 just run           # builds the example module and runs the engine with it
 ```
+
+The example module declares a block trigger on Sepolia, and it logs one line for each new block.
+`engine.dev.toml` takes the RPC URL from `SEPOLIA_RPC_URL`, and the engine refuses to start while the variable is unset.
+[docs/tutorial-first-module.md](docs/tutorial-first-module.md) continues from here to a module of your own.
 
 The engine takes a component wasm and its `component.toml` (dependencies + config).
 The manifest is mandatory: pass its path, or ship a `component.toml` next to the wasm.
@@ -45,16 +62,20 @@ Every manifest must declare a `[dependencies]` table; an empty one grants nothin
 Every manifest must also declare a `[component].name` that is not blank.
 The engine uses the name as the state namespace, and it refuses a missing, empty, or whitespace-only name.
 
+`just run` ends in this command:
+
 ```sh
 cargo run -p nexum-cli -- --engine-config engine.dev.toml
 ```
 
 `engine.dev.toml` is committed, and it declares the example as a `[[modules]]` entry, which is the path a deployment uses.
-The engine also takes a wasm and a manifest as positional arguments, which boots one module without any `engine.toml`:
+The engine also takes a wasm and a manifest as positional arguments, which boots that one module in place of the `[[modules]]` entries:
 
 ```sh
-cargo run -p nexum-cli -- target/wasm32-wasip2/release/example.wasm modules/example/component.toml
+cargo run -p nexum-cli -- target/wasm32-wasip2/release/example.wasm modules/example/component.toml --engine-config engine.dev.toml
 ```
+
+With no `--engine-config` and no `engine.toml` in the working directory, the engine runs on defaults, which configure no chain.
 
 A module that declares a `block` or `event` trigger needs its chain declared in `engine.toml`, or the engine refuses to boot.
 The smallest working stanza is:
@@ -65,7 +86,7 @@ rpc_url = "http://localhost:8545"
 ```
 
 `http(s)://` URLs are not dialled at boot; `ws(s)://` URLs are.
-The example module declares no triggers, so `engine.dev.toml` configures no chain; the modules under `modules/examples/` and `modules/fixtures/` need one.
+The example module and the modules under `modules/examples/` declare a block trigger on Sepolia, and `engine.dev.toml` carries the entry for it.
 
 ## Component integrity
 
