@@ -9,6 +9,7 @@ mod e2e;
 mod engine;
 mod ledger;
 mod lifecycle;
+mod schedule;
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;

@@ -117,6 +117,14 @@ impl TestRuntimeBuilder {
         self
     }
 
+    /// Launch with no `[chains]` entry and an empty provider pool, for an
+    /// engine whose triggers name no chain.
+    #[must_use]
+    pub fn without_chains(mut self) -> Self {
+        self.chains = Vec::new();
+        self
+    }
+
     /// Demand a `[[modules]].digest` on every entry, as a defaulted
     /// `engine.toml` does. Off here so a test states what it exercises.
     #[must_use]
@@ -168,7 +176,9 @@ impl TestRuntimeBuilder {
         config.limits = self.limits.try_into()?;
         config.policy = self.policy;
         // The chain gate applies even over mock backends.
-        config.chains = super::test_chain_configs();
+        if !self.chains.is_empty() {
+            config.chains = super::test_chain_configs();
+        }
         config.engine.require_component_digest = self.require_digest;
         config.modules = Entry::rows(entries(self.modules), tmp.path(), &self.wasm);
 
@@ -214,6 +224,9 @@ impl TestRuntimeBuilder {
         // Both terminals honour the opt-in, so a test need not know which.
         if self.require_digest {
             scenario = scenario.require_digest();
+        }
+        if self.chains.is_empty() {
+            scenario = scenario.chains(Default::default());
         }
         scenario
             .extensions(self.extensions)
@@ -869,6 +882,73 @@ mod tests {
         rt.wait_for_log("example", "block 42 on chain")
             .await
             .expect("dispatch resumes once the head poll recovers");
+
+        rt.shutdown();
+        rt.wait().await.expect("clean shutdown");
+    }
+
+    /// End to end through the launcher: the engine's only module declares
+    /// only a schedule trigger, and no chain is configured. It boots, stays
+    /// live on the schedule source alone, and delivers one tick for each
+    /// matching minute the clock passes, stamped with that minute.
+    #[tokio::test(start_paused = true)]
+    async fn harness_fires_schedule_triggers_on_a_chainless_engine() {
+        use std::time::{Duration, UNIX_EPOCH};
+
+        let Some(wasm) = module_wasm_or_skip("tick-recorder") else {
+            return;
+        };
+
+        // 2024-05-17T12:00:30Z.
+        const START_SECS: u64 = 1_715_947_230;
+
+        let mut rt = TestRuntime::builder(wasm)
+            .without_chains()
+            .module(
+                crate::test_utils::workspace_root()
+                    .join("modules/fixtures/tick-recorder/component.toml"),
+            )
+            .configure_clock(|clock| clock.set(UNIX_EPOCH + Duration::from_secs(START_SECS)))
+            .launch()
+            .await
+            .expect("a schedule-only module launches with no [chains] entry");
+
+        let ticks = |rt: &TestRuntime| -> Vec<u64> {
+            let logs = rt.logs();
+            logs.list_runs("tick-recorder")
+                .into_iter()
+                .flat_map(|meta| logs.read(&meta.run, 0).records)
+                .filter_map(|record| record.message.strip_prefix("tick ")?.parse().ok())
+                .collect()
+        };
+
+        // The wall clock and the runtime clock move together, a second at
+        // a time: 12:00:30 to 12:00:59 passes no minute boundary.
+        let pass = async |rt: &TestRuntime, secs: u64| {
+            for _ in 0..secs {
+                rt.clock().advance(Duration::from_secs(1));
+                tokio::time::advance(Duration::from_secs(1)).await;
+                for _ in 0..8 {
+                    tokio::task::yield_now().await;
+                }
+            }
+        };
+        pass(&rt, 29).await;
+        assert_eq!(ticks(&rt), Vec::<u64>::new(), "no tick at boot");
+
+        // 12:00:59 to 12:05:30: five minute boundaries, five ticks.
+        pass(&rt, 271).await;
+        let last = (START_SECS + 270) * 1_000;
+        rt.wait_for_log("tick-recorder", &format!("tick {last}"))
+            .await
+            .expect("the 12:05 tick is dispatched");
+        assert_eq!(
+            ticks(&rt),
+            (1..=5)
+                .map(|minute| (START_SECS - 30 + minute * 60) * 1_000)
+                .collect::<Vec<_>>(),
+            "one tick per minute, each stamped with its own minute",
+        );
 
         rt.shutdown();
         rt.wait().await.expect("clean shutdown");

@@ -196,6 +196,11 @@ A forced exit (a drain past `[limits.shutdown] drain_secs`) terminates the proce
 A `resume = true` trigger then replays the in-flight log at the next start; a block is not replayed.
 See [ADR-0024](adr/0024-blocks-are-clocks-and-host-keys-leave-the-module-namespace.md) for why blocks are not replayed and no host gap primitive exists.
 
+The runtime writes nothing for a `schedule` trigger.
+A schedule fires from the host wall clock in UTC, so a tick that came due while the engine was down is not replayed, and a step of the host clock moves the schedule with it.
+Keep the host clock synchronized.
+See [ADR-0027](adr/0027-schedule-triggers-follow-the-wall-clock-and-replay-nothing.md).
+
 ## 5. Logs
 
 The engine emits JSON `tracing` events on stdout, one flat object per line.
@@ -223,7 +228,7 @@ An address already in use refuses the launch rather than leaving a running engin
 |---|---|---|---|
 | `nexum_runtime_boot_refusals_total` | counter | `error_kind` | Boot refusals by error kind. |
 | `nexum_runtime_dispatch_latency_seconds` | histogram | `module`, `trigger_kind`, `outcome` | Wall-clock seconds to dispatch one trigger, sampled on every dispatch that reached the guest. `outcome` is one of `ok`, `fault`, `trap` and `deadline`, so a p95 read over the bare metric covers the failing dispatches too; sum `outcome` away to read one module's whole distribution, as `NexumDispatchLatency` below does. A trigger dropped before the guest runs records no latency and is counted in `nexum_runtime_dispatch_dropped_total` instead. `outcome` is bounded at those four values, so it multiplies the series count by at most four: each `module`, `trigger_kind` and `outcome` triple carries the eleven buckets plus `+Inf`, `_sum` and `_count`. |
-| `nexum_runtime_dispatch_dropped_total` | counter | `module`, `trigger_kind`, `reason` | Triggers dropped before dispatch. `reason = "rate_limited"` is the per-component dispatch rate limit (`[limits.dispatch]`, default `burst = 256` and `refill_per_sec = 128`). `reason = "shutdown"` is a stop landing mid fan-out: the fan-out follows `[[modules]]` order, so the same trailing modules are skipped at every stop. `reason = "fuel_set_failed"` is the per-dispatch fuel budget failing to apply: the module stays alive and the trigger is skipped. A block is not replayed; an event is, from its cursor. |
+| `nexum_runtime_dispatch_dropped_total` | counter | `module`, `trigger_kind`, `reason` | Triggers dropped before dispatch. `reason = "rate_limited"` is the per-component dispatch rate limit (`[limits.dispatch]`, default `burst = 256` and `refill_per_sec = 128`). `reason = "shutdown"` is a stop landing mid fan-out: the fan-out follows `[[modules]]` order, so the same trailing modules are skipped at every stop. `reason = "fuel_set_failed"` is the per-dispatch fuel budget failing to apply: the module stays alive and the trigger is skipped. `reason = "coalesced"` is a schedule tick that came due while an earlier tick of the same trigger still waited for dispatch: a count that climbs means the module, or the engine around it, is slower than its schedule. A block is not replayed and neither is a schedule tick; an event is, from its cursor. |
 | `nexum_runtime_module_errors_total` | counter | `module`, `error_kind` | Module faults and traps. `error_kind = "trap"` is a wasmtime trap and `"deadline"` is a dispatch cut off at `[limits.dispatch] deadline_secs`; other values are fault labels. The trap and deadline values are the same strings the latency histogram uses for `outcome`, so the two metrics agree about one event. |
 | `nexum_runtime_module_restarts_total` | counter | `module` | Module restart attempts. |
 | `nexum_runtime_module_poisoned` | gauge | `module` | `1` once a module crosses `[limits.poison]` (default 5 failures in 600 s) or its event source reports an unrecoverable condition. Stays `1` until the process restarts. |
@@ -471,8 +476,12 @@ The spelling is `[policy.component.<id>]`, and `<id>` is the `[[modules]].id` of
 | `DuplicateComponentId`: two `[[modules]]` entries claim one `id` | Validation refusal, at load | A unique `id` per entry, or the policy join is ambiguous. |
 | `LogRetentionTooStrict`: a console level louder than what retention keeps | Validation refusal, at load | A `log_retain_level` at least as loud as every console level, or a quieter `log_print_level` and no `[policy.log_targets]` row above it. Both default to `trace`, so this needs a retention level you set and a console or target level above it. |
 | `InvalidLogLevel`: a value that is not one of the five level names | Validation refusal, at load | `trace`, `debug`, `info`, `warn` or `error`. |
+| `InvalidScheduleCron`: a `schedule` trigger whose `cron` is not a supported five-field expression | Validation refusal, at load, before any compile | A five-field expression in that component's manifest. An earlier release parsed the field and never read it, so any string booted. [The trigger reference](02-modules-triggers-packaging.md#schedule-triggers) lists what the engine refuses. |
 
 Each breach at the request is also counted: `HttpRequestDenied` under `nexum_runtime_capability_denials_total{reason="allowlist"}`, and `DestinationIpProhibited` under `reason="destination"`.
+
+A `schedule` trigger also starts to fire.
+An earlier release warned at load and never dispatched one, so a component that declares a schedule trigger now gets ticks it did not get before.
 
 The digest requirement is the one default that changed direction, so it fires on an `engine.toml` nobody edited.
 `[engine].require_component_digest` defaults to `true`, and what it requires is the operator's pin on `[[modules]].digest`, not the author's pin in the manifest beside the artifact ([ADR-0025](adr/0025-the-required-digest-is-the-operator-pin.md)).
@@ -498,4 +507,5 @@ Write it deliberately or not at all: the relaxation is then auditable in the con
 - [ADR-0024](adr/0024-blocks-are-clocks-and-host-keys-leave-the-module-namespace.md): logs replay, blocks do not, and host keys live outside a component's namespace.
 - [ADR-0025](adr/0025-the-required-digest-is-the-operator-pin.md): the required digest is the operator pin.
 - [ADR-0026](adr/0026-the-local-store-carries-a-format-version.md): the local-store format version.
+- [ADR-0027](adr/0027-schedule-triggers-follow-the-wall-clock-and-replay-nothing.md): schedule triggers follow the wall clock in UTC and replay nothing.
 - [Component lifecycle, trigger system, and packaging](02-modules-triggers-packaging.md).

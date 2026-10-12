@@ -29,7 +29,7 @@ A consumer takes them as `git` dependencies pinned to a commit: see [docs/sdk.md
 - `crates/nexum-world` - single-source capability and fault-label vocabularies.
 - `modules/example` - minimal reference module.
 - `modules/examples/` - example modules (balance-tracker, http-probe, price-alert).
-- `modules/fixtures/` - adversarial test fixtures (clock-reader, env-reader, flaky-bomb, fuel-bomb, log-bomb, memory-bomb, panic-bomb, slow-host, topic-parity).
+- `modules/fixtures/` - adversarial test fixtures (clock-reader, env-reader, flaky-bomb, fuel-bomb, log-bomb, memory-bomb, panic-bomb, slow-host, tick-recorder, topic-parity).
 - `wit/nexum-host` - the `nexum:host` WIT package.
 
 ## Development
@@ -78,6 +78,7 @@ cargo run -p nexum-cli -- target/wasm32-wasip2/release/example.wasm modules/exam
 With no `--engine-config` and no `engine.toml` in the working directory, the engine runs on defaults, which configure no chain.
 
 A module that declares a `block` or `event` trigger needs its chain declared in `engine.toml`, or the engine refuses to boot.
+A `schedule` trigger fires on a cron expression in UTC and needs no chain.
 The smallest working stanza is:
 
 ```toml
@@ -87,6 +88,7 @@ rpc_url = "http://localhost:8545"
 
 `http(s)://` URLs are not dialled at boot; `ws(s)://` URLs are.
 The example module and the modules under `modules/examples/` declare a block trigger on Sepolia, and `engine.dev.toml` carries the entry for it.
+A module whose only trigger is a schedule, like the `tick-recorder` fixture, needs no chain.
 
 ## Component integrity
 

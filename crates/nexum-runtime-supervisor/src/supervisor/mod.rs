@@ -16,7 +16,7 @@ pub use health::{HealthPublisher, HealthSnapshot, HealthWatch, health_channel};
 pub use lifecycle::ModuleState;
 pub use nexum_runtime_api::WasiClockOverride;
 pub use prepass::ConfiguredChains;
-pub use sources::{EventSource, SourcePlan, Viability};
+pub use sources::{EventSource, ScheduleSource, SourcePlan, Viability};
 pub use store::{build_linker, engine};
 
 #[cfg(feature = "test-utils")]

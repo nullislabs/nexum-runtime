@@ -10,6 +10,8 @@ amends: 0014-local-store-durability-model.md, 0018-one-operator-policy-surface.m
 > [ADR-0020](0020-retire-component-kind.md) retired the manifest `kind` field and so discharged the `module` versus `service` half of the ADR-0016 spelling deferral that the Supersession section below leaves open.
 > The sentence carries the mark in place.
 > The trigger rename respelled two core kinds, `chain-log` to `event` and `cron` to `schedule`, and the Decision text below carries the current names.
+> [ADR-0027](0027-schedule-triggers-follow-the-wall-clock-and-replay-nothing.md) made the `schedule` kind fire, so the Context sentence that calls it inert describes the state before that record.
+> The sentence carries the mark in place.
 
 ## Context
 
@@ -18,6 +20,7 @@ Counts over `crates`, `wit` and `docs`: watch 442, subscription 362, subscribe 1
 A module author declares a `[[subscription]]`, the host opens an "event source", dispatches an "event" to `on-event`, and the operator tunes an unrelated thing called watch.
 The repository already spells the kind vocabulary three times: the `nexum_world::SubscriptionKind` variants, the serde tags of the manifest parser's `CoreSubscription`, and the `event_kind` metric label.
 The label copy is untyped literals at the dispatch call sites, and it never carries `cron`, because cron subscriptions are inert.
+Amended by [ADR-0027](0027-schedule-triggers-follow-the-wall-clock-and-replay-nothing.md): schedule triggers fire, and the label carries `schedule`.
 That duplication is the generator of the drift, not a symptom of it.
 
 ## Decision

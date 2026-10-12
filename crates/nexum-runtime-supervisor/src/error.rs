@@ -327,6 +327,7 @@ mod tests {
         "invalid_event_topic",
         "non_string_trigger_filter",
         "start_block_without_resume",
+        "invalid_schedule_cron",
         // LoadRefusal.
         "section_unclaimed",
         "extension_namespace_claimed",

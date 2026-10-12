@@ -60,7 +60,7 @@ It recognizes five handlers, and each returns `Result<(), Fault>`.
 | `init` | `Vec<(String, String)>` | none: it runs once after each instantiation, with the `[config]` pairs |
 | `on_block` | `types::Block` | `block` |
 | `on_event` | `types::Log` | `event` |
-| `on_schedule` | `types::ScheduleTick` | `schedule`, which the engine parses and does not dispatch |
+| `on_schedule` | `types::ScheduleTick` | `schedule` |
 | `on_extension` | `types::ExtensionTrigger` | a kind an extension owns |
 
 `types` is `nexum::host::types`, which the macro generates in your crate.

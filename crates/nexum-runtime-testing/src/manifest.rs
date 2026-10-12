@@ -145,6 +145,16 @@ impl TestManifest {
         self
     }
 
+    /// Append a `schedule` trigger firing on `cron`.
+    #[must_use]
+    pub fn schedule_trigger(mut self, cron: &str) -> Self {
+        let mut table = toml::Table::new();
+        table.insert("on".into(), "schedule".into());
+        table.insert("cron".into(), cron.into());
+        self.triggers.push(table);
+        self
+    }
+
     /// Append an extension trigger; no filters admits every delivery of the kind.
     #[must_use]
     pub fn extension_trigger(mut self, kind: &str, filters: &[(&str, &str)]) -> Self {

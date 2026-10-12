@@ -369,24 +369,17 @@ pub(super) async fn module<T: RuntimeTypes>(
             false
         }
     };
-    // Unserviceable triggers warn; an undeclared extension kind refuses.
+    // An undeclared extension kind refuses.
     let extension_kinds = extension_trigger_kinds(&shared.extensions);
     for trigger in &loaded_manifest.triggers {
-        match trigger {
-            Trigger::Schedule { .. } => warn!(
-                module = %module_namespace,
-                "schedule triggers are declared but never fire until 0.3",
-            ),
-            Trigger::Extension { extension_kind, .. }
-                if !extension_kinds.contains(extension_kind.as_str()) =>
-            {
-                return Err(LoadRefusal::UnknownTriggerKind {
-                    module: module_namespace.clone(),
-                    kind: extension_kind.clone(),
-                }
-                .into());
+        if let Trigger::Extension { extension_kind, .. } = trigger
+            && !extension_kinds.contains(extension_kind.as_str())
+        {
+            return Err(LoadRefusal::UnknownTriggerKind {
+                module: module_namespace.clone(),
+                kind: extension_kind.clone(),
             }
-            _ => {}
+            .into());
         }
     }
 

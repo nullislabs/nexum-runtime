@@ -8,6 +8,7 @@ mod runtime;
 pub mod supervisor;
 
 pub use runtime::event_loop;
+pub use runtime::schedule;
 
 #[cfg(feature = "test-utils")]
 pub mod test_utils;

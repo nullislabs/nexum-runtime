@@ -439,7 +439,67 @@ on   = "schedule"
 cron = "*/5 * * * *"
 "#;
         let loaded = validate(toml).expect("parse");
-        assert!(matches!(&loaded.triggers[0], Trigger::Schedule { .. }));
+        assert!(
+            matches!(&loaded.triggers[0], Trigger::Schedule { cron } if cron.expression() == "*/5 * * * *"),
+            "{:?}",
+            loaded.triggers[0],
+        );
+    }
+
+    /// A cron expression the parser does not support refuses the manifest
+    /// at load, with a typed variant carrying the value and the operator
+    /// wording pinned verbatim.
+    #[test]
+    fn load_refuses_an_invalid_schedule_cron_at_parse() {
+        fn schedule_trigger(cron: &str) -> String {
+            format!(
+                "[component]\nname = \"bad\"\n\n[dependencies]\n\n\
+                 [[trigger]]\non   = \"schedule\"\ncron = \"{cron}\"\n"
+            )
+        }
+        let err = validate(&schedule_trigger("*/5 * * *")).expect_err("four fields");
+        assert!(
+            matches!(
+                err,
+                ParseError::InvalidScheduleCron {
+                    ref value,
+                    source: crate::CronError::FieldCount { found: 4 },
+                } if value == "*/5 * * *"
+            ),
+            "{err:?}",
+        );
+        // Operator wording pin.
+        assert_eq!(
+            err.to_string(),
+            "manifest: invalid schedule cron \"*/5 * * *\": expected 5 fields \
+             (minute hour day-of-month month day-of-week), found 4; a seconds field, \
+             a year field and a timezone are not supported",
+        );
+        assert_eq!(<&str>::from(&err), "invalid_schedule_cron");
+
+        for unsupported in [
+            "@daily",
+            "0 */5 * * * *",
+            "0 0 L * *",
+            "0 0 * * MON",
+            "61 * * * *",
+        ] {
+            let err = validate(&schedule_trigger(unsupported)).expect_err("unsupported syntax");
+            assert!(
+                matches!(err, ParseError::InvalidScheduleCron { ref value, .. } if value == unsupported),
+                "{unsupported:?}: {err:?}",
+            );
+        }
+
+        // A schedule trigger without its expression is a shape refusal.
+        let err = validate(
+            "[component]\nname = \"bad\"\n\n[dependencies]\n\n[[trigger]]\non = \"schedule\"\n",
+        )
+        .expect_err("missing cron");
+        assert!(
+            matches!(err, ParseError::InvalidTrigger { index: 1, ref kind, .. } if kind == "schedule"),
+            "{err:?}",
+        );
     }
 
     #[test]

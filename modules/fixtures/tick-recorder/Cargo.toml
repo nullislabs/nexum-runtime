@@ -1,0 +1,18 @@
+[package]
+name = "tick-recorder"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Test fixture: logs the fired-at of every schedule tick, and can hold a dispatch open. Lets a test assert when a schedule trigger fired and how pending ticks coalesce."
+
+[lints]
+workspace = true
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+nexum-sdk = { path = "../../../crates/nexum-sdk" }
+wit-bindgen = { version = "0.59", default-features = false, features = ["macros", "realloc"] }
